@@ -50,4 +50,4 @@ repos:
     rev: v0.2.0
     hooks:
     -   id: check-copyright
-        args: []
+        args: ["llmdeploy"]
