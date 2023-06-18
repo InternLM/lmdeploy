@@ -1,0 +1,36 @@
+name: "postprocessing"
+backend: "python"
+max_batch_size: 1
+input [
+  {
+    name: "TOKENS_BATCH"
+    data_type: TYPE_UINT32
+    dims: [ -1, -1 ]
+  },
+  {
+    name: "sequence_length"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+  }
+]
+output [
+  {
+    name: "OUTPUT"
+    data_type: TYPE_STRING
+    dims: [ -1, -1 ]
+  }
+]
+
+instance_group [
+    {
+        count: 1
+        kind: KIND_CPU
+    }
+]
+
+parameters {
+  key: "tokenizer_path"
+  value: {
+    string_value: "tokenizer/tokenizer.model"
+  }
+}
