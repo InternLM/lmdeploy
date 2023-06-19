@@ -25,7 +25,17 @@ def create_workspace(_path: str):
         print(f'create workspace in directory {_path}')
         return True
     except Exception as e:
-        print(f'exception happened: {e}')
+        print(f'create workspace in {_path} failed: {e}')
+        return False
+
+
+def destroy_workspace(_path: str):
+    try:
+        shutil.rmtree(_path)
+        print(f'destroy workspace in directory {_path}')
+        return True
+    except Exception as e:
+        print(f'create workspace in {_path} failed: {e}')
         return False
 
 
@@ -366,9 +376,15 @@ def main(model_name: str,
 
     model_name = model_name.lower()
     if model_format == 'llama':
-        deploy_llama(model_name, model_path, tokenizer_path, dst_path, tp)
+        res = deploy_llama(model_name, model_path, tokenizer_path, dst_path,
+                           tp)
     else:
-        deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
+        res = deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
+
+    if not res:
+        print(f'deploy model "{model_name}" via fastertransformer failed')
+        destroy_workspace(dst_path)
+        exit(-1)
 
     # pack model repository for triton inference server
     triton_model_path = osp.join(dst_path, 'triton_models')
