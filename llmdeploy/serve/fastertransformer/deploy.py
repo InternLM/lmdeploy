@@ -35,7 +35,7 @@ def copy_triton_model_templates(_path: str):
         dir_path = osp.dirname(cur_path)
         triton_models_path = osp.join(dir_path, 'triton_models')
         dst_path = osp.join(_path, 'triton_models')
-        shutil.copytree(triton_models_path, dst_path)
+        shutil.copytree(triton_models_path, dst_path, symlinks=True)
     except Exception as e:
         print(f'copy triton model templates from "{triton_models_path}"'
               f' to "{dst_path}" failed: {e}')
@@ -141,8 +141,9 @@ def export(model_name: str, model_params: dict, tokenizer_path: str,
 def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                  dst_path: str, tp: int):
     if osp.exists(tokenizer_path):
-        shutil.copy(tokenizer_path,
-                    osp.join(dst_path, 'triton_models/tokenizer/'))
+        shutil.copy(
+            tokenizer_path,
+            osp.join(dst_path, 'triton_models/tokenizer/tokenizer.model'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         return -1
@@ -229,8 +230,9 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     if tokenizer_path is None:
         tokenizer_path = osp.join(model_path, 'tokenizer.model')
     if osp.exists(tokenizer_path):
-        shutil.copy(tokenizer_path,
-                    osp.join(dst_path, 'triton_models/tokenizer/'))
+        shutil.copy(
+            tokenizer_path,
+            osp.join(dst_path, 'triton_models/tokenizer/tokenizer.model'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         exit(-1)
