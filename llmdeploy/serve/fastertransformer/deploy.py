@@ -8,6 +8,7 @@ from pathlib import Path
 import fire
 import safetensors
 import torch
+from sentencepiece import SentencePieceProcessor
 
 supported_models = [
     'vicuna-7b', 'vicuna-13b', 'llama-7b', 'llama-13b', 'llama-30b',
@@ -44,7 +45,18 @@ def copy_triton_model_templates(_path: str):
     return 0
 
 
-def export(model_name: str, model_params: dict, out_dir: str, tp: int):
+def tokenizer_info(model_path: str):
+    assert os.path.isfile(model_path), model_path
+    sp_model = SentencePieceProcessor(model_file=model_path)
+    # BOS / EOS token IDs
+    n_words = sp_model.vocab_size()
+    bos_id = sp_model.bos_id()
+    eos_id = sp_model.eos_id()
+    return n_words, bos_id, eos_id
+
+
+def export(model_name: str, model_params: dict, tokenizer_path: str,
+           out_dir: str, tp: int):
     out_dir = osp.join(out_dir, 'weights')
     os.makedirs(out_dir, exist_ok=True)
 
@@ -85,19 +97,15 @@ def export(model_name: str, model_params: dict, out_dir: str, tp: int):
             save_bin(param_data, param_name)
 
     # export config and save it to {out_dir}/config.ini
+    vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     cfg = dict(llama=dict(model_name=model_name,
-                          vocab_size=32000,
+                          vocab_size=vocab_size,
+                          bos_id=bos_id,
+                          eos_id=eos_id,
                           size_per_head=128,
                           norm_eps=1e-6,
-                          rotary_embedding=128,
-                          weight_type='fp16',
-                          max_batch_size=32,
-                          max_context_token_num=4,
-                          session_len=2048,
-                          step_length=1,
-                          cache_max_entry_count=48,
-                          cache_chunk_size=8,
-                          use_context_fmha=0))
+                          rotary_embedding=128))
+    special = dict()
     if model_name.endswith('7b'):
         special = dict(head_num=32, num_layer=32, inter_size=11008)
     elif model_name.endswith('13b'):
@@ -108,11 +116,22 @@ def export(model_name: str, model_params: dict, out_dir: str, tp: int):
         special = dict(head_num=64, num_layer=80, inter_size=22016)
     else:
         return False
+
     cfg['llama'].update(special)
-    for section, key_values in cfg.items():
-        cfg[section] = key_values
+    cfg['llama'].update(
+        dict(weight_type='fp16',
+             max_batch_size=32,
+             max_context_token_num=4,
+             session_len=2048,
+             step_length=1,
+             cache_max_entry_count=48,
+             cache_chunk_size=8,
+             use_context_fmha=1))
 
     config = configparser.ConfigParser()
+    for section, key_values in cfg.items():
+        config[section] = key_values
+
     config_path = osp.join(out_dir, 'config.ini')
     with open(config_path, 'w') as f:
         config.write(f)
@@ -183,7 +202,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         model_params[f'layers.{i}.attention.w_qkv.weight'] = qkv
         print(qkv.shape, qkv.dtype)
 
-    return export(model_name, model_params, dst_path, tp)
+    return export(model_name, model_params, tokenizer_path, dst_path, tp)
 
 
 def permute(x: torch.Tensor):
@@ -210,8 +229,8 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     if tokenizer_path is None:
         tokenizer_path = osp.join(model_path, 'tokenizer.model')
     if osp.exists(tokenizer_path):
-        shutil.copytree(tokenizer_path,
-                        osp.join(dst_path, 'triton_models/tokenizer/'))
+        shutil.copy(tokenizer_path,
+                    osp.join(dst_path, 'triton_models/tokenizer/'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         exit(-1)
@@ -289,7 +308,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, model_params, dst_path, tp)
+    return export(model_name, model_params, tokenizer_path, dst_path, tp)
 
 
 def main(model_name: str,
