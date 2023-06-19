@@ -22,11 +22,11 @@ def create_workspace(_path: str):
         if osp.exists(_path):
             shutil.rmtree(_path)
         os.makedirs(_path)
+        print(f'create workspace in directory {_path}')
+        return True
     except Exception as e:
         print(f'exception happened: {e}')
-        return -1
-    print(f'create workspace in directory {_path}')
-    return 0
+        return False
 
 
 def copy_triton_model_templates(_path: str):
@@ -36,13 +36,14 @@ def copy_triton_model_templates(_path: str):
         triton_models_path = osp.join(dir_path, 'triton_models')
         dst_path = osp.join(_path, 'triton_models')
         shutil.copytree(triton_models_path, dst_path, symlinks=True)
+        print(f'copy triton model templates from "{triton_models_path}" to '
+              f'"{dst_path}" successfully')
+        shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
+        return True
     except Exception as e:
         print(f'copy triton model templates from "{triton_models_path}"'
               f' to "{dst_path}" failed: {e}')
-        return -1
-    print(f'copy triton model templates from "{triton_models_path}" to '
-          f'"{dst_path}" successfully')
-    return 0
+        return False
 
 
 def tokenizer_info(model_path: str):
@@ -313,6 +314,17 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     return export(model_name, model_params, tokenizer_path, dst_path, tp)
 
 
+def pack_model_repository(workspace_path: str, triton_model_path):
+    model_repo_dir = osp.join(workspace_path, 'model_repository')
+    os.makedirs(model_repo_dir, exist_ok=True)
+    os.symlink(src=osp.join('../triton_models/interactive'),
+               dst=osp.join(model_repo_dir, 'fastertransformer'))
+    os.symlink(src=osp.join('../triton_models/preprocessing'),
+               dst=osp.join(model_repo_dir, 'preprocessing'))
+    os.symlink(src=osp.join('../triton_models/postprocessing'),
+               dst=osp.join(model_repo_dir, 'postprocessing'))
+
+
 def main(model_name: str,
          model_path: str,
          model_format: str,
@@ -346,17 +358,21 @@ def main(model_name: str,
               'specified')
         exit(-1)
 
-    if create_workspace(dst_path) != 0:
+    if not create_workspace(dst_path):
         exit(-1)
 
-    if copy_triton_model_templates(dst_path) != 0:
+    if not copy_triton_model_templates(dst_path):
         exit(-1)
 
     model_name = model_name.lower()
     if model_format == 'llama':
         deploy_llama(model_name, model_path, tokenizer_path, dst_path, tp)
-    # else:
-    #     deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
+    else:
+        deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
+
+    # pack model repository for triton inference server
+    triton_model_path = osp.join(dst_path, 'triton_models')
+    pack_model_repository(dst_path, triton_model_path)
 
 
 if __name__ == '__main__':
