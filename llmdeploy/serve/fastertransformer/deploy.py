@@ -49,11 +49,11 @@ def copy_triton_model_templates(_path: str):
         print(f'copy triton model templates from "{triton_models_path}" to '
               f'"{dst_path}" successfully')
         shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
-        return True
+        return dst_path
     except Exception as e:
         print(f'copy triton model templates from "{triton_models_path}"'
               f' to "{dst_path}" failed: {e}')
-        return False
+        return None
 
 
 def tokenizer_info(model_path: str):
@@ -111,8 +111,8 @@ def export(model_name: str, model_params: dict, tokenizer_path: str,
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     cfg = dict(llama=dict(model_name=model_name,
                           vocab_size=vocab_size,
-                          bos_id=bos_id,
-                          eos_id=eos_id,
+                          start_id=bos_id,
+                          end_id=eos_id,
                           size_per_head=128,
                           norm_eps=1e-6,
                           rotary_embedding=128))
@@ -150,11 +150,10 @@ def export(model_name: str, model_params: dict, tokenizer_path: str,
 
 
 def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
-                 dst_path: str, tp: int):
+                 triton_models_path: str, tp: int):
     if osp.exists(tokenizer_path):
-        shutil.copy(
-            tokenizer_path,
-            osp.join(dst_path, 'triton_models/tokenizer/tokenizer.model'))
+        shutil.copy(tokenizer_path,
+                    osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         return -1
@@ -214,7 +213,8 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         model_params[f'layers.{i}.attention.w_qkv.weight'] = qkv
         print(qkv.shape, qkv.dtype)
 
-    return export(model_name, model_params, tokenizer_path, dst_path, tp)
+    return export(model_name, model_params, tokenizer_path, triton_models_path,
+                  tp)
 
 
 def permute(x: torch.Tensor):
@@ -237,13 +237,12 @@ def check_zero(x: torch.Tensor):
 
 
 def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
-              dst_path: str, tp: int):
+              triton_models_path: str, tp: int):
     if tokenizer_path is None:
         tokenizer_path = osp.join(model_path, 'tokenizer.model')
     if osp.exists(tokenizer_path):
-        shutil.copy(
-            tokenizer_path,
-            osp.join(dst_path, 'triton_models/tokenizer/tokenizer.model'))
+        shutil.copy(tokenizer_path,
+                    osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         exit(-1)
@@ -321,10 +320,11 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, model_params, tokenizer_path, dst_path, tp)
+    return export(model_name, model_params, tokenizer_path, triton_models_path,
+                  tp)
 
 
-def pack_model_repository(workspace_path: str, triton_model_path):
+def pack_model_repository(workspace_path: str):
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
     os.symlink(src=osp.join('../triton_models/interactive'),
@@ -371,15 +371,17 @@ def main(model_name: str,
     if not create_workspace(dst_path):
         exit(-1)
 
-    if not copy_triton_model_templates(dst_path):
+    triton_models_path = copy_triton_model_templates(dst_path)
+    if triton_models_path is None:
         exit(-1)
 
     model_name = model_name.lower()
     if model_format == 'llama':
-        res = deploy_llama(model_name, model_path, tokenizer_path, dst_path,
-                           tp)
+        res = deploy_llama(model_name, model_path, tokenizer_path,
+                           triton_models_path, tp)
     else:
-        res = deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
+        res = deploy_hf(model_name, model_path, tokenizer_path,
+                        triton_models_path, tp)
 
     if not res:
         print(f'deploy model "{model_name}" via fastertransformer failed')
@@ -387,8 +389,7 @@ def main(model_name: str,
         exit(-1)
 
     # pack model repository for triton inference server
-    triton_model_path = osp.join(dst_path, 'triton_models')
-    pack_model_repository(dst_path, triton_model_path)
+    pack_model_repository(dst_path)
 
 
 if __name__ == '__main__':
