@@ -17,16 +17,31 @@ supported_formats = ['llama', 'hf']
 
 
 def create_workspace(_path: str):
-    if osp.exists(_path):
-        shutil.rmtree(_path)
-    os.makedirs(_path)
+    try:
+        if osp.exists(_path):
+            shutil.rmtree(_path)
+        os.makedirs(_path)
+    except Exception as e:
+        print(f'exception happened: {e}')
+        return -1
+    print(f'create workspace in directory {_path}')
+    return 0
 
 
 def copy_triton_model_templates(_path: str):
-    cur_path = osp.abspath(__file__)
-    dir_path = osp.dirname(cur_path)
-    triton_models_path = osp.join(dir_path, 'triton_models')
-    shutil.copytree(triton_models_path, _path)
+    try:
+        cur_path = osp.abspath(__file__)
+        dir_path = osp.dirname(cur_path)
+        triton_models_path = osp.join(dir_path, 'triton_models')
+        dst_path = osp.join(_path, 'triton_models')
+        shutil.copytree(triton_models_path, dst_path)
+    except Exception as e:
+        print(f'copy triton model templates from "{triton_models_path}"'
+              f' to "{dst_path}" failed: {e}')
+        return -1
+    print(f'copy triton model templates from "{triton_models_path}" to '
+          f'"{dst_path}" successfully')
+    return 0
 
 
 def export(model_name: str, model_params: dict, out_dir: str, tp: int):
@@ -107,8 +122,8 @@ def export(model_name: str, model_params: dict, out_dir: str, tp: int):
 def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                  dst_path: str, tp: int):
     if osp.exists(tokenizer_path):
-        shutil.copytree(tokenizer_path,
-                        osp.join(dst_path, 'triton_models/tokenizer/'))
+        shutil.copy(tokenizer_path,
+                    osp.join(dst_path, 'triton_models/tokenizer/'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         return -1
@@ -277,9 +292,9 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     return export(model_name, model_params, dst_path, tp)
 
 
-def main(model_name: str = 'vicuna-7b',
-         model_path: str = None,
-         model_format: str = 'hf',
+def main(model_name: str,
+         model_path: str,
+         model_format: str,
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1):
@@ -296,17 +311,13 @@ def main(model_name: str = 'vicuna-7b',
         tp (int): the number of GPUs used for tensor parallelism
     """
     if model_name.lower() not in supported_models:
-        print(f'{model_name} is not supported. The supported models are: '
+        print(f'"{model_name}" is not supported. The supported models are: '
               f'{supported_models}')
         exit(-1)
 
     if model_format not in supported_formats:
-        print(f'the model format {model_format} is not supported. '
+        print(f'the model format "{model_format}" is not supported. '
               f'The supported format are: {supported_formats}')
-        exit(-1)
-
-    if model_path is None:
-        print('the model path should be specified')
         exit(-1)
 
     if model_format == 'llama' and tokenizer_path is None:
@@ -314,14 +325,17 @@ def main(model_name: str = 'vicuna-7b',
               'specified')
         exit(-1)
 
-    model_name = model_name.lower()
-    create_workspace(dst_path)
-    copy_triton_model_templates(dst_path)
+    if create_workspace(dst_path) != 0:
+        exit(-1)
 
+    if copy_triton_model_templates(dst_path) != 0:
+        exit(-1)
+
+    model_name = model_name.lower()
     if model_format == 'llama':
         deploy_llama(model_name, model_path, tokenizer_path, dst_path, tp)
-    else:
-        deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
+    # else:
+    #     deploy_hf(model_name, model_path, tokenizer_path, dst_path, tp)
 
 
 if __name__ == '__main__':
