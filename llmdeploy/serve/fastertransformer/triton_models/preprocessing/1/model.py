@@ -57,7 +57,9 @@ class TritonPythonModel:
         self.model_config = model_config = json.loads(args['model_config'])
 
         # Parse model output configs and convert Triton types to numpy types
-        input_names = ['INPUT_ID', 'REQUEST_INPUT_LEN']
+        input_names = [
+            'INPUT_ID', 'REQUEST_INPUT_LEN', 'BAD_WORDS_IDS', 'STOP_WORDS_IDS'
+        ]
         for input_name in input_names:
             setattr(
                 self,
@@ -102,6 +104,8 @@ class TritonPythonModel:
             # Get input tensors
             query = pb_utils.get_input_tensor_by_name(request,
                                                       'QUERY').as_numpy()
+            request_output_len = pb_utils.get_input_tensor_by_name(
+                request, 'REQUEST_OUTPUT_LEN').as_numpy()
 
             # Preprocessing input data.
             input_id, request_input_len = self._create_request(query)
@@ -111,6 +115,12 @@ class TritonPythonModel:
             input_id_tensor = pb_utils.Tensor(
                 'INPUT_ID',
                 np.array(input_id).astype(self.input_id_dtype))
+            request_input_len_tensor = pb_utils.Tensor(
+                'REQUEST_INPUT_LEN',
+                np.array(request_input_len).astype(
+                    self.request_input_len_dtype))
+            request_output_len_tensor = pb_utils.Tensor(
+                'REQUEST_OUTPUT_LEN', request_output_len)
 
             # Create InferenceResponse. You can set an error here in case
             # there was a problem with handling this inference request.
@@ -119,8 +129,10 @@ class TritonPythonModel:
             #
             # pb_utils.InferenceResponse(
             #    output_tensors=..., TritonError("An error occurred"))
-            inference_response = pb_utils.InferenceResponse(
-                output_tensors=[input_id_tensor])
+            inference_response = pb_utils.InferenceResponse(output_tensors=[
+                input_id_tensor, request_input_len_tensor,
+                request_output_len_tensor
+            ])
             responses.append(inference_response)
 
         # You should return a list of pb_utils.InferenceResponse. Length
