@@ -58,7 +58,7 @@ pip install -e .
 
 ### 部署 [LLaMA](https://github.com/facebookresearch/llama) 服务
 
-请填写[这张表](<(https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form)>)，获取 LLaMA 模型权重。
+请填写[这张表](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)，获取 LLaMA 模型权重。
 
 执行下面任一命令，可以把 LLaMA 模型部署到 NVIDIA GPU Server：
 
