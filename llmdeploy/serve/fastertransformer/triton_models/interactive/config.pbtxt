@@ -241,12 +241,7 @@ output [
     dims: [ -1, -1 ]
   }
 ]
-parameters {
-  key: "tensor_para_size"
-  value: {
-    string_value: "1"
-  }
-}
+
 parameters {
   key: "pipeline_para_size"
   value: {

@@ -28,7 +28,10 @@ def main(triton_server_addr: str, model_name: str, session_id: int):
         else:
             request_id = f'{session_id}-{nth_round}'
             for status, res, tokens in chatbot.stream_infer(
-                    session_id, prompt, request_id=request_id):
+                    session_id,
+                    prompt,
+                    request_id=request_id,
+                    request_output_len=512):
                 continue
             print(f'session {session_id}, {status}, {tokens}, {res}')
         nth_round += 1
