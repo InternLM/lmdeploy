@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import configparser
+import json
 import os
 import os.path as osp
+import re
 import shutil
 from pathlib import Path
 
@@ -66,8 +68,14 @@ def tokenizer_info(model_path: str):
     return n_words, bos_id, eos_id
 
 
-def export(model_name: str, model_params: dict, tokenizer_path: str,
-           out_dir: str, tp: int):
+def export(model_name: str,
+           num_layer: int,
+           norm_eps: float,
+           model_params: dict,
+           tokenizer_path: str,
+           out_dir: str,
+           tp: int,
+           size_per_head: int = 128):
     out_dir = osp.join(out_dir, 'weights')
     os.makedirs(out_dir, exist_ok=True)
 
@@ -79,11 +87,16 @@ def export(model_name: str, model_params: dict, tokenizer_path: str,
 
     # reverse the splitting axes since the weights are transposed above
     for param_name, param_data in model_params.items():
+        if param_name == 'tok_embeddings.weight':
+            _vocab_size, dim = param_data.shape
+            head_num = dim // size_per_head
         split_dim = None
         key, ext = param_name.split('.')[-2:]
         copy = False
         if key in ['w1', 'w3', 'w_qkv']:
             split_dim = -1
+            if key == 'w1':
+                inter_size = param_data.shape[-1]
         elif key in ['w2', 'wo']:
             if ext in ['scales', 'zeros']:
                 copy = True
@@ -109,35 +122,28 @@ def export(model_name: str, model_params: dict, tokenizer_path: str,
 
     # export config and save it to {out_dir}/config.ini
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
-    cfg = dict(llama=dict(model_name=model_name,
-                          vocab_size=vocab_size,
-                          start_id=bos_id,
-                          end_id=eos_id,
-                          size_per_head=128,
-                          norm_eps=1e-6,
-                          rotary_embedding=128))
-    special = dict()
-    if model_name.endswith('7b'):
-        special = dict(head_num=32, num_layer=32, inter_size=11008)
-    elif model_name.endswith('13b'):
-        special = dict(head_num=40, num_layer=40, inter_size=13824)
-    elif model_name.endswith('30b'):
-        special = dict(head_num=52, num_layer=60, inter_size=17920)
-    elif model_name.endswith('65b'):
-        special = dict(head_num=64, num_layer=80, inter_size=22016)
-    else:
-        return False
-
-    cfg['llama'].update(special)
-    cfg['llama'].update(
-        dict(weight_type='fp16',
-             max_batch_size=32,
-             max_context_token_num=4,
-             session_len=2048,
-             step_length=1,
-             cache_max_entry_count=48,
-             cache_chunk_size=8,
-             use_context_fmha=1))
+    assert _vocab_size == vocab_size, \
+        f'different vocab size {_vocab_size} vs {vocab_size}'
+    cfg = dict(llama=dict(
+        model_name=model_name,
+        head_num=head_num,
+        size_per_head=size_per_head,
+        vocab_size=vocab_size,
+        num_layer=num_layer,
+        rotary_embedding=size_per_head,
+        inter_size=inter_size,
+        norm_eps=norm_eps,
+        start_id=bos_id,
+        end_id=eos_id,
+        weight_type='fp16',
+        # parameters for fastertransformer
+        max_batch_size=32,
+        max_context_token_num=4,
+        session_len=2048,
+        step_length=1,
+        cache_max_entry_count=48,
+        cache_chunk_size=8,
+        use_context_fmha=1))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -156,7 +162,18 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
     else:
         print('tokenizer model {tokenizer_path} does not exist')
-        return -1
+        return False
+    # read model arguments from params.json
+    try:
+        params_path = osp.join(model_path, 'params.json')
+        with open(params_path) as f:
+            model_arg = json.load(f)
+            num_layer = model_arg['n_layers']
+            norm_eps = model_arg['norm_eps']
+    except Exception as e:
+        print(f'get "n_layers" and "norm_eps" from {params_path} failed: {e}')
+        return False
+
     # convert weights from llama to fastertransformer
     checkpoints = []
     for pattern in ['*.pth', '*.pt']:
@@ -213,8 +230,10 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         model_params[f'layers.{i}.attention.w_qkv.weight'] = qkv
         print(qkv.shape, qkv.dtype)
 
-    return export(model_name, model_params, tokenizer_path, triton_models_path,
-                  tp)
+    assert num_layer == i, f'miss matched layers: {num_layer} vs {i}'
+
+    return export(model_name, num_layer, norm_eps, model_params,
+                  tokenizer_path, triton_models_path, tp)
 
 
 def permute(x: torch.Tensor):
@@ -246,6 +265,19 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     else:
         print('tokenizer model {tokenizer_path} does not exist')
         exit(-1)
+
+    # read model arguments from params.json
+    try:
+        params_path = osp.join(model_path, 'config.json')
+        with open(params_path) as f:
+            model_arg = json.load(f)
+            num_layer = model_arg['num_hidden_layers']
+            norm_eps = model_arg['rms_norm_eps']
+    except Exception as e:
+        print(f'get "num_hidden_layers" and "rms_norm_eps" from '
+              f'{params_path} failed: {e}')
+        return False
+
     # convert weights from hf to fastertransformer
     model_params = {}
 
@@ -314,14 +346,16 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         except KeyError:
             break
 
+    assert num_layer == i, 'miss matched layers: {num_layer} vs {i}'
+
     other = [('tok_embeddings.weight', 'model.embed_tokens.weight'),
              ('norm.weight', 'model.norm.weight'),
              ('output.weight', 'lm_head.weight')]
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, model_params, tokenizer_path, triton_models_path,
-                  tp)
+    return export(model_name, i + 1, norm_eps, model_params, tokenizer_path,
+                  triton_models_path, tp)
 
 
 def pack_model_repository(workspace_path: str):
@@ -383,6 +417,12 @@ def main(model_name: str,
         res = deploy_hf(model_name, model_path, tokenizer_path,
                         triton_models_path, tp)
 
+    # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
+    with open(osp.join(triton_models_path, 'interactive/config.pbtxt'),
+              'a') as f:
+        param = 'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
+            'string_value: ' + f'"{tp}"\n' + '  }\n}\n'
+        f.write(param)
     if not res:
         print(f'deploy model "{model_name}" via fastertransformer failed')
         destroy_workspace(dst_path)
@@ -390,6 +430,14 @@ def main(model_name: str,
 
     # pack model repository for triton inference server
     pack_model_repository(dst_path)
+
+    # update the value of $TP in `service_docker_up.sh`
+    file_path = osp.join(dst_path, 'service_docker_up.sh')
+    with open(file_path, 'r') as f:
+        content = f.read()
+        content = re.sub('TP=1', f'TP={tp}', content)
+    with open(file_path, 'w') as f:
+        f.write(content)
 
 
 if __name__ == '__main__':

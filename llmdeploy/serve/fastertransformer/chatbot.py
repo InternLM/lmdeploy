@@ -249,6 +249,8 @@ class Chatbot:
                 return f'USER: {prompt} ASSISTANT:'
             else:
                 return f'</s>USER: {prompt} ASSISTANT:'
+        else:
+            return prompt
 
     def _stream_infer(self,
                       session: Session,
