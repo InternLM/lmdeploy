@@ -3,6 +3,5 @@
 __pycache__/
 *.egg-info/
 workspace/
-models/
 .cache
 *build*/
