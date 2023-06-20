@@ -14,6 +14,18 @@
 
 namespace fastertransformer {
 
+#if !defined(__CUDA_ARCH__)
+  using ArchTag = cutlass::arch::Sm80;
+#else
+#if (__CUDA_ARCH__ >= 800)
+  using ArchTag = cutlass::arch::Sm80;
+#elif (__CUDA_ARCH__ >= 750)
+  using ArchTag = cutlass::arch::Sm75;
+#elif (__CUDA_ARCH__ >= 700)
+  using ArchTag = cutlass::arch::Sm70;
+#endif
+#endif
+
 template<
     // dtype of Q/K/V/M
     typename Element_,
@@ -817,7 +829,6 @@ private:
                       std::is_same<half, typename std::decay<T>::type>::value,
                       cutlass::half_t,
                       T>;
-  using ArchTag = cutlass::arch::Sm80;
   using SingleValueAttention = LlamaAttentionKernel<
         scalar_t,
         ArchTag,
