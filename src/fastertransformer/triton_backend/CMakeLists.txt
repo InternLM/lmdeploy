@@ -153,7 +153,7 @@ set_target_properties(
     INSTALL_RPATH_USE_LINK_PATH FALSE
     INSTALL_RPATH "$\{ORIGIN\}"
     LINK_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libtriton_fastertransformer.ldscript
-    LINK_FLAGS "-Wl,--no-as-needed,--version-script libtriton_fastertransformer.ldscript"
+    LINK_FLAGS "-Wl,--no-as-needed,--version-script ${CMAKE_CURRENT_BINARY_DIR}/libtriton_fastertransformer.ldscript"
 )
 
 # Need to turn off unused-but-set-variable due to Torchvision
