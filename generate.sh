@@ -1,0 +1,14 @@
+#!/bin/sh
+
+cmake .. \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
+    -DCMAKE_INSTALL_PREFIX=./install \
+    -DSM=80 \
+    -DBUILD_MULTI_GPU=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=80 \
+    -DCMAKE_CUDA_COMPILER=/usr/local/cuda-11.8/bin/nvcc \
+    -DBUILD_CUTLASS_MOE=OFF \
+    -DBUILD_CUTLASS_MIXED_GEMM=OFF \
+    -DCMAKE_CUDA_FLAGS="-lineinfo" \
+    -DUSE_NVTX=ON
