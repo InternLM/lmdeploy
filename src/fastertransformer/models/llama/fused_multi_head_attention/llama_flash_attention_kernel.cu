@@ -878,14 +878,6 @@ public:
     {
         invoke_attention_impl<T, kQueriesPerBlock, kKeysPerBlock>(
             kSingleValueIteration, batch_size_, head_num_, key_len_, seq_len_, size_per_head_, params, st);
-        // if (kSingleValueIteration) {
-        //     invokeFlashAttention_impl<T, SingleValueAttention>(
-        //         batch_size_, head_num_, key_len_, seq_len_, size_per_head_, params, st);
-        // }
-        // else {
-        //     invokeFlashAttention_impl<T, MultiValueAttention>(
-        //         batch_size_, head_num_, key_len_, seq_len_, size_per_head_, params, st);
-        // }
     }
 };
 
