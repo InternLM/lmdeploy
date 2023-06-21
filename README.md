@@ -58,6 +58,16 @@ pip install -e .
 
 ## Quick Start
 
+### Build
+
+Pull docker image `openmmlab/llmdeploy:base` and build llmdeploy libs in its launched container
+
+```shell
+mkdir build && cd build
+../generate.sh
+make -j$(nproc) && make install
+```
+
 ### Serving [LLaMA](https://github.com/facebookresearch/llama)
 
 Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form)
@@ -70,7 +80,7 @@ Run one of the following commands to serve a LLaMA model on NVIDIA GPU server:
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
     --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install//backends/fastertransformer
 ```
 
 </details>
@@ -81,7 +91,7 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-13B /path/to/llama-13b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install//backends/fastertransformer
 ```
 
 </details>
@@ -92,7 +102,7 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-33B /path/to/llama-33b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 4
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install//backends/fastertransformer
 ```
 
 </details>
@@ -103,7 +113,7 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-65B /path/to/llama-65b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 8
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install//backends/fastertransformer
 ```
 
 </details>
@@ -121,7 +131,7 @@ python3 -m fastchat.model.apply_delta \
   --delta-path lmsys/vicuna-7b-delta-v1.1
 
 python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install//backends/fastertransformer
 ```
 
 </details>
@@ -137,7 +147,7 @@ python3 -m fastchat.model.apply_delta \
   --delta-path lmsys/vicuna-13b-delta-v1.1
 
 python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install//backends/fastertransformer
 ```
 
 </details>
@@ -147,6 +157,8 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```
+
+## User Guide
 
 ## Contributing
 
