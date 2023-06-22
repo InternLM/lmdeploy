@@ -236,7 +236,6 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
             param.data = param.data.t()
 
     # concat qkv projection
-    # concat qkv projection
     for t in ['weight', 'bias']:
         for i in range(1000):
             _qkv = [f'layers.{i}.attention.{k}.{t}' for k in [
@@ -407,9 +406,6 @@ def main(model_name: str,
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism
     """
-    # if model_name.lower() not in supported_models:
-    #     print(f'"{model_name}" is not supported. The supported models are: '
-    #           f'{supported_models}')
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
