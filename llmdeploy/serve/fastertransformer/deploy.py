@@ -12,10 +12,6 @@ import safetensors
 import torch
 from sentencepiece import SentencePieceProcessor
 
-supported_models = [
-    'vicuna-7b', 'vicuna-13b', 'llama-7b', 'llama-13b', 'llama-30b',
-    'llama-65b'
-]
 supported_formats = ['llama', 'hf']
 
 
@@ -379,7 +375,7 @@ def main(model_name: str,
 
     Args:
         model_name (str): the name of the to-be-deployed model, such as
-            llama-7b, llama-13b and etc
+            llama-7b, llama-13b, vicuna-7b and etc
         model_path (str): the directory path of the model
         model_format (str): the format of the model, fb or hf. 'fb' stands for
             META's llama format, and 'hf' means huggingface format
@@ -387,10 +383,6 @@ def main(model_name: str,
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism
     """
-    if model_name.lower() not in supported_models:
-        print(f'"{model_name}" is not supported. The supported models are: '
-              f'{supported_models}')
-        exit(-1)
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
@@ -409,7 +401,6 @@ def main(model_name: str,
     if triton_models_path is None:
         exit(-1)
 
-    model_name = model_name.lower()
     if model_format == 'llama':
         res = deploy_llama(model_name, model_path, tokenizer_path,
                            triton_models_path, tp)
