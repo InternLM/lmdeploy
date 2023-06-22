@@ -24,7 +24,7 @@ from llmdeploy.serve.fastertransformer.utils import (Postprocessor,
 class Session:
     session_id: Union[int, str]
     request_id: str = ''
-    prev: str = ''  # history of the session in text format
+    histories: str = ''  # history conversations of the session
     round_prev: str = ''  # previous generated text in the current round
     sequence_length: int = 0  # the total generated token number in the session
     response: str = ''
@@ -88,8 +88,10 @@ class Chatbot:
                  repetition_penalty: float = 1.0,
                  stop_words: List = None,
                  bad_words: List = None,
+                 ignore_eos: bool = True,
                  log_level: int = logging.INFO,
-                 display: bool = False):
+                 display: bool = False,
+                 profile_generation: bool = False):
         self._session = None
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
@@ -97,6 +99,8 @@ class Chatbot:
             stop_words = np.array(stop_words, dtype=np.int32)
         if bad_words is not None:
             bad_words = np.array(bad_words, dtype=np.int32)
+        if ignore_eos:
+            stop_words = None
 
         self.cfg = mmengine.Config(
             dict(session_len=session_len,
@@ -105,7 +109,8 @@ class Chatbot:
                  temperature=temperature,
                  repetition_penalty=repetition_penalty,
                  stop_words=stop_words,
-                 bad_words=bad_words))
+                 bad_words=bad_words,
+                 profile_generation=profile_generation))
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
         self.log_level = log_level
@@ -158,7 +163,8 @@ class Chatbot:
                                                       sequence_start,
                                                       sequence_end):
             yield status, res, tokens
-        self._session.prev = self._session.prev + self._session.round_prev
+        self._session.histories = \
+            self._session.histories + self._session.round_prev
 
     def end(self, session_id: int, *args, **kwargs):
         """end a session. Triton inference server will release the session's
@@ -237,7 +243,7 @@ class Chatbot:
                 break
         if status == StatusCode.TRITON_STREAM_END:
             logger.info(f'cancel session {session_id} successfully')
-            if prev_session.prev:
+            if prev_session.histories:
                 logger.warn(f'TODO: start to recover session {session_id}')
         else:
             logger.info(f'cancel session {session_id} failed: {res}')
@@ -273,7 +279,10 @@ class Chatbot:
 
         input_ids, input_lengths = self.preprocess(prompt)
         input_tokens = input_lengths.squeeze()
-
+        if self.cfg.profile_generation:
+            yield StatusCode.TRITON_STREAM_ING, \
+                  'ignore preprocessing during profiling generation', \
+                  input_tokens
         if request_output_len is None:
             request_output_len = max(
                 128,
@@ -302,10 +311,9 @@ class Chatbot:
                                           request_output_len, sequence_start,
                                           sequence_end, preseq_length, cancel))
         producer.start()
-        for state, res, tokens in self.stream_consumer(self.postprocess, que,
-                                                       session, preseq_length,
-                                                       cancel, logger,
-                                                       self.display):
+        for state, res, tokens in self.stream_consumer(
+                self.postprocess, que, session, preseq_length, cancel, logger,
+                self.display, self.cfg.profile_generation):
             if state.value < 0:
                 yield state, res, 0
             else:
@@ -382,7 +390,7 @@ class Chatbot:
 
     @staticmethod
     def stream_consumer(postprocess, res_queue, session, preseq_length, cancel,
-                        logger, display):
+                        logger, display, profile_generation):
 
         def process_response(res):
             if session.ai_says is None:
@@ -421,6 +429,12 @@ class Chatbot:
                 output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
                 sequence_length = sequence_length.reshape(
                     (1, sequence_length.shape[-1]))
+
+                if profile_generation:
+                    yield (StatusCode.TRITON_STREAM_ING,
+                           'postprocessing is ignored during profiling '
+                           'token generation', sequence_length.squeeze())
+                    continue
                 output_str = postprocess(output_ids[:, :, preseq_length:],
                                          sequence_length)
                 text = output_str[0].decode()
