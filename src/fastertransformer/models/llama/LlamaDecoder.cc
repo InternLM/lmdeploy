@@ -16,7 +16,8 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.cc
 
 #include "src/fastertransformer/models/llama/LlamaDecoder.h"
 #include "src/fastertransformer/models/llama/llama_decoder_kernels.h"
@@ -205,13 +206,14 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
         // output: self_attn_output_, k_cache, v_cache = self_attn(decoder_normed_input_)
         forwardSelfAttn(sess, decoder_output, input_tensors, layer);
 
-        invokeFusedAddResidualRMSNorm(decoder_input,
-                                      decoder_output,
-                                      decoder_layer_weights->at(layer)->ffn_norm_weights,
-                                      rmsnorm_eps_,
-                                      sess.batch_size,
-                                      hidden_units_,
-                                      stream_);
+        invokeFusedAddBiasResidualRMSNorm(decoder_input,
+                                          decoder_output,
+                                          decoder_layer_weights->at(layer)->self_attn_weights.output.bias,
+                                          decoder_layer_weights->at(layer)->ffn_norm_weights,
+                                          rmsnorm_eps_,
+                                          sess.batch_size,
+                                          hidden_units_,
+                                          stream_);
         sync_check_cuda_error();
 
         // decoder_layer_output_ = ffn(decoder_normed_input_)
@@ -219,13 +221,14 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
 
         auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
                                                      input_tensors->at("output_norm_weight").getPtr<T>();
-        invokeFusedAddResidualRMSNorm(decoder_input,  //
-                                      decoder_output,
-                                      scale_weight,
-                                      rmsnorm_eps_,
-                                      sess.batch_size,
-                                      hidden_units_,
-                                      stream_);
+        invokeFusedAddBiasResidualRMSNorm(decoder_input,  //
+                                          decoder_output,
+                                          decoder_layer_weights->at(layer)->ffn_weights.output.bias,
+                                          scale_weight,
+                                          rmsnorm_eps_,
+                                          sess.batch_size,
+                                          hidden_units_,
+                                          stream_);
         sync_check_cuda_error();
     }
 

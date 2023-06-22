@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
 #pragma once
 
@@ -91,6 +92,7 @@ private:
     size_t         tensor_para_size_;
     size_t         pipeline_para_size_;
     ft::WeightType weight_type_;
+    bool           attn_bias_;
 
     size_t prefix_cache_len_{};
 

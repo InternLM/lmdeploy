@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
 #include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
 #include "3rdparty/INIReader.h"
@@ -127,6 +128,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     use_context_fmha_      = reader.GetInteger("llama", "use_context_fmha", 1);
     cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
     prefix_cache_len_      = reader.GetInteger("llama", "prefix_cache_len", 0);
+    attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
 
     handleMissingParams();
 
@@ -284,6 +286,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       vocab_size_,
                                                                       num_layer_,
                                                                       weight_type_,
+                                                                      attn_bias_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank,
                                                                       prefix_cache_len_);
@@ -297,14 +300,14 @@ std::string LlamaTritonModel<T>::toString()
     std::stringstream ss;
     ss << "Model: "
        << "\nhead_num: " << head_num_ << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_
-       << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_ << "\nmax_batch_size: " << max_batch_size_
-       << "\nmax_context_token_num: " << max_context_token_num_ << "\nsession_len: " << session_len_
-       << "\nstep_length: " << step_length_ << "\ncache_max_entry_count: " << cache_max_entry_count_
-       << "\ncache_chunk_size: " << cache_chunk_size_ << "\nuse_context_fmha: " << use_context_fmha_
-       << "\nstart_id: " << start_id_ << "\ntensor_para_size: " << tensor_para_size_
-       << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
-       << "\nmodel_name: " << model_name_ << "\nprefix_cache_len: " << prefix_cache_len_
-       << "\nmodel_dir: " << model_dir_ << std::endl;
+       << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_ << "\nattn_bias: " << attn_bias_
+       << "\nmax_batch_size: " << max_batch_size_ << "\nmax_context_token_num: " << max_context_token_num_
+       << "\nsession_len: " << session_len_ << "\nstep_length: " << step_length_
+       << "\ncache_max_entry_count: " << cache_max_entry_count_ << "\ncache_chunk_size: " << cache_chunk_size_
+       << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
+       << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
+       << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
+       << "\nprefix_cache_len: " << prefix_cache_len_ << "\nmodel_dir: " << model_dir_ << std::endl;
 
     return ss.str();
 }
