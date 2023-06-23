@@ -25,7 +25,7 @@ class Session:
     session_id: Union[int, str]
     request_id: str = ''
     histories: str = ''  # history conversations of the session
-    round_prev: str = ''  # previous generated text in the current round
+    prev: str = ''  # previous generated text in the current round
     sequence_length: int = 0  # the total generated token number in the session
     response: str = ''
     status: int = None  # status of the session
@@ -86,7 +86,7 @@ class Chatbot:
                  temperature: float = 1.0,
                  repetition_penalty: float = 1.0,
                  stop_words: List[int] = None,
-                 ignore_eos: bool = True,
+                 ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False):
@@ -258,6 +258,8 @@ class Chatbot:
         return token_ids[0][0]
 
     def _stop_words(self, stop_words: List[int]):
+        if stop_words is None:
+            return None
         assert isinstance(stop_words, List) and \
                all(isinstance(elem, int) for elem in stop_words), \
                f'stop_words must be a list but got {type(stop_words)}'
@@ -445,7 +447,7 @@ class Chatbot:
 
                 session.sequence_length = sequence_length.squeeze()
                 sequence_length = sequence_length - preseq_length
-                if output_ids[-1][-1] == eos_id:
+                if output_ids[-1][-1][-1] == eos_id:
                     session.sequence_length = session.sequence_length - 1
                     sequence_length = sequence_length - 1
 
