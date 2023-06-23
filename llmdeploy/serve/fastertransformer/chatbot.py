@@ -89,20 +89,22 @@ class Chatbot:
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False):
+        assert model_name in MODELS.module_dict.keys(), \
+            f"'{model_name}' is not supported. " \
+            f'The supported models are: {MODELS.module_dict.keys()}'
+        self.model_name = model_name
+        self.model = MODELS.get(self.model_name)()
         self._session = None
         self.tritonserver_addr = tritonserver_addr
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
         self.bos_id = self._get_bos()
         self.eos_id = self._get_eos()
-        self.model_name = model_name
-        self.model = MODELS.get(self.model_name)()
         stop_words = self._stop_words(self.model.stop_words())
         bad_words = None
         if ignore_eos:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
-
         self.cfg = mmengine.Config(
             dict(session_len=session_len,
                  top_p=top_p,
@@ -112,7 +114,6 @@ class Chatbot:
                  stop_words=stop_words,
                  bad_words=bad_words,
                  profile_generation=profile_generation))
-
         self.log_level = log_level
         self.display = display
 

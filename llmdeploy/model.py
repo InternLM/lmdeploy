@@ -48,7 +48,15 @@ conversation"""  # noqa: E501
         return self._stop_words
 
 
-if __name__ == '__main__':
-    model = MODELS.get('vicuna')()
+def main(model_name: str = 'test'):
+    assert model_name in MODELS.module_dict.keys(), \
+        f"'{model_name}' is not supported. " \
+        f'The supported models are: {MODELS.module_dict.keys()}'
+    model = MODELS.get('vicuna--1')()
     prompt = model.get_prompt(prompt='hi')
     print(prompt)
+
+
+if __name__ == '__main__':
+    import fire
+    fire.Fire(main)
