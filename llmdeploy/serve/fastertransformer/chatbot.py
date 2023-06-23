@@ -15,6 +15,7 @@ import numpy as np
 import tritonclient.grpc as grpcclient
 from tritonclient.grpc.service_pb2 import ModelInferResponse
 
+from llmdeploy.model import MODELS
 from llmdeploy.serve.fastertransformer.utils import (Postprocessor,
                                                      Preprocessor,
                                                      prepare_tensor)
@@ -71,7 +72,6 @@ class Chatbot:
         temperature (float): to modulate the next token probability
         repetition_penalty (float): The parameter for repetition penalty.
             1.0 means no penalty
-        stop_words (list[int]): List of token ids that stops the generation
         log_level (int): the level of the log
         display (bool): display the generated text on consolo or not
         profile_generation (bool): profile token generation or not
@@ -85,7 +85,6 @@ class Chatbot:
                  top_k: int = 40,
                  temperature: float = 1.0,
                  repetition_penalty: float = 1.0,
-                 stop_words: List[int] = None,
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
@@ -97,7 +96,8 @@ class Chatbot:
         self.bos_id = self._get_bos()
         self.eos_id = self._get_eos()
         self.model_name = model_name
-        stop_words = self._stop_words(stop_words)
+        self.model = MODELS.get(self.model_name)()
+        stop_words = self._stop_words(self.model.stop_words())
         bad_words = None
         if ignore_eos:
             stop_words = None
@@ -164,7 +164,7 @@ class Chatbot:
                                                       sequence_end):
             yield status, res, tokens
         self._session.histories = \
-            self._session.histories + self._session.round_prev
+            self._session.histories + self._session.prev
 
     def end(self, session_id: int, *args, **kwargs):
         """end a session. Triton inference server will release the session's
@@ -272,13 +272,7 @@ class Chatbot:
         return stop_words
 
     def _get_prompt(self, prompt: str, sequence_start: bool):
-        if self.model_name == 'vicuna':
-            if sequence_start:
-                return f'USER: {prompt} ASSISTANT:'
-            else:
-                return f'</s>USER: {prompt} ASSISTANT:'
-        else:
-            return prompt
+        return self.model.get_prompt(prompt, sequence_start)
 
     def _stream_infer(self,
                       session: Session,
@@ -324,7 +318,7 @@ class Chatbot:
                     f'history tokens: {session.sequence_length}')
 
         preseq_length = session.sequence_length
-        session.round_prev = ''
+        session.prev = ''
 
         que = queue.Queue()
         producer = threading.Thread(target=self._stream_producer,
