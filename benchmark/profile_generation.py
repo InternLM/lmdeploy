@@ -26,6 +26,7 @@ def infer(chatbot, session_id: int, prompt: str, outseq_len: int,
 
 
 def warmup(tritonserver_addr: str,
+           model_name: str,
            session_len: int,
            concurrency: int,
            output_seqlen: int,
@@ -45,6 +46,7 @@ def warmup(tritonserver_addr: str,
     _start = time.perf_counter()
     chatbots = [
         Chatbot(tritonserver_addr=tritonserver_addr,
+                model_name=model_name,
                 session_len=session_len,
                 ignore_eos=True) for _ in range(concurrency)
     ]
@@ -60,12 +62,14 @@ def warmup(tritonserver_addr: str,
 
 
 def main(tritonserver_addr: str,
+         model_name: str,
          concurrency: int = 1,
          session_len: int = 2048,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
-    warmup(tritonserver_addr, concurrency, session_len, output_seqlen)
+    warmup(tritonserver_addr, model_name, concurrency, session_len,
+           output_seqlen)
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)

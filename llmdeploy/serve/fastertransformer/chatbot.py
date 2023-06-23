@@ -72,10 +72,9 @@ class Chatbot:
         repetition_penalty (float): The parameter for repetition penalty.
             1.0 means no penalty
         stop_words (list): List of token ids that stops the generation
-        bad_words (list): List of token ids that are not allowed to be
-            generated.
         log_level (int): the level of the log
         display (bool): display the generated text on consolo or not
+        profile_generation (bool): profile token generation or not
     """
 
     def __init__(self,
@@ -87,20 +86,23 @@ class Chatbot:
                  temperature: float = 1.0,
                  repetition_penalty: float = 1.0,
                  stop_words: List = None,
-                 bad_words: List = None,
                  ignore_eos: bool = True,
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False):
         self._session = None
         self.tritonserver_addr = tritonserver_addr
+        self.preprocess = Preprocessor(tritonserver_addr)
+        self.postprocess = Postprocessor(tritonserver_addr)
+        self.bos_id = self._get_bos()
+        self.eos_id = self._get_eos()
         self.model_name = model_name
         if stop_words is not None:
             stop_words = np.array(stop_words, dtype=np.int32)
-        if bad_words is not None:
-            bad_words = np.array(bad_words, dtype=np.int32)
+        bad_words = None
         if ignore_eos:
             stop_words = None
+            bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
 
         self.cfg = mmengine.Config(
             dict(session_len=session_len,
@@ -111,8 +113,7 @@ class Chatbot:
                  stop_words=stop_words,
                  bad_words=bad_words,
                  profile_generation=profile_generation))
-        self.preprocess = Preprocessor(tritonserver_addr)
-        self.postprocess = Postprocessor(tritonserver_addr)
+
         self.log_level = log_level
         self.display = display
 
@@ -248,6 +249,14 @@ class Chatbot:
         else:
             logger.info(f'cancel session {session_id} failed: {res}')
         return status
+
+    def _get_bos(self):
+        token_ids, _ = self.preprocess('<BOS>')
+        return token_ids[0][0]
+
+    def _get_eos(self):
+        token_ids, _ = self.preprocess('<EOS>')
+        return token_ids[0][0]
 
     def _get_prompt(self, prompt: str, sequence_start: bool):
         if self.model_name == 'vicuna':
