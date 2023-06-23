@@ -71,7 +71,7 @@ class Chatbot:
         temperature (float): to modulate the next token probability
         repetition_penalty (float): The parameter for repetition penalty.
             1.0 means no penalty
-        stop_words (list): List of token ids that stops the generation
+        stop_words (list[int]): List of token ids that stops the generation
         log_level (int): the level of the log
         display (bool): display the generated text on consolo or not
         profile_generation (bool): profile token generation or not
@@ -85,7 +85,7 @@ class Chatbot:
                  top_k: int = 40,
                  temperature: float = 1.0,
                  repetition_penalty: float = 1.0,
-                 stop_words: List = None,
+                 stop_words: List[int] = None,
                  ignore_eos: bool = True,
                  log_level: int = logging.INFO,
                  display: bool = False,
@@ -97,8 +97,7 @@ class Chatbot:
         self.bos_id = self._get_bos()
         self.eos_id = self._get_eos()
         self.model_name = model_name
-        if stop_words is not None:
-            stop_words = np.array(stop_words, dtype=np.int32)
+        stop_words = self._stop_words(stop_words)
         bad_words = None
         if ignore_eos:
             stop_words = None
@@ -257,6 +256,18 @@ class Chatbot:
     def _get_eos(self):
         token_ids, _ = self.preprocess('<EOS>')
         return token_ids[0][0]
+
+    def _stop_words(self, stop_words: List[int]):
+        assert isinstance(stop_words, List) and \
+               all(isinstance(elem, int) for elem in stop_words), \
+               f'stop_words must be a list but got {type(stop_words)}'
+        # each id in stop_words represents a stop word
+        # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
+        # detailed explanation about fastertransformer's stop_words
+        stop_word_offsets = range(1, len(stop_words) + 1)
+        stop_words = np.array([[stop_words,
+                                stop_word_offsets]]).astype(np.int32)
+        return stop_words
 
     def _get_prompt(self, prompt: str, sequence_start: bool):
         if self.model_name == 'vicuna':
@@ -448,9 +459,9 @@ class Chatbot:
                                          sequence_length)
                 text = output_str[0].decode()
                 if display:
-                    new_text = text[len(session.round_prev):]
+                    new_text = text[len(session.prev):]
                     print(new_text, end='', flush=True)
-                session.round_prev = text
+                session.prev = text
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
                        sequence_length.squeeze())
             except Exception as e:
