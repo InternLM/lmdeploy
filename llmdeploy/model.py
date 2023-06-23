@@ -18,6 +18,7 @@ class Vicuna:
         else:
             return f'</s>{self.user}: {prompt} {self.assistant}:'
 
+    @property
     def stop_words(self):
         return None
 
@@ -34,7 +35,6 @@ conversation"""  # noqa: E501
         self.user = '<|Human|>'
         self.eou = 'െ'
         self.assistant = '<|Assistant|>'
-        self._stop_words = [45623]
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
@@ -44,8 +44,9 @@ conversation"""  # noqa: E501
         else:
             return f'\n{self.user}:{prompt}{self.eou}\n{self.assistant}:'
 
+    @property
     def stop_words(self):
-        return self._stop_words
+        return [45623]
 
 
 def main(model_name: str = 'test'):

@@ -100,7 +100,7 @@ class Chatbot:
         self.postprocess = Postprocessor(tritonserver_addr)
         self.bos_id = self._get_bos()
         self.eos_id = self._get_eos()
-        stop_words = self._stop_words(self.model.stop_words())
+        stop_words = self._stop_words(self.model.stop_words)
         bad_words = None
         if ignore_eos:
             stop_words = None
