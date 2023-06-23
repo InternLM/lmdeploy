@@ -26,6 +26,7 @@ class Tokenizer:
             s = s.replace('<BOS>', '')
             add_bos = True
         if s == '<EOS>':
+            s = ''
             add_eos = True
         return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
 
