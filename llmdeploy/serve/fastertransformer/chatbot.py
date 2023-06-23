@@ -333,7 +333,7 @@ class Chatbot:
         producer.start()
         for state, res, tokens in self.stream_consumer(
                 self.postprocess, que, session, preseq_length, cancel, logger,
-                self.display, self.cfg.profile_generation):
+                self.display, self.cfg.profile_generation, self.eos_id):
             if state.value < 0:
                 yield state, res, 0
             else:
@@ -410,7 +410,7 @@ class Chatbot:
 
     @staticmethod
     def stream_consumer(postprocess, res_queue, session, preseq_length, cancel,
-                        logger, display, profile_generation):
+                        logger, display, profile_generation, eos_id):
 
         def process_response(res):
             if session.ai_says is None:
@@ -445,6 +445,9 @@ class Chatbot:
 
                 session.sequence_length = sequence_length.squeeze()
                 sequence_length = sequence_length - preseq_length
+                if output_ids[-1][-1] == eos_id:
+                    session.sequence_length = session.sequence_length - 1
+                    sequence_length = sequence_length - 1
 
                 output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
                 sequence_length = sequence_length.reshape(
