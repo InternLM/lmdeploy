@@ -116,12 +116,14 @@ def main(tritonserver_addr: str,
     token_latency_max = np.max(stats[:, 2], axis=0)
     token_latency_ave = np.mean(stats[:, 2], axis=0)
     throughput = np.sum(stats[:, 1], axis=0) / np.sum(stats[:, 2], axis=0)
-    print(f'\n{"-" * 50}\nelapsed_time: {elapsed_time}s\n'
+    print(f'\n{"-" * 50}\ncocurrency: {concurrency}, input_tokens: '
+          f'{input_seqlen}, output_tokens: {output_seqlen}\n'
+          f'elapsed_time: {elapsed_time}s\n'
           f'first_token latency(min, max, ave):\n'
-          f'{first_token_latency_min}, {first_token_latency_max}, '
-          f'{first_token_latency_ave})\ntoken latency(min, max, ave):\n'
-          f'{token_latency_min}, {token_latency_max}, {token_latency_ave}\n'
-          f'throughput: {throughput} token/s\n{"-" * 50}')
+          f'{first_token_latency_min}s, {first_token_latency_max}s, '
+          f'{first_token_latency_ave}s)\ntoken latency(min, max, ave):\n'
+          f'{token_latency_min}s, {token_latency_max}s, {token_latency_ave}s\n'
+          f'throughput:\n{throughput} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':
