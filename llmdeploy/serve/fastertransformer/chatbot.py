@@ -26,8 +26,8 @@ class Session:
     session_id: Union[int, str]
     request_id: str = ''
     histories: str = ''  # history conversations of the session
-    prev: str = ''  # previous generated text in the current round
     sequence_length: int = 0  # the total generated token number in the session
+    prompt: str = ''
     response: str = ''
     status: int = None  # status of the session
 
@@ -158,14 +158,16 @@ class Chatbot:
         self._session.request_id = request_id
         self._session.response = ''
 
-        prompt = self._get_prompt(prompt, sequence_start)
-        for status, res, tokens in self._stream_infer(self._session, prompt,
+        self._session.prompt = self._get_prompt(prompt, sequence_start)
+        for status, res, tokens in self._stream_infer(self._session,
+                                                      self._session.prompt,
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
             yield status, res, tokens
         self._session.histories = \
-            self._session.histories + self._session.prev
+            self._session.histories + self._session.prompt + \
+            self._session.response
 
     def end(self, session_id: int, *args, **kwargs):
         """end a session. Triton inference server will release the session's
@@ -324,7 +326,7 @@ class Chatbot:
                     f'history tokens: {session.sequence_length}')
 
         preseq_length = session.sequence_length
-        session.prev = ''
+        session.response = ''
 
         que = queue.Queue()
         producer = threading.Thread(target=self._stream_producer,
@@ -414,19 +416,11 @@ class Chatbot:
     def stream_consumer(postprocess, res_queue, session, preseq_length, cancel,
                         logger, display, profile_generation, eos_id):
 
-        def process_response(res):
-            if session.ai_says is None:
-                return res, True
-            index = res.find(session.ai_says)
-            if index == -1:
-                return res, False
-            res = res[index + len(session.ai_says):].replace(session.eoa, '')
-            return res, True
-
         while True:
             result = res_queue.get()
             if result is None:
-                yield StatusCode.TRITON_STREAM_END, session.response, \
+                yield StatusCode.TRITON_STREAM_END, \
+                      session.response[len(session.prompt):], \
                       session.sequence_length - preseq_length
                 break
             if 'errcode' in result:
@@ -464,14 +458,17 @@ class Chatbot:
                                          sequence_length)
                 text = output_str[0].decode()
                 if display:
-                    new_text = text[len(session.prev):]
+                    new_text = text[len(session.response):]
                     print(new_text, end='', flush=True)
-                session.prev = text
-                yield (StatusCode.TRITON_STREAM_ING, session.response,
-                       sequence_length.squeeze())
+                session.response = text
+                if len(session.response) > len(session.prompt):
+                    yield (StatusCode.TRITON_STREAM_ING,
+                           session.response[len(session.prompt):],
+                           sequence_length.squeeze())
             except Exception as e:
                 logger.error(f'catch exception: {e}')
 
+        session.response = session.response[len(session.prompt):]
         # put session back to queue so that `_stream_infer` can update it in
         # `self.sessions`
         while not res_queue.empty():
