@@ -7,14 +7,18 @@ import numpy as np
 from llmdeploy.serve.fastertransformer.chatbot import Chatbot
 
 
-def infer(chatbot, session_id: int, prompt: str, outseq_len: int,
+def infer(chatbot, session_id: int, prompt: str, output_seqlen: int,
           test_round: int, que: mp.Queue):
     stats = []
     for i in range(test_round):
         timestamps = []
         tokens = []
-        for status, res, token in chatbot.generate(
-                session_id, prompt, request_output_len=outseq_len):
+        for status, res, token in chatbot.stream_infer(
+                session_id,
+                prompt,
+                request_output_len=output_seqlen,
+                sequence_start=True,
+                sequence_end=True):
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
@@ -22,13 +26,14 @@ def infer(chatbot, session_id: int, prompt: str, outseq_len: int,
         token_latency = timestamps[-1] - timestamps[0]
         token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
+        chatbot.reset_session()
     que.put((session_id, stats))
 
 
 def warmup(tritonserver_addr: str,
            model_name: str,
-           session_len: int,
            concurrency: int,
+           session_len: int,
            output_seqlen: int,
            warmup_round: int = 4):
     print('start to warmup ...')
@@ -42,13 +47,16 @@ def warmup(tritonserver_addr: str,
                     sequence_start=True,
                     sequence_end=True):
                 continue
+            chatbot.reset_session()
 
     _start = time.perf_counter()
     chatbots = [
         Chatbot(tritonserver_addr=tritonserver_addr,
                 model_name=model_name,
                 session_len=session_len,
-                ignore_eos=True) for _ in range(concurrency)
+                ignore_eos=True,
+                display=False,
+                profile_generation=True) for _ in range(concurrency)
     ]
     procs = []
     for i, chatbot in enumerate(chatbots):
@@ -78,6 +86,7 @@ def main(tritonserver_addr: str,
     _start = time.perf_counter()
     for i in range(concurrency):
         chatbot = Chatbot(tritonserver_addr=tritonserver_addr,
+                          model_name=model_name,
                           session_len=session_len,
                           ignore_eos=True,
                           profile_generation=True)
@@ -98,8 +107,7 @@ def main(tritonserver_addr: str,
               f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
         stats.append(_stats)
 
-    stats = np.array(stats)
-    stats.reshape(-1, 3)
+    stats = np.array(stats).reshape(-1, 3)
 
     first_token_latency_min = np.min(stats[:, 0], axis=0)
     first_token_latency_max = np.max(stats[:, 0], axis=0)

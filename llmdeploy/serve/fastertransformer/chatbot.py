@@ -250,6 +250,9 @@ class Chatbot:
             logger.info(f'cancel session {session_id} failed: {res}')
         return status
 
+    def reset_session(self):
+        self._session = None
+
     def _get_bos(self):
         token_ids, _ = self.preprocess('<BOS>')
         return token_ids[0][0]
@@ -273,6 +276,8 @@ class Chatbot:
         return stop_words
 
     def _get_prompt(self, prompt: str, sequence_start: bool):
+        if self.cfg.profile_generation:
+            return prompt
         return self.model.get_prompt(prompt, sequence_start)
 
     def _stream_infer(self,
