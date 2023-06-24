@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.cc
-
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.cc
 
 #include "src/fastertransformer/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
@@ -237,8 +237,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     fusedQKV_masked_attention_dispatch<T>(
         qkv_buf_,
-        nullptr,  // query_weight.bias,
-        nullptr,  // relative_attention_bias,
+        weights->qkv.bias,  // query_weight.bias,
+        nullptr,            // relative_attention_bias,
         nullptr,
         nullptr,
         key_cache_ptrs,

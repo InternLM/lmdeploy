@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.cc
-
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.cc
 
 #include "src/fastertransformer/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/fastertransformer/utils/logger.h"
@@ -25,33 +25,38 @@
 namespace fastertransformer {
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(
-    size_t hidden_units, size_t inter_size, WeightType weight_type, size_t tensor_para_size, size_t tensor_para_rank):
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     hidden_units,
+                                                    size_t     inter_size,
+                                                    WeightType weight_type,
+                                                    bool       attn_bias,
+                                                    size_t     tensor_para_size,
+                                                    size_t     tensor_para_rank):
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     weight_type_(weight_type),
+    attn_bias_(attn_bias),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
-    self_attn_weights.qkv.input_dims     = hidden_units_;
-    self_attn_weights.qkv.output_dims    = 3 * hidden_units_ / tensor_para_size_;
-    self_attn_weights.qkv.type           = weight_type;
+    self_attn_weights.qkv.input_dims  = hidden_units_;
+    self_attn_weights.qkv.output_dims = 3 * hidden_units_ / tensor_para_size_;
+    self_attn_weights.qkv.type        = weight_type;
 
     self_attn_weights.output.input_dims  = hidden_units_ / tensor_para_size_;
     self_attn_weights.output.output_dims = hidden_units_;
     self_attn_weights.output.type        = weight_type;
 
-    ffn_weights.gating.input_dims        = hidden_units_;
-    ffn_weights.gating.output_dims       = inter_size_ / tensor_para_size_;
-    ffn_weights.gating.type              = weight_type;
+    ffn_weights.gating.input_dims  = hidden_units_;
+    ffn_weights.gating.output_dims = inter_size_ / tensor_para_size_;
+    ffn_weights.gating.type        = weight_type;
 
     ffn_weights.intermediate.input_dims  = hidden_units_;
     ffn_weights.intermediate.output_dims = inter_size_ / tensor_para_size_;
     ffn_weights.intermediate.type        = weight_type;
-    
-    ffn_weights.output.input_dims        = inter_size_ / tensor_para_size_;
-    ffn_weights.output.output_dims       = hidden_units_;
-    ffn_weights.output.type              = weight_type;
+
+    ffn_weights.output.input_dims  = inter_size_ / tensor_para_size_;
+    ffn_weights.output.output_dims = hidden_units_;
+    ffn_weights.output.type        = weight_type;
     mallocWeights();
 }
 
@@ -117,8 +122,8 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     deviceMalloc((T**)&self_attn_norm_weights, hidden_units_);
     deviceMalloc((T**)&ffn_norm_weights, hidden_units_);
 
-    fastertransformer::mallocWeights(self_attn_weights.qkv, false);
-    fastertransformer::mallocWeights(self_attn_weights.output, false);
+    fastertransformer::mallocWeights(self_attn_weights.qkv, attn_bias_);
+    fastertransformer::mallocWeights(self_attn_weights.output, attn_bias_);
 
     fastertransformer::mallocWeights(ffn_weights.gating, false);
     fastertransformer::mallocWeights(ffn_weights.intermediate, false);

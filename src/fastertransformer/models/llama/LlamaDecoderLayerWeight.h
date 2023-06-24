@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.h
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.h
 
 #pragma once
 
@@ -27,8 +28,12 @@ template<typename T>
 struct LlamaDecoderLayerWeight {
 public:
     LlamaDecoderLayerWeight() = delete;
-    LlamaDecoderLayerWeight(
-        size_t hidden_units, size_t inter_size, WeightType weight_type, size_t tensor_para_size, size_t tensor_para_rank);
+    LlamaDecoderLayerWeight(size_t     hidden_units,
+                            size_t     inter_size,
+                            WeightType weight_type,
+                            bool       attn_bias,
+                            size_t     tensor_para_size,
+                            size_t     tensor_para_rank);
     ~LlamaDecoderLayerWeight();
     LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other) = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
@@ -41,13 +46,14 @@ public:
     LlamaFfnWeight<T>       ffn_weights{};
 
 private:
-    size_t hidden_units_;
-    size_t inter_size_;
+    size_t     hidden_units_;
+    size_t     inter_size_;
     WeightType weight_type_;
-    size_t bit_size_;
-    size_t tensor_para_size_;
-    size_t tensor_para_rank_;
-    bool   is_maintain_buffer_ = false;
+    size_t     bit_size_;
+    bool       attn_bias_;
+    size_t     tensor_para_size_;
+    size_t     tensor_para_rank_;
+    bool       is_maintain_buffer_ = false;
 
     void mallocWeights();
 };

@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.h
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.h
 
 #pragma once
 
@@ -32,6 +33,7 @@ struct LlamaWeight {
                 size_t     vocab_size,
                 size_t     num_layer,
                 WeightType weight_type,
+                bool       attn_bias,
                 size_t     tensor_para_size,
                 size_t     tensor_para_rank,
                 int        prefix_cache_len);
