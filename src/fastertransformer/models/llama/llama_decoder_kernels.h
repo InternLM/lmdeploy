@@ -5,7 +5,7 @@
 namespace fastertransformer {
 
 template<typename T>
-void invokeFusedAddResidualRMSNorm(
-    T* residual, T* inout, const T* scale, float eps, int batch_size, int n_dims, cudaStream_t stream);
+void invokeFusedAddBiasResidualRMSNorm(
+    T* residual, T* inout, const T* bias, const T* scale, float eps, int batch_size, int n_dims, cudaStream_t stream);
 
 }  // namespace fastertransformer

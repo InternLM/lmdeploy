@@ -15,8 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
+
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
 
 #include "src/fastertransformer/models/llama/LlamaContextAttentionLayer.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
@@ -157,9 +158,9 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    v_buf_2_,
                                    PrefixPromptBatchWeightsParam<T>{},
                                    qkv_buf_,
-                                   (const T*)nullptr,  // qkv_bias
-                                   padding_offset,     // padding_offset,
-                                   history_length,     // used for applying rotary embedding
+                                   weights->qkv.bias,
+                                   padding_offset,  // padding_offset,
+                                   history_length,  // used for applying rotary embedding
                                    batch_size,
                                    max_q_len,  // seq_len
                                    num_token,  // batch_size * seq_len

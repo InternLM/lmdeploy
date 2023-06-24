@@ -81,6 +81,8 @@ def export(model_name: str,
             param = param.half()
         param.contiguous().numpy().tofile(osp.join(out_dir, name))
 
+    attn_bias = False
+
     # reverse the splitting axes since the weights are transposed above
     for param_name, param_data in model_params.items():
         if param_name == 'tok_embeddings.weight':
@@ -88,13 +90,18 @@ def export(model_name: str,
             head_num = dim // size_per_head
         split_dim = None
         key, ext = param_name.split('.')[-2:]
+        if key == 'w_qkv' and ext == 'bias':
+            attn_bias = True
         copy = False
         if key in ['w1', 'w3', 'w_qkv']:
-            split_dim = -1
-            if key == 'w1':
-                inter_size = param_data.shape[-1]
+            if ext in ['bias']:
+                copy = True
+            else:
+                split_dim = -1
+                if key == 'w1':
+                    inter_size = param_data.shape[-1]
         elif key in ['w2', 'wo']:
-            if ext in ['scales', 'zeros']:
+            if ext in ['scales', 'zeros', 'bias']:
                 copy = True
             else:
                 split_dim = 0
@@ -129,6 +136,7 @@ def export(model_name: str,
         rotary_embedding=size_per_head,
         inter_size=inter_size,
         norm_eps=norm_eps,
+        attn_bias=attn_bias,
         start_id=bos_id,
         end_id=eos_id,
         weight_type='fp16',
@@ -189,20 +197,28 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
     for i, ckpt_path in enumerate(checkpoints):
         ckpt = torch.load(ckpt_path, map_location='cpu')
         for param_name, param_data in ckpt.items():
-            key = param_name.split('.')[-2]
+            key, ext = param_name.split('.')[-2:]
             # column-parallel
             if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'output']:
                 size = param_data.size(0)
-                param = get_param(
-                    param_name,
-                    [size * n_ckpt, param_data.size(1)])
-                param.data[size * i:size * (i + 1), :] = param_data
+                if ext == 'weight':
+                    param = get_param(
+                        param_name, [size * n_ckpt, param_data.size(1)])
+                    param.data[size * i:size * (i + 1), :] = param_data
+                else:  # bias
+                    param = get_param(param_name, [size * n_ckpt])
+                    param.data[size * i:size * (i + 1)] = param_data
             # row-parallel
             elif key in ['w2', 'wo', 'tok_embeddings']:
                 size = param_data.size(-1)
-                param = get_param(param_name,
-                                  [param_data.size(0), size * n_ckpt])
-                param.data[:, size * i:size * (i + 1)] = param_data
+                if ext == 'weight':
+                    param = get_param(param_name,
+                                      [param_data.size(0), size * n_ckpt])
+                    param.data[:, size * i:size * (i + 1)] = param_data
+                else:  # bias
+                    param = get_param(param_name, [size])
+                    param.data = param_data
+
             elif i == 0:
                 param = get_param(param_name, param_data.size())
                 param.data = param_data
@@ -216,15 +232,18 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
             param.data = param.data.t()
 
     # concat qkv projection
-    for i in range(1000):
-        _qkv = [f'layers.{i}.attention.{k}.weight' for k in ['wq', 'wk', 'wv']]
-        try:
-            qkv = tuple(map(model_params.pop, _qkv))
-        except KeyError:
-            break
-        qkv = torch.stack(qkv, dim=1)
-        model_params[f'layers.{i}.attention.w_qkv.weight'] = qkv
-        print(qkv.shape, qkv.dtype)
+    for t in ['weight', 'bias']:
+        for i in range(1000):
+            _qkv = [f'layers.{i}.attention.{k}.{t}' for k in [
+                'wq', 'wk', 'wv']]
+            try:
+                qkv = tuple(map(model_params.pop, _qkv))
+            except KeyError:
+                break
+            # concat by output_dims
+            qkv = torch.stack(qkv, dim=qkv[0].dim() - 1)
+            print(f'layers.{i}.attention.w_qkv.{t}', qkv.shape)
+            model_params[f'layers.{i}.attention.w_qkv.{t}'] = qkv
 
     assert num_layer == i, f'miss matched layers: {num_layer} vs {i}'
 
