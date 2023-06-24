@@ -13,6 +13,7 @@ def infer(chatbot, session_id: int, prompt: str, output_seqlen: int,
     for i in range(test_round):
         timestamps = []
         tokens = []
+        start = time.perf_counter()
         for status, res, token in chatbot.stream_infer(
                 session_id,
                 prompt,
@@ -22,7 +23,7 @@ def infer(chatbot, session_id: int, prompt: str, output_seqlen: int,
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
-        first_token_latency = timestamps[1] - timestamps[0]
+        first_token_latency = timestamps[0] - start
         token_latency = timestamps[-1] - timestamps[0]
         token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
@@ -55,7 +56,6 @@ def warmup(tritonserver_addr: str,
                 model_name=model_name,
                 session_len=session_len,
                 ignore_eos=True,
-                display=False,
                 profile_generation=True) for _ in range(concurrency)
     ]
     procs = []
