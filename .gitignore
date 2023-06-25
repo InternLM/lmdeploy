@@ -10,3 +10,4 @@ dist/
 examples/cpp/llama/*.csv
 *.npy
 *.weight
+*.pyc
