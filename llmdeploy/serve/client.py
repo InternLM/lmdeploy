@@ -12,9 +12,9 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def main(triton_server_addr: str, model_name: str, session_id: int):
+def main(tritonserver_addr: str, model_name: str, session_id: int = 1):
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
-    chatbot = Chatbot(triton_server_addr,
+    chatbot = Chatbot(tritonserver_addr,
                       model_name,
                       log_level=log_level,
                       display=True)
