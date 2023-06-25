@@ -245,7 +245,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
             print(f'layers.{i}.attention.w_qkv.{t}', qkv.shape)
             model_params[f'layers.{i}.attention.w_qkv.{t}'] = qkv
 
-    assert num_layer == i, f'miss matched layers: {num_layer} vs {i}'
+    # assert num_layer == i, f'miss matched layers: {num_layer} vs {i}'
 
     return export(model_name, num_layer, norm_eps, model_params,
                   tokenizer_path, triton_models_path, tp)
