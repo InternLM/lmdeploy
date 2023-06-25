@@ -1,23 +1,40 @@
 import json
 import multiprocessing as mp
+import os
 import random
 import time
+from typing import List
 
 import fire
 import numpy as np
+from sentencepiece import SentencePieceProcessor
 
 from llmdeploy.serve.fastertransformer.chatbot import Chatbot
-from llmdeploy.serve.fastertransformer.utils import Preprocessor
+
+
+class Tokenizer:
+
+    def __init__(self, model_path: str):
+        # reload tokenizer
+        assert os.path.isfile(model_path), model_path
+        self.sp_model = SentencePieceProcessor(model_file=model_path)
+
+    def encode(self, prompts: List):
+        prompts_token_ids = self.sp_model.Encode(prompts,
+                                                 add_bos=False,
+                                                 add_eos=False)
+        return [len(token_ids) for token_ids in prompts_token_ids]
 
 
 def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
     stats = []
     while not req_que.empty():
-        prompt, output_seqlen = req_que.get()
+        prompt, input_seqlen, output_seqlen = req_que.get()
+        print(f'request info: session {session_id}, '
+              f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         timestamps = []
         tokens = []
-        timestamps.append(time.perf_counter())
-        tokens.append(0)
+        start = time.perf_counter()
         for status, res, token in chatbot.stream_infer(
                 session_id,
                 prompt,
@@ -26,10 +43,11 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
                 sequence_end=True):
             timestamps.append(time.perf_counter())
             tokens.append(token)
+        chatbot.reset_session()
 
-        first_token_latency = timestamps[1] - timestamps[0]
-        token_latency = timestamps[-1] - timestamps[1]
-        token = tokens[-1]
+        first_token_latency = timestamps[1] - start
+        token_latency = timestamps[-1] - timestamps[0]
+        token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
     res_que.put((session_id, stats))
 
@@ -69,22 +87,11 @@ def warmup(tritonserver_addr: str,
     for proc in procs:
         proc.join()
     _end = time.perf_counter()
-    print(f'end warmup, elapsed time: {_end - _start}s')
+    print(f'end warmup, elapsed time: {round(_end - _start, 2)} s')
 
 
-def tokenize(tritonserver_addr, prompts):
-    # TODO: make 'preprocessor' supports batch inference
-    preprocessor = Preprocessor(tritonserver_addr)
-    prompts_token_ids = []
-    for prompt in prompts:
-        token_ids, _ = preprocessor(prompt)
-        token_ids = token_ids.tolist()
-        prompts_token_ids.append(len(token_ids[0]))
-    return prompts_token_ids
-
-
-def read_dataset(tritonserver_addr, dataset_path: str, samples: int,
-                 test_round: int, session_len: int):
+def read_dataset(tritonserver_addr, tokenizer_path: str, dataset_path: str,
+                 samples: int, test_round: int, session_len: int):
     start = time.perf_counter()
     with open(dataset_path) as f:
         dataset = json.load(f)
@@ -98,8 +105,9 @@ def read_dataset(tritonserver_addr, dataset_path: str, samples: int,
               f'{round(time.perf_counter() - start, 2)} s')
 
     start = time.perf_counter()
-    prompts_token_lens = tokenize(tritonserver_addr, prompts)
-    completions_token_lens = tokenize(tritonserver_addr, completions)
+    tokenizer = Tokenizer(tokenizer_path)
+    prompts_token_lens = tokenizer.encode(prompts)
+    completions_token_lens = tokenizer.encode(completions)
     print(f'elapsed time for tokenization: '
           f'{round(time.perf_counter() - start, 2)} s')
 
@@ -110,7 +118,7 @@ def read_dataset(tritonserver_addr, dataset_path: str, samples: int,
         if input_len + output_len > session_len:
             # ignore too long conversation
             continue
-        filtered_dataset.append([prompt, output_len])
+        filtered_dataset.append([prompt, input_len, output_len])
 
     if samples > 0:
         filtered_dataset = random.sample(filtered_dataset, samples)
@@ -127,6 +135,7 @@ def read_dataset(tritonserver_addr, dataset_path: str, samples: int,
 
 def main(tritonserver_addr: str,
          model_name: str,
+         tokenizer_path: str,
          dataset_path: str,
          concurrency: int = 1,
          session_len: int = 2048,
@@ -134,8 +143,8 @@ def main(tritonserver_addr: str,
          test_round: int = 1):
     warmup(tritonserver_addr, model_name, concurrency, session_len,
            session_len)
-    req_que = read_dataset(tritonserver_addr, dataset_path, samples,
-                           test_round, session_len)
+    req_que = read_dataset(tritonserver_addr, tokenizer_path, dataset_path,
+                           samples, test_round, session_len)
     res_que = mp.Queue()
     procs = []
     _start = time.perf_counter()
@@ -143,6 +152,8 @@ def main(tritonserver_addr: str,
         chatbot = Chatbot(tritonserver_addr=tritonserver_addr,
                           model_name=model_name,
                           session_len=session_len,
+                          display=False,
+                          profile_serving=True,
                           ignore_eos=True)
         proc = mp.Process(target=infer,
                           args=(chatbot, i + 1, req_que, res_que))
@@ -167,11 +178,11 @@ def main(tritonserver_addr: str,
     first_token_latency_ave = np.mean(stats[:, 0], axis=0)
     throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
     print(f'\n{"-" * 50}\ncocurrency: {concurrency}\n'
-          f'elapsed_time: {elapsed_time}s\n'
+          f'elapsed_time: {elapsed_time:.2f}s\n'
           f'first_token latency(min, max, ave):\n'
-          f'{first_token_latency_min}s, {first_token_latency_max}s, '
-          f'{first_token_latency_ave}s)\n'
-          f'throughput:\n{throughput} token/s\n{"-" * 50}')
+          f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
+          f'{first_token_latency_ave:.2f}s)\n'
+          f'throughput:\n{throughput:.2f} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':

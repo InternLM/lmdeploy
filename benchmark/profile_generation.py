@@ -66,7 +66,7 @@ def warmup(tritonserver_addr: str,
     for proc in procs:
         proc.join()
     _end = time.perf_counter()
-    print(f'end warmup, elapsed time: {_end - _start}s')
+    print(f'end warmup, elapsed time: {round(_end - _start, 2)}s')
 
 
 def main(tritonserver_addr: str,
@@ -118,11 +118,12 @@ def main(tritonserver_addr: str,
     throughput = np.sum(stats[:, 1], axis=0) / np.sum(stats[:, 2], axis=0)
     print(f'\n{"-" * 50}\ncocurrency: {concurrency}, input_tokens: '
           f'{input_seqlen}, output_tokens: {output_seqlen}\n'
-          f'elapsed_time: {elapsed_time}s\n'
+          f'elapsed_time: {elapsed_time:.2f}s\n'
           f'first_token latency(min, max, ave):\n'
-          f'{first_token_latency_min}s, {first_token_latency_max}s, '
-          f'{first_token_latency_ave}s)\ntoken latency(min, max, ave):\n'
-          f'{token_latency_min}s, {token_latency_max}s, {token_latency_ave}s\n'
+          f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
+          f'{first_token_latency_ave:.2f}s)\ntoken latency(min, max, ave):\n'
+          f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
+          f'{token_latency_ave:.2f}s\n'
           f'throughput:\n{throughput} token/s\n{"-" * 50}')
 
 

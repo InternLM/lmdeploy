@@ -88,7 +88,8 @@ class Chatbot:
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
-                 profile_generation: bool = False):
+                 profile_generation: bool = False,
+                 profile_serving: bool = False):
         assert model_name in MODELS.module_dict.keys(), \
             f"'{model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'
@@ -112,10 +113,11 @@ class Chatbot:
                  temperature=temperature,
                  repetition_penalty=repetition_penalty,
                  stop_words=stop_words,
-                 bad_words=bad_words,
-                 profile_generation=profile_generation))
+                 bad_words=bad_words))
         self.log_level = log_level
         self.display = display
+        self.profile_generation = profile_generation
+        self.profile_serving = profile_serving
 
     def stream_infer(self,
                      session_id: int,
@@ -278,7 +280,7 @@ class Chatbot:
         return stop_words
 
     def _get_prompt(self, prompt: str, sequence_start: bool):
-        if self.cfg.profile_generation:
+        if self.profile_generation or self.profile_serving:
             return prompt
         return self.model.get_prompt(prompt, sequence_start)
 
@@ -301,12 +303,17 @@ class Chatbot:
                f'request_output_len is supposed to be None or int, ' \
                f'but got {type(request_output_len)}'
 
+        if sequence_start:
+            logger.info(f'session {session.session_id}, clear history since '
+                        f'sequence_start is True')
+            session.histories = ''
+            session.sequence_length = 0
+
         input_ids, input_lengths = self.preprocess(prompt)
         input_tokens = input_lengths.squeeze()
-        if self.cfg.profile_generation:
+        if self.profile_generation:
             yield StatusCode.TRITON_STREAM_ING, \
-                  'ignore preprocessing during profiling generation', \
-                  input_tokens
+                  'ignore preprocessing during profiling generation', 0
         if request_output_len is None:
             request_output_len = max(
                 128,
@@ -337,7 +344,7 @@ class Chatbot:
         producer.start()
         for state, res, tokens in self.stream_consumer(
                 self.postprocess, que, session, preseq_length, cancel, logger,
-                self.display, self.cfg.profile_generation, self.eos_id):
+                self.display, self.profile_generation, self.eos_id):
             if state.value < 0:
                 yield state, res, 0
             else:
@@ -441,7 +448,8 @@ class Chatbot:
 
                 session.sequence_length = sequence_length.squeeze()
                 sequence_length = sequence_length - preseq_length
-                if output_ids[-1][-1][-1] == eos_id:
+                last_token_id = output_ids[-1][-1][session.sequence_length - 1]
+                if last_token_id == eos_id:
                     session.sequence_length = session.sequence_length - 1
                     sequence_length = sequence_length - 1
 
