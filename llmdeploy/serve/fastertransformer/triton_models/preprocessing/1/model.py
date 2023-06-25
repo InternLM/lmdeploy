@@ -21,10 +21,14 @@ class Tokenizer:
 
     def encode(self, s: str):
         add_bos = False
+        add_eos = False
         if s.find('<BOS>') != -1:
             s = s.replace('<BOS>', '')
             add_bos = True
-        return self.model.Encode(s, add_bos=add_bos)
+        if s == '<EOS>':
+            s = ''
+            add_eos = True
+        return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
 
     def decode(self, t: List[int]):
         return self.model.Decode(t)
