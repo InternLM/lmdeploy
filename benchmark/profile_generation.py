@@ -119,12 +119,12 @@ def main(tritonserver_addr: str,
     print(f'\n{"-" * 50}\ncocurrency: {concurrency}, input_tokens: '
           f'{input_seqlen}, output_tokens: {output_seqlen}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
-          f'first_token latency(min, max, ave):\n'
+          f'first_token latency(min, max, ave): '
           f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
-          f'{first_token_latency_ave:.2f}s)\ntoken latency(min, max, ave):\n'
+          f'{first_token_latency_ave:.2f}s\ntoken latency(min, max, ave): '
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
-          f'throughput:\n{throughput} token/s\n{"-" * 50}')
+          f'throughput: {throughput} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':

@@ -179,10 +179,10 @@ def main(tritonserver_addr: str,
     throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
     print(f'\n{"-" * 50}\ncocurrency: {concurrency}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
-          f'first_token latency(min, max, ave):\n'
+          f'first_token latency(min, max, ave): '
           f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
-          f'{first_token_latency_ave:.2f}s)\n'
-          f'throughput:\n{throughput:.2f} token/s\n{"-" * 50}')
+          f'{first_token_latency_ave:.2f}s\n'
+          f'throughput: {throughput:.2f} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':
