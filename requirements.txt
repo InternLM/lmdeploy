@@ -3,3 +3,4 @@ mmengine
 numpy
 setuptools
 tritonclient==2.33.0
+safetensors
