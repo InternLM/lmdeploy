@@ -38,3 +38,6 @@ target_link_libraries(Llama PUBLIC -lcudart
         cuda_utils
         logger
         llama_fmha)
+
+add_executable(llama_gemm llama_gemm.cc)
+target_link_libraries(llama_gemm PUBLIC -lcudart gpt_gemm_func memory_utils cuda_utils logger)
