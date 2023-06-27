@@ -143,7 +143,7 @@ def main(
             except:  # noqa
                 print('illegal instruction')
         else:
-            if _is_master == 0:
+            if _is_master:
                 streamer = DecodeOutputStreamer(tokenizer)
             else:
                 streamer = None
