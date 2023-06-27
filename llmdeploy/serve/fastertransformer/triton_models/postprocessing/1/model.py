@@ -6,7 +6,6 @@ from typing import List
 
 import numpy as np
 import triton_python_backend_utils as pb_utils
-from sentencepiece import SentencePieceProcessor
 
 
 class Tokenizer:
@@ -56,7 +55,6 @@ class Tokenizer:
             return self.model.Decode(t)
         else:
             return self.model.decode(t)
-
 
 
 class TritonPythonModel:

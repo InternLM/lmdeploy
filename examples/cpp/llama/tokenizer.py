@@ -1,9 +1,9 @@
 from typing import List
 import fire
-import sys
 
 
 class Tokenizer:
+
     def __init__(self, model_file: str):
         if model_file.endswith('.model'):
             from sentencepiece import SentencePieceProcessor
@@ -39,7 +39,8 @@ class Tokenizer:
 
 
 def main(model_file: str = '/data/llama/model/tokenizer.model',
-         encode_file: str = None, decode_file: str = None):
+         encode_file: str = None,
+         decode_file: str = None):
     tokenizer = Tokenizer(model_file)
     if encode_file:
         with open(encode_file, 'r') as f:
