@@ -147,7 +147,7 @@ def export(model_name: str,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=8,
-        use_context_fmha=1))
+        use_context_fmha=0))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -302,6 +302,8 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
     _files = sorted(_files)
 
+    print(_files)
+
     _params = {}
     for _file in _files:
         _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
@@ -369,7 +371,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, i + 1, norm_eps, model_params, tokenizer_path,
+    return export(model_name, num_layer, norm_eps, model_params, tokenizer_path,
                   triton_models_path, tp)
 
 

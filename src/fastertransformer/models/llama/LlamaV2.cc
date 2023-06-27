@@ -91,6 +91,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     FT_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
 
     size_t elem_bits = 0;
+    fprintf(stdout, "******** quant_policy %d\n", quant_policy);
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
         elem_bits = sizeof(int8_t) * 8;
         if (use_context_fmha) {

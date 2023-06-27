@@ -129,7 +129,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
     prefix_cache_len_      = reader.GetInteger("llama", "prefix_cache_len", 0);
     attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
-    quant_policy_          = reader.GetInteger("llama", "quant_policy", 4);
+    quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
 
     handleMissingParams();
 
