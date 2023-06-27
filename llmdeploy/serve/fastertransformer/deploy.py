@@ -165,7 +165,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
     else:
-        print('tokenizer model {tokenizer_path} does not exist')
+        print(f'tokenizer model {tokenizer_path} does not exist')
         return False
     # read model arguments from params.json
     try:
@@ -277,8 +277,12 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     if osp.exists(tokenizer_path):
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
+        for json_file in os.listdir(model_path):
+            if json_file.endswith('.json') and json_file!='pytorch_model.bin.index.json':
+                json_path = osp.join(model_path, json_file) 
+                shutil.copy(json_path, osp.join(triton_models_path, 'tokenizer', json_file))
     else:
-        print('tokenizer model {tokenizer_path} does not exist')
+        print(f'tokenizer model {tokenizer_path} does not exist')
         exit(-1)
 
     # read model arguments from params.json

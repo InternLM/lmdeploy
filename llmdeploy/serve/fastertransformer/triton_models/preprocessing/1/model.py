@@ -7,31 +7,56 @@ from typing import List
 import numpy as np
 import torch
 import triton_python_backend_utils as pb_utils
-from sentencepiece import SentencePieceProcessor
 from torch.nn.utils.rnn import pad_sequence
 
 
 class Tokenizer:
 
     def __init__(self, model_file: str):
-        self.model = SentencePieceProcessor(model_file=model_file)
-        self.vocab_size = self.model.vocab_size()
-        self.start_id = self.model.bos_id()
-        self.end_id = self.model.eos_id()
+        model_folder = osp.split(model_file)[0]
+        tokenizer_config_file = osp.join(model_folder, 'tokenizer_config.json')
+        use_hf_model = osp.exists(tokenizer_config_file)
+        self.use_hf_model = use_hf_model
+        if not self.use_hf_model:
+            from sentencepiece import SentencePieceProcessor
+            self.model = SentencePieceProcessor(model_file=model_file)
+            self.vocab_size = self.model.vocab_size()
+            self.start_id = self.model.bos_id()
+            self.end_id = self.model.eos_id()
+        else:
+            from transformers import AutoTokenizer
+            self.model = AutoTokenizer.from_pretrained(model_folder)
+            self.vocab_size = self.model.vocab_size
+            self.start_id = self.model.bos_token_id
+            self.end_id = self.model.eos_token_id
+            backend_tokenizer_file = osp.join(model_folder, 'tokenizer.json')
+            # save tokenizer.json to reuse
+            if not osp.exists(backend_tokenizer_file):
+                self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     def encode(self, s: str):
-        add_bos = False
-        add_eos = False
-        if s.find('<BOS>') != -1:
-            s = s.replace('<BOS>', '')
-            add_bos = True
-        if s == '<EOS>':
-            s = ''
-            add_eos = True
-        return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
+        if not self.use_hf_model:
+            add_bos = False
+            add_eos = False
+            if s.find('<BOS>') != -1:
+                s = s.replace('<BOS>', '')
+                add_bos = True
+            if s == '<EOS>':
+                s = ''
+                add_eos = True
+            return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
+        else:
+            if s.find('<BOS>') != -1:
+                s = s.replace('<BOS>', '<s>')
+            if s == '<EOS>':
+                s = '</s>'
+            return self.model.encode(s, add_special_tokens=True)
 
     def decode(self, t: List[int]):
-        return self.model.Decode(t)
+        if hasattr(self.model, 'Decode'):
+            return self.model.Decode(t)
+        else:
+            return self.model.decode(t)
 
 
 class TritonPythonModel:
