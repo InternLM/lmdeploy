@@ -1,5 +1,6 @@
-# Copyright (c) OpenMMLab. All rights reserved.\
+# Copyright (c) OpenMMLab. All rights reserved.
 
+import os
 import warnings
 
 import fire
@@ -29,15 +30,19 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def init_model(model_path: str,
-               tokenizer_path: str,
-               tp: int = 1,
-               use_fast_tokenizer=True):
+def init_model(
+    model_path: str,
+    tokenizer_path: str,
+    use_fast_tokenizer=True,
+    local_rank=0,
+    world_size=1,
+):
     """Note:
     If the model is converted from new version of transformers,
         use_fast_tokenizer should be True.
     If using depodaca/llama-xb-hf, use_fast_tokenizer should be False.
     """
+
     if not _is_transformers_available:
         raise ImportError('transformers is not installed.\n'
                           'Please install with `pip install transformers`.\n')
@@ -45,7 +50,7 @@ def init_model(model_path: str,
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path,
                                               use_fast=use_fast_tokenizer)
 
-    torch.set_default_device('cuda')
+    torch.set_default_device(local_rank)
     model = AutoModelForCausalLM.from_pretrained(model_path,
                                                  torch_dtype=torch.float16)
 
@@ -55,7 +60,7 @@ def init_model(model_path: str,
     else:
         model = deepspeed.init_inference(
             model=model,  # Transformers models
-            mp_size=tp,  # Number of GPU
+            mp_size=world_size,  # Number of GPU
             dtype=torch.float16,  # dtype of the weights (fp16)
             replace_with_kernel_inject=True,
             # replace the model with the kernel injector
@@ -67,17 +72,30 @@ def init_model(model_path: str,
     return tokenizer, model
 
 
-def main(model_path: str,
-         tokenizer_path: str = None,
-         tp: int = 1,
-         max_new_tokens=64,
-         temperature: float = 0.8,
-         top_p: float = 0.95,
-         seed: int = 1):
+def main(
+    model_path: str,
+    tokenizer_path: str = None,
+    max_new_tokens=64,
+    temperature: float = 0.8,
+    top_p: float = 0.95,
+    seed: int = 1,
+    use_fast_tokenizer=True,
+):
+    torch.manual_seed(seed)
+
+    local_rank = int(os.getenv('LOCAL_RANK', '0'))
+    world_size = int(os.getenv('WORLD_SIZE', '1'))
+
     if not tokenizer_path:
         tokenizer_path = model_path
 
-    tokenizer, model = init_model(model_path, tokenizer_path, tp)
+    tokenizer, model = init_model(
+        model_path,
+        tokenizer_path,
+        use_fast_tokenizer=use_fast_tokenizer,
+        local_rank=local_rank,
+        world_size=world_size,
+    )
 
     gen_config = GenerationConfig(
         max_new_tokens=max_new_tokens,
@@ -95,26 +113,42 @@ def main(model_path: str,
     )
     model.generate(torch.tensor([[1]]), warmup_config)
 
-    torch.manual_seed(seed)
-    print('READY ...')
+    # print("READY ...")
+    _is_master = local_rank == 0
+    _is_dist = world_size > 1
+
     while True:
-        prompt = input_prompt()
+        # Receive prompt on master
+        if _is_master:
+            prompt = input_prompt()
+        else:
+            prompt = None
+        # Broadcast prompt to all workers
+        if _is_dist:
+            prompt = [prompt]
+            torch.distributed.broadcast_object_list(prompt, src=0)
+            prompt = prompt[0]
+
         if prompt == 'exit':
             exit(0)
-        elif prompt.startswith('config set'):
+
+        # Re-config during runtime
+        if prompt.startswith('config set'):
             try:
                 keqv = prompt.split()[-1]
                 k, v = keqv.split('=')
                 v = eval(v)
                 gen_config.__setattr__(k, v)
-                print(f'set {k} to {repr(v)}')
+                print(f'Worker {local_rank} set {k} to {repr(v)}')
             except:  # noqa
                 print('illegal instruction')
         else:
+            if _is_master == 0:
+                streamer = DecodeOutputStreamer(tokenizer)
+            else:
+                streamer = None
             ids = tokenizer.encode(prompt, return_tensors='pt')
-            model.generate(ids,
-                           gen_config,
-                           streamer=DecodeOutputStreamer(tokenizer))
+            model.generate(ids, gen_config, streamer=streamer)
 
 
 if __name__ == '__main__':

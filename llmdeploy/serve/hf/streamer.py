@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import re
 
 from transformers import PreTrainedTokenizerFast
@@ -28,6 +29,8 @@ class DecodeOutputStreamer(BaseStreamer):
             space = ''
         if res := self.hex_regex.match(tok):
             tok = chr(int(res.group(1), 16))
+        if tok == '</s>':
+            tok = '\n'
         return space + tok
 
     def _decode_fallback(self, value):
