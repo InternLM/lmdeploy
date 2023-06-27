@@ -11,10 +11,11 @@ namespace fastertransformer {
 
 enum QuantPolicy {
     kNone = 0x00,
-    // reserve 0x01 and 0x02
+    // reserve 0x01 and 0x02 for backward compatibility
+    kReserve1 = 0x01,
+    kReserve2 = 0x02,
     // quantize cache kv
     kCacheKVInt8 = 0x04,
-    kWeightInt4 = 0x08,
 };
 
 enum CmpMode

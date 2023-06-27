@@ -1569,14 +1569,6 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     int8_t* k_cache_batch_int8 = nullptr;
 
     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
-        T* k_cache =
-            params.k_cache_per_sample ?
-                (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki) :
-                &params.k_cache[bhi * params.memory_max_len * Dh + ki];
-        // Base pointer for the beam's batch, before offsetting with indirection buffer
-        // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
-        k_cache_batch = k_cache;
-    } else {
         // convert k_cache_per_sample to int8
         if (params.k_cache_per_sample) {
             int8_t** ptr = reinterpret_cast<int8_t**>(params.k_cache_per_sample);
@@ -1585,6 +1577,14 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             int8_t* ptr = reinterpret_cast<int8_t*>(params.k_cache);
             k_cache_batch_int8 = &ptr[bhi * params.memory_max_len * Dh + ki];
         }
+    } else {
+        T* k_cache =
+            params.k_cache_per_sample ?
+                (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki) :
+                &params.k_cache[bhi * params.memory_max_len * Dh + ki];
+        // Base pointer for the beam's batch, before offsetting with indirection buffer
+        // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
+        k_cache_batch = k_cache;
     }
 
 
