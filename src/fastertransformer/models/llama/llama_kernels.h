@@ -46,7 +46,9 @@ void invokeExtendKVCache(T**          k_dst,
                          int          max_seq_len,
                          int          size_per_head,
                          int          local_head_num,
-                         cudaStream_t stream);
+                         cudaStream_t stream,
+                         int          quant,
+                         const float* kv_scale);
 
 template<typename T>
 void invokeTransposeKVCache(T*           key_cache_trans,
@@ -60,7 +62,9 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                             int          max_seq_len,
                             int          size_per_head,
                             int          head_num,
-                            cudaStream_t stream);
+                            cudaStream_t stream,
+                            int          quant_policy,
+                            const float* kv_scale);
 
 void invokeGatherOutput(int*         output_ids,
                         const int*   ids,
@@ -151,24 +155,24 @@ struct TempBuffer {
     T* data;
 };
 
-template<typename T>
-inline T*
-transpose_key_cache(T* key_cache, size_t head_num, size_t size_per_head_by_x, size_t mem_len, size_t x, cudaStream_t st)
-{
-    static TempBuffer<T> buf(8192 * 8192);
-    // from: H Dx, S, x
-    // to  : S, H Dx, x
-    invokeTransposeAxis01(buf.data, key_cache, head_num * size_per_head_by_x, mem_len, x, st);
-    return buf.data;
-}
+// template<typename T>
+// inline T*
+// transpose_key_cache(T* key_cache, size_t head_num, size_t size_per_head_by_x, size_t mem_len, size_t x, cudaStream_t st)
+// {
+//     static TempBuffer<T> buf(8192 * 8192);
+//     // from: H Dx, S, x
+//     // to  : S, H Dx, x
+//     invokeTransposeAxis01(buf.data, key_cache, head_num * size_per_head_by_x, mem_len, x, st);
+//     return buf.data;
+// }
 
-template<typename T>
-inline T* transpose_value_cache(T* value_cache, size_t head_num, size_t mem_len, size_t size_per_head, cudaStream_t st)
-{
-    static TempBuffer<T> buf(8192 * 8192);
-    invokeTransposeAxis01(buf.data, value_cache, head_num, mem_len, size_per_head, st);
-    return buf.data;
-}
+// template<typename T>
+// inline T* transpose_value_cache(T* value_cache, size_t head_num, size_t mem_len, size_t size_per_head, cudaStream_t st)
+// {
+//     static TempBuffer<T> buf(8192 * 8192);
+//     invokeTransposeAxis01(buf.data, value_cache, head_num, mem_len, size_per_head, st);
+//     return buf.data;
+// }
 
 inline void dump_sequence_len(int* d_seq_len, int step, int tp_rank, cudaStream_t st)
 {

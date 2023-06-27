@@ -42,7 +42,8 @@ public:
                                cublasMMWrapper* cublas_wrapper,
                                IAllocator*      allocator,
                                bool             is_free_buffer_after_forward,
-                               bool             use_fmha):
+                               bool             use_fmha,
+                               int              quant_policy):
         head_num_(head_num),
         size_per_head_(size_per_head),
         hidden_units_(head_num * size_per_head),
@@ -56,7 +57,8 @@ public:
         linear_(cublas_wrapper, stream),
         allocator_(allocator),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
-        use_fmha_(use_fmha)
+        use_fmha_(use_fmha),
+        quant_policy_(quant_policy)
     {
     }
 
@@ -72,17 +74,19 @@ public:
                                  int    max_k_len,
                                  int    max_seq_len);
 
-    void unfusedMultiHeadAttention(T**        key_cache_ptrs,
-                                   T**        val_cache_ptrs,
-                                   size_t     cache_layer_offset,
-                                   const T*   attention_mask,
-                                   const int* padding_offset,
-                                   const int* context_length,
-                                   int        batch_size,
-                                   int        num_token,
-                                   int        max_q_len,
-                                   int        max_k_len,
-                                   int        max_seq_len);
+    void unfusedMultiHeadAttention(T**          key_cache_ptrs,
+                                   T**          val_cache_ptrs,
+                                   size_t       cache_layer_offset,
+                                   const T*     attention_mask,
+                                   const int*   padding_offset,
+                                   const int*   context_length,
+                                   int          batch_size,
+                                   int          num_token,
+                                   int          max_q_len,
+                                   int          max_k_len,
+                                   int          max_seq_len,
+                                   int          quant_policy,
+                                   const float* kv_scale);
 
 private:
     const size_t head_num_;
@@ -96,6 +100,7 @@ private:
     const bool neox_rotary_style_;
 
     const bool use_fmha_;
+    const int quant_policy_;
 
     NcclParam tensor_para_;
 
