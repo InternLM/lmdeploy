@@ -114,12 +114,12 @@ def main(
     model.generate(torch.tensor([[1]]), warmup_config)
 
     # print("READY ...")
-    _is_master = local_rank == 0
+    _on_master = local_rank == 0
     _is_dist = world_size > 1
 
     while True:
         # Receive prompt on master
-        if _is_master:
+        if _on_master:
             prompt = input_prompt()
         else:
             prompt = None
@@ -143,7 +143,7 @@ def main(
             except:  # noqa
                 print('illegal instruction')
         else:
-            if _is_master:
+            if _on_master:
                 streamer = DecodeOutputStreamer(tokenizer)
             else:
                 streamer = None
