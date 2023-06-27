@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.\
 
-import os
 import warnings
 
 import fire
@@ -35,7 +34,8 @@ def init_model(model_path: str,
                tp: int = 1,
                use_fast_tokenizer=True):
     """Note:
-    If the model is converted from new version of transformers, use_fast_tokenizer should be True.
+    If the model is converted from new version of transformers,
+        use_fast_tokenizer should be True.
     If using depodaca/llama-xb-hf, use_fast_tokenizer should be False.
     """
     if not _is_transformers_available:
@@ -57,8 +57,8 @@ def init_model(model_path: str,
             model=model,  # Transformers models
             mp_size=tp,  # Number of GPU
             dtype=torch.float16,  # dtype of the weights (fp16)
-            replace_with_kernel_inject=
-            True,  # replace the model with the kernel injector
+            replace_with_kernel_inject=True,
+            # replace the model with the kernel injector
             max_out_tokens=2048,
         )
 
@@ -67,18 +67,35 @@ def init_model(model_path: str,
     return tokenizer, model
 
 
-def main(model_path: str, tokenizer_path: str = None, tp: int = 1):
+def main(model_path: str,
+         tokenizer_path: str = None,
+         tp: int = 1,
+         max_new_tokens=64,
+         temperature: float = 0.8,
+         top_p: float = 0.95,
+         seed: int = 1):
     if not tokenizer_path:
         tokenizer_path = model_path
 
     tokenizer, model = init_model(model_path, tokenizer_path, tp)
 
-    gen_config = GenerationConfig(max_new_tokens=64, do_sample=False)
+    gen_config = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        do_sample=temperature > 0,
+        temperature=temperature,
+        top_p=top_p,
+    )
 
     # warmup
-    warmup_config = GenerationConfig(max_new_tokens=1, do_sample=False)
+    warmup_config = GenerationConfig(
+        max_new_tokens=1,
+        do_sample=temperature > 0,
+        temperature=temperature,
+        top_p=top_p,
+    )
     model.generate(torch.tensor([[1]]), warmup_config)
 
+    torch.manual_seed(seed)
     print('READY ...')
     while True:
         prompt = input_prompt()
@@ -91,7 +108,7 @@ def main(model_path: str, tokenizer_path: str = None, tp: int = 1):
                 v = eval(v)
                 gen_config.__setattr__(k, v)
                 print(f'set {k} to {repr(v)}')
-            except:
+            except:  # noqa
                 print('illegal instruction')
         else:
             ids = tokenizer.encode(prompt, return_tensors='pt')
