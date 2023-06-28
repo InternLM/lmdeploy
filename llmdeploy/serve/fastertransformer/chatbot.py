@@ -107,13 +107,14 @@ class Chatbot:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
         self.cfg = mmengine.Config(
-            dict(session_len=session_len,
-                 top_p=top_p,
-                 top_k=top_k,
-                 temperature=temperature,
-                 repetition_penalty=repetition_penalty,
-                 stop_words=stop_words,
-                 bad_words=bad_words))
+            dict(
+                session_len=session_len,
+                top_p=top_p,
+                top_k=top_k,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                stop_words=stop_words,
+                bad_words=bad_words))
         self.log_level = log_level
         self.display = display
         self.profile_generation = profile_generation
@@ -200,13 +201,16 @@ class Chatbot:
             return StatusCode.TRITON_SESSION_CLOSED
 
         self._session.status = 0
-        for status, _, _ in self._stream_infer(self._session,
-                                               prompt='',
-                                               request_output_len=0,
-                                               sequence_start=False,
-                                               sequence_end=True):
+        for status, _, _ in self._stream_infer(
+                self._session,
+                prompt='',
+                request_output_len=0,
+                sequence_start=False,
+                sequence_end=True):
             if status != StatusCode.TRITON_STREAM_END:
                 return status
+
+        self.reset_session()
         return StatusCode.TRITON_STREAM_END
 
     def cancel(self, session_id: int, *args, **kwargs):
@@ -238,12 +242,13 @@ class Chatbot:
             return StatusCode.TRITON_SESSION_CLOSED
 
         prev_session = self._session
-        for status, res, _ in self._stream_infer(self._session,
-                                                 prompt='',
-                                                 request_output_len=0,
-                                                 sequence_start=False,
-                                                 sequence_end=False,
-                                                 cancel=True):
+        for status, res, _ in self._stream_infer(
+                self._session,
+                prompt='',
+                request_output_len=0,
+                sequence_start=False,
+                sequence_end=False,
+                cancel=True):
             if status.value < 0:
                 break
         if status == StatusCode.TRITON_STREAM_END:
@@ -336,11 +341,11 @@ class Chatbot:
         session.response = ''
 
         que = queue.Queue()
-        producer = threading.Thread(target=self._stream_producer,
-                                    args=(self.tritonserver_addr, session, que,
-                                          self.cfg, input_ids, input_lengths,
-                                          request_output_len, sequence_start,
-                                          sequence_end, preseq_length, cancel))
+        producer = threading.Thread(
+            target=self._stream_producer,
+            args=(self.tritonserver_addr, session, que, self.cfg, input_ids,
+                  input_lengths, request_output_len, sequence_start,
+                  sequence_end, preseq_length, cancel))
         producer.start()
         for state, res, tokens in self.stream_consumer(
                 self.postprocess, que, session, preseq_length, cancel, logger,
@@ -411,12 +416,13 @@ class Chatbot:
                         random_seed * np.ones((1, 1), dtype=np.uint64))
                 ]
             client.start_stream(callback)
-            client.async_stream_infer('fastertransformer',
-                                      inputs,
-                                      sequence_id=session.session_id,
-                                      request_id=session.request_id,
-                                      sequence_start=sequence_start,
-                                      sequence_end=sequence_end)
+            client.async_stream_infer(
+                'fastertransformer',
+                inputs,
+                sequence_id=session.session_id,
+                request_id=session.request_id,
+                sequence_start=sequence_start,
+                sequence_end=sequence_end)
         que.put(None)
 
     @staticmethod

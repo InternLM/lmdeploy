@@ -23,11 +23,14 @@ class Tokenizer:
             self.end_id = self.model.eos_id()
         else:
             from transformers import AutoTokenizer
+            backend_tokenizer_file = osp.join(model_folder, 'tokenizer.json')
+            if not osp.exists(backend_tokenizer_file):
+                print('WARNING: Can not find tokenizer.json. '
+                      'It may take long time to initialize the tokenizer.')
             self.model = AutoTokenizer.from_pretrained(model_folder)
             self.vocab_size = self.model.vocab_size
             self.start_id = self.model.bos_token_id
             self.end_id = self.model.eos_token_id
-            backend_tokenizer_file = osp.join(model_folder, 'tokenizer.json')
             # save tokenizer.json to reuse
             if not osp.exists(backend_tokenizer_file):
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
@@ -44,17 +47,22 @@ class Tokenizer:
                 add_eos = True
             return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
         else:
+            add_special_tokens = False
             if s.find('<BOS>') != -1:
                 s = s.replace('<BOS>', '<s>')
             if s == '<EOS>':
                 s = '</s>'
-            return self.model.encode(s, add_special_tokens=True)
+            if len(s) == 0:
+                add_special_tokens = True
+            return self.model.encode(s, add_special_tokens=add_special_tokens)
 
     def decode(self, t: List[int]):
-        if hasattr(self.model, 'Decode'):
+        if not self.use_hf_model:
             return self.model.Decode(t)
         else:
-            return self.model.decode(t)
+            skip_special_tokens = True
+            return self.model.decode(
+                t, skip_special_tokens=skip_special_tokens)
 
 
 class TritonPythonModel:

@@ -378,8 +378,8 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, i + 1, norm_eps, model_params, tokenizer_path,
-                  triton_models_path, tp)
+    return export(model_name, num_layer, norm_eps, model_params,
+                  tokenizer_path, triton_models_path, tp)
 
 
 def pack_model_repository(workspace_path: str):
