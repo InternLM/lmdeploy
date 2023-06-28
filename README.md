@@ -158,6 +158,12 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```
 
+## Inference with Web UI
+
+```shell
+python3 llmdeploy/webui/app.py {server_ip_addresss}:33337
+```
+
 ## User Guide
 
 ## Contributing

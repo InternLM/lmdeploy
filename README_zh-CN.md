@@ -146,6 +146,12 @@ bash workspace/service_docker_up.sh
 python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```
 
+## 使用浏览器推理
+
+```shell
+python3 llmdeploy/webui/app.py {server_ip_addresss}:33337
+```
+
 ## 贡献指南
 
 我们感谢所有的贡献者为改进和提升 LLMDeploy 所作出的努力。请参考[贡献指南](.github/CONTRIBUTING.md)来了解参与项目贡献的相关指引。

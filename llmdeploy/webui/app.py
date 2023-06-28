@@ -31,8 +31,8 @@ def reset_everything_func(instruction_txtbox, state_chatbot, llama_chatbot,
     )
 
 
-def run(model_name: str,
-        triton_server_addr: str,
+def run(triton_server_addr: str,
+        model_name: str = 'vicuna',
         server_name: str = 'localhost',
         server_port: int = 6006):
     with gr.Blocks(css=PARENT_BLOCK_CSS, theme='ParityError/Anime') as demo:
