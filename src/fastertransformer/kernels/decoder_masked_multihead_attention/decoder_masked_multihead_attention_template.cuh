@@ -1052,13 +1052,13 @@ inline __device__ int32_t quant(float4 a, const float scale)
 }
 
 // float16 to int8
-// inline __device__ int8_t quant(uint16_t a, const float scale)
-// {
-//     int8_t int8;
-//     float  b = half_to_float(a);
-//     int8     = round(max(-128.f, min(127.f, b.x / scale)));
-//     return int8;
-// }
+inline __device__ int8_t quant(uint16_t a, const float scale)
+{
+    int8_t int8;
+    float  b = half_to_float(a);
+    int8     = round(max(-128.f, min(127.f, b / scale)));
+    return int8;
+}
 // float16x2 to int8x2
 inline __device__ int16_t quant(uint a, const float scale)
 {
@@ -1460,8 +1460,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
                         Packed_Int8_t k_int8 = quant(k, k_scale);
 
-                        Packed_Int8_t* dst_ptr = reinterpret_cast<Packed_Int8_t*>(params.k_cache);
-                        dst_ptr[offset] = k_int8;
+                        int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache);
+                        *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
                     } else {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache[offset]) = vec_conversion<Qk_vec_m, Qk_vec_k>(k);
                     }
@@ -1481,8 +1481,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
                         Packed_Int8_t k_int8 = quant(k, k_scale);
 
-                        Packed_Int8_t** dst_ptr = reinterpret_cast<Packed_Int8_t**>(params.k_cache_per_sample);
-                        dst_ptr[bi][offset] = k_int8;
+                        int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
+                        *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
                     } else {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
                             vec_conversion<Qk_vec_m, Qk_vec_k>(k);
@@ -1571,8 +1571,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
         // convert k_cache_per_sample to int8
         if (params.k_cache_per_sample) {
-            int8_t** ptr = reinterpret_cast<int8_t**>(params.k_cache_per_sample);
-            k_cache_batch_int8 = ptr[bi] + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki;
+            int8_t* ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
+            k_cache_batch_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki;
         } else {
             int8_t* ptr = reinterpret_cast<int8_t*>(params.k_cache);
             k_cache_batch_int8 = &ptr[bhi * params.memory_max_len * Dh + ki];
@@ -1755,8 +1755,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
         if (params.v_cache_per_sample) {
-            int8_t** ptr = reinterpret_cast<int8_t**>(params.v_cache_per_sample);
-            v_cache_int8 = ptr[bi] + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi;
+            int8_t* ptr = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
+            v_cache_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi;
         } else {
             int8_t* ptr = reinterpret_cast<int8_t*>(params.v_cache);
             v_cache_int8 = &ptr[bhi * params.memory_max_len * Dh + vi];

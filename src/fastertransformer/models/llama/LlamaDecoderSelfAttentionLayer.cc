@@ -17,8 +17,6 @@
 
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.cc
-#include <iostream>
-#include <filesystem>
 #include "src/fastertransformer/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
@@ -241,6 +239,10 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     const auto kv_cache_layer_offset = layer_id * local_head_num_ * max_seq_len * size_per_head_;
     const int  memory_len            = max_seq_len;
 
+    if (kv_cache_layer_offset >= 192937984) {
+        fprintf(stderr, "gdb");
+    }
+
     fusedQKV_masked_attention_dispatch<T>(
         qkv_buf_,
         weights->qkv.bias,  // query_weight.bias,
@@ -279,22 +281,6 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         weights->past_kv_scale.data(), // attention kv scale
         stream_);
     sync_check_cuda_error();
-
-    const std::string path_base = "/workspace/save-fp16/normal_";
-    std::string kpath = path_base + "k" + std::to_string(layer_id) + ".npy";
-    std::string vpath = path_base + "v" + std::to_string(layer_id) + ".npy";
-    // if (not std::filesystem::exists(kpath)) {
-    //     auto kptr = key_cache_ptrs[0];
-    //     auto vptr = value_cache_ptrs[0];
-
-    //     Tensor k(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, local_head_num_}, kptr);
-    //     k.saveNpy(kpath);
-
-    //     Tensor v(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, local_head_num_}, vptr);
-    //     v.saveNpy(vpath);
-    // }
-
-    
 
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
 
