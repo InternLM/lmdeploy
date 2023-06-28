@@ -147,7 +147,7 @@ def export(model_name: str,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=8,
-        use_context_fmha=0))
+        use_context_fmha=1))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -301,7 +301,6 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
 
     _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
     _files = sorted(_files)
-
     print(_files)
 
     _params = {}
