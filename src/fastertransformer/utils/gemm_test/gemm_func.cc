@@ -270,10 +270,10 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     // Let try a fixed number of combinations
     int                  AlgoCount         = 0;
     int                  AlgoCountRestrict = 0;            // workspace == 0
-    int                  maxNumTraversal   = 50;           // max number of traversal
+    const int            maxNumTraversal   = 50;           // max number of traversal
     cublasLtMatmulAlgo_t algos[AlgoCombinations];          // 0 <= workspace <= 32MB
     cublasLtMatmulAlgo_t algosRestrict[AlgoCombinations];  // workspace == 0
-    int                  kernelRepeats = 100;              // number of time the CUDA kernels will be run back to back
+    const int            kernelRepeats = 100;              // number of time the CUDA kernels will be run back to back
     int                  nbAlgoIds     = 0;                // Number of algorithms actually returned by
                                                            // cublasLtMatmulAlgoGetIds function.
 #define ALGO_IDS 100                                       // Number of algorithms requested.

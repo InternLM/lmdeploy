@@ -39,6 +39,7 @@ void generate_gpt_gemm_config(int   batch_size,
     void* cublas_workspace;
     void* buffer;
     int   workSpaceSize;
+#if 0
     bool  workspace_flag = std::is_same<T, half>::value;
 #ifdef ENABLE_FP8
     workspace_flag = workspace_flag || std::is_same<T, __nv_fp8_e4m3>::value;
@@ -46,6 +47,9 @@ void generate_gpt_gemm_config(int   batch_size,
 #if ENABLE_BF16
     workspace_flag = workspace_flag || std::is_same<T, __nv_bfloat16>::value;
 #endif
+#endif
+    // algorithms with workspace perform worse than evaluated
+    const bool workspace_flag = 0;
     if (workspace_flag) {
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
@@ -310,7 +314,8 @@ void generate_gpt_gemm_config(int   batch_size,
     }
 
     for (int i = 0; i < gemm_num; ++i) {
-        if (i <= 5) {
+        // tuning of context gemm and logits gemm is not working yet
+        if (i <= 5 || i == 10) {
             continue;
         }
         int seq_len = i <= 5 ? max_input_len : 1;
@@ -445,7 +450,7 @@ void generate_gpt_gemm_config(int   batch_size,
         if ((data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) || data_type == FP8_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int                ALGO_COMBINATIONS = 5000;
+            int                ALGO_COMBINATIONS = 10000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             // for gpt, computeType & scaleType should be FP32
