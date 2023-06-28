@@ -147,7 +147,8 @@ def export(model_name: str,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=8,
-        use_context_fmha=1))
+        use_context_fmha=1,
+        quant_policy=0))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
