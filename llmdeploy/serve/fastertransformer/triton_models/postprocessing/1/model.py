@@ -60,7 +60,7 @@ class Tokenizer:
         if not self.use_hf_model:
             return self.model.Decode(t)
         else:
-            skip_special_tokens = True
+            skip_special_tokens = False
             return self.model.decode(
                 t, skip_special_tokens=skip_special_tokens)
 
