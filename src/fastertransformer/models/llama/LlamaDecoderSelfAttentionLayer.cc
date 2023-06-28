@@ -17,7 +17,8 @@
 
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.cc
-
+#include <iostream>
+#include <filesystem>
 #include "src/fastertransformer/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
@@ -99,14 +100,14 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     // Set the input buffers.
     params.q = reinterpret_cast<const DataType*>(qkv_buf);
-    if (int8_mode != 2) {
-        params.k = reinterpret_cast<const DataType*>(qkv_buf) + hidden_units;
-        params.v = reinterpret_cast<const DataType*>(qkv_buf) + 2 * hidden_units;
-    }
-    else {
-        params.k = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + hidden_units);
-        params.v = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + 2 * hidden_units);
-    }
+    // if (int8_mode != 2) {
+    params.k = reinterpret_cast<const DataType*>(qkv_buf) + hidden_units;
+    params.v = reinterpret_cast<const DataType*>(qkv_buf) + 2 * hidden_units;
+    // }
+    // else {
+    //     params.k = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + hidden_units);
+    //     params.v = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + 2 * hidden_units);
+    // }
     params.stride   = 3 * hidden_units;
     params.finished = const_cast<bool*>(finished);
 
@@ -149,10 +150,11 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
 
     params.int8_mode = int8_mode;
-    if (int8_mode == 2) {
-        params.qkv_scale_out       = qkv_scale_out;
-        params.attention_out_scale = attention_out_scale;
-    } else if (int8_mode == QuantPolicy::kCacheKVInt8) {
+    // if (int8_mode == 2) {
+    //     params.qkv_scale_out       = qkv_scale_out;
+    //     params.attention_out_scale = attention_out_scale;
+    // }
+    if (int8_mode & QuantPolicy::kCacheKVInt8) {
         params.attention_k_scale = attention_kv_scale[0];
         params.attention_v_scale = attention_kv_scale[1];
     }
@@ -277,6 +279,22 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         weights->past_kv_scale.data(), // attention kv scale
         stream_);
     sync_check_cuda_error();
+
+    const std::string path_base = "/workspace/save-fp16/normal_";
+    std::string kpath = path_base + "k" + std::to_string(layer_id) + ".npy";
+    std::string vpath = path_base + "v" + std::to_string(layer_id) + ".npy";
+    // if (not std::filesystem::exists(kpath)) {
+    //     auto kptr = key_cache_ptrs[0];
+    //     auto vptr = value_cache_ptrs[0];
+
+    //     Tensor k(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, local_head_num_}, kptr);
+    //     k.saveNpy(kpath);
+
+    //     Tensor v(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, local_head_num_}, vptr);
+    //     v.saveNpy(vpath);
+    // }
+
+    
 
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
 

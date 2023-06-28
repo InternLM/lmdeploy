@@ -129,7 +129,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
     prefix_cache_len_      = reader.GetInteger("llama", "prefix_cache_len", 0);
     attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
-    quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
+    quant_policy_ = 0;
+    // quant_policy_          = reader.GetInteger("llama", "quant_policy", 4);
 
     handleMissingParams();
 
@@ -309,7 +310,7 @@ std::string LlamaTritonModel<T>::toString()
        << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
-       << "\nprefix_cache_len: " << prefix_cache_len_ << "\nmodel_dir: " << model_dir_ << std::endl;
+       << "\nprefix_cache_len: " << prefix_cache_len_ << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << std::endl;
 
     return ss.str();
 }

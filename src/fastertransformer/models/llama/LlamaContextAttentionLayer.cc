@@ -19,6 +19,8 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
 
+#include <iostream>
+#include <filesystem>
 #include "src/fastertransformer/models/llama/LlamaContextAttentionLayer.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
@@ -198,7 +200,23 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                         stream_,
                         quant_policy_,
                         weights->past_kv_scale.data());
+
+
+    const std::string path_base = "/workspace/save/context_";
+
     sync_check_cuda_error();
+    std::string kpath = path_base + "k" + std::to_string(layer_id) + ".npy";
+    std::string vpath = path_base + "v" + std::to_string(layer_id) + ".npy";
+    if (not std::filesystem::exists(kpath)) {
+        // auto kptr = k_cache_ptrs[0];
+        // auto vptr = v_cache_ptrs[0];
+
+        // Tensor k(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, batch_size, local_head_num_}, kptr);
+        // k.saveNpy(kpath);
+
+        // Tensor v(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, batch_size, local_head_num_}, vptr);
+        // v.saveNpy(vpath);
+    }
 
     if (use_fmha_) {
         fusedMultiHeadAttention(k_cache_ptrs,
@@ -225,6 +243,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   max_seq_len,
                                   quant_policy_,
                                   weights->past_kv_scale.data());
+
+        
     }
 
     //////////////////////////////////////////////
@@ -236,6 +256,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
         ftNcclAllReduceSum(attention_out, attention_out, num_token * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
     }
+
+ 
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
@@ -329,6 +351,23 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**        key_cac
                            kv_scale);
     sync_check_cuda_error();
 
+    const std::string path_base = "/workspace/save-fp16/context_";
+    std::string hkpath = path_base + "hk" + ".npy";
+    std::string hvpath = path_base + "hv" + ".npy";
+    std::string hspath = path_base + "hs" + ".npy";
+
+    if (not std::filesystem::exists(hkpath)) {
+
+        Tensor k(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, local_head_num_}, k_cache_buf_);
+        k.saveNpy(hkpath);
+
+        Tensor v(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, local_head_num_}, v_cache_buf_);
+        v.saveNpy(hvpath);
+
+        Tensor s(MemoryType::MEMORY_CPU, DataType::TYPE_FP32, {2}, kv_scale);
+        s.saveNpy(hspath);
+    }
+
     const T qk_scale = static_cast<T>(1.f / sqrtf(size_per_head_ * 1.f));
 
     //////////////////////////////////////////////
@@ -398,6 +437,12 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**        key_cac
                                              0,
                                              stream_);
     sync_check_cuda_error();
+
+    std::string hapath = path_base + "ha" + "policy" + std::to_string(quant_policy_) + ".npy";
+    if (not std::filesystem::exists(hapath)) {
+        Tensor attn(MemoryType::MEMORY_GPU, DataType::TYPE_FP16, {size_per_head_, max_q_len}, qkv_buf_3_);
+        attn.saveNpy(hapath);
+    }
 }
 
 template class LlamaContextAttentionLayer<float>;
