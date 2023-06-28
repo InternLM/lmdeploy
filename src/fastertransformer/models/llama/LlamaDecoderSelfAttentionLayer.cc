@@ -98,14 +98,9 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     // Set the input buffers.
     params.q = reinterpret_cast<const DataType*>(qkv_buf);
-    // if (int8_mode != 2) {
     params.k = reinterpret_cast<const DataType*>(qkv_buf) + hidden_units;
     params.v = reinterpret_cast<const DataType*>(qkv_buf) + 2 * hidden_units;
-    // }
-    // else {
-    //     params.k = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + hidden_units);
-    //     params.v = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + 2 * hidden_units);
-    // }
+
     params.stride   = 3 * hidden_units;
     params.finished = const_cast<bool*>(finished);
 
@@ -148,10 +143,7 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
 
     params.int8_mode = int8_mode;
-    // if (int8_mode == 2) {
-    //     params.qkv_scale_out       = qkv_scale_out;
-    //     params.attention_out_scale = attention_out_scale;
-    // }
+
     if (int8_mode & QuantPolicy::kCacheKVInt8) {
         params.attention_k_scale = attention_kv_scale[0];
         params.attention_v_scale = attention_kv_scale[1];
@@ -238,10 +230,6 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     const auto kv_cache_layer_offset = layer_id * local_head_num_ * max_seq_len * size_per_head_;
     const int  memory_len            = max_seq_len;
-
-    if (kv_cache_layer_offset >= 192937984) {
-        fprintf(stderr, "gdb");
-    }
 
     fusedQKV_masked_attention_dispatch<T>(
         qkv_buf_,

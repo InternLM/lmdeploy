@@ -451,48 +451,6 @@ template void invokeExtendKVCache(half**,
                                   int,
                                   const float*);
 
-// template<typename T>
-// __global__ void transpose_key_cache(T*           k_dst,
-//                                     const T**    k_src,
-//                                     const size_t src_offset,
-//                                     const int    head_num,
-//                                     const int    size_per_head,
-//                                     const int*   seq_length,
-//                                     const int    max_kv_len,
-//                                     const int    max_seq_len)
-// {
-//     const int     batch_id = blockIdx.y;
-//     const int     head_id  = blockIdx.z;
-//     constexpr int X_ELEMS  = (sizeof(T) == 4) ? 4 : 8;
-
-//     const int idx                 = blockIdx.x * blockDim.x + threadIdx.x;
-//     int       size_per_head_div_x = size_per_head / X_ELEMS;
-
-//     // x dim is now handled by uint4 type
-//     const auto key_src = reinterpret_cast<const uint4*>(k_src[batch_id] + src_offset);
-//     const auto key_dst = reinterpret_cast<uint4*>(k_dst);
-
-//     const auto seq_len = seq_length[batch_id];
-
-//     const int k_head_size_id = idx % size_per_head_div_x;
-//     const int k_seq_len_id   = idx / size_per_head_div_x;
-
-//     if (k_seq_len_id < seq_len) {
-//         // [B, H, s, D/x] <- [B, H, D/x, S[:s]]
-
-//         const int64_t src_idx = head_id * size_per_head_div_x * max_seq_len +  // H
-//                                 k_head_size_id * max_seq_len +                 // D/x
-//                                 k_seq_len_id;                                  // s
-
-//         const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +  // B
-//                                 head_id * size_per_head_div_x * max_kv_len +              // H
-//                                 k_seq_len_id * size_per_head_div_x +                      // s
-//                                 k_head_size_id;                                           // D/x
-
-//         key_dst[dst_idx] = key_src[src_idx];
-//     }
-// }
-
 template<typename T>
 __global__ void transpose_value_cache(T*           v_dst,  //
                                       const T**    v_src,
