@@ -62,7 +62,7 @@ void LlamaContextDecoder<T>::freeBuffer()
 }
 
 template<typename T>
-void LlamaContextDecoder<T>::initialize(bool use_fmha)
+void LlamaContextDecoder<T>::initialize(bool use_fmha, int quant_policy)
 {
     h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
 
@@ -75,7 +75,8 @@ void LlamaContextDecoder<T>::initialize(bool use_fmha)
                                                                  cublas_wrapper_,
                                                                  allocator_,
                                                                  is_free_buffer_after_forward_,
-                                                                 use_fmha);
+                                                                 use_fmha,
+                                                                 quant_policy);
 
     silu_ffn_layer_ = new LlamaFfnLayer<T>(head_num_,
                                            size_per_head_,
@@ -133,7 +134,8 @@ LlamaContextDecoder<T>::LlamaContextDecoder(size_t           head_num,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator*      allocator,
                                             bool             is_free_buffer_after_forward,
-                                            bool             use_fmha):
+                                            bool             use_fmha,
+                                            int              quant_policy):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -145,7 +147,7 @@ LlamaContextDecoder<T>::LlamaContextDecoder(size_t           head_num,
     tensor_para_(tensor_para),
     data_type_(getTensorType<T>())
 {
-    initialize(use_fmha);
+    initialize(use_fmha, quant_policy);
 }
 
 template<typename T>

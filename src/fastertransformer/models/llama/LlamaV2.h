@@ -62,6 +62,7 @@ public:
             int                          end_id,
             int                          cache_max_entry_count,
             int                          cache_chunk_size,
+            int                          quant_policy,
             bool                         use_context_fmha,
             std::shared_ptr<SharedState> shared_state,
             LlamaWeight<T>*              weights,
@@ -88,7 +89,7 @@ private:
 
     void internalThreadEntry(int device_id);
 
-    void initialize(bool use_context_fmha);
+    void initialize(bool use_context_fmha, int quant_policy);
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
