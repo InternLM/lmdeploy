@@ -52,6 +52,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     int                          end_id,
                     int                          cache_max_entry_count,
                     int                          cache_chunk_size,
+                    int                          quant_policy,
                     bool                         use_context_fmha,
                     std::shared_ptr<SharedState> shared_state,
                     LlamaWeight<T>*              weights,
@@ -89,16 +90,26 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     FT_CHECK(vocab_size_ % tensor_para_.world_size_ == 0);
     FT_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
 
+    size_t elem_bits = 0;
+    if (quant_policy & QuantPolicy::kCacheKVInt8) {
+        elem_bits = sizeof(int8_t) * 8;
+        if (use_context_fmha) {
+            FT_LOG_ERROR("use_context_fmha not support int8");
+            assert(0);
+        }
+    } else {
+        elem_bits = sizeof(T) * 8;
+    }
     kv_cache_mgr_ = std::make_unique<LlamaCacheManager>(num_layer_,
                                                         local_head_num_,
                                                         size_per_head_,
                                                         session_len,
-                                                        sizeof(T) * 8,
+                                                        elem_bits,
                                                         cache_max_entry_count,
                                                         cache_chunk_size,
                                                         tensor_para.rank_,
                                                         allocator);
-    initialize(use_context_fmha);
+    initialize(use_context_fmha, quant_policy);
     start();
 }
 
@@ -113,7 +124,7 @@ LlamaV2<T>::~LlamaV2()
 }
 
 template<typename T>
-void LlamaV2<T>::initialize(bool use_context_fmha)
+void LlamaV2<T>::initialize(bool use_context_fmha, int quant_policy)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -128,7 +139,8 @@ void LlamaV2<T>::initialize(bool use_context_fmha)
                                                   cublas_wrapper_,
                                                   allocator_,
                                                   is_free_buffer_after_forward_,
-                                                  use_context_fmha);
+                                                  use_context_fmha,
+                                                  quant_policy);
 
     decoder_ = new LlamaDecoder<T>(head_num_,
                                    size_per_head_,
@@ -140,7 +152,8 @@ void LlamaV2<T>::initialize(bool use_context_fmha)
                                    stream_,
                                    cublas_wrapper_,
                                    allocator_,
-                                   is_free_buffer_after_forward_);
+                                   is_free_buffer_after_forward_,
+                                   quant_policy);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
                                                           vocab_size_,  // vocab_size_padded,

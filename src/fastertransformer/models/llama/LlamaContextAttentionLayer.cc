@@ -195,9 +195,12 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                         max_seq_len,
                         size_per_head_,
                         local_head_num_,
-                        stream_);
-    sync_check_cuda_error();
+                        stream_,
+                        quant_policy_,
+                        weights->past_kv_scale.data());
 
+
+    sync_check_cuda_error();
     if (use_fmha_) {
         fusedMultiHeadAttention(k_cache_ptrs,
                                 v_cache_ptrs,
@@ -220,7 +223,11 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   num_token,
                                   max_q_len,
                                   max_k_len,
-                                  max_seq_len);
+                                  max_seq_len,
+                                  quant_policy_,
+                                  weights->past_kv_scale.data());
+
+        
     }
 
     //////////////////////////////////////////////
@@ -232,6 +239,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
         ftNcclAllReduceSum(attention_out, attention_out, num_token * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
     }
+
+ 
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
@@ -303,7 +312,9 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**        key_cac
                                                               int        num_token,
                                                               int        max_q_len,
                                                               int        max_k_len,
-                                                              int        max_seq_len)
+                                                              int        max_seq_len,
+                                                              int           quant,
+                                                              const float*     kv_scale)
 {
     // key_cache [B, H, S[:t+s], D/x, x] -> [B, H, t+s, D]
     // val_cache [B, H, S[:t+s], D/x, x] -> [B, H, t+s, D]
@@ -318,7 +329,9 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**        key_cac
                            max_seq_len,
                            size_per_head_,
                            local_head_num_,
-                           stream_);
+                           stream_,
+                           quant,
+                           kv_scale);
     sync_check_cuda_error();
 
     const T qk_scale = static_cast<T>(1.f / sqrtf(size_per_head_ * 1.f));

@@ -93,6 +93,7 @@ private:
     size_t         pipeline_para_size_;
     ft::WeightType weight_type_;
     bool           attn_bias_;
+    int            quant_policy_;
 
     size_t prefix_cache_len_{};
 

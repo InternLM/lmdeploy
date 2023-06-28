@@ -37,7 +37,8 @@ LlamaDecoder<T>::LlamaDecoder(size_t           head_num,
                               cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator*      allocator,
-                              bool             is_free_buffer_after_forward):
+                              bool             is_free_buffer_after_forward,
+                              int              quant_policy):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -50,7 +51,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t           head_num,
     data_type_(getTensorType<T>())
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    initialize();
+    initialize(quant_policy);
 }
 
 template<typename T>
@@ -62,7 +63,7 @@ LlamaDecoder<T>::~LlamaDecoder()
 }
 
 template<typename T>
-void LlamaDecoder<T>::initialize()
+void LlamaDecoder<T>::initialize(int quant_policy)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -74,7 +75,8 @@ void LlamaDecoder<T>::initialize()
                                                                   stream_,
                                                                   cublas_wrapper_,
                                                                   allocator_,
-                                                                  is_free_buffer_after_forward_);
+                                                                  is_free_buffer_after_forward_,
+                                                                  quant_policy);
 
     silu_ffn_layer_ = new LlamaFfnLayer<T>(head_num_,
                                            size_per_head_,

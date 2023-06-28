@@ -344,6 +344,11 @@ std::vector<T> loadWeightFromBinHelper(std::vector<size_t> shape, std::string fi
     return host_array;
 }
 
+std::vector<float> loadArrayFromBin(std::vector<size_t> shape, std::string filename)
+{
+    return loadWeightFromBinHelper<float>(shape, filename);
+}
+
 template<typename T, typename T_IN>
 int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filename)
 {
@@ -523,7 +528,7 @@ void saveToBinary(const T* ptr, const size_t size, std::string filename)
     std::vector<T> h_ptr(size);
     cudaD2Hcpy(h_ptr.data(), ptr, size);
     std::vector<float> float_ptr(size);
-    for (int i = 0; i < size; i++) {
+    for (size_t i = 0; i < size; i++) {
         float_ptr[i] = (float)h_ptr[i];
     }
 

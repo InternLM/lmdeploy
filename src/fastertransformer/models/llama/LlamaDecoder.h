@@ -35,7 +35,7 @@ protected:
     void allocateBuffer() override;  // deprecated
     void allocateBuffer(size_t batch_size);
     void freeBuffer() override;
-    void initialize();
+    void initialize(int quant_policy);
 
     size_t head_num_;
     size_t size_per_head_;
@@ -79,7 +79,9 @@ public:
                  cudaStream_t     stream,
                  cublasMMWrapper* cublas_wrapper,
                  IAllocator*      allocator,
-                 bool             is_free_buffer_after_forward);
+                 bool             is_free_buffer_after_forward,
+                 int              quant_policy),
+                 
 
     ~LlamaDecoder() override;
 
