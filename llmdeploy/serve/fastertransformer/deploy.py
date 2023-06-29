@@ -127,28 +127,29 @@ def export(model_name: str,
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     assert _vocab_size == vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
-    cfg = dict(llama=dict(
-        model_name=model_name,
-        head_num=head_num,
-        size_per_head=size_per_head,
-        vocab_size=vocab_size,
-        num_layer=num_layer,
-        rotary_embedding=size_per_head,
-        inter_size=inter_size,
-        norm_eps=norm_eps,
-        attn_bias=attn_bias,
-        start_id=bos_id,
-        end_id=eos_id,
-        weight_type='fp16',
-        # parameters for fastertransformer
-        max_batch_size=32,
-        max_context_token_num=4,
-        session_len=2048,
-        step_length=1,
-        cache_max_entry_count=48,
-        cache_chunk_size=8,
-        use_context_fmha=1,
-        quant_policy=0))
+    cfg = dict(
+        llama=dict(
+            model_name=model_name,
+            head_num=head_num,
+            size_per_head=size_per_head,
+            vocab_size=vocab_size,
+            num_layer=num_layer,
+            rotary_embedding=size_per_head,
+            inter_size=inter_size,
+            norm_eps=norm_eps,
+            attn_bias=attn_bias,
+            start_id=bos_id,
+            end_id=eos_id,
+            weight_type='fp16',
+            # parameters for fastertransformer
+            max_batch_size=32,
+            max_context_token_num=4,
+            session_len=2048,
+            step_length=1,
+            cache_max_entry_count=48,
+            cache_chunk_size=8,
+            use_context_fmha=1,
+            quant_policy=0))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -166,7 +167,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
     else:
-        print('tokenizer model {tokenizer_path} does not exist')
+        print(f'tokenizer model {tokenizer_path} does not exist')
         return False
     # read model arguments from params.json
     try:
@@ -190,9 +191,8 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
     def get_param(_name, _size):
         print(_name, _size)
         if _name not in model_params:
-            model_params[_name] = torch.zeros(_size,
-                                              dtype=torch.float16,
-                                              device='cpu')
+            model_params[_name] = torch.zeros(
+                _size, dtype=torch.float16, device='cpu')
         return model_params[_name]
 
     for i, ckpt_path in enumerate(checkpoints):
@@ -204,7 +204,8 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                 size = param_data.size(0)
                 if ext == 'weight':
                     param = get_param(
-                        param_name, [size * n_ckpt, param_data.size(1)])
+                        param_name,
+                        [size * n_ckpt, param_data.size(1)])
                     param.data[size * i:size * (i + 1), :] = param_data
                 else:  # bias
                     param = get_param(param_name, [size * n_ckpt])
@@ -235,8 +236,9 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
     # concat qkv projection
     for t in ['weight', 'bias']:
         for i in range(1000):
-            _qkv = [f'layers.{i}.attention.{k}.{t}' for k in [
-                'wq', 'wk', 'wv']]
+            _qkv = [
+                f'layers.{i}.attention.{k}.{t}' for k in ['wq', 'wk', 'wv']
+            ]
             try:
                 qkv = tuple(map(model_params.pop, _qkv))
             except KeyError:
@@ -278,8 +280,15 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     if osp.exists(tokenizer_path):
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
+        for json_file in os.listdir(model_path):
+            if json_file.endswith(
+                    '.json') and json_file != 'pytorch_model.bin.index.json':
+                json_path = osp.join(model_path, json_file)
+                shutil.copy(
+                    json_path,
+                    osp.join(triton_models_path, 'tokenizer', json_file))
     else:
-        print('tokenizer model {tokenizer_path} does not exist')
+        print(f'tokenizer model {tokenizer_path} does not exist')
         exit(-1)
 
     # read model arguments from params.json
@@ -371,19 +380,22 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, num_layer, norm_eps, model_params, tokenizer_path,
-                  triton_models_path, tp)
+    return export(model_name, num_layer, norm_eps, model_params,
+                  tokenizer_path, triton_models_path, tp)
 
 
 def pack_model_repository(workspace_path: str):
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(src=osp.join('../triton_models/interactive'),
-               dst=osp.join(model_repo_dir, 'fastertransformer'))
-    os.symlink(src=osp.join('../triton_models/preprocessing'),
-               dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(src=osp.join('../triton_models/postprocessing'),
-               dst=osp.join(model_repo_dir, 'postprocessing'))
+    os.symlink(
+        src=osp.join('../triton_models/interactive'),
+        dst=osp.join(model_repo_dir, 'fastertransformer'))
+    os.symlink(
+        src=osp.join('../triton_models/preprocessing'),
+        dst=osp.join(model_repo_dir, 'preprocessing'))
+    os.symlink(
+        src=osp.join('../triton_models/postprocessing'),
+        dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
 def main(model_name: str,
