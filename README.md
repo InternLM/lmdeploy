@@ -158,6 +158,13 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```
 
+## Inference with Web UI
+
+```shell
+python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
+```
+
+## User Guide
 ## Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
