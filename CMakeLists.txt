@@ -39,6 +39,7 @@ endif()
 if(NOT USE_TRITONSERVER_DATATYPE)
   option(USE_TRITONSERVER_DATATYPE "Build triton backend for triton server" OFF)
 endif()
+option(BUILD_PY_FFI "Build python ffi" ON)
 
 include(FetchContent)
 
