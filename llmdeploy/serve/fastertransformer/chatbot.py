@@ -167,6 +167,8 @@ class Chatbot:
                                                       sequence_start,
                                                       sequence_end):
             yield status, res, tokens
+            if status.value < 0:
+                return
         self._session.histories = \
             self._session.histories + self._session.prompt + \
             self._session.response
@@ -327,7 +329,10 @@ class Chatbot:
                      f'history tokens {session.sequence_length}, ' \
                      f'request length {request_output_len}'
             yield StatusCode.TRITON_SESSION_OUT_OF_LIMIT, errmsg, 0
+            return
+
         logger.info(f'session {session.session_id}, '
+                    f'max length: {self.cfg.session_len}, '
                     f'input tokens: {input_tokens}, '
                     f'request tokens: {request_output_len}, '
                     f'history tokens: {session.sequence_length}')
