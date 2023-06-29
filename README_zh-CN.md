@@ -146,6 +146,11 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```
 
+## 使用浏览器推理
+
+```shell
+python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
+```
 ## 量化部署
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
 首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 weight 目录下。
