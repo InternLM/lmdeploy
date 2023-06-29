@@ -40,7 +40,8 @@ public:
                                    cudaStream_t     stream,
                                    cublasMMWrapper* cublas_wrapper,
                                    IAllocator*      allocator,
-                                   bool             is_free_buffer_after_forward):
+                                   bool             is_free_buffer_after_forward,
+                                   int              quant_policy):
         head_num_(head_num),
         size_per_head_(size_per_head),
         hidden_units_(head_num * size_per_head),
@@ -52,7 +53,8 @@ public:
         stream_(stream),
         linear_(cublas_wrapper, stream),
         allocator_(allocator),
-        is_free_buffer_after_forward_(is_free_buffer_after_forward)
+        is_free_buffer_after_forward_(is_free_buffer_after_forward),
+        quant_policy_(quant_policy)
     {
     }
 
@@ -71,6 +73,7 @@ private:
     const size_t local_hidden_units_;
     const size_t rotary_embedding_dim_;
     const bool   is_free_buffer_after_forward_;
+    const int    quant_policy_;
 
     const bool neox_rotary_style_;
 

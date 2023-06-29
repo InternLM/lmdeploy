@@ -68,7 +68,7 @@ pip install -e .
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
     --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
 </details>
@@ -79,7 +79,7 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-13B /path/to/llama-13b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
 </details>
@@ -90,7 +90,7 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-33B /path/to/llama-33b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 4
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
 </details>
@@ -101,7 +101,7 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/fastertransformer/deploy.py llama-65B /path/to/llama-65b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 8
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
 </details>
@@ -119,7 +119,7 @@ python3 -m fastchat.model.apply_delta \
   --delta-path lmsys/vicuna-7b-delta-v1.1
 
 python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
 </details>
@@ -135,7 +135,7 @@ python3 -m fastchat.model.apply_delta \
   --delta-path lmsys/vicuna-13b-delta-v1.1
 
 python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
-bash workspace/service_docker_up.sh
+bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
 </details>
@@ -145,6 +145,13 @@ bash workspace/service_docker_up.sh
 ```shell
 python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```
+
+## 量化部署
+在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
+首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 weight 目录下。
+然后调整 `config.ini`
+* `use_context_fmha` 改为 0，表示关闭
+* `quant_policy` 设置为 4。此参数默认为 0，表示不开启
 
 ## 贡献指南
 

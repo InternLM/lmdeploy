@@ -17,7 +17,6 @@
 
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.cc
-
 #include "src/fastertransformer/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
@@ -75,6 +74,7 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                                       const float* qkv_scale_out,
                                                       const float* attention_out_scale,
                                                       const int    int8_mode,
+                                                      const float* attention_kv_scale,
                                                       cudaStream_t stream)
 {
     using DataType = typename SATypeConverter<T>::Type;
@@ -98,14 +98,9 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     // Set the input buffers.
     params.q = reinterpret_cast<const DataType*>(qkv_buf);
-    if (int8_mode != 2) {
-        params.k = reinterpret_cast<const DataType*>(qkv_buf) + hidden_units;
-        params.v = reinterpret_cast<const DataType*>(qkv_buf) + 2 * hidden_units;
-    }
-    else {
-        params.k = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + hidden_units);
-        params.v = reinterpret_cast<const DataType*>(reinterpret_cast<const int8_t*>(qkv_buf) + 2 * hidden_units);
-    }
+    params.k = reinterpret_cast<const DataType*>(qkv_buf) + hidden_units;
+    params.v = reinterpret_cast<const DataType*>(qkv_buf) + 2 * hidden_units;
+
     params.stride   = 3 * hidden_units;
     params.finished = const_cast<bool*>(finished);
 
@@ -148,9 +143,10 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
 
     params.int8_mode = int8_mode;
-    if (int8_mode == 2) {
-        params.qkv_scale_out       = qkv_scale_out;
-        params.attention_out_scale = attention_out_scale;
+
+    if (int8_mode & QuantPolicy::kCacheKVInt8) {
+        params.attention_k_scale = attention_kv_scale[0];
+        params.attention_v_scale = attention_kv_scale[1];
     }
 
     PUSH_RANGE("scaled dot-product fusion");
@@ -269,7 +265,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         nullptr,  // ia3_value_weights
         nullptr,  // qkv_scale_out
         nullptr,  // attention_out_scale
-        0,        // int8_mode
+        quant_policy_,        // int8_mode
+        weights->past_kv_scale.data(), // attention kv scale
         stream_);
     sync_check_cuda_error();
 

@@ -158,6 +158,17 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type);
     loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type);
     loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type);
+
+    // load kv_cache quant scale
+    // if file not exist, get empty vector
+    std::string scale_path = dir_path + ".past_kv_scale." + rank_spec + ".weight";
+    std::ifstream  in(scale_path, std::ios::in);
+    if (in.is_open()) {
+        in.close();
+        self_attn_weights.past_kv_scale = loadArrayFromBin({2}, scale_path);
+    } else {
+        self_attn_weights.past_kv_scale = {};
+    }
 }
 
 template struct LlamaDecoderLayerWeight<float>;

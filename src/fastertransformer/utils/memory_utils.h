@@ -55,6 +55,8 @@ int loadWeightFromBin(T*                  ptr,
                       std::string         filename,
                       FtCudaDataType      model_file_type = FtCudaDataType::FP32);
 
+std::vector<float> loadArrayFromBin(std::vector<size_t> shape, std::string filename);
+
 // template<typename T>
 // int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
 //                                               T*                  scale_ptr,
