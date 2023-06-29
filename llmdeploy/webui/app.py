@@ -68,7 +68,7 @@ def cancel_func(instruction_txtbox, state_chatbot, llama_chatbot):
 
 
 def run(triton_server_addr: str,
-        model_name: str = 'vicuna',
+        model_name: str,
         server_name: str = 'localhost',
         server_port: int = 6006):
     with gr.Blocks(css=PARENT_BLOCK_CSS, theme='ParityError/Anime') as demo:

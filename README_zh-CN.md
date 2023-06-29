@@ -149,7 +149,7 @@ python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ## 使用浏览器推理
 
 ```shell
-python3 llmdeploy/webui/app.py {server_ip_addresss}:33337
+python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
 ```
 
 ## 贡献指南
