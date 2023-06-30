@@ -477,13 +477,13 @@ void generate_encoder_gemm_config(
             int   fast_algo = 0;
             for (int alg = 0; alg < 4; ++alg) {
                 cudaDeviceSynchronize();
-                cusparseLtMatDescriptor_t mat_A, matB, mat_C;
+                cusparseLtMatDescriptor_t mat_A, mat_B, mat_C;
                 void*                     d_workspace = nullptr;
                 int                       num_streams = 1;
                 cudaStream_t              streams[1]  = {stream};
                 CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
                     &handle, &mat_A, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
-                CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matB, k, n, k, alignment, CUDA_R_16F, order))
+                CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_B, k, n, k, alignment, CUDA_R_16F, order))
                 CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_C, m, n, m, alignment, CUDA_R_16F, order))
                 gettimeofday(&start, NULL);
                 for (int ite = 0; ite < ites; ++ite) {
@@ -494,7 +494,7 @@ void generate_encoder_gemm_config(
                     cusparseLtMatmulAlgSelection_t alg_sel;
                     cusparseLtMatmulPlan_t         plan;
                     CHECK_CUSPARSE(cusparseLtMatmulDescriptorInit(
-                        &handle, &matmul, opA, opB, &mat_A, &matB, &mat_C, &mat_C, compute_type))
+                        &handle, &matmul, opA, opB, &mat_A, &mat_B, &mat_C, &mat_C, compute_type))
                     CHECK_CUSPARSE(
                         cusparseLtMatmulAlgSelectionInit(&handle, &alg_sel, &matmul, CUSPARSELT_MATMUL_ALG_DEFAULT))
                     CHECK_CUSPARSE(cusparseLtMatmulAlgSetAttribute(

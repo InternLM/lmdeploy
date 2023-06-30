@@ -695,9 +695,9 @@ void cublasMMWrapper::SpGemm(cublasOperation_t transa,
     }
     else {
         // initializing MatDesc takes a lot of time
-        cusparseLtMatDescriptor_t mat_A, matB, mat_C;
+        cusparseLtMatDescriptor_t mat_A, mat_B, mat_C;
         sp_mat_A_desc_map_[mark] = mat_A;
-        sp_mat_B_desc_map_[mark] = matB;
+        sp_mat_B_desc_map_[mark] = mat_B;
         sp_mat_C_desc_map_[mark] = mat_C;
         CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(&cusparselt_handle_,
                                                           &sp_mat_A_desc_map_[mark],
