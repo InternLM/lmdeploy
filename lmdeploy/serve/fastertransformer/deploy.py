@@ -127,29 +127,28 @@ def export(model_name: str,
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     assert _vocab_size == vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
-    cfg = dict(
-        llama=dict(
-            model_name=model_name,
-            head_num=head_num,
-            size_per_head=size_per_head,
-            vocab_size=vocab_size,
-            num_layer=num_layer,
-            rotary_embedding=size_per_head,
-            inter_size=inter_size,
-            norm_eps=norm_eps,
-            attn_bias=attn_bias,
-            start_id=bos_id,
-            end_id=eos_id,
-            weight_type='fp16',
-            # parameters for fastertransformer
-            max_batch_size=32,
-            max_context_token_num=4,
-            session_len=2048,
-            step_length=1,
-            cache_max_entry_count=48,
-            cache_chunk_size=8,
-            use_context_fmha=1,
-            quant_policy=0))
+    cfg = dict(llama=dict(
+        model_name=model_name,
+        head_num=head_num,
+        size_per_head=size_per_head,
+        vocab_size=vocab_size,
+        num_layer=num_layer,
+        rotary_embedding=size_per_head,
+        inter_size=inter_size,
+        norm_eps=norm_eps,
+        attn_bias=attn_bias,
+        start_id=bos_id,
+        end_id=eos_id,
+        weight_type='fp16',
+        # parameters for fastertransformer
+        max_batch_size=32,
+        max_context_token_num=4,
+        session_len=2048,
+        step_length=1,
+        cache_max_entry_count=48,
+        cache_chunk_size=8,
+        use_context_fmha=1,
+        quant_policy=0))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -191,8 +190,9 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
     def get_param(_name, _size):
         print(_name, _size)
         if _name not in model_params:
-            model_params[_name] = torch.zeros(
-                _size, dtype=torch.float16, device='cpu')
+            model_params[_name] = torch.zeros(_size,
+                                              dtype=torch.float16,
+                                              device='cpu')
         return model_params[_name]
 
     for i, ckpt_path in enumerate(checkpoints):
@@ -387,15 +387,12 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
 def pack_model_repository(workspace_path: str):
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(
-        src=osp.join('../triton_models/interactive'),
-        dst=osp.join(model_repo_dir, 'fastertransformer'))
-    os.symlink(
-        src=osp.join('../triton_models/preprocessing'),
-        dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(
-        src=osp.join('../triton_models/postprocessing'),
-        dst=osp.join(model_repo_dir, 'postprocessing'))
+    os.symlink(src=osp.join('../triton_models/interactive'),
+               dst=osp.join(model_repo_dir, 'fastertransformer'))
+    os.symlink(src=osp.join('../triton_models/preprocessing'),
+               dst=osp.join(model_repo_dir, 'preprocessing'))
+    os.symlink(src=osp.join('../triton_models/postprocessing'),
+               dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
 def main(model_name: str,
