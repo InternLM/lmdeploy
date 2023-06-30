@@ -149,7 +149,7 @@ python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ## 使用浏览器推理
 
 ```shell
-python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
+python3 llmdeploy/app.py {server_ip_addresss}:33337 model_name
 ```
 ## 量化部署
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
