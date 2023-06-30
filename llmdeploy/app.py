@@ -1,19 +1,40 @@
-# flake8: noqa
+# Copyright (c) OpenMMLab. All rights reserved.
 from functools import partial
 import threading
+from typing import Sequence
 
 import fire
 import gradio as gr
 import os
-from strings import ABSTRACT, TITLE
-from styles import PARENT_BLOCK_CSS
 
 from llmdeploy.serve.fastertransformer.chatbot import Chatbot
 
+CSS = """
+#container {
+    width: 95%;
+    margin-left: auto;
+    margin-right: auto;
+}
 
-def chat_stream(instruction,
-                state_chatbot,
-                llama_chatbot,
+#chatbot {
+    height: 500px;
+    overflow: auto;
+}
+
+.chat_wrap_space {
+    margin-left: 0.5em
+}
+"""
+
+THEME = gr.themes.Soft(
+    primary_hue=gr.themes.colors.blue,
+    secondary_hue=gr.themes.colors.sky,
+    font=[gr.themes.GoogleFont("Inconsolata"), "Arial", "sans-serif"])
+
+
+def chat_stream(instruction: str,
+                state_chatbot: Sequence,
+                llama_chatbot: Chatbot,
                 model_name: str = None):
     bot_summarized_response = ''
     model_type = 'fastertransformer'
@@ -37,12 +58,9 @@ def chat_stream(instruction,
     yield (state_chatbot, state_chatbot, f'{bot_summarized_response}'.strip())
 
 
-def reset_textbox():
-    return gr.Textbox.update(value='')
-
-
-def reset_everything_func(instruction_txtbox, state_chatbot, llama_chatbot,
-                          triton_server_addr, model_name):
+def reset_all_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
+                   llama_chatbot: gr.State, triton_server_addr: str,
+                   model_name: str):
 
     state_chatbot = []
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
@@ -57,7 +75,11 @@ def reset_everything_func(instruction_txtbox, state_chatbot, llama_chatbot,
     )
 
 
-def cancel_func(instruction_txtbox, state_chatbot, llama_chatbot):
+def cancel_func(
+    instruction_txtbox: gr.Textbox,
+    state_chatbot: gr.State,
+    llama_chatbot: gr.State,
+):
     session_id = llama_chatbot._session.session_id
     llama_chatbot.cancel(session_id)
 
@@ -71,10 +93,10 @@ def run(triton_server_addr: str,
         model_name: str,
         server_name: str = 'localhost',
         server_port: int = 6006):
-    with gr.Blocks(css=PARENT_BLOCK_CSS, theme='ParityError/Anime') as demo:
+    with gr.Blocks(css=CSS, theme=THEME) as demo:
         chat_interface = partial(chat_stream, model_name=model_name)
-        reset_everything = partial(
-            reset_everything_func,
+        reset_all = partial(
+            reset_all_func,
             model_name=model_name,
             triton_server_addr=triton_server_addr)
         log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
@@ -86,16 +108,12 @@ def run(triton_server_addr: str,
                 display=True))
         state_chatbot = gr.State([])
 
-        with gr.Column(elem_id='col_container'):
-            gr.Markdown(f'## {TITLE}\n\n\n{ABSTRACT}')
-
-            # with gr.Accordion('Context Setting', open=False):
-            #     hidden_txtbox = gr.Textbox(
-            #         placeholder='', label='Order', visible=False)
+        with gr.Column(elem_id='container'):
+            gr.Markdown('## LLMDeploy Playground')
 
             chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
             instruction_txtbox = gr.Textbox(
-                placeholder='What do you want to say to AI?',
+                placeholder='Please input the instruction',
                 label='Instruction')
             with gr.Row():
                 cancel_btn = gr.Button(value='Cancel')
@@ -108,8 +126,8 @@ def run(triton_server_addr: str,
             batch=False,
             max_batch_size=1,
         )
-        reset_event = instruction_txtbox.submit(
-            reset_textbox,
+        instruction_txtbox.submit(
+            lambda: gr.Textbox.update(value=''),
             [],
             [instruction_txtbox],
         )
@@ -120,8 +138,7 @@ def run(triton_server_addr: str,
             cancels=[send_event])
 
         reset_btn.click(
-            reset_everything,
-            [instruction_txtbox, state_chatbot, llama_chatbot],
+            reset_all, [instruction_txtbox, state_chatbot, llama_chatbot],
             [llama_chatbot, state_chatbot, chatbot, instruction_txtbox],
             cancels=[send_event])
 
