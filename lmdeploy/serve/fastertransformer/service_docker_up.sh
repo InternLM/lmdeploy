@@ -41,8 +41,8 @@ if [ -z "$1" ]; then
         --cap-add=SYS_PTRACE \
         --cap-add=SYS_ADMIN \
         --security-opt seccomp=unconfined \
-        --name llmdeploy \
-        -it --env NCCL_LAUNCH_MODE=GROUP lvhan028/fastertransformer:v0.0.1 \
+        --name lmdeploy \
+        -it --env NCCL_LAUNCH_MODE=GROUP openmmlab/lmdeploy:latest \
         tritonserver \
         --model-repository=/workspace/models/model_repository \
         --allow-http=0 \
@@ -72,8 +72,8 @@ for ((i = 1; i <= $#; i++)); do
         --cap-add=SYS_PTRACE \
         --cap-add=SYS_ADMIN \
         --security-opt seccomp=unconfined \
-        --name llmdeploy \
-        -it --env NCCL_LAUNCH_MODE=GROUP lvhan028/fastertransformer:v0.0.1 \
+        --name lmdeploy \
+        -it --env NCCL_LAUNCH_MODE=GROUP openmmlab/lmdeploy:latest \
         tritonserver \
         --model-repository=/workspace/models/model_repository \
         --allow-http=0 \

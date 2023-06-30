@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/llmdeploy-logo.png" width="450"/>
+  <img src="resources/lmdeploy-logo.png" width="450"/>
   <div>&nbsp;</div>
   <div align="center">
     <b><font size="5">OpenMMLab website</font></b>
@@ -18,11 +18,11 @@
   </div>
   <div>&nbsp;</div>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://llmdeploy.readthedocs.io/en/latest/)
-[![codecov](https://codecov.io/gh/open-mmlab/llmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/llmdeploy)
-[![license](https://img.shields.io/github/license/open-mmlab/llmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/llmdeploy)](https://github.com/open-mmlab/llmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/llmdeploy)](https://github.com/open-mmlab/llmdeploy/issues)
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
+[![codecov](https://codecov.io/gh/open-mmlab/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/lmdeploy)
+[![license](https://img.shields.io/github/license/open-mmlab/lmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
+[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
+[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
 
 English | [简体中文](README_zh-CN.md)
 
@@ -30,9 +30,9 @@ English | [简体中文](README_zh-CN.md)
 
 <div align="center">
   <a href="https://openmmlab.medium.com/" style="text-decoration:none;">
-    <img src="https://user-images.githubusercontent.com/25839884/218352562-cdded397-b0f3-4ca1-b8dd-a60df8dca75b.png" width="3%" alt="" /></a>
+    <img src="https://user-images.githubusercontent.com/25839884/219255827-67c1a27f-f8c5-46a9-811d-5e57448c61d1.png" width="3%" alt="" /></a>
   <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
-  <a href="https://discord.gg/raweFPmdzG" style="text-decoration:none;">
+  <a href="https://discord.com/channels/1037617289144569886/1046608014234370059" style="text-decoration:none;">
     <img src="https://user-images.githubusercontent.com/25839884/218347213-c080267f-cbb6-443e-8532-8e1ed9a58ea9.png" width="3%" alt="" /></a>
   <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
   <a href="https://twitter.com/OpenMMLab" style="text-decoration:none;">
@@ -40,27 +40,47 @@ English | [简体中文](README_zh-CN.md)
   <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
   <a href="https://www.youtube.com/openmmlab" style="text-decoration:none;">
     <img src="https://user-images.githubusercontent.com/25839884/218346691-ceb2116a-465a-40af-8424-9f30d2348ca9.png" width="3%" alt="" /></a>
+  <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
+  <a href="https://space.bilibili.com/1293512903" style="text-decoration:none;">
+    <img src="https://user-images.githubusercontent.com/25839884/219026751-d7d14cce-a7c9-4e82-9942-8375fca65b99.png" width="3%" alt="" /></a>
+  <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
+  <a href="https://www.zhihu.com/people/openmmlab" style="text-decoration:none;">
+    <img src="https://user-images.githubusercontent.com/25839884/219026120-ba71e48b-6e94-4bd4-b4e9-b7d175b5e362.png" width="3%" alt="" /></a>
 </div>
 
 ## Introduction
 
-## Installation
+LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
+
+- A high throughput inference engine named as **TurboMind** based on [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) for LLaMA family models
+
+- Interactive generation is supported. LMDeploy can remember the history by caching the attention k/v in multi-turn dialogues, so that it can avoid repetitive decoding of historical conversations.
+
+<div align="center">
+  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
+</div>
+
+- Support persistent-batch inference
+
+  TODO: gif to show what persistent batch is
+
+## Quick Start
+
+### Installation
 
 Below are quick steps for installation:
 
 ```shell
 conda create -n open-mmlab python=3.8
 conda activate open-mmlab
-git clone https://github.com/open-mmlab/llmdeploy.git
-cd llmdeploy
+git clone https://github.com/open-mmlab/lmdeploy.git
+cd lmdeploy
 pip install -e .
 ```
 
-## Quick Start
-
 ### Build
 
-Pull docker image `openmmlab/llmdeploy:base` and build llmdeploy libs in its launched container
+Pull docker image `openmmlab/lmdeploy:latest` and build lmdeploy libs in its launched container
 
 ```shell
 mkdir build && cd build
@@ -78,7 +98,7 @@ Run one of the following commands to serve a LLaMA model on NVIDIA GPU server:
 <summary><b>7B</b></summary>
 
 ```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
+python3 lmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
     --tokenizer_path /path/to/tokenizer/model
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
@@ -89,30 +109,8 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 <summary><b>13B</b></summary>
 
 ```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-13B /path/to/llama-13b llama \
+python3 lmdeploy/serve/fastertransformer/deploy.py llama-13B /path/to/llama-13b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
-```
-
-</details>
-
-<details open>
-<summary><b>33B</b></summary>
-
-```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-33B /path/to/llama-33b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 4
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
-```
-
-</details>
-
-<details open>
-<summary><b>65B</b></summary>
-
-```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-65B /path/to/llama-65b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 8
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -130,7 +128,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-7b \
   --delta-path lmsys/vicuna-7b-delta-v1.1
 
-python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
+python3 lmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -146,7 +144,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-13b \
   --delta-path lmsys/vicuna-13b-delta-v1.1
 
-python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
+python3 lmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -155,28 +153,29 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 ## Inference with Command Line Interface
 
 ```shell
-python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
+python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
 ```
 
 ## Inference with Web UI
 
 ```shell
-python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
+python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 ```
 
 ## User Guide
+
 ## Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
 First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
 Then adjust `config.ini`
-* `use_context_fmha` changed to 0, means off
-* `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
+
+- `use_context_fmha` changed to 0, means off
+- `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
 ## Contributing
 
-We appreciate all contributions to LLMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
-
+We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
 
 ## Acknowledgement
 
