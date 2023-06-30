@@ -15,10 +15,10 @@ import numpy as np
 import tritonclient.grpc as grpcclient
 from tritonclient.grpc.service_pb2 import ModelInferResponse
 
-from llmdeploy.model import MODELS
-from llmdeploy.serve.fastertransformer.utils import (Postprocessor,
-                                                     Preprocessor,
-                                                     prepare_tensor)
+from lmdeploy.model import MODELS
+from lmdeploy.serve.fastertransformer.utils import (Postprocessor,
+                                                    Preprocessor,
+                                                    prepare_tensor)
 
 
 @dataclass
