@@ -24,7 +24,6 @@ jobs:
           use-verbose-mode: 'yes'
 #          check-modified-files-only: 'yes'
           config-file: '.github/md-link-config.json'
-          folder-path: 'docs/en, docs/zh_cn'
           file-path: './README.md, ./LICENSE, ./README_zh-CN.md'
       - name: Check doc link
         run: |
