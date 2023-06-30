@@ -11,11 +11,12 @@ if(NOT pybind11_FOUND)
     find_package(pybind11 CONFIG)
 endif()
 
-set(ModuleName _turboformers)
+set(ModuleName _turbomind)
 pybind11_add_module(${ModuleName} bind.cpp)
 target_link_libraries(${ModuleName} PRIVATE TransformerTritonBackend 
     LlamaTritonBackend tensor
     custom_ar_comm memory_utils -lcublasLt)
+target_compile_features(${ModuleName} PRIVATE cxx_std_14)
 
 install(TARGETS ${ModuleName}
 DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer)
