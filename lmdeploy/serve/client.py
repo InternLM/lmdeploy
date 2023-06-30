@@ -3,7 +3,7 @@ import os
 
 import fire
 
-from lmdeploy.serve.fastertransformer.chatbot import Chatbot
+from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
 def input_prompt():

@@ -16,9 +16,8 @@ import tritonclient.grpc as grpcclient
 from tritonclient.grpc.service_pb2 import ModelInferResponse
 
 from lmdeploy.model import MODELS
-from lmdeploy.serve.fastertransformer.utils import (Postprocessor,
-                                                    Preprocessor,
-                                                    prepare_tensor)
+from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
+                                            prepare_tensor)
 
 
 @dataclass
@@ -56,8 +55,7 @@ def get_logger(log_file=None, log_level=logging.INFO):
 
 
 class Chatbot:
-    """Chatbot for LLaMA series models with fastertransformer as inference
-    engine.
+    """Chatbot for LLaMA series models with turbomind as inference engine.
 
     Args:
         tritonserver_addr (str): communicating address '<ip>:<port>' of
@@ -277,7 +275,7 @@ class Chatbot:
                f'stop_words must be a list but got {type(stop_words)}'
         # each id in stop_words represents a stop word
         # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
-        # detailed explanation about fastertransformer's stop_words
+        # detailed explanation about turbomind's stop_words
         stop_word_offsets = range(1, len(stop_words) + 1)
         stop_words = np.array([[stop_words,
                                 stop_word_offsets]]).astype(np.int32)
@@ -418,7 +416,7 @@ class Chatbot:
                         random_seed * np.ones((1, 1), dtype=np.uint64))
                 ]
             client.start_stream(callback)
-            client.async_stream_infer('fastertransformer',
+            client.async_stream_infer('turbomind',
                                       inputs,
                                       sequence_id=session.session_id,
                                       request_id=session.request_id,
@@ -438,7 +436,7 @@ class Chatbot:
                       session.sequence_length - preseq_length
                 break
             if 'errcode' in result:
-                logger.error(f'got error from fastertransformer, code '
+                logger.error(f'got error from turbomind, code '
                              f"{result['errcode']}, {result['errmsg']}, "
                              f'token {session.sequence_length}')
                 session.sequence_length = preseq_length
