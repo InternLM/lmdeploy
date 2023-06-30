@@ -16,8 +16,8 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.h
-
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.h
 
 #include "src/fastertransformer/layers/BaseLayer.h"
 // #include "src/fastertransformer/layers/FfnLayer.h"
@@ -82,8 +82,7 @@ public:
                  bool             is_free_buffer_after_forward,
                  int              quant_policy),
 
-
-    ~LlamaDecoder() override;
+        ~LlamaDecoder() override;
 
     virtual void forward(std::unordered_map<std::string, Tensor>*        output_tensors,
                          const std::unordered_map<std::string, Tensor>*  input_tensors,

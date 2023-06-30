@@ -17,6 +17,13 @@ jobs:
           pre-commit install
       - name: Linting
         run: pre-commit run --all-files
+      - name: Format c/cuda codes with clang-format
+        uses: DoozyX/clang-format-lint-action@v0.14
+        with:
+          source: src
+          extensions: h,c,cpp,hpp,cu,cuh
+          clangFormatVersion: 14
+          style: file
       - name: Check markdown link
         uses: gaurav-nelson/github-action-markdown-link-check@v1
         with:

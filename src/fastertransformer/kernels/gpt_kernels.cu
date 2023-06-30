@@ -242,18 +242,18 @@ __global__ void inputIdsEmbeddingLookupPosEncodingSoftPrompt(inputIdsEmbeddingLo
         // embedding lookup from word ids [batch, beam, length] (part of [batch, beam, max_input_length]), [vocab,
         // hidden] and [batch, max_prefix_soft_prompt_length, hidden] to generate embedding [batch, beam, length +
         // max_prefix_soft_prompt_length, hidden]
-        int       tmp_index = index;
-        const int hidden_id = tmp_index % param.hidden_units;
-        tmp_index           = (tmp_index - hidden_id) / param.hidden_units;
-        const int seq_id    = tmp_index % (param.max_prefix_soft_prompt_length + param.max_input_length);
-        tmp_index           = (tmp_index - seq_id) / (param.max_prefix_soft_prompt_length + param.max_input_length);
-        const int beam_id   = tmp_index % param.beam_width;
-        tmp_index           = (tmp_index - beam_id) / param.beam_width;
-        const int batch_id  = tmp_index % param.batch_size;
+        int       tmp_index    = index;
+        const int hidden_id    = tmp_index % param.hidden_units;
+        tmp_index              = (tmp_index - hidden_id) / param.hidden_units;
+        const int seq_id       = tmp_index % (param.max_prefix_soft_prompt_length + param.max_input_length);
+        tmp_index              = (tmp_index - seq_id) / (param.max_prefix_soft_prompt_length + param.max_input_length);
+        const int beam_id      = tmp_index % param.beam_width;
+        tmp_index              = (tmp_index - beam_id) / param.beam_width;
+        const int     batch_id = tmp_index % param.batch_size;
         const int64_t hidden_units = param.hidden_units;
-        T         embedding =
+        T             embedding =
             (seq_id < param.prefix_soft_prompt_lengths[batch_id]) ?
-                        (T)param.prefix_soft_prompt_embedding[batch_id * param.max_prefix_soft_prompt_length * hidden_units
+                            (T)param.prefix_soft_prompt_embedding[batch_id * param.max_prefix_soft_prompt_length * hidden_units
                                                       + seq_id * hidden_units + hidden_id] :
                             param.embedding_table[param.input_ids[batch_id * param.beam_width * param.max_input_length
                                                       + beam_id * param.max_input_length

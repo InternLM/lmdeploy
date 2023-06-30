@@ -34,7 +34,7 @@ void LlamaBatch<T>::verifyRequests(std::vector<std::shared_ptr<Request>>& stop_r
     };
 
     auto handle_conflict_or_invalid = [this, &occurrence, &invalidate](std::vector<std::shared_ptr<Request>>& rs,
-                                                                      const char*                            type) {
+                                                                       const char*                            type) {
         for (auto& r : rs) {
             if (r) {
                 int ec = 0;

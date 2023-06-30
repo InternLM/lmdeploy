@@ -25,7 +25,8 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Modified from https://github.com/triton-inference-server/fastertransformer_backend/blob/main/src/libfastertransformer.cc
+// Modified from
+// https://github.com/triton-inference-server/fastertransformer_backend/blob/main/src/libfastertransformer.cc
 
 #include <stdint.h>
 

@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptContextDecoder.h
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptContextDecoder.h
 
 #pragma once
 

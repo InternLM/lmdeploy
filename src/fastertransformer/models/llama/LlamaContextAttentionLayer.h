@@ -16,7 +16,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.h
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.h
 
 #pragma once
 
@@ -100,7 +101,7 @@ private:
     const bool neox_rotary_style_;
 
     const bool use_fmha_;
-    const int quant_policy_;
+    const int  quant_policy_;
 
     NcclParam tensor_para_;
 

@@ -98,19 +98,19 @@ template void invokeDecodingInitialize(bool*          finished,
 
 // PROMPT_SRC: 0 --> no prompts, 1 --> from loaded prompts, 2 --> from request prompts
 template<typename T>
-__global__ void embeddingLookupPosEncoding(T*             from_tensor,
-                                           const T*       embedding_table,
-                                           const T*       position_encoding,
-                                           const int*     all_ids,
-                                           const int*     padding_count,
-                                           const int*     input_lengths,
-                                           const int      local_token_num,
-                                           const int64_t  hidden_units,
-                                           const int      step,
-                                           const int      max_input_length,
-                                           const int      token_num,
-                                           const int      ite,
-                                           const T        scale)
+__global__ void embeddingLookupPosEncoding(T*            from_tensor,
+                                           const T*      embedding_table,
+                                           const T*      position_encoding,
+                                           const int*    all_ids,
+                                           const int*    padding_count,
+                                           const int*    input_lengths,
+                                           const int     local_token_num,
+                                           const int64_t hidden_units,
+                                           const int     step,
+                                           const int     max_input_length,
+                                           const int     token_num,
+                                           const int     ite,
+                                           const T       scale)
 {
     // 1. lookup from embedding table
     // 2. multiply scale

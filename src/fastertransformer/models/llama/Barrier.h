@@ -15,9 +15,9 @@ public:
         pthread_barrier_init(&barrier_, nullptr, count);
     }
 
-    Barrier(const Barrier&) = delete;
-    Barrier& operator=(const Barrier&) = delete;
-    Barrier(Barrier&&) noexcept        = delete;
+    Barrier(const Barrier&)                = delete;
+    Barrier& operator=(const Barrier&)     = delete;
+    Barrier(Barrier&&) noexcept            = delete;
     Barrier& operator=(Barrier&&) noexcept = delete;
 
     void wait()

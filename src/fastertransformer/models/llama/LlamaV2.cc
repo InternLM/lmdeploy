@@ -17,7 +17,8 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
 
 #include "src/fastertransformer/models/llama/LlamaV2.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
@@ -97,7 +98,8 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
             FT_LOG_ERROR("use_context_fmha not support int8");
             assert(0);
         }
-    } else {
+    }
+    else {
         elem_bits = sizeof(T) * 8;
     }
     kv_cache_mgr_ = std::make_unique<LlamaCacheManager>(num_layer_,

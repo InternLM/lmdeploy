@@ -1,10 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/models/llama/llama_kernels.h"
 #include "src/fastertransformer/models/llama/llama_utils.h"
 #include "src/fastertransformer/utils/cuda_type_utils.cuh"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 
 namespace fastertransformer {
 
@@ -293,37 +293,40 @@ inline __device__ float2 float2div(float a, float2 b)
     return c;
 }
 
-static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale) {
-  half4 dst;
-  dst.x = __float2half(value.x * scale);
-  dst.y = __float2half(value.y * scale);
-  dst.z = __float2half(value.z * scale);
-  dst.w = __float2half(value.w * scale);
-  return dst;
+static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale)
+{
+    half4 dst;
+    dst.x = __float2half(value.x * scale);
+    dst.y = __float2half(value.y * scale);
+    dst.z = __float2half(value.z * scale);
+    dst.w = __float2half(value.w * scale);
+    return dst;
 }
 
-static inline __device__ uint32_t float4_to_char4(float x,
-                                                  float y,
-                                                  float z,
-                                                  float w) {
-  uint32_t dst;
+static inline __device__ uint32_t float4_to_char4(float x, float y, float z, float w)
+{
+    uint32_t dst;
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 720
-  uint32_t a; asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(a) : "f"(x));
-  uint32_t b; asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(b) : "f"(y));
-  uint32_t c; asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(c) : "f"(z));
-  uint32_t d; asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(d) : "f"(w));
+    uint32_t a;
+    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(a) : "f"(x));
+    uint32_t b;
+    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(b) : "f"(y));
+    uint32_t c;
+    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(c) : "f"(z));
+    uint32_t d;
+    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(d) : "f"(w));
 
-  asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2,  0;\n" : "=r"(dst) : "r"(d), "r"(c));
-  asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2, %0;\n" : "+r"(dst) : "r"(b), "r"(a));
+    asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2,  0;\n" : "=r"(dst) : "r"(d), "r"(c));
+    asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2, %0;\n" : "+r"(dst) : "r"(b), "r"(a));
 #else
-  char4 tmp;
-  tmp.x = x;
-  tmp.y = y;
-  tmp.z = z;
-  tmp.w = w;
-  dst = reinterpret_cast<const uint32_t&>(tmp);
+    char4 tmp;
+    tmp.x = x;
+    tmp.y = y;
+    tmp.z = z;
+    tmp.w = w;
+    dst   = reinterpret_cast<const uint32_t&>(tmp);
 #endif
-  return dst;
+    return dst;
 }
 
 template<typename T>
@@ -380,7 +383,6 @@ __global__ void extend_value_cache_int8(int8_t**     v_dst,
     }
 }
 
-
 template<typename T>
 void invokeExtendKVCache(T**          k_dst,
                          T**          v_dst,
@@ -404,18 +406,48 @@ void invokeExtendKVCache(T**          k_dst,
     dim3 grid((max_q_len * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
 
     if (quant & QuantPolicy::kCacheKVInt8) {
-        extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(
-            reinterpret_cast<int8_t**>(k_dst), dst_offset, k_src, local_head_num, size_per_head, query_length, history_length, max_q_len, max_seq_len, kv_scale[0]);
+        extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(reinterpret_cast<int8_t**>(k_dst),
+                                                               dst_offset,
+                                                               k_src,
+                                                               local_head_num,
+                                                               size_per_head,
+                                                               query_length,
+                                                               history_length,
+                                                               max_q_len,
+                                                               max_seq_len,
+                                                               kv_scale[0]);
 
-        extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(
-            reinterpret_cast<int8_t**>(v_dst), dst_offset, v_src, local_head_num, size_per_head, query_length, history_length, max_q_len, max_seq_len, kv_scale[1]);
+        extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(reinterpret_cast<int8_t**>(v_dst),
+                                                               dst_offset,
+                                                               v_src,
+                                                               local_head_num,
+                                                               size_per_head,
+                                                               query_length,
+                                                               history_length,
+                                                               max_q_len,
+                                                               max_seq_len,
+                                                               kv_scale[1]);
+    }
+    else {
+        extend_value_cache<<<grid, block_sz, 0, stream>>>(k_dst,
+                                                          dst_offset,
+                                                          k_src,
+                                                          local_head_num,
+                                                          size_per_head,
+                                                          query_length,
+                                                          history_length,
+                                                          max_q_len,
+                                                          max_seq_len);
 
-    } else {
-        extend_value_cache<<<grid, block_sz, 0, stream>>>(
-            k_dst, dst_offset, k_src, local_head_num, size_per_head, query_length, history_length, max_q_len, max_seq_len);
-
-        extend_value_cache<<<grid, block_sz, 0, stream>>>(
-            v_dst, dst_offset, v_src, local_head_num, size_per_head, query_length, history_length, max_q_len, max_seq_len);
+        extend_value_cache<<<grid, block_sz, 0, stream>>>(v_dst,
+                                                          dst_offset,
+                                                          v_src,
+                                                          local_head_num,
+                                                          size_per_head,
+                                                          query_length,
+                                                          history_length,
+                                                          max_q_len,
+                                                          max_seq_len);
     }
 }
 
@@ -492,17 +524,16 @@ __global__ void transpose_value_cache(T*           v_dst,  //
     }
 }
 
-
 template<typename T>
-__global__ void transpose_value_cache_int8(T*           v_dst,  //
-                                      const int8_t**    v_src,
-                                      const size_t src_offset,
-                                      const int    head_num,
-                                      const int    size_per_head,
-                                      const int*   seq_length,
-                                      const int    max_kv_len,
-                                      const int    max_seq_len,
-                                      const float  v_scale)
+__global__ void transpose_value_cache_int8(T*             v_dst,  //
+                                           const int8_t** v_src,
+                                           const size_t   src_offset,
+                                           const int      head_num,
+                                           const int      size_per_head,
+                                           const int*     seq_length,
+                                           const int      max_kv_len,
+                                           const int      max_seq_len,
+                                           const float    v_scale)
 {
     const int     batch_id = blockIdx.y;
     const int     head_id  = blockIdx.z;
@@ -533,7 +564,7 @@ __global__ void transpose_value_cache_int8(T*           v_dst,  //
 
         // int8x8 -> fp16x8
         const auto from_ptr = reinterpret_cast<const char4*>(val_src + src_idx);
-        auto to_ptr = reinterpret_cast<half4*>(val_dst + dst_idx);
+        auto       to_ptr   = reinterpret_cast<half4*>(val_dst + dst_idx);
 
         to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale);
         to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale);
@@ -562,13 +593,27 @@ void invokeTransposeKVCache(T*           key_cache_trans,
     dim3 grid((max_kv_len * size_per_head / x + block_sz - 1) / block_sz, batch_size, head_num);
 
     if (quant & QuantPolicy::kCacheKVInt8) {
-        transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(
-            key_cache_trans, reinterpret_cast<const int8_t**>(key_cache), src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len, kv_scale[0]);
+        transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(key_cache_trans,
+                                                                  reinterpret_cast<const int8_t**>(key_cache),
+                                                                  src_offset,
+                                                                  head_num,
+                                                                  size_per_head,
+                                                                  key_length,
+                                                                  max_kv_len,
+                                                                  max_seq_len,
+                                                                  kv_scale[0]);
 
-        transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(
-            val_cache_trans, reinterpret_cast<const int8_t**>(val_cache), src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len, kv_scale[1]);
-
-    } else {
+        transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(val_cache_trans,
+                                                                  reinterpret_cast<const int8_t**>(val_cache),
+                                                                  src_offset,
+                                                                  head_num,
+                                                                  size_per_head,
+                                                                  key_length,
+                                                                  max_kv_len,
+                                                                  max_seq_len,
+                                                                  kv_scale[1]);
+    }
+    else {
         transpose_value_cache<<<grid, block_sz, 0, stream>>>(
             key_cache_trans, key_cache, src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len);
 
@@ -577,10 +622,34 @@ void invokeTransposeKVCache(T*           key_cache_trans,
     }
 }
 
-template void invokeTransposeKVCache(
-    float*, float*, const float**, const float**, size_t, int, const int*, int, int, int, int, cudaStream_t stream, int, const float*);
-template void invokeTransposeKVCache(
-    half*, half*, const half**, const half**, size_t, int, const int*, int, int, int, int, cudaStream_t stream, int, const float*);
+template void invokeTransposeKVCache(float*,
+                                     float*,
+                                     const float**,
+                                     const float**,
+                                     size_t,
+                                     int,
+                                     const int*,
+                                     int,
+                                     int,
+                                     int,
+                                     int,
+                                     cudaStream_t stream,
+                                     int,
+                                     const float*);
+template void invokeTransposeKVCache(half*,
+                                     half*,
+                                     const half**,
+                                     const half**,
+                                     size_t,
+                                     int,
+                                     const int*,
+                                     int,
+                                     int,
+                                     int,
+                                     int,
+                                     cudaStream_t stream,
+                                     int,
+                                     const float*);
 
 __global__ void gatherOutput(int*       output_ids,
                              const int* ids,

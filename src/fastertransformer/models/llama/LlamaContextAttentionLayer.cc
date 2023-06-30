@@ -199,7 +199,6 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                         quant_policy_,
                         weights->past_kv_scale.data());
 
-
     sync_check_cuda_error();
     if (use_fmha_) {
         fusedMultiHeadAttention(k_cache_ptrs,
@@ -226,8 +225,6 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   max_seq_len,
                                   quant_policy_,
                                   weights->past_kv_scale.data());
-
-
     }
 
     //////////////////////////////////////////////
@@ -239,8 +236,6 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
         ftNcclAllReduceSum(attention_out, attention_out, num_token * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
     }
-
-
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
@@ -302,19 +297,19 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
 }
 
 template<typename T>
-void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**        key_cache_ptrs,
-                                                              T**        val_cache_ptrs,
-                                                              size_t     cache_layer_offset,
-                                                              const T*   attention_mask,
-                                                              const int* padding_offset,
-                                                              const int* context_length,
-                                                              int        batch_size,
-                                                              int        num_token,
-                                                              int        max_q_len,
-                                                              int        max_k_len,
-                                                              int        max_seq_len,
-                                                              int           quant,
-                                                              const float*     kv_scale)
+void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_cache_ptrs,
+                                                              T**          val_cache_ptrs,
+                                                              size_t       cache_layer_offset,
+                                                              const T*     attention_mask,
+                                                              const int*   padding_offset,
+                                                              const int*   context_length,
+                                                              int          batch_size,
+                                                              int          num_token,
+                                                              int          max_q_len,
+                                                              int          max_k_len,
+                                                              int          max_seq_len,
+                                                              int          quant,
+                                                              const float* kv_scale)
 {
     // key_cache [B, H, S[:t+s], D/x, x] -> [B, H, t+s, D]
     // val_cache [B, H, S[:t+s], D/x, x] -> [B, H, t+s, D]

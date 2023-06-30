@@ -18,8 +18,7 @@ enum QuantPolicy {
     kCacheKVInt8 = 0x04,
 };
 
-enum CmpMode
-{
+enum CmpMode {
     kCmpNone,
     kCmpRead,
     kCmpWrite,
