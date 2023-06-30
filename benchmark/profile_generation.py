@@ -4,7 +4,7 @@ import time
 import fire
 import numpy as np
 
-from llmdeploy.serve.fastertransformer.chatbot import Chatbot
+from lmdeploy.serve.fastertransformer.chatbot import Chatbot
 
 
 def infer(chatbot, session_id: int, prompt: str, output_seqlen: int,

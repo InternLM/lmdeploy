@@ -3,7 +3,7 @@ import os
 from setuptools import find_packages, setup
 
 pwd = os.path.dirname(__file__)
-version_file = 'llmdeploy/version.py'
+version_file = 'lmdeploy/version.py'
 
 
 def readme():
@@ -19,15 +19,15 @@ def get_version():
 
 
 if __name__ == '__main__':
-    setup(name='llmdeploy',
+    setup(name='lmdeploy',
           version=get_version(),
-          description='triton inference service of llama',
+          description='A toolset for compressing, deploying and serving LLM',
           long_description=readme(),
           long_description_content_type='text/markdown',
           author='OpenMMLab',
           author_email='openmmlab@gmail.com',
           packages=find_packages(
-              exclude=('llmdeploy/serve/fastertransformer/triton_models', )),
+              exclude=('lmdeploy/serve/fastertransformer/triton_models', )),
           classifiers=[
               'Programming Language :: Python :: 3.8',
               'Programming Language :: Python :: 3.9',

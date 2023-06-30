@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/llmdeploy-logo.png" width="450"/>
+  <img src="resources/lmdeploy-logo.png" width="450"/>
   <div>&nbsp;</div>
   <div align="center">
     <b><font size="5">OpenMMLab website</font></b>
@@ -18,11 +18,11 @@
   </div>
   <div>&nbsp;</div>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://llmdeploy.readthedocs.io/en/latest/)
-[![codecov](https://codecov.io/gh/open-mmlab/llmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/llmdeploy)
-[![license](https://img.shields.io/github/license/open-mmlab/llmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/llmdeploy)](https://github.com/open-mmlab/llmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/llmdeploy)](https://github.com/open-mmlab/llmdeploy/issues)
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
+[![codecov](https://codecov.io/gh/open-mmlab/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/lmdeploy)
+[![license](https://img.shields.io/github/license/open-mmlab/lmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
+[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
+[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
 
 English | [简体中文](README_zh-CN.md)
 
@@ -44,23 +44,37 @@ English | [简体中文](README_zh-CN.md)
 
 ## Introduction
 
-## Installation
+LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMDeploy](https://github.com/open-mmlab/mmdeploy) and [MMRazor](https://github.com/open-mmlab/mmrazor) teams. It has the following core features:
+
+- A high throughput inference engine named as **TurboMind** based on [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) for LLaMA family models
+
+- Interactive generation is supported. LMDeploy can remember the history by caching the attention k/v in multi-turn dialogues, so that it can avoid repetitive decoding of historical conversations.
+
+<div align="center">
+  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
+</div>
+
+- Support persistent-batch inference
+
+  TODO: gif to show what persistent batch is
+
+## Quick Start
+
+### Installation
 
 Below are quick steps for installation:
 
 ```shell
 conda create -n open-mmlab python=3.8
 conda activate open-mmlab
-git clone https://github.com/open-mmlab/llmdeploy.git
-cd llmdeploy
+git clone https://github.com/open-mmlab/lmdeploy.git
+cd lmdeploy
 pip install -e .
 ```
 
-## Quick Start
-
 ### Build
 
-Pull docker image `openmmlab/llmdeploy:base` and build llmdeploy libs in its launched container
+Pull docker image `openmmlab/lmdeploy:latest` and build lmdeploy libs in its launched container
 
 ```shell
 mkdir build && cd build
@@ -78,41 +92,8 @@ Run one of the following commands to serve a LLaMA model on NVIDIA GPU server:
 <summary><b>7B</b></summary>
 
 ```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
+python3 lmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
     --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
-```
-
-</details>
-
-<details open>
-<summary><b>13B</b></summary>
-
-```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-13B /path/to/llama-13b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
-```
-
-</details>
-
-<details open>
-<summary><b>33B</b></summary>
-
-```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-33B /path/to/llama-33b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 4
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
-```
-
-</details>
-
-<details open>
-<summary><b>65B</b></summary>
-
-```shell
-python3 llmdeploy/serve/fastertransformer/deploy.py llama-65B /path/to/llama-65b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 8
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -130,7 +111,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-7b \
   --delta-path lmsys/vicuna-7b-delta-v1.1
 
-python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
+python3 lmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -146,7 +127,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-13b \
   --delta-path lmsys/vicuna-13b-delta-v1.1
 
-python3 llmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
+python3 lmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -155,28 +136,29 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 ## Inference with Command Line Interface
 
 ```shell
-python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
+python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
 ```
 
 ## Inference with Web UI
 
 ```shell
-python3 llmdeploy/app.py {server_ip_addresss}:33337 model_name
+python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 ```
 
 ## User Guide
+
 ## Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
 First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
 Then adjust `config.ini`
-* `use_context_fmha` changed to 0, means off
-* `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
+
+- `use_context_fmha` changed to 0, means off
+- `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
 ## Contributing
 
-We appreciate all contributions to LLMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
-
+We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
 
 ## Acknowledgement
 
