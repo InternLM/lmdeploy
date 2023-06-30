@@ -61,8 +61,8 @@ class Tokenizer:
             return self.model.Decode(t)
         else:
             skip_special_tokens = False
-            return self.model.decode(
-                t, skip_special_tokens=skip_special_tokens)
+            return self.model.decode(t,
+                                     skip_special_tokens=skip_special_tokens)
 
 
 class TritonPythonModel:

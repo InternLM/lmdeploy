@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 PARENT_BLOCK_CSS = """
 #col_container {
     width: 95%;

@@ -407,7 +407,7 @@ void LlamaBatch<T>::initializeGeneration()
     check_cuda_error(
         cudaMemcpyAsync(sequence_lengths_, context_length_buf_, sizeof(int) * batch_size_, cudaMemcpyDefault, stream_));
     // `sequence_lengths_` will be increased by dynamic decode
-    // note that in decoder and in output "sequence length" has differnt semantic
+    // note that in decoder and in output "sequence length" has different semantic
     // - in decoder it means length of sequence that has kv cache already computed
     // - in output it means length of all tokens (the last generated token does not have k/v cache computed yet)
     invokePlusScalar(sequence_lengths_, -1, batch_size_, stream_);

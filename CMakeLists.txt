@@ -43,7 +43,7 @@ endif()
 include(FetchContent)
 
 FetchContent_Declare(
-  repo-cutlass 
+  repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
   GIT_TAG        cc85b64cf676c45f98a17e3a47c0aafcf817f088
 )

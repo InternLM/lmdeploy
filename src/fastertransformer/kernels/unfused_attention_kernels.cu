@@ -1472,7 +1472,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
             k = *reinterpret_cast<Vec_t*>(k_smem + half_idx * smem_pitch + intra_half_idx);
         }
     }
-    if (!is_masked && !q_buf) {  // also skip modifing QKV if q/k/v_buf are present
+    if (!is_masked && !q_buf) {  // also skip modifying QKV if q/k/v_buf are present
         *reinterpret_cast<Vec_t*>(&QKV[src_q_idx]) = q;
         *reinterpret_cast<Vec_t*>(&QKV[src_k_idx]) = k;
         *reinterpret_cast<Vec_t*>(&QKV[src_v_idx]) = v;

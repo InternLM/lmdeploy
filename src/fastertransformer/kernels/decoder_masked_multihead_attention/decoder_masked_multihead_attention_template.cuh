@@ -1455,7 +1455,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                     // Two chunks are separated by L * x elements. A thread write QK_VEC_SIZE elements.
                     int offset = bhi * params.memory_max_len * Dh + co * params.memory_max_len * QK_ELTS_IN_16B
                                  + tlength_circ * QK_ELTS_IN_16B + ci;
-                    
+
                     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
                         Packed_Int8_t k_int8 = quant(k, k_scale);
@@ -1822,7 +1822,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             const int beam_offset = HAS_BEAMS ? beam_src * params.num_heads * params.memory_max_len * Dh : 0;
             // Load the values from the cache.
             V_vec_k v;
-            
+
             if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
                 Packed_Int8_t  v_vec_m_int8  = *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
@@ -1867,7 +1867,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             const int beam_offset = HAS_BEAMS ? beam_src * params.num_heads * params.memory_max_len * Dh : 0;
             // Load the values from the cache.
             V_vec_k v;
-            
+
             if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
                 Packed_Int8_t  v_vec_m_int8  = *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti_circ * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);

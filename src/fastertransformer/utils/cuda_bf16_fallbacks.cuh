@@ -25,7 +25,7 @@ namespace fastertransformer {
 inline __device__ float2 bf1622float2(const __nv_bfloat162 val) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
     float2 f_val;
-    f_val.x = __low2float(val); 
+    f_val.x = __low2float(val);
     f_val.y = __high2float(val);
     return f_val;
 #else
@@ -129,7 +129,7 @@ inline __device__ __nv_bfloat162 bf16hmul2(const __nv_bfloat162 x, const __nv_bf
 inline __device__ __nv_bfloat16 bf16hmul(const __nv_bfloat16 x, const __nv_bfloat16 y) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
     return __float2bfloat16( __bfloat162float(x) * __bfloat162float(y) );
-#else 
+#else
     return __hmul(x, y);
 #endif
 }

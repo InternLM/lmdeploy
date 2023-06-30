@@ -409,7 +409,7 @@ void invokeExtendKVCache(T**          k_dst,
 
         extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(
             reinterpret_cast<int8_t**>(v_dst), dst_offset, v_src, local_head_num, size_per_head, query_length, history_length, max_q_len, max_seq_len, kv_scale[1]);
-    
+
     } else {
         extend_value_cache<<<grid, block_sz, 0, stream>>>(
             k_dst, dst_offset, k_src, local_head_num, size_per_head, query_length, history_length, max_q_len, max_seq_len);
@@ -567,7 +567,7 @@ void invokeTransposeKVCache(T*           key_cache_trans,
 
         transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(
             val_cache_trans, reinterpret_cast<const int8_t**>(val_cache), src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len, kv_scale[1]);
-    
+
     } else {
         transpose_value_cache<<<grid, block_sz, 0, stream>>>(
             key_cache_trans, key_cache, src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len);

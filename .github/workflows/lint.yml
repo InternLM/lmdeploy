@@ -1,0 +1,52 @@
+name: lint
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python 3.7
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.7
+      - name: Install pre-commit hook
+        run: |
+          python -m pip install pre-commit
+          pre-commit install
+      - name: Linting
+        run: pre-commit run --all-files
+      - name: Format c/cuda codes with clang-format
+        uses: DoozyX/clang-format-lint-action@v0.11
+        with:
+          source: csrc
+          extensions: h,c,cpp,hpp,cu,cuh
+          style: file
+      - name: Check index.rst
+        run: |
+          python .github/scripts/check_index_rst.py docs/en/index.rst
+          python .github/scripts/check_index_rst.py docs/zh_cn/index.rst
+      - name: Check markdown link
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          use-verbose-mode: 'yes'
+#          check-modified-files-only: 'yes'
+          config-file: '.github/md-link-config.json'
+          folder-path: 'docs/en, docs/zh_cn'
+          file-path: './README.md, ./LICENSE, ./README_zh-CN.md'
+      - name: Check doc link
+        run: |
+          python .github/scripts/doc_link_checker.py --target docs/zh_cn
+          python .github/scripts/doc_link_checker.py --target README_zh-CN.md
+          python .github/scripts/doc_link_checker.py --target docs/en
+          python .github/scripts/doc_link_checker.py --target README.md
+      - name: Check docstring coverage
+        run: |
+          python -m pip install interrogate
+          interrogate -v --ignore-init-method --ignore-module --ignore-private --ignore-nested-functions --ignore-nested-classes --fail-under 80 lmdeploy
+      - name: Check pylint score
+        run: |
+          python -m pip install pylint
+          pylint lmdeploy

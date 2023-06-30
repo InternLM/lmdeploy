@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.8)
 
 add_subdirectory(fused_multi_head_attention)
 
-add_library(Llama STATIC 
+add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
         LlamaCacheManager.cc

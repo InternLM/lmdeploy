@@ -81,7 +81,7 @@ public:
                  IAllocator*      allocator,
                  bool             is_free_buffer_after_forward,
                  int              quant_policy),
-                 
+
 
     ~LlamaDecoder() override;
 

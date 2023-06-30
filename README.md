@@ -165,18 +165,19 @@ python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
 ```
 
 ## User Guide
+
 ## Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
 First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
 Then adjust `config.ini`
-* `use_context_fmha` changed to 0, means off
-* `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
+
+- `use_context_fmha` changed to 0, means off
+- `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
 ## Contributing
 
 We appreciate all contributions to LLMDeploy. Please refer to [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the contributing guideline.
-
 
 ## Acknowledgement
 

@@ -227,7 +227,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   quant_policy_,
                                   weights->past_kv_scale.data());
 
-        
+
     }
 
     //////////////////////////////////////////////
@@ -240,7 +240,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
         sync_check_cuda_error();
     }
 
- 
+
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();

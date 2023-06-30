@@ -63,8 +63,8 @@ class Tokenizer:
             return self.model.Decode(t)
         else:
             skip_special_tokens = False
-            return self.model.decode(
-                t, skip_special_tokens=skip_special_tokens)
+            return self.model.decode(t,
+                                     skip_special_tokens=skip_special_tokens)
 
 
 class TritonPythonModel:
@@ -190,6 +190,7 @@ class TritonPythonModel:
             for s in query
         ]
         start_lengths = torch.IntTensor([[len(ids)] for ids in start_ids])
-        start_ids = pad_sequence(
-            start_ids, batch_first=True, padding_value=self.end_id)
+        start_ids = pad_sequence(start_ids,
+                                 batch_first=True,
+                                 padding_value=self.end_id)
         return start_ids, start_lengths

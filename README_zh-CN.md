@@ -151,12 +151,15 @@ python3 llmdeploy/serve/client.py {server_ip_addresss}:33337 1
 ```shell
 python3 llmdeploy/webui/app.py {server_ip_addresss}:33337 model_name
 ```
+
 ## 量化部署
+
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
 首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 weight 目录下。
 然后调整 `config.ini`
-* `use_context_fmha` 改为 0，表示关闭
-* `quant_policy` 设置为 4。此参数默认为 0，表示不开启
+
+- `use_context_fmha` 改为 0，表示关闭
+- `quant_policy` 设置为 4。此参数默认为 0，表示不开启
 
 ## 贡献指南
 

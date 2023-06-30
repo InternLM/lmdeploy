@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (c) OpenMMLab. All rights reserved.
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
@@ -213,7 +213,7 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
                                              static_cast<T*>(nullptr),
                                              pPromptTuningParam<T>{},
                                              input_ids,
-                                             0,  // only used for postion encoding
+                                             0,  // only used for position encoding
                                              token_num,
                                              token_num,
                                              1,
