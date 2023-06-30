@@ -38,7 +38,7 @@ repos:
     rev: v2.1.0
     hooks:
       - id: codespell
-        args: ["--ignore-words=.codespellignorewords"]
+        args: ["--skip=third_party/*,*.ipynb,*.proto"]
 
   - repo: https://github.com/myint/docformatter
     rev: v1.4
