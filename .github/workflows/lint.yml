@@ -17,12 +17,6 @@ jobs:
           pre-commit install
       - name: Linting
         run: pre-commit run --all-files
-      - name: Format c/cuda codes with clang-format
-        uses: DoozyX/clang-format-lint-action@v0.11
-        with:
-          source: src
-          extensions: h,c,cpp,hpp,cu,cuh
-          style: file
       - name: Check index.rst
         run: |
           python .github/scripts/check_index_rst.py docs/en/index.rst
