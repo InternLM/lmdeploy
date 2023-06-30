@@ -140,7 +140,7 @@ def export(model_name: str,
         start_id=bos_id,
         end_id=eos_id,
         weight_type='fp16',
-        # parameters for fastertransformer
+        # parameters for turbomind
         max_batch_size=32,
         max_context_token_num=4,
         session_len=2048,
@@ -179,7 +179,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         print(f'get "n_layers" and "norm_eps" from {params_path} failed: {e}')
         return False
 
-    # convert weights from llama to fastertransformer
+    # convert weights from llama to turbomind format
     checkpoints = []
     for pattern in ['*.pth', '*.pt']:
         checkpoints += sorted(Path(model_path).glob(pattern))
@@ -303,7 +303,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
               f'{params_path} failed: {e}')
         return False
 
-    # convert weights from hf to fastertransformer
+    # convert weights from hf to turbomind
     model_params = {}
 
     _qweight = 'weight'
@@ -388,7 +388,7 @@ def pack_model_repository(workspace_path: str):
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
     os.symlink(src=osp.join('../triton_models/interactive'),
-               dst=osp.join(model_repo_dir, 'fastertransformer'))
+               dst=osp.join(model_repo_dir, 'turbomind'))
     os.symlink(src=osp.join('../triton_models/preprocessing'),
                dst=osp.join(model_repo_dir, 'preprocessing'))
     os.symlink(src=osp.join('../triton_models/postprocessing'),
@@ -401,7 +401,7 @@ def main(model_name: str,
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1):
-    """deploy llama family models via fastertransformer.
+    """deploy llama family models via turbomind.
 
     Args:
         model_name (str): the name of the to-be-deployed model, such as
@@ -445,7 +445,7 @@ def main(model_name: str,
             'string_value: ' + f'"{tp}"\n' + '  }\n}\n'
         f.write(param)
     if not res:
-        print(f'deploy model "{model_name}" via fastertransformer failed')
+        print(f'deploy model "{model_name}" via turbomind failed')
         destroy_workspace(dst_path)
         exit(-1)
 

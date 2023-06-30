@@ -7,7 +7,7 @@ from typing import Sequence
 import fire
 import gradio as gr
 
-from lmdeploy.serve.fastertransformer.chatbot import Chatbot
+from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 CSS = """
 #container {
@@ -37,7 +37,7 @@ def chat_stream(instruction: str,
                 llama_chatbot: Chatbot,
                 model_name: str = None):
     bot_summarized_response = ''
-    model_type = 'fastertransformer'
+    model_type = 'turbomind'
     state_chatbot = state_chatbot + [(instruction, None)]
     session_id = threading.current_thread().ident
     bot_response = llama_chatbot.stream_infer(
