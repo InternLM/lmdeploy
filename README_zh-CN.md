@@ -50,7 +50,7 @@
 
 ## 简介
 
-LMDeploy 是 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发的，针对 LLM 进行轻量化、部署和服务的工具箱。它拥有以下核心功能：
+LMDeploy 是 [MMRazor](https://github.com/open-mmlab/mmrazor) 和 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 团队联合开发的，针对 LLM 进行轻量化、部署和服务的工具箱。它拥有以下核心功能：
 
 - 基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) 实现的高效推理引擎 **TurboMind**, 支持 LLaMA 及其变体模型在 NVIDIA 设备上的推理
 
