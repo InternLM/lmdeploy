@@ -5,9 +5,7 @@ from pathlib import Path
 from typing import List
 
 import numpy as np
-import torch
 import triton_python_backend_utils as pb_utils
-from torch.nn.utils.rnn import pad_sequence
 
 
 class Tokenizer:
@@ -63,8 +61,8 @@ class Tokenizer:
             return self.model.Decode(t)
         else:
             skip_special_tokens = False
-            return self.model.decode(
-                t, skip_special_tokens=skip_special_tokens)
+            return self.model.decode(t,
+                                     skip_special_tokens=skip_special_tokens)
 
 
 class TritonPythonModel:
@@ -93,25 +91,20 @@ class TritonPythonModel:
         # Parse model configs
         self.model_config = model_config = json.loads(args['model_config'])
 
-        # Parse model output configs and convert Triton types to numpy types
-        input_names = [
-            'INPUT_ID', 'REQUEST_INPUT_LEN', 'BAD_WORDS_IDS', 'STOP_WORDS_IDS'
-        ]
-        for input_name in input_names:
-            setattr(
-                self,
-                input_name.lower() + '_dtype',
-                pb_utils.triton_string_to_numpy(
-                    pb_utils.get_output_config_by_name(
-                        model_config, input_name)['data_type']))
+        # Parse model output configs
+        output_config = pb_utils.get_output_config_by_name(
+            model_config, 'OUTPUT')
+
+        # Convert Triton types to numpy types
+        self.output_dtype = pb_utils.triton_string_to_numpy(
+            output_config['data_type'])
 
         cur_folder = Path(__file__).parent
+
         self.tokenizer = Tokenizer(
             osp.join(
                 cur_folder, self.model_config['parameters']['tokenizer_path']
                 ['string_value']))
-        self.start_id = self.tokenizer.start_id
-        self.end_id = self.tokenizer.end_id
 
     def execute(self, requests):
         """`execute` must be implemented in every Python model. `execute`
@@ -139,25 +132,20 @@ class TritonPythonModel:
         # and create a pb_utils.InferenceResponse for each of them.
         for idx, request in enumerate(requests):
             # Get input tensors
-            query = pb_utils.get_input_tensor_by_name(request,
-                                                      'QUERY').as_numpy()
-            request_output_len = pb_utils.get_input_tensor_by_name(
-                request, 'REQUEST_OUTPUT_LEN').as_numpy()
+            tokens_batch = pb_utils.get_input_tensor_by_name(
+                request, 'TOKENS_BATCH').as_numpy()
+            sequence_length = pb_utils.get_input_tensor_by_name(
+                request, 'sequence_length').as_numpy()
 
-            # Preprocessing input data.
-            input_id, request_input_len = self._create_request(query)
+            # Postprocessing output data.
+            outputs = self._postprocessing(tokens_batch.tolist(),
+                                           sequence_length)
 
             # Create output tensors. You need pb_utils.Tensor
             # objects to create pb_utils.InferenceResponse.
-            input_id_tensor = pb_utils.Tensor(
-                'INPUT_ID',
-                np.array(input_id).astype(self.input_id_dtype))
-            request_input_len_tensor = pb_utils.Tensor(
-                'REQUEST_INPUT_LEN',
-                np.array(request_input_len).astype(
-                    self.request_input_len_dtype))
-            request_output_len_tensor = pb_utils.Tensor(
-                'REQUEST_OUTPUT_LEN', request_output_len)
+            output_tensor = pb_utils.Tensor(
+                'OUTPUT',
+                np.array(outputs).astype(self.output_dtype))
 
             # Create InferenceResponse. You can set an error here in case
             # there was a problem with handling this inference request.
@@ -166,10 +154,8 @@ class TritonPythonModel:
             #
             # pb_utils.InferenceResponse(
             #    output_tensors=..., TritonError("An error occurred"))
-            inference_response = pb_utils.InferenceResponse(output_tensors=[
-                input_id_tensor, request_input_len_tensor,
-                request_output_len_tensor
-            ])
+            inference_response = pb_utils.InferenceResponse(
+                output_tensors=[output_tensor])
             responses.append(inference_response)
 
         # You should return a list of pb_utils.InferenceResponse. Length
@@ -184,12 +170,11 @@ class TritonPythonModel:
         """
         print('Cleaning up...')
 
-    def _create_request(self, query):
-        start_ids = [
-            torch.IntTensor(self.tokenizer.encode(s[0].decode()))
-            for s in query
-        ]
-        start_lengths = torch.IntTensor([[len(ids)] for ids in start_ids])
-        start_ids = pad_sequence(
-            start_ids, batch_first=True, padding_value=self.end_id)
-        return start_ids, start_lengths
+    def _postprocessing(self, tokens_batch, sequence_length):
+        outputs = []
+        for beam_tokens, beam_len in zip(tokens_batch, sequence_length):
+            for tokens, _len in zip(beam_tokens, beam_len):
+                output = self.tokenizer.decode(tokens[:_len])
+                output = output.encode('utf8')
+                outputs.append(output)
+        return outputs

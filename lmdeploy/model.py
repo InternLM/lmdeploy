@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from mmengine import Registry
 
-MODELS = Registry('model', locations=['llmdeploy.model'])
+MODELS = Registry('model', locations=['lmdeploy.model'])
 
 
 @MODELS.register_module(name='vicuna')
