@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention/decoder_masked_multihead_attention_template.cuh"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
+#include "src/turbomind/kernels/decoder_masked_multihead_attention/decoder_masked_multihead_attention_template.cuh"
+#include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include <assert.h>
 #include <float.h>
 #include <type_traits>

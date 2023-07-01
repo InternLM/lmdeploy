@@ -19,9 +19,9 @@
 #include <string>
 #include <unordered_map>
 
-#include "src/fastertransformer/utils/string_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class RepetitionPenaltyType {
     Additive,        // the presence penalty
@@ -42,4 +42,4 @@ inline float getDefaultPenaltyValue(RepetitionPenaltyType penalty_type)
     return 0.0f;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

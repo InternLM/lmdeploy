@@ -16,17 +16,17 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptContextDecoder.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptContextDecoder.cc
 
-#include "src/fastertransformer/models/llama/LlamaContextDecoder.h"
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
-#include "src/fastertransformer/models/llama/LlamaContextDecoder.h"
-#include "src/fastertransformer/models/llama/llama_decoder_kernels.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/models/llama/LlamaContextDecoder.h"
+#include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/models/llama/LlamaContextDecoder.h"
+#include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/utils/Tensor.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void LlamaContextDecoder<T>::allocateBuffer()
@@ -37,7 +37,7 @@ void LlamaContextDecoder<T>::allocateBuffer()
 template<typename T>
 void LlamaContextDecoder<T>::allocateBuffer(size_t batch_size, size_t num_token, size_t max_q_len, size_t max_kv_len)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     attn_ffn_io_    = (T*)allocator_->reMalloc(attn_ffn_io_, sizeof(T) * num_token * hidden_units_, false);
     attention_mask_ = (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * batch_size * max_q_len * max_kv_len, false);
@@ -50,7 +50,7 @@ void LlamaContextDecoder<T>::allocateBuffer(size_t batch_size, size_t num_token,
 template<typename T>
 void LlamaContextDecoder<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&attn_ffn_io_);
         allocator_->free((void**)&padding_offset_);
@@ -94,7 +94,7 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
                                              int                                            layer,
                                              bool                                           is_final)
 {
-    // FT_LOG_ERROR(__PRETTY_FUNCTION__);
+    // TM_LOG_ERROR(__PRETTY_FUNCTION__);
     TensorMap self_attention_input_tensors{
         {"input_query", Tensor{MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}},
         {"attention_mask",
@@ -283,4 +283,4 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 template class LlamaContextDecoder<float>;
 template class LlamaContextDecoder<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

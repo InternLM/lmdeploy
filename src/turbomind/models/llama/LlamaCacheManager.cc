@@ -1,10 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/models/llama/LlamaCacheManager.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/models/llama/LlamaCacheManager.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 LlamaCacheManager::~LlamaCacheManager()
 {
@@ -16,7 +16,7 @@ LlamaCacheManager::~LlamaCacheManager()
 void* LlamaCacheManager::allocate(bool is_preallocte)
 {
     if (rank_ == 0) {
-        FT_LOG_INFO("[LlamaCacheManager][allocate]");
+        TM_LOG_INFO("[LlamaCacheManager][allocate]");
     }
 
     void* mem_ptr{};
@@ -26,7 +26,7 @@ void* LlamaCacheManager::allocate(bool is_preallocte)
         device_free_.pop();
 
         if (rank_ == 0) {
-            FT_LOG_INFO("[LlamaCacheManager][allocate] free = %d", (int)device_free_.size());
+            TM_LOG_INFO("[LlamaCacheManager][allocate] free = %d", (int)device_free_.size());
         }
     }
     else if (entry_count_ < max_entry_count_) {
@@ -34,14 +34,14 @@ void* LlamaCacheManager::allocate(bool is_preallocte)
         const size_t entry_byte_size = 2 * cache_byte_size_;  // 2 for k,v
 
         if (rank_ == 0) {
-            FT_LOG_INFO("[LlamaCacheManager][allocate] malloc %d", (int)alloc_count);
+            TM_LOG_INFO("[LlamaCacheManager][allocate] malloc %d", (int)alloc_count);
         }
         const auto chunk_ptr = allocator_->malloc(alloc_count * entry_byte_size, false);
         FT_CHECK(chunk_ptr);
         device_mem_.push_back(chunk_ptr);
         entry_count_ += alloc_count;
         if (rank_ == 0) {
-            FT_LOG_INFO("[LlamaCacheManager][allocate] count = %d", entry_count_);
+            TM_LOG_INFO("[LlamaCacheManager][allocate] count = %d", entry_count_);
         }
 
         for (int i = 0; i < alloc_count; ++i) {
@@ -54,7 +54,7 @@ void* LlamaCacheManager::allocate(bool is_preallocte)
         }
 
         if (rank_ == 0) {
-            FT_LOG_INFO("[LlamaCacheManager][allocate] free = %d", (int)device_free_.size());
+            TM_LOG_INFO("[LlamaCacheManager][allocate] free = %d", (int)device_free_.size());
         }
     }
     else {
@@ -68,13 +68,13 @@ void* LlamaCacheManager::allocate(bool is_preallocte)
 auto LlamaCacheManager::create(uint64_t id, cudaStream_t stream) -> Sequence
 {
     if (rank_ == 0) {
-        FT_LOG_INFO("[LlamaCacheManager][create] %ld", (long)id);
+        TM_LOG_INFO("[LlamaCacheManager][create] %ld", (long)id);
     }
 
     for (const auto& e : device_cache_) {
         if (e.id == id) {
             if (rank_ == 0) {
-                FT_LOG_WARNING("[LlamaCacheManager][create] Removing conflicting id %ld", (long)id);
+                TM_LOG_WARNING("[LlamaCacheManager][create] Removing conflicting id %ld", (long)id);
             }
             erase(id);
         }
@@ -102,7 +102,7 @@ auto LlamaCacheManager::getEntryOrThrow(uint64_t id) -> std::vector<Sequence>::i
     auto pred = [&](const Sequence& s) { return s.id == id; };
     auto it   = std::find_if(device_cache_.begin(), device_cache_.end(), pred);
     if (it == device_cache_.end()) {
-        FT_LOG_ERROR("[LlamaCacheManager] %ld not found.\n", (long)id);
+        TM_LOG_ERROR("[LlamaCacheManager] %ld not found.\n", (long)id);
         FT_CHECK(0);
     }
     return it;
@@ -111,7 +111,7 @@ auto LlamaCacheManager::getEntryOrThrow(uint64_t id) -> std::vector<Sequence>::i
 auto LlamaCacheManager::fetch(uint64_t id, cudaStream_t stream) -> Sequence
 {
     if (rank_ == 0) {
-        FT_LOG_INFO("[LlamaCacheManager][fetch] %ld", (long)id);
+        TM_LOG_INFO("[LlamaCacheManager][fetch] %ld", (long)id);
     }
 
     auto entry = getEntryOrThrow(id);
@@ -131,7 +131,7 @@ auto LlamaCacheManager::fetch(uint64_t id, cudaStream_t stream) -> Sequence
 void LlamaCacheManager::update(const Sequence& seq, cudaStream_t stream)
 {
     if (rank_ == 0) {
-        FT_LOG_INFO("[LlamaCacheManager][update] %ld", (long)seq.id);
+        TM_LOG_INFO("[LlamaCacheManager][update] %ld", (long)seq.id);
     }
 
     auto entry = getEntryOrThrow(seq.id);
@@ -145,7 +145,7 @@ void LlamaCacheManager::update(const Sequence& seq, cudaStream_t stream)
 void LlamaCacheManager::erase(uint64_t id)
 {
     if (rank_ == 0) {
-        FT_LOG_INFO("[LlamaCacheManager][erase] %ld", (long)id);
+        TM_LOG_INFO("[LlamaCacheManager][erase] %ld", (long)id);
     }
 
     auto entry = getEntryOrThrow(id);
@@ -153,7 +153,7 @@ void LlamaCacheManager::erase(uint64_t id)
     if (entry->k_cache) {
         device_free_.push(entry->k_cache);
         if (rank_ == 0) {
-            FT_LOG_INFO("[LlamaCacheManager][erase] free = %d", (int)device_free_.size());
+            TM_LOG_INFO("[LlamaCacheManager][erase] free = %d", (int)device_free_.size());
         }
     }
     device_cache_.erase(entry);
@@ -171,7 +171,7 @@ void* LlamaCacheManager::evict()
     }
 
     if (rank_ == 0) {
-        FT_LOG_INFO("[LlamaCacheManager][evict] %ld", (long)it->id);
+        TM_LOG_INFO("[LlamaCacheManager][evict] %ld", (long)it->id);
     }
 
     FT_CHECK(it->k_cache);
@@ -189,4 +189,4 @@ bool LlamaCacheManager::contains(uint64_t id) const noexcept
     return it != device_cache_.end();
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

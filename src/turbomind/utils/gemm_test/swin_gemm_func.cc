@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/gemm_test/swin_gemm_func.h"
+#include "src/turbomind/utils/gemm_test/swin_gemm_func.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_swin_gemm_config(
@@ -398,4 +398,4 @@ template void generate_swin_gemm_config<__nv_bfloat16>(
     int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend);
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

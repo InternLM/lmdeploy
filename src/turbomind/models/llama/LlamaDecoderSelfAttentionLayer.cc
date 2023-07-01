@@ -16,18 +16,18 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.cc
-#include "src/fastertransformer/models/llama/LlamaDecoderSelfAttentionLayer.h"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
-#include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/models/llama/llama_utils.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/DecoderSelfAttentionLayer.cc
+#include "src/turbomind/models/llama/LlamaDecoderSelfAttentionLayer.h"
+#include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
+#include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 #include <string>
 // #include <glog/logging.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct SATypeConverter {
@@ -157,7 +157,7 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 template<typename T>
 void LlamaDecoderSelfAttentionLayer<T>::allocateBuffer(size_t batch_size, int key_len, int max_memory_len)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     qkv_buf_ =
         reinterpret_cast<T*>(allocator_->reMalloc(qkv_buf_, sizeof(T) * batch_size * 3 * local_hidden_units_, false));
     context_buf_ =
@@ -289,4 +289,4 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 template class LlamaDecoderSelfAttentionLayer<float>;
 template class LlamaDecoderSelfAttentionLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

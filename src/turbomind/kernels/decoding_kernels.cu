@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/decoding_kernels.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 // static const float HALF_FLT_MAX = 65504.F;
 
@@ -803,4 +803,4 @@ void invokeFinalize(int*         output_ids,
         max_seq_len);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

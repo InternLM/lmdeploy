@@ -17,7 +17,7 @@
 
 #include <cuda_runtime.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 void invokeStopWordsCriterion(const int*   output_ids,
                               const int*   parent_ids,
@@ -39,4 +39,4 @@ void invokeLengthCriterion(bool*           finished,
                            int             step,
                            cudaStream_t    stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

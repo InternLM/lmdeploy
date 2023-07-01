@@ -2,14 +2,14 @@
 #include <string>     // std::string
 #include <vector>     // std::vector
 
-#include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/logger.h"
 
 #include "unittest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 #define PRINT_LIMIT 16
 #define EPSILON (1e-20)
@@ -30,7 +30,7 @@ struct TestCase {
 
     void print()
     {
-        FT_LOG_INFO(toString());
+        TM_LOG_INFO(toString());
     }
 };
 
@@ -107,7 +107,7 @@ void testActivationKernel(TestCase tc)
         invokeAddBiasGeluV2(output_baseline, bias, (const int*) nullptr, (const T*) nullptr, m, n, stream);
     }
     float total_time_opt = cuda_timer_opt.stop();
-    FT_LOG_INFO("%s baseline_time: %f us, opt_time: %f us, speedup: %f (ite: %d)",
+    TM_LOG_INFO("%s baseline_time: %f us, opt_time: %f us, speedup: %f (ite: %d)",
                 tc.toString().c_str(),
                 total_time_baseline / ite * 1000.f,
                 total_time_opt / ite * 1000.f,
@@ -148,7 +148,7 @@ int main()
         // testActivationKernel<float>(tc);
         testActivationKernel<half>(tc);
     }
-    FT_LOG_INFO("testActivationKernel done");
+    TM_LOG_INFO("testActivationKernel done");
 
     return 0;
 }

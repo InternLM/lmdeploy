@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/gemm_test/t5_gemm_func.h"
+#include "src/turbomind/utils/gemm_test/t5_gemm_func.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 bool isSparseGemmAvailable(size_t m, size_t n, size_t k)
 {
@@ -830,4 +830,4 @@ size_t calT5GemmTestBufSizeInByte(int            batch_size,
     return buf_size_in_byte;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

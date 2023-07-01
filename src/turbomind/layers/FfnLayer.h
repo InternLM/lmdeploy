@@ -16,20 +16,20 @@
 
 #pragma once
 
-#include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
-#include "src/fastertransformer/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
-#include "src/fastertransformer/kernels/matrix_vector_multiplication.h"
-#include "src/fastertransformer/kernels/moe_kernels.h"
-#include "src/fastertransformer/layers/BaseLayer.h"
-#include "src/fastertransformer/layers/FfnWeight.h"
-#include "src/fastertransformer/utils/activation_types.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
+#include "src/turbomind/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
+#include "src/turbomind/kernels/matrix_vector_multiplication.h"
+#include "src/turbomind/kernels/moe_kernels.h"
+#include "src/turbomind/layers/BaseLayer.h"
+#include "src/turbomind/layers/FfnWeight.h"
+#include "src/turbomind/utils/activation_types.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 #include <stdint.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class FfnLayer: public BaseLayer {
@@ -122,8 +122,8 @@ public:
         inter_size_ = runtime_inter_size;
     }
 
-    virtual void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                         const std::vector<fastertransformer::Tensor>* input_tensors,
+    virtual void forward(std::vector<turbomind::Tensor>*       output_tensors,
+                         const std::vector<turbomind::Tensor>* input_tensors,
                          const FfnWeight<T>*                           ffn_weights);
     virtual void forward(TensorMap* output_tensors, TensorMap* input_tensors, const FfnWeight<T>* ffn_weights);
 };
@@ -229,4 +229,4 @@ private:
     using FfnLayer<T>::inter_size_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

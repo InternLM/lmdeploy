@@ -20,15 +20,15 @@
 #include <vector>
 
 // #include "3rdparty/trt_fused_multihead_attention/fused_multihead_attention_common.h"
-#include "src/fastertransformer/layers/BaseLayer.h"
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/layers/BaseLayer.h"
+#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class AttentionType {
     UNFUSED_MHA,
@@ -159,4 +159,4 @@ public:
     }
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

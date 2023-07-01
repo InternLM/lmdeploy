@@ -2,14 +2,14 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cuda_runtime.h>
 #include <mutex>
 
-namespace fastertransformer {
+namespace turbomind {
 
 struct NcclGuard {
     static constexpr int kMaxGroupCount = 32;
@@ -89,4 +89,4 @@ struct NcclGuard {
     std::unique_ptr<std::lock_guard<std::mutex>> global_nccl_lock_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

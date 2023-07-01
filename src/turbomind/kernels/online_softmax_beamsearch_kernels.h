@@ -15,9 +15,9 @@
  */
 #pragma once
 
-#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
+#include "src/turbomind/kernels/beam_search_topk_kernels.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeTopkSoftMax(const T*        log_probs,
@@ -38,4 +38,4 @@ void invokeTopkSoftMax(const T*        log_probs,
                        const float     length_penalty,
                        cudaStream_t    stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -24,10 +24,10 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 __global__ void curandInitialize(curandState_t* state, const int size, const unsigned long long random_seed)
 {
@@ -575,4 +575,4 @@ template void invokeTopKTopPSampling(void*          workspace,
                                      const int*     end_ids,
                                      cudaStream_t   stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

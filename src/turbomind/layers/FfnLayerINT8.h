@@ -17,16 +17,16 @@
 #pragma once
 
 #include "FfnINT8Weight.h"
-#include "src/fastertransformer/kernels/activation_int8_kernels.h"
-#include "src/fastertransformer/layers/BaseLayer.h"
-#include "src/fastertransformer/utils/ScaleList.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasINT8MMWrapper.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/activation_int8_kernels.h"
+#include "src/turbomind/layers/BaseLayer.h"
+#include "src/turbomind/utils/ScaleList.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasINT8MMWrapper.h"
+#include "src/turbomind/utils/memory_utils.h"
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class GeluFfnLayerINT8;
@@ -77,8 +77,8 @@ public:
 
     ~FfnLayerINT8();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
+    void forward(std::vector<turbomind::Tensor>*       output_tensors,
+                 const std::vector<turbomind::Tensor>* input_tensors,
                  const FfnWeight<T>*                           ffn_weights);
 
     friend GeluFfnLayerINT8<T>;
@@ -143,4 +143,4 @@ private:
     void invokeAddBiasActivation(const int m, const T* bias, ScaleList* scale_list) override;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

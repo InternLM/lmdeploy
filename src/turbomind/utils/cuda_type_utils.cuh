@@ -16,13 +16,13 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cuda_bf16_fallbacks.cuh"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_bf16_fallbacks.cuh"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include <cuda.h>
 #include <cuda_fp16.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 inline __device__ T ldg(const T* val)
@@ -598,4 +598,4 @@ __device__ inline __nv_fp8_e4m3 cuda_cast<__nv_fp8_e4m3, int8_t>(int8_t val)
 
 #endif  // ENABLE_FP8
 
-}  // namespace fastertransformer
+}  // namespace turbomind

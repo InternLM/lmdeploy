@@ -17,18 +17,18 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/GptContextAttentionLayer.cc
 
-#include "src/fastertransformer/models/llama/LlamaContextAttentionLayer.h"
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/unfused_attention_kernels.h"
-#include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/models/llama/llama_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
+#include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
@@ -36,7 +36,7 @@ void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
                                                    size_t max_q_len,
                                                    size_t max_k_len)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     // no padding
     qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * 3 * local_hidden_units_, true);
@@ -75,7 +75,7 @@ template<typename T>
 void LlamaContextAttentionLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
         allocator_->free((void**)(&qkv_buf_));
         allocator_->free((void**)(&q_buf_2_));
@@ -98,7 +98,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                                    const TensorMap*               input_tensors,
                                                    const LlamaAttentionWeight<T>* weights)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     /**
      * input_tensors:
@@ -403,4 +403,4 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_c
 template class LlamaContextAttentionLayer<float>;
 template class LlamaContextAttentionLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

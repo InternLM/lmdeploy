@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/attention_layers_fp8/AttentionFP8Weight.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/layers/attention_layers_fp8/AttentionFP8Weight.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <stdint.h>

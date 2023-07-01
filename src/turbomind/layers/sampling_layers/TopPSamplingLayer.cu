@@ -18,14 +18,14 @@
 #include <algorithm>
 #include <float.h>
 
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
-#include "src/fastertransformer/kernels/sampling_topp_kernels.h"
-#include "src/fastertransformer/layers/sampling_layers/TopPSamplingLayer.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/kernels/sampling_topp_kernels.h"
+#include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 static __global__ void set_topp_runtime_args(int             batch_size,
                                              uint            top_k,
@@ -117,7 +117,7 @@ void TopPSamplingLayer<T>::allocateBuffer()
 template<typename T>
 void TopPSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     BaseSamplingLayer<T>::allocateBuffer(batch_size, top_k, top_p);
     invokeTopPSampling<T>(nullptr,  // workspace
                           sampling_workspace_size_,
@@ -163,7 +163,7 @@ void TopPSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
 template<typename T>
 void TopPSamplingLayer<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&sampling_workspace_));
         allocator_->free((void**)(&topp_id_vals_buf_));
@@ -196,7 +196,7 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     *   \param  top_p_reset_ids [batch_size] on gpu, uint32, optional
     **/
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
     const Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
     const size_t runtime_top_p_size = runtime_top_p.size();
@@ -274,7 +274,7 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
                     log probs at the current step.
     **/
 
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() >= 4);
     FT_CHECK(output_tensors->size() >= 1);
 
@@ -339,7 +339,7 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         local_batch_size,
         stream_);
     sync_check_cuda_error();
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template<typename T>
@@ -390,4 +390,4 @@ TopPSamplingLayer<T>::~TopPSamplingLayer()
 template class TopPSamplingLayer<float>;
 template class TopPSamplingLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

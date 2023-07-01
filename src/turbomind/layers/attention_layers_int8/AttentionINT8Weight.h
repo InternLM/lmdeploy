@@ -16,14 +16,14 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
-#include "src/fastertransformer/utils/ScaleList.h"
+#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
+#include "src/turbomind/utils/ScaleList.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct AttentionINT8Weight: AttentionWeight<T> {
     ScaleList* scale_list_ptr;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

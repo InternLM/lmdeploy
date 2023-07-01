@@ -20,7 +20,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeDecodingInitialize(bool*        finished,
@@ -167,4 +167,4 @@ void invokeFinalize(int*         output_ids,
                     const int    batch_size,
                     cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

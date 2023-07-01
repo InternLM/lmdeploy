@@ -41,13 +41,13 @@
 #include <memory>
 #endif
 
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/logger.h"
 
 #if defined(CUDART_VERSION) && CUDART_VERSION < 11020
 #define CUDA_MEMORY_POOL_DISABLED
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class AllocatorType {
     CUDA,
@@ -74,26 +74,26 @@ public:
     template<typename T>
     void* reMalloc(T* ptr, size_t size, const bool is_set_zero = true, bool is_host = false)
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         size              = ((size + 31) / 32) * 32;  // make the buffer align with 32 bytes
         void* void_ptr    = (void*)ptr;
         void* ptr_address = getAddress(void_ptr);
         if (isExist(ptr_address)) {
             ReallocType realloc_type = isReMalloc(ptr_address, size);
             if (realloc_type == ReallocType::INCREASE) {
-                FT_LOG_DEBUG("ReMalloc the buffer %p since it is too small.", void_ptr);
+                TM_LOG_DEBUG("ReMalloc the buffer %p since it is too small.", void_ptr);
                 free((void**)(&void_ptr), is_host);
                 return malloc(size, is_set_zero, is_host);
             }
 #if !defined(CUDA_MEMORY_POOL_DISABLED)
             else if (realloc_type == ReallocType::DECREASE) {
-                FT_LOG_DEBUG("ReMalloc the buffer %p to release unused memory to memory pools.", void_ptr);
+                TM_LOG_DEBUG("ReMalloc the buffer %p to release unused memory to memory pools.", void_ptr);
                 free((void**)(&void_ptr), is_host);
                 return malloc(size, is_set_zero, is_host);
             }
 #endif
             else {
-                FT_LOG_DEBUG("Reuse original buffer %p with size %d and do nothing for reMalloc.", void_ptr, size);
+                TM_LOG_DEBUG("Reuse original buffer %p with size %d and do nothing for reMalloc.", void_ptr, size);
                 if (is_set_zero) {
                     memSet(void_ptr, 0, size);
                 }
@@ -101,7 +101,7 @@ public:
             }
         }
         else {
-            FT_LOG_DEBUG("Cannot find buffer %p, mallocing new one.", void_ptr);
+            TM_LOG_DEBUG("Cannot find buffer %p, mallocing new one.", void_ptr);
             return malloc(size, is_set_zero, is_host);
         }
     }
@@ -147,10 +147,10 @@ private:
 public:
     Allocator(int device_id): device_id_(device_id)
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         pointer_mapping_ = new std::unordered_map<void*, size_t>();
 #if defined(CUDA_MEMORY_POOL_DISABLED)
-        FT_LOG_WARNING(
+        TM_LOG_WARNING(
             "Async cudaMalloc/Free is not supported before CUDA 11.2. Using Sync cudaMalloc/Free."
             "Note this may lead to hang with NCCL kernels launched in parallel; if so, try NCCL_LAUNCH_MODE=GROUP");
 #else
@@ -166,7 +166,7 @@ public:
             }
             check_cuda_error(cudaDeviceCanAccessPeer(&peer_access_available, device_id, i));
             if (!peer_access_available) {
-                FT_LOG_WARNING("Device " + std::to_string(device_id) + " peer access Device " + std::to_string(i)
+                TM_LOG_WARNING("Device " + std::to_string(device_id) + " peer access Device " + std::to_string(i)
                                + " is not available.");
                 continue;
             }
@@ -183,7 +183,7 @@ public:
 
     virtual ~Allocator()
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         while (!pointer_mapping_->empty()) {
             free((void**)(&pointer_mapping_->begin()->first));
         }
@@ -202,7 +202,7 @@ public:
 
     void* malloc(size_t size, const bool is_set_zero = true, bool is_host = false)
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         if (size == 0) {
             return nullptr;
         }
@@ -224,7 +224,7 @@ public:
             check_cuda_error(cudaMemsetAsync(ptr, 0, (size_t)(ceil(size / 32.)) * 32, stream_));
         }
         check_cuda_error(getSetDevice(o_device));
-        FT_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
+        TM_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
 
         pointer_mapping_->insert({getAddress(ptr), size});
 
@@ -233,12 +233,12 @@ public:
 
     void free(void** ptr, bool is_host = false) const
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         void* address = getAddress(*ptr);
         if (*ptr != nullptr) {
             int o_device = 0;
             if (pointer_mapping_->count(address)) {
-                FT_LOG_DEBUG("Free buffer %p", address);
+                TM_LOG_DEBUG("Free buffer %p", address);
                 check_cuda_error(getSetDevice(device_id_, &o_device));
                 if (is_host) {
                     check_cuda_error(cudaFreeHost(*ptr));
@@ -255,7 +255,7 @@ public:
                 pointer_mapping_->erase(address);
             }
             else {
-                FT_LOG_WARNING("pointer_mapping_ does not have information of ptr at %p.", address);
+                TM_LOG_WARNING("pointer_mapping_ does not have information of ptr at %p.", address);
             }
         }
         *ptr = nullptr;
@@ -287,7 +287,7 @@ class Allocator<AllocatorType::TF>: public IAllocator {
         for (int i = 0; i < pointer_mapping_->at(address).dims(); i++) {
             current_buffer_size *= pointer_mapping_->at(address).dim_size(i);
         }
-        FT_LOG_DEBUG("current_buffer_size: %d, new buffer: %d", current_buffer_size, size);
+        TM_LOG_DEBUG("current_buffer_size: %d, new buffer: %d", current_buffer_size, size);
         if (current_buffer_size < size) {
             return ReallocType::INCREASE;
         }
@@ -317,7 +317,7 @@ public:
 
     void* malloc(size_t size, const bool is_set_zero = true, bool is_host = false)
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         tensorflow::Tensor buf;
         long long int      buf_size = ((long long int)ceil(size / 32.) * 32);
         tensorflow::Status status;
@@ -347,7 +347,7 @@ public:
 
     void free(void** ptr, bool is_host = false) const
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         void* address = getAddress(*ptr);
         pointer_mapping_->erase(address);
         *ptr = nullptr;
@@ -387,7 +387,7 @@ class Allocator<AllocatorType::TH>: public IAllocator {
         for (int i = 0; i < pointer_mapping_->at(address).dim(); i++) {
             current_buffer_size *= pointer_mapping_->at(address).size(i);
         }
-        FT_LOG_DEBUG(
+        TM_LOG_DEBUG(
             "current_buffer_size: %d, original buffer: %p, new buffer: %d", current_buffer_size, address, size);
         if (current_buffer_size < size) {
             return ReallocType::INCREASE;
@@ -419,7 +419,7 @@ public:
 
     void* malloc(size_t size, const bool is_set_zero = true, bool is_host = false)
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         int64_t       buf_size = static_cast<int64_t>(ceil(size / 32.)) * 32;
         torch::Tensor buf;
         if (is_host) {
@@ -432,14 +432,14 @@ public:
         if (is_set_zero) {
             cudaMemset(ptr, 0, buf_size);
         }
-        FT_LOG_DEBUG("malloc buffer %p with size %ld", ptr, buf_size);
+        TM_LOG_DEBUG("malloc buffer %p with size %ld", ptr, buf_size);
         pointer_mapping_->insert({getAddress(ptr), buf});
         return ptr;
     }
 
     void free(void** ptr, bool is_host = false) const
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         void* address = getAddress(*ptr);
         pointer_mapping_->erase(address);
         *ptr = nullptr;
@@ -448,7 +448,7 @@ public:
 
     virtual ~Allocator()
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         while (!pointer_mapping_->empty()) {
             void* ptr = pointer_mapping_->begin()->second.data_ptr();
             free((void**)(&ptr));
@@ -463,4 +463,4 @@ public:
     }
 };
 #endif
-}  // namespace fastertransformer
+}  // namespace turbomind

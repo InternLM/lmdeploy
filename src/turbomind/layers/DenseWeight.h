@@ -15,10 +15,10 @@
  */
 
 #pragma once
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "stdlib.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 // Note that the int8 mode of BERT and GPT are different.
 // For int8 mode = 2 on GPT:
@@ -63,4 +63,4 @@ struct DenseWeight {
     bool fuse_gemm_bias = false;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

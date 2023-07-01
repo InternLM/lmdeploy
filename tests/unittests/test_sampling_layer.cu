@@ -9,18 +9,18 @@
 #include <cublasLt.h>
 #include <cuda_runtime.h>
 
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
-#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopKSamplingLayer.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/Tensor.h"
 
 // #include "tests/unittests/unittest_utils.h"
 #include "tests/unittests/gtest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 struct SamplingLayerTestParam {
     size_t batch_size;
@@ -256,12 +256,12 @@ protected:
                     for (auto& expt : expts) {
                         ss << " " << expt;
                     }
-                    FT_LOG_DEBUG("%s", ss.str().c_str());
+                    TM_LOG_DEBUG("%s", ss.str().c_str());
                 }
                 ++failures;
             }
         }
-        FT_LOG_DEBUG("check...%6s : failures: %d / %d",
+        TM_LOG_DEBUG("check...%6s : failures: %d / %d",
                      failures == 0 ? "....OK" : "FAILED", failures, max_seq_len * batchxbeam);
         delete[] h_output_ids;
         return failures == 0;
@@ -302,7 +302,7 @@ public:
             EXPECT_TRUE(passed) << "Failed at seed " << seed;
 #ifndef NDEBUG
             if (!passed) {
-                FT_LOG_ERROR("actual output ids");
+                TM_LOG_ERROR("actual output ids");
                 printMatrix(d_output_ids, max_seq_len, batch_size, batch_size, true);
             }
 #endif
@@ -867,7 +867,7 @@ protected:
             dynamic_decode_layer->forward(&dynamic_decode_output_tensors,
                                         &dynamic_decode_input_tensors);
 
-            FT_LOG_DEBUG("Step %2d generated ids", step);
+            TM_LOG_DEBUG("Step %2d generated ids", step);
             cudaD2Hcpy(h_output_ids,
                        dynamic_decode_output_tensors
                            .at("output_ids")
@@ -878,14 +878,14 @@ protected:
             for (size_t i = 0; i < batch_size * beam_width; ++i) {
                 int idx = i * vocab_size + h_output_ids[i];
                 expected_cum_log_probs[i] += (float)h_log_probs[idx];
-                FT_LOG_DEBUG(
+                TM_LOG_DEBUG(
                     "| step %2d batch %2d idx %7d id %6d | log-prob %9.4f (expt: %9.4f) "
                     "| cum-log-prob %9.4f (expt: %9.4f) | prob %9.4e",
                     (int)step, (int)i, (int)idx, (int)h_output_ids[i],
                     h_output_log_probs[step * batch_size * beam_width + i], (float)h_log_probs[idx],
                     h_cum_log_probs[i], expected_cum_log_probs[i], (float)h_probs[idx]);
             }
-            FT_LOG_DEBUG("");
+            TM_LOG_DEBUG("");
         }
 
         bool passed = checkResult(param.toString(), cum_log_probs, expected_cum_log_probs, batch_size * beam_width);

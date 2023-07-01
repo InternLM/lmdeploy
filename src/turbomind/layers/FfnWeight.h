@@ -18,7 +18,7 @@
 
 #include "DenseWeight.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T1, typename T2 = T1>
 struct FfnWeight {
@@ -29,4 +29,4 @@ struct FfnWeight {
     DenseWeight<T1, T2> ia3_weight;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

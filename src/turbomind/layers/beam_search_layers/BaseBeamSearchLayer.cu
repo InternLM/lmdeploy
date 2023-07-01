@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/beam_search_penalty_kernels.h"
-#include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/beam_search_penalty_kernels.h"
+#include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 __global__ void update_indir_cache_kernel(int*        tgt_indir_cache,
                                           const int*  src_indir_cache,
@@ -112,7 +112,7 @@ BaseBeamSearchLayer<T>::BaseBeamSearchLayer(BaseBeamSearchLayer<T> const& beam_s
 template<typename T>
 BaseBeamSearchLayer<T>::~BaseBeamSearchLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     freeBuffer();
 }
 
@@ -288,4 +288,4 @@ void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input
 template class BaseBeamSearchLayer<float>;
 template class BaseBeamSearchLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

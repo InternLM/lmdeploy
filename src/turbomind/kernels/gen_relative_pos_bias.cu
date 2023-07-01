@@ -17,11 +17,11 @@
 #include "cublas_v2.h"
 #include "gen_relative_pos_bias.h"
 #include "reduce_kernel_utils.cuh"
-#include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cstdio>
 
-namespace fastertransformer {
+namespace turbomind {
 
 /*******************  invokeGenRelativePosBias  ***********************/
 // relative_position_bias_table is [(2*window_size-1)*(2*window_size-1), headNum]
@@ -301,4 +301,4 @@ template void invokeGenRelativePosBiasV2(half*          relative_position_bias,
                                          const int      cpb_mlp_out_dim,
                                          const int      head_num,
                                          cudaStream_t   stream);
-}  // namespace fastertransformer
+}  // namespace turbomind

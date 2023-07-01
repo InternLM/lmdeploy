@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/gemm_test/encoder_igemm_func.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/gemm_test/encoder_igemm_func.h"
 #include <algorithm>
 #include <cublasLt.h>
 #include <cuda_runtime.h>
@@ -30,7 +30,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* CAUTION : must match cublasLtMatmulTile_t */
 // const char* const matmulTileName[] = {
@@ -42,4 +42,4 @@ namespace fastertransformer {
 int generate_swin_igemm_config(
     int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend = true);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

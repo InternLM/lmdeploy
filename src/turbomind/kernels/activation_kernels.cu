@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* Gelu Activation */
 
@@ -255,8 +255,8 @@ void invokeGenericActivation(T*           out,
                              const int    seq_len,
                              cudaStream_t stream)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_LOG_DEBUG("invokeGenericActivation %d %d %d", m, n, seq_len);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("invokeGenericActivation %d %d %d", m, n, seq_len);
     using PT                   = typename packed_type<T>::type;
     constexpr int packed_elems = num_elems<PT>::value;
     using PBT                  = typename packed_as<BT, packed_elems>::type;
@@ -272,7 +272,7 @@ void invokeGenericActivation(T*           out,
         block.x = n_threads;
         grid.x  = ceil(m * n / double(n_threads));
     }
-    FT_LOG_DEBUG("%d %d", grid.x, block.x);
+    TM_LOG_DEBUG("%d %d", grid.x, block.x);
     sync_check_cuda_error();
     generic_activation<Activation><<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
                                                                reinterpret_cast<const PBT*>(bias),
@@ -655,4 +655,4 @@ void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stre
 template void invokeSigmoid(float* data, const int size, const float scale, cudaStream_t stream);
 template void invokeSigmoid(half* data, const int size, const float scale, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

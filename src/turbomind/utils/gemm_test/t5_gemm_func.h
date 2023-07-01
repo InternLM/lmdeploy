@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/gemm_test/gemm_func.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/gemm_test/gemm_func.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_t5_gemm_config(int   batch_size,
@@ -66,4 +66,4 @@ size_t calT5GemmTestBufSizeInByte(int            batch_size,
                                   int            tensor_para_size,
                                   CublasDataType data_type);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

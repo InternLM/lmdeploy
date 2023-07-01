@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/layers/beam_search_layers/BeamSearchLayer.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/layers/beam_search_layers/BeamSearchLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __global__ void logProbAddCumLogProb(float*       log_probs,
@@ -278,7 +278,7 @@ void BeamSearchLayer<T>::allocateBuffer()
 template<typename T>
 void BeamSearchLayer<T>::allocateBuffer(size_t batch_size, size_t beam_width)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     invokeTopkBeamSearch<float>(nullptr,
                                 topk_softmax_workspace_size_,
@@ -345,10 +345,10 @@ BeamSearchLayer<T>::BeamSearchLayer(BeamSearchLayer<T> const& beam_search_layer)
 template<typename T>
 BeamSearchLayer<T>::~BeamSearchLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template class BeamSearchLayer<float>;
 template class BeamSearchLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

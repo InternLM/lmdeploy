@@ -1,13 +1,13 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #pragma once
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/utils/Tensor.h"
 #include <cuda_runtime.h>
 #include <sstream>
 #include <string>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum QuantPolicy {
     kNone = 0x00,
@@ -64,4 +64,4 @@ size_t curandStateGetSize();
 
 bool isDebug();
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -23,7 +23,7 @@
 #include <cuda_fp16.h>
 #include <cudnn.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void conv2d(T*             output,
@@ -134,4 +134,4 @@ void conv2d(T*             output,
     checkCUDNN(cudnnDestroyConvolutionDescriptor(convolution_descriptor_));
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

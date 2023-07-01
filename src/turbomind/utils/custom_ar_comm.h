@@ -21,12 +21,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "src/fastertransformer/kernels/custom_ar_kernels.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/custom_ar_kernels.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 class AbstractCustomComm {
 public:
@@ -84,4 +84,4 @@ struct CustomARCommTypeConverter<__nv_bfloat16> {
 };
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

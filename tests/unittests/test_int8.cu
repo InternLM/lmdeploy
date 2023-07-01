@@ -5,10 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/kernels/transpose_int8_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/kernels/transpose_int8_kernels.h"
 
 #include <algorithm>
 #include <iostream>
@@ -16,7 +16,7 @@
 
 #include "tests/unittests/gtest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 class Int8TestSuite: public FtTestBase {
 

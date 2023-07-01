@@ -22,13 +22,13 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
-#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/beam_search_topk_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __device__ __forceinline__ T apply_length_penalty(T log_prob, int length, float length_penalty)
@@ -595,7 +595,7 @@ void invokeTopkBeamSearch(void*           workspace,
                           const int*      end_ids,
                           cudaStream_t    stream)
 {
-    FT_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
     // log_probs: (batch, beam, vocab) cumulative log_probs of beams ending with a token.
     const int vocab_size = vocab_size_padded_;
     // Beam size should be less than or equal to vocab size.
@@ -842,4 +842,4 @@ void invokeInsertUnfinishedPath(BeamHypotheses beam_hyps,
     insertUnfinishedPath<<<batch_size, 256, 0, stream>>>(beam_hyps, finished, cum_log_probs, batch_size, beam_width);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

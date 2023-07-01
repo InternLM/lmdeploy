@@ -27,7 +27,7 @@ if __name__ == '__main__':
           author='OpenMMLab',
           author_email='openmmlab@gmail.com',
           packages=find_packages(
-              exclude=('lmdeploy/serve/fastertransformer/triton_models', )),
+              exclude=('lmdeploy/serve/turbomind/triton_models', )),
           classifiers=[
               'Programming Language :: Python :: 3.8',
               'Programming Language :: Python :: 3.9',

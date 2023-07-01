@@ -21,16 +21,16 @@
 #include <memory>
 #include <thread>
 
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
-#include "src/fastertransformer/utils/custom_ar_comm.h"
-#include "src/fastertransformer/utils/mpi_utils.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
-#include "src/fastertransformer/utils/word_list.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/custom_ar_comm.h"
+#include "src/turbomind/utils/mpi_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
+#include "src/turbomind/utils/nvtx_utils.h"
+#include "src/turbomind/utils/word_list.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 constexpr const bool kUSE_MPI = true;
 

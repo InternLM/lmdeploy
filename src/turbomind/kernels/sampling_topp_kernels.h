@@ -17,7 +17,7 @@
 
 #include <curand_kernel.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 void invokeTopPInitialize(int*         topp_id_val_buf,
                           int*         topp_offset_buf,
@@ -152,4 +152,4 @@ void invokeComputeToppDecay(float*         runtime_top_p,
                             const int      local_batch_size,
                             cudaStream_t   stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

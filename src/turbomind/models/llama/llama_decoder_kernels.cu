@@ -1,14 +1,14 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/models/llama/llama_decoder_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cuda_fp16.h>
 
 namespace cg = cooperative_groups;
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct res_norm_ops_t {
@@ -162,4 +162,4 @@ template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

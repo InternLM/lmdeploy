@@ -26,11 +26,11 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
-#include "src/fastertransformer/kernels/logprob_kernels.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/logprob_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __global__ void log_probs_kernel(float*       log_probs,
@@ -158,7 +158,7 @@ void invokeLogProbFromLogits(float*       cum_log_probs,
     // input_lengths: [batch_size]
     // workspace: workspace buffer of size at least sizeof(float) * max_input_length * batch_size.
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // block_size should be multiple of 32 to use warpReduceMax.
     const int block_size = vocab_size < 1024 ? (vocab_size + 31) / 32 * 32 : 1024;
     assert(block_size % 32 == 0);
@@ -207,4 +207,4 @@ template void invokeLogProbFromLogits(float*       cum_log_probs,
                                       const size_t workspace_size,
                                       cudaStream_t stream,
                                       const bool   batch_first);
-}  // end of namespace fastertransformer
+}  // end of namespace turbomind

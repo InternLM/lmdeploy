@@ -22,11 +22,11 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
-#include "src/fastertransformer/kernels/online_softmax_beamsearch_kernels.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/online_softmax_beamsearch_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 #define DO_SPLIT_SMALL_TOP_K_SOFTMAX
 static const int SMALL_TOP_K_SOFTMAX_THREADBLOCK_SIZE = 256;
@@ -736,4 +736,4 @@ template void invokeTopkSoftMax<half>(const half*     log_probs,
                                       const float     length_penalty,
                                       cudaStream_t    stream);
 
-}  // end of namespace fastertransformer
+}  // end of namespace turbomind

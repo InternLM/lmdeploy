@@ -17,17 +17,17 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptDecoder.h
 
-#include "src/fastertransformer/layers/BaseLayer.h"
-// #include "src/fastertransformer/layers/FfnLayer.h"
-#include "src/fastertransformer/models/llama/LlamaDecoderLayerWeight.h"
-#include "src/fastertransformer/models/llama/LlamaDecoderSelfAttentionLayer.h"
-#include "src/fastertransformer/models/llama/LlamaFfnLayer.h"
-#include "src/fastertransformer/utils/custom_ar_comm.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/layers/BaseLayer.h"
+// #include "src/turbomind/layers/FfnLayer.h"
+#include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/models/llama/LlamaDecoderSelfAttentionLayer.h"
+#include "src/turbomind/models/llama/LlamaFfnLayer.h"
+#include "src/turbomind/utils/custom_ar_comm.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaDecoder: public BaseLayer {
@@ -93,4 +93,4 @@ public:
                          const std::vector<LlamaDecoderLayerWeight<T>*>* decoder_layer_weights);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -16,9 +16,9 @@
 
 #include "3rdparty/fp8_qgmma_1x1/fp8_qgmma_1x1_utils.h"
 #include "cuda_utils.h"
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -28,7 +28,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 class cublasFP8MMWrapper: public cublasMMWrapper {
 public:
@@ -170,8 +170,8 @@ public:
 
 private:
     int                                 version_major_, version_minor_, version_patch_;
-    fastertransformer::qgmma1x1Launcher qgmmaLauncher;
+    turbomind::qgmma1x1Launcher qgmmaLauncher;
     void*                               cublas_workspace_qgemm_ = nullptr;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

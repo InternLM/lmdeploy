@@ -20,10 +20,10 @@
 #include <cuda_runtime.h>
 #include <unordered_map>
 
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct inputIdsEmbeddingLookupPosEncodingSoftPromptParam {
@@ -238,4 +238,4 @@ void invokeSumLengthDimension(float*       out_buf,
                               const size_t hidden_dim,
                               cudaStream_t stream = 0);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

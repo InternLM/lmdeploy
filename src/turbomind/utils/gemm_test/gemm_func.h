@@ -17,8 +17,8 @@
 #pragma once
 
 #include "encoder_igemm_func.h"  // TODO(bhsueh) Remove this include
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -34,7 +34,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 // Scale Type Converter
 // is_fp16_compute_type is only valid when T = half
@@ -98,4 +98,4 @@ int printPerfStructure(int                       batch_size,
                        int                       hasPrint,
                        int                       batch_count = 1);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/ban_bad_words.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/ban_bad_words.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __global__ void ban_bad_words(T*         logits,
@@ -161,4 +161,4 @@ template void invokeBanBadWords(float*       logits,
                                 size_t       step,
                                 cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind
