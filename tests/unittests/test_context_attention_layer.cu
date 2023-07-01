@@ -10,17 +10,17 @@
 #include <thrust/host_vector.h>
 #include <thrust/transform.h>
 
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/unfused_attention_kernels.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 #include "unittest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 template<typename scalar_t>
 __global__ void pad_query_kernel(
@@ -216,7 +216,7 @@ static const char* usage = "Usage: %s <batch-size> <num-heads> <key-len> <query-
 
 int main(int argc, const char* argv[])
 {
-    using namespace fastertransformer;
+    using namespace turbomind;
     using scalar_t                            = half;
     static const cudaDataType_t kCudaDataType = std::is_same<scalar_t, half>::value ? CUDA_R_16F : CUDA_R_32F;
 

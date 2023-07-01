@@ -9,7 +9,7 @@ import fire
 import numpy as np
 from sentencepiece import SentencePieceProcessor
 
-from lmdeploy.serve.fastertransformer.chatbot import Chatbot
+from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
 class Tokenizer:

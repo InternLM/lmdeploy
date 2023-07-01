@@ -24,23 +24,23 @@
 #include <torch/custom_class.h>
 #include <torch/script.h>
 
-#include "src/fastertransformer/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
-#include "src/fastertransformer/th_op/th_utils.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
+#include "src/turbomind/th_op/th_utils.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/logger.h"
 
 #include "cutlass/numeric_types.h"
 
 using torch::Tensor;
 using torch_ext::get_ptr;
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T>
 void int8_gemm_test(
-    const int m, 
-    const int n, 
-    const int k, 
+    const int m,
+    const int n,
+    const int k,
     const at::ScalarType output_data_type,
     const QuantMode quant_mode,
     const int iters)
@@ -143,9 +143,9 @@ void int8_gemm_test(
     auto duration = duration_cast<microseconds>(end - start);
 
     if (torch::allclose((y.to(torch::kCUDA).to(at_fp32) * alpha_row_col_scale_gpu.to(torch::kCUDA)).to(output_data_type), y_gpu)) {
-        FT_LOG_INFO("SUCCESS " + std::to_string((double(duration.count()) / iters) / 1000) + " ms");
+        TM_LOG_INFO("SUCCESS " + std::to_string((double(duration.count()) / iters) / 1000) + " ms");
     } else {
-        FT_LOG_ERROR("FAILED " + std::to_string((double(duration.count()) / iters) / 1000) + " ms");
+        TM_LOG_ERROR("FAILED " + std::to_string((double(duration.count()) / iters) / 1000) + " ms");
         // std::cout << "diff " << (y.to(torch::kCUDA).to(at_fp32) * alpha_row_col_scale_gpu.to(torch::kCUDA)).to(at_fp16) - y_gpu << std::endl;
     }
 }
@@ -153,7 +153,7 @@ void int8_gemm_test(
 int main(int argc, char **argv)
 {
     if (argc != 7) {
-        FT_LOG_ERROR("arguments missing, needs m, n, k, data_type(fp16=0, bf16=1), quant_mode (perTensor=0, perToken=1, perChannel=2, perTokenChannel=3), iters.");
+        TM_LOG_ERROR("arguments missing, needs m, n, k, data_type(fp16=0, bf16=1), quant_mode (perTensor=0, perToken=1, perChannel=2, perTokenChannel=3), iters.");
         return 0;
     }
 
