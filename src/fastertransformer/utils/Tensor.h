@@ -35,8 +35,7 @@
 
 namespace fastertransformer {
 
-typedef enum datatype_enum
-{
+typedef enum datatype_enum {
     TYPE_INVALID,
     TYPE_BOOL,
     TYPE_UINT8,
@@ -99,8 +98,7 @@ DataType getTensorType()
     }
 }
 
-typedef enum memorytype_enum
-{
+typedef enum memorytype_enum {
     MEMORY_CPU,
     MEMORY_CPU_PINNED,
     MEMORY_GPU

@@ -309,7 +309,8 @@ std::string LlamaTritonModel<T>::toString()
        << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
-       << "\nprefix_cache_len: " << prefix_cache_len_ << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << std::endl;
+       << "\nprefix_cache_len: " << prefix_cache_len_ << "\nmodel_dir: " << model_dir_
+       << "\nquant_policy: " << quant_policy_ << std::endl;
 
     return ss.str();
 }

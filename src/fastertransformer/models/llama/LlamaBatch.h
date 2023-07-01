@@ -122,7 +122,7 @@ private:
     void* topk_curandstate_buf_{};
     void* topp_curandstate_buf_{};
 
-    // hard limits for persistant buffers
+    // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
 
     using CachedSeq = LlamaCacheManager::Sequence;

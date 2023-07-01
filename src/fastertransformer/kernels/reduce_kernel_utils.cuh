@@ -21,50 +21,46 @@
 #else
 #include <cooperative_groups.h>
 #endif
-#include <cuda_fp16.h>
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <float.h>
 #include <type_traits>
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace cg = cooperative_groups;
 
 namespace fastertransformer {
 
-template <int VPT>
+template<int VPT>
 struct BytesToType;
 
-template <>
-struct BytesToType<2>
-{
+template<>
+struct BytesToType<2> {
     using type = uint16_t;
 };
-template <>
-struct BytesToType<4>
-{
+template<>
+struct BytesToType<4> {
     using type = uint32_t;
 };
-template <>
-struct BytesToType<8>
-{
+template<>
+struct BytesToType<8> {
     using type = uint64_t;
 };
-template <>
-struct BytesToType<16>
-{
+template<>
+struct BytesToType<16> {
     using type = float4;
 };
 
-template <int Bytes>
+template<int Bytes>
 __device__ inline void copy(const void* local, void* data)
 {
     using T = typename BytesToType<Bytes>::type;
 
-    const T* in = static_cast<const T*>(local);
-    T* out = static_cast<T*>(data);
-    *out = *in;
+    const T* in  = static_cast<const T*>(local);
+    T*       out = static_cast<T*>(data);
+    *out         = *in;
 }
 
 static const float HALF_FLT_MAX = 65504.F;
@@ -133,7 +129,6 @@ __inline__ __device__ T blockReduceMax(T val)
 
     return val;
 }
-
 
 /* Calculate the maximum of all elements in a block */
 template<typename T>

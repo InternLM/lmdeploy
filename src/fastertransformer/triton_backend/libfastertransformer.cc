@@ -25,7 +25,8 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Modified from https://github.com/triton-inference-server/fastertransformer_backend/blob/main/src/libfastertransformer.cc
+// Modified from
+// https://github.com/triton-inference-server/fastertransformer_backend/blob/main/src/libfastertransformer.cc
 
 #include <stdint.h>
 
@@ -1399,7 +1400,7 @@ void ModelInstanceState::SetInputTensors(
             auto batch_input_name = batch_input.TargetNames()[0];
 
             // we only take care of the ragged input_ids
-            // Assume the first dimention (length) are different and others are the
+            // Assume the first dimension (length) are different and others are the
             // same BATCH_ITEM_SHAPE [num_requests (batches), num_dims (excluding
             // batch dimension)]
             if (batch_input_kind == BatchInput::Kind::BATCH_ITEM_SHAPE
@@ -1464,7 +1465,7 @@ void ModelInstanceState::SetInputTensors(
                                                     param.batch_input_ptr + param.batch_intput_size,
                                                     [&](int x) { return x != param.batch_input_ptr[0]; });
 
-                // calculate statics of elements
+                // calculate statistics of elements
                 if (param.is_input_ragged) {
                     param.max_elements_per_seq =
                         *std::max_element(param.batch_input_ptr, param.batch_input_ptr + param.batch_intput_size);

@@ -1,6 +1,6 @@
 fire
 mmengine
 numpy
+safetensors
 setuptools
 tritonclient==2.33.0
-safetensors

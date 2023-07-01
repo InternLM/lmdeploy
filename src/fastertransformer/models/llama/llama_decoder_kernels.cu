@@ -11,7 +11,8 @@ namespace cg = cooperative_groups;
 namespace fastertransformer {
 
 template<typename T>
-struct res_norm_ops_t {};
+struct res_norm_ops_t {
+};
 
 template<typename T>
 struct res_norm_t {
@@ -144,7 +145,7 @@ __global__ void fusedAddBiasResidualNorm(T* __restrict__ r_data,
 
 template<typename T>
 void invokeFusedAddBiasResidualRMSNorm(
-    T* residual, T* inout, const T* bias, const T* scale, float eps, int batch_size, int n_dims, cudaStream_t stream)
+    T* residual, T* in_out, const T* bias, const T* scale, float eps, int batch_size, int n_dims, cudaStream_t stream)
 {
     constexpr int PACK_DIM = sizeof(uint4) / sizeof(T);
     FT_CHECK(n_dims % PACK_DIM == 0);
@@ -154,7 +155,7 @@ void invokeFusedAddBiasResidualRMSNorm(
     n_threads           = (n_threads + 31) / 32 * 32;      // round up to the nearest multiple of warp size
 
     fusedAddBiasResidualNorm<<<batch_size, n_threads, 0, stream>>>(
-        residual, inout, bias, scale, eps, batch_size, n_dims);
+        residual, in_out, bias, scale, eps, batch_size, n_dims);
 }
 
 template void

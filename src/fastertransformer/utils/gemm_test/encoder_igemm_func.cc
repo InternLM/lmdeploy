@@ -1239,15 +1239,15 @@ int generate_encoder_igemm_config(
             int8_t* d_C = d_B + k * n;
             int8_t* dA_compressed;
             {
-                cusparseLtMatDescriptor_t matA;
+                cusparseLtMatDescriptor_t mat_A;
                 CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
-                    &handle, &matA, m, k, k, alignment, CUDA_R_8I, row_order, CUSPARSELT_SPARSITY_50_PERCENT))
+                    &handle, &mat_A, m, k, k, alignment, CUDA_R_8I, row_order, CUSPARSELT_SPARSITY_50_PERCENT))
                 CHECK_CUSPARSE(
-                    cusparseLtSpMMAPrune2(&handle, &matA, true, opA, d_A, d_A, CUSPARSELT_PRUNE_SPMMA_STRIP, stream))
+                    cusparseLtSpMMAPrune2(&handle, &mat_A, true, opA, d_A, d_A, CUSPARSELT_PRUNE_SPMMA_STRIP, stream))
                 size_t compressed_size;
-                CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&handle, &matA, &compressed_size))
+                CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&handle, &mat_A, &compressed_size))
                 check_cuda_error(cudaMalloc((void**)&dA_compressed, compressed_size));
-                CHECK_CUSPARSE(cusparseLtSpMMACompress2(&handle, &matA, true, opA, d_A, dA_compressed, stream))
+                CHECK_CUSPARSE(cusparseLtSpMMACompress2(&handle, &mat_A, true, opA, d_A, dA_compressed, stream))
             }
             cudaDeviceSynchronize();
             cudaError_t result = cudaGetLastError();
@@ -1259,14 +1259,14 @@ int generate_encoder_igemm_config(
             int   fast_algo = 0;
             for (int alg = 0; alg < 4; ++alg) {
                 cudaDeviceSynchronize();
-                cusparseLtMatDescriptor_t matA, matB, matC;
+                cusparseLtMatDescriptor_t mat_A, mat_B, mat_C;
                 void*                     d_workspace = nullptr;
                 int                       num_streams = 1;
                 cudaStream_t              streams[1]  = {stream};
                 CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
-                    &handle, &matA, m, k, k, alignment, CUDA_R_8I, row_order, CUSPARSELT_SPARSITY_50_PERCENT))
-                CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matB, k, n, k, alignment, CUDA_R_8I, col_order))
-                CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matC, m, n, m, alignment, CUDA_R_8I, col_order))
+                    &handle, &mat_A, m, k, k, alignment, CUDA_R_8I, row_order, CUSPARSELT_SPARSITY_50_PERCENT))
+                CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_B, k, n, k, alignment, CUDA_R_8I, col_order))
+                CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_C, m, n, m, alignment, CUDA_R_8I, col_order))
                 gettimeofday(&start, NULL);
                 for (int ite = 0; ite < ites; ++ite) {
                     // initializing MatDesc takes a lot of time
@@ -1276,7 +1276,7 @@ int generate_encoder_igemm_config(
                     cusparseLtMatmulAlgSelection_t alg_sel;
                     cusparseLtMatmulPlan_t         plan;
                     CHECK_CUSPARSE(cusparseLtMatmulDescriptorInit(
-                        &handle, &matmul, opA, opB, &matA, &matB, &matC, &matC, compute_type))
+                        &handle, &matmul, opA, opB, &mat_A, &mat_B, &mat_C, &mat_C, compute_type))
                     CHECK_CUSPARSE(
                         cusparseLtMatmulAlgSelectionInit(&handle, &alg_sel, &matmul, CUSPARSELT_MATMUL_ALG_DEFAULT))
                     CHECK_CUSPARSE(cusparseLtMatmulAlgSetAttribute(
