@@ -5,7 +5,7 @@ show_help() {
   echo
   echo "Options:"
   echo "  -h, --help   Show this help message and exit"
-  echo "  --lib-dir    Specify the directory of fastertransformer libraries"
+  echo "  --lib-dir    Specify the directory of turbomind libraries"
 }
 
 # check if '-h' or '--help' in the arguments
@@ -64,7 +64,7 @@ for ((i = 1; i <= $#; i++)); do
       docker run \
         --gpus $DEVICES \
         --rm \
-        -v "${LIB_PATH}":/opt/tritonserver/backends/fastertransformer \
+        -v "${LIB_PATH}":/opt/tritonserver/backends/turbomind \
         -v ""${SCRIPT_ABS_DIR}"":/workspace/models \
         --shm-size 16g \
         -p 33336:22 \

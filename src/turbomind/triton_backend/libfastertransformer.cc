@@ -511,11 +511,11 @@ TRITONSERVER_Error* ModelState::AutoCompleteConfig()
         }
     }
     else {
-        // Auto-complete configuration is not supported since fastertransformer does
+        // Auto-complete configuration is not supported since turbomind does
         // not store/capture sufficient model metadata so just log error instead.
         LOG_MESSAGE(TRITONSERVER_LOG_WARN,
                     (std::string("skipping model configuration auto-complete for '") + Name()
-                     + "': not supported for fastertransformer backend")
+                     + "': not supported for turbomind backend")
                         .c_str());
     }
 
@@ -940,7 +940,7 @@ void ModelInstanceState::ProcessRequests(TRITONBACKEND_Request** requests, const
                 request_count,
                 TRITONSERVER_ErrorNew(
                     TRITONSERVER_ERROR_INTERNAL,
-                    std::string("null request given to FasterTransformer backend for '" + Name() + "'").c_str()));
+                    std::string("null request given to TurboMind backend for '" + Name() + "'").c_str()));
             return;
         }
 
@@ -1115,7 +1115,7 @@ void ModelInstanceState::ProcessRequests(TRITONBACKEND_Request** requests, const
     for (auto& response : responses) {
         if (response != nullptr) {
             LOG_IF_ERROR(TRITONBACKEND_ResponseSend(response, TRITONSERVER_RESPONSE_COMPLETE_FINAL, nullptr),
-                         "failed to send FasterTransformer backend response");
+                         "failed to send TurboMind backend response");
             LOG_MESSAGE(TRITONSERVER_LOG_VERBOSE, (std::string("response is sent")).c_str());
         }
         else {
@@ -1160,7 +1160,7 @@ void streaming_callback(std::shared_ptr<std::unordered_map<std::string, Tensor>>
         if (response != nullptr) {
             LOG_MESSAGE(TRITONSERVER_LOG_VERBOSE, (std::string("start to send streaming response")).c_str());
             LOG_IF_ERROR(TRITONBACKEND_ResponseSend(response, 0, nullptr),
-                         "failed to send FasterTransformer backend response");
+                         "failed to send TurboMind backend response");
             LOG_MESSAGE(TRITONSERVER_LOG_VERBOSE, (std::string("streaming response is sent")).c_str());
         }
         else {
@@ -1358,7 +1358,7 @@ ModelInstanceState::Execute(std::vector<TRITONBACKEND_Response*>*               
             responses,
             response_count,
             TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_INTERNAL,
-                                  ("FasterTransformer execute failure: " + std::string(ex.what())).c_str()));
+                                  ("TurboMind execute failure: " + std::string(ex.what())).c_str()));
     }
     auto output_tensors = output_tensors_list[0];
     return output_tensors;
