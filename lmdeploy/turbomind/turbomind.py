@@ -31,10 +31,19 @@ def _stop_words(stop_words: List[int]):
 def _np_dict_to_tm_dict(np_dict:dict):
     ret = _tm.TensorMap()
     for k, v in np_dict.items():
-        ret[k] = _tm.from_dlpack(v.__dlpack__())
+        ret[k] = _tm.from_dlpack(v)
 
     return ret
     
+def _tm_dict_to_torch_dict(tm_dict:_tm.TensorMap):
+    ret = dict()
+    for k, v in tm_dict.items():
+        if v.type == _tm.DataType.TYPE_UINT32:
+            v = v.view(_tm.DataType.TYPE_INT32)
+        ret[k] = torch.from_dlpack(v)
+
+    return ret
+
 class TurboMind:
     def __init__(self, model_path:str, eos_id:int=2, stop_words: List[int]=None):
         self.eos_id = eos_id
@@ -127,4 +136,9 @@ class TurboMind:
         tm_inputs = _np_dict_to_tm_dict(inputs)
         tm_outputs = self.model_inst.forward(tm_inputs, self.instance_comm)
 
-        return [[], [], []]
+        outputs = _tm_dict_to_torch_dict(tm_outputs)
+
+        output_ids = outputs['output_ids'][0]
+        sequence_length = outputs['sequence_length'].long()[0]
+        return [(output[:l], l.item()) for output, l in zip(output_ids, sequence_length)]
+

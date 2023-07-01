@@ -249,6 +249,12 @@ PYBIND11_MODULE(_turbomind, m) {
             auto data_ptr = reinterpret_cast<void*>(data);
             return new triton::Tensor(where, type, shape, data_ptr);
         }))
+        .def("view", [](triton::Tensor* self, triton::DataType new_type){
+            return new triton::Tensor(self->where, new_type, self->shape, self->data);
+        }, "new_type"_a)
+        .def("view", [](triton::Tensor* self, std::vector<size_t> new_shape){
+            return new triton::Tensor(self->where, self->type, new_shape, self->data);
+        }, "new_shape"_a)
         .def("__dlpack__", [](triton::Tensor* self, long stream) {
             auto tensor_ptr = TritonTensorToDLManagedTensor(*self);
             return new py::capsule(
@@ -270,15 +276,17 @@ PYBIND11_MODULE(_turbomind, m) {
             auto device = getDLDevice(*self);
             return std::tuple<int, int>(int(device.device_type), device.device_id);
         });
-    m.def("from_dlpack", [](py::capsule* obj) {
+    m.def("from_dlpack", [](py::object obj) {
+                        
+                        py::capsule cap = obj.attr("__dlpack__")();
                         DLManagedTensor* dlmt = static_cast<DLManagedTensor*>(
-                            PyCapsule_GetPointer(obj->ptr(), kDlTensorCapsuleName));
+                            PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
                         auto ret = DLManagedTensorToTritonTensor(dlmt);
                         return ret.release();
                       }, "dl_managed_tensor"_a);
 
     // transformer model instance
-    py::bind_map<TensorMap>(m, "TensorMap");
+    py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
     py::class_<AbstractTransformerModelInstance>(m, "AbstractTransformerModelInstance")
         // .def("forward", [](AbstractTransformerModelInstance* model, TensorVector& input_tensors){
         //     return model->forward(make_shared_nodel(input_tensors));
@@ -286,7 +294,7 @@ PYBIND11_MODULE(_turbomind, m) {
         .def("forward", [](AbstractTransformerModelInstance* model, TensorMap& input_tensors,
             ft::AbstractInstanceComm* inst_comm){
             return model->forward(make_shared_nodel(input_tensors), inst_comm);
-        }, "input_tensors"_a, "inst_comm"_a=nullptr, py::return_value_policy::reference_internal);
+        }, "input_tensors"_a, "inst_comm"_a=nullptr);
 
     // transformer model
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
