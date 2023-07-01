@@ -34,7 +34,7 @@
 #define EPSILON (1e-20)
 #define EPSILON_FP16 (1e-10)
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 class TestFailureError : public std::exception {
 private:

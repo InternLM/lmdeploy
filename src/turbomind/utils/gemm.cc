@@ -16,7 +16,7 @@
 
 #include "src/turbomind/utils/gemm.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* ***************************** GEMM Impl ******************************** */
 
@@ -1181,4 +1181,4 @@ size_t compressMatrixB(void**              output,
 
 /* ************************* End of GEMM utils **************************** */
 
-}  // end of namespace fastertransformer
+}  // end of namespace turbomind

@@ -19,7 +19,7 @@
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include <cuda_fp16.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 #ifdef ENABLE_BF16
 inline __device__ float2 bf1622float2(const __nv_bfloat162 val)
@@ -287,4 +287,4 @@ inline __device__ __nv_bfloat162 bf16hfma2(__nv_bfloat162 a, __nv_bfloat162 b, _
 
 #endif  // ENABLE_BF16
 
-}  // namespace fastertransformer
+}  // namespace turbomind

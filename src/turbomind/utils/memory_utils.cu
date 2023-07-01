@@ -22,7 +22,7 @@
 #include <sys/stat.h>
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void deviceMalloc(T** ptr, size_t size, bool is_random_initialize)
@@ -839,4 +839,4 @@ bool invokeCheckRange(T* buffer, const size_t size, T min, T max, bool* d_within
 template bool
 invokeCheckRange<int>(int* buffer, const size_t size, int min, int max, bool* d_within_range, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

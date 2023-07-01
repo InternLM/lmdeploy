@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 // k-cache layout [L, H, D/x, S[s:], x]
 // v-cache layout [L, H, S[s:], D/x, x]
@@ -99,4 +99,4 @@ private:
     std::vector<Sequence> device_cache_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

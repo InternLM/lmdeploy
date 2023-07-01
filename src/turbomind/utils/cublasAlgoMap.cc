@@ -16,7 +16,7 @@
 
 #include "cublasAlgoMap.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 cublasAlgoMap::cublasAlgoMap(const std::string filename, const std::string sp_config_filename):
     config_filename_(filename), sp_config_filename_(sp_config_filename)
@@ -223,4 +223,4 @@ bool cublasAlgoMap::isUseSparse(const int batch_count, const int m, const int n,
     }
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

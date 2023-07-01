@@ -22,7 +22,7 @@
 
 #include "src/turbomind/utils/string_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 class Logger {
 
@@ -108,14 +108,14 @@ private:
 
 #define FT_LOG(level, ...)                                                                                             \
     do {                                                                                                               \
-        if (fastertransformer::Logger::getLogger().getLevel() <= level) {                                              \
-            fastertransformer::Logger::getLogger().log(level, __VA_ARGS__);                                            \
+        if (turbomind::Logger::getLogger().getLevel() <= level) {                                              \
+            turbomind::Logger::getLogger().log(level, __VA_ARGS__);                                            \
         }                                                                                                              \
     } while (0)
 
-#define FT_LOG_TRACE(...) FT_LOG(fastertransformer::Logger::TRACE, __VA_ARGS__)
-#define FT_LOG_DEBUG(...) FT_LOG(fastertransformer::Logger::DEBUG, __VA_ARGS__)
-#define FT_LOG_INFO(...) FT_LOG(fastertransformer::Logger::INFO, __VA_ARGS__)
-#define FT_LOG_WARNING(...) FT_LOG(fastertransformer::Logger::WARNING, __VA_ARGS__)
-#define FT_LOG_ERROR(...) FT_LOG(fastertransformer::Logger::ERROR, __VA_ARGS__)
-}  // namespace fastertransformer
+#define FT_LOG_TRACE(...) FT_LOG(turbomind::Logger::TRACE, __VA_ARGS__)
+#define FT_LOG_DEBUG(...) FT_LOG(turbomind::Logger::DEBUG, __VA_ARGS__)
+#define FT_LOG_INFO(...) FT_LOG(turbomind::Logger::INFO, __VA_ARGS__)
+#define FT_LOG_WARNING(...) FT_LOG(turbomind::Logger::WARNING, __VA_ARGS__)
+#define FT_LOG_ERROR(...) FT_LOG(turbomind::Logger::ERROR, __VA_ARGS__)
+}  // namespace turbomind

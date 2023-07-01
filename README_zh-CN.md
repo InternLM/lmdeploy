@@ -96,7 +96,7 @@ make -j$(nproc) && make install
 <summary><b>7B</b></summary>
 
 ```shell
-python3 lmdeploy/serve/fastertransformer/deploy.py llama-7B /path/to/llama-7b llama \
+python3 lmdeploy/serve/turbomind/deploy.py llama-7B /path/to/llama-7b llama \
     --tokenizer_path /path/to/tokenizer/model
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
@@ -107,7 +107,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fast
 <summary><b>13B</b></summary>
 
 ```shell
-python3 lmdeploy/serve/fastertransformer/deploy.py llama-13B /path/to/llama-13b llama \
+python3 lmdeploy/serve/turbomind/deploy.py llama-13B /path/to/llama-13b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 2
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
@@ -126,7 +126,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-7b \
   --delta-path lmsys/vicuna-7b-delta-v1.1
 
-python3 lmdeploy/serve/fastertransformer/deploy.py vicuna-7B /path/to/vicuna-7b hf
+python3 lmdeploy/serve/turbomind/deploy.py vicuna-7B /path/to/vicuna-7b hf
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 
@@ -142,7 +142,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-13b \
   --delta-path lmsys/vicuna-13b-delta-v1.1
 
-python3 lmdeploy/serve/fastertransformer/deploy.py vicuna-13B /path/to/vicuna-13b hf
+python3 lmdeploy/serve/turbomind/deploy.py vicuna-13B /path/to/vicuna-13b hf
 bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/fastertransformer
 ```
 

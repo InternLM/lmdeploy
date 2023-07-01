@@ -27,7 +27,7 @@
 #include <string>
 // #include <glog/logging.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct SATypeConverter {
@@ -289,4 +289,4 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 template class LlamaDecoderSelfAttentionLayer<float>;
 template class LlamaDecoderSelfAttentionLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

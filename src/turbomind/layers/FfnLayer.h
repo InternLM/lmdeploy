@@ -29,7 +29,7 @@
 #include <stdint.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class FfnLayer: public BaseLayer {
@@ -122,8 +122,8 @@ public:
         inter_size_ = runtime_inter_size;
     }
 
-    virtual void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                         const std::vector<fastertransformer::Tensor>* input_tensors,
+    virtual void forward(std::vector<turbomind::Tensor>*       output_tensors,
+                         const std::vector<turbomind::Tensor>* input_tensors,
                          const FfnWeight<T>*                           ffn_weights);
     virtual void forward(TensorMap* output_tensors, TensorMap* input_tensors, const FfnWeight<T>* ffn_weights);
 };
@@ -229,4 +229,4 @@ private:
     using FfnLayer<T>::inter_size_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

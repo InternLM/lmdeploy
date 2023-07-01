@@ -19,7 +19,7 @@
 
 #include "tests/unittests/unittest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 struct TestCase {
     std::string name;

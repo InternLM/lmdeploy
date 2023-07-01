@@ -13,7 +13,7 @@
 // modified from:
 // https://github.com/NVIDIA/cutlass/blob/main/examples/41_fused_multi_head_attention/kernel_forward.h
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<
     // dtype of Q/K/V/M
@@ -907,4 +907,4 @@ void FlashAttentionOp<T>::operator()(Params& params, cudaStream_t st) const
 template class FlashAttentionOp<float>;
 template class FlashAttentionOp<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

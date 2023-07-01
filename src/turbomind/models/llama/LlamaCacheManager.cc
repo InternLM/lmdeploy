@@ -4,7 +4,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 LlamaCacheManager::~LlamaCacheManager()
 {
@@ -189,4 +189,4 @@ bool LlamaCacheManager::contains(uint64_t id) const noexcept
     return it != device_cache_.end();
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

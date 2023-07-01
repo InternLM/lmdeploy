@@ -23,7 +23,7 @@
 #include "src/turbomind/utils/nvtx_utils.h"
 // #include <glog/logging.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void LlamaFfnLayer<T>::allocateBuffer(size_t token_num)
@@ -110,4 +110,4 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 template class LlamaFfnLayer<float>;
 template class LlamaFfnLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -8,7 +8,7 @@
 
 namespace cg = cooperative_groups;
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct res_norm_ops_t {
@@ -162,4 +162,4 @@ template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

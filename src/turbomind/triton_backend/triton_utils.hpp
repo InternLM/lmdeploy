@@ -19,7 +19,7 @@
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/Tensor.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T>
 void move_tensor_H2D(const triton::Tensor&                                          tensor,

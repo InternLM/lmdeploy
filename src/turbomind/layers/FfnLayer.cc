@@ -18,11 +18,11 @@
 #include "src/turbomind/kernels/transpose_int8_kernels.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
-void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                          const std::vector<fastertransformer::Tensor>* input_tensors,
+void FfnLayer<T>::forward(std::vector<turbomind::Tensor>*       output_tensors,
+                          const std::vector<turbomind::Tensor>* input_tensors,
                           const FfnWeight<T>*                           ffn_weights)
 {
     TensorMap input_tensor({{"ffn_input", input_tensors->at(0)}});
@@ -712,4 +712,4 @@ template class SiluFfnLayer<half>;
 template class SiluFfnLayer<__nv_bfloat16>;
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

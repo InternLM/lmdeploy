@@ -26,7 +26,7 @@
 #include "src/turbomind/utils/nccl_utils.h"
 #include <functional>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaFfnLayer {
@@ -82,4 +82,4 @@ private:
     bool is_allocate_buffer_{};
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

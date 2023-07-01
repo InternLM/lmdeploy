@@ -31,7 +31,7 @@
 #include "src/turbomind/utils/mpi_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 namespace triton {
 #ifdef USE_TRITONSERVER_DATATYPE

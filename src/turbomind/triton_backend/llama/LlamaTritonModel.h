@@ -29,7 +29,7 @@
 #include <cuda_fp16.h>
 #include <mutex>
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T>
 struct LlamaTritonSharedModelInstance;

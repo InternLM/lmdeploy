@@ -16,7 +16,7 @@
 
 #include "custom_ar_comm.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 CustomAllReduceComm<T>::CustomAllReduceComm(size_t rank_size, size_t rank): rank_size_(rank_size), rank_(rank)
@@ -186,4 +186,4 @@ initCustomAllReduceComm<uint32_t>(std::vector<std::shared_ptr<AbstractCustomComm
                                   int                                               enable_custom_all_reduce,
                                   size_t                                            rank_size);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

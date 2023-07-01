@@ -31,7 +31,7 @@
 #define USE_QGMMA
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 const float FP8_E4M3_MAX = 480.0f;
 
@@ -190,5 +190,5 @@ void invokeFakeQuantize(T_OUT* dst, const T_IN* src, const int size, cudaStream_
 template<typename T_W>
 void invokeComputeFP8QuantizeScale(float* quant_ptr, const T_W* weights, const int k, const int n, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind
 #endif  // ENABLE_FP8

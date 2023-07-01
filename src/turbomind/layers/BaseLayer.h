@@ -22,7 +22,7 @@
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 class BaseLayer {
 public:
@@ -65,4 +65,4 @@ protected:
     bool sparse_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

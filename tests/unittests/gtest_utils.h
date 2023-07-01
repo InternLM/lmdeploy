@@ -13,7 +13,7 @@
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/logger.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 namespace {
 

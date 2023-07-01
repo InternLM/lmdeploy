@@ -17,7 +17,7 @@
 #include "src/turbomind/utils/logger.h"
 #include <cuda_runtime.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 Logger::Logger()
 {
@@ -56,4 +56,4 @@ Logger::Logger()
     }
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -20,7 +20,7 @@
 #include "src/turbomind/utils/memory_utils.h"
 #include "unittest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 template<typename scalar_t>
 __global__ void pad_query_kernel(
@@ -216,7 +216,7 @@ static const char* usage = "Usage: %s <batch-size> <num-heads> <key-len> <query-
 
 int main(int argc, const char* argv[])
 {
-    using namespace fastertransformer;
+    using namespace turbomind;
     using scalar_t                            = half;
     static const cudaDataType_t kCudaDataType = std::is_same<scalar_t, half>::value ? CUDA_R_16F : CUDA_R_32F;
 

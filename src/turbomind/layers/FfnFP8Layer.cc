@@ -19,7 +19,7 @@
 #include "src/turbomind/utils/cublasFP8MMWrapper.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T1, typename T2>
 void FfnFP8Layer<T1, T2>::forward(TensorMap*                  output_tensors,
@@ -532,4 +532,4 @@ void ReluFfnFP8Layer<T1, T2>::invokeAddBiasActivation(const int    m,
 
 template class ReluFfnFP8Layer<__nv_fp8_e4m3, __nv_bfloat16>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

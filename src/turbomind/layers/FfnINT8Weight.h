@@ -18,11 +18,11 @@
 
 #include "FfnWeight.h"
 #include "src/turbomind/utils/ScaleList.h"
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct FfnINT8Weight: FfnWeight<T> {
     ScaleList* scale_list_ptr;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

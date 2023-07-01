@@ -16,7 +16,7 @@
 
 #include "src/turbomind/utils/gemm_test/xlnet_gemm_func.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_xlnet_gemm_config(int   batch_size,
@@ -458,4 +458,4 @@ template void generate_xlnet_gemm_config<__nv_bfloat16>(int   batch_size,
                                                         bool  isAppend);
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

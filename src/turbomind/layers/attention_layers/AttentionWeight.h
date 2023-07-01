@@ -18,7 +18,7 @@
 
 #include "src/turbomind/layers/DenseWeight.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T1, typename T2 = T1>
 struct AttentionWeight {
@@ -30,4 +30,4 @@ struct AttentionWeight {
     DenseWeight<T1, T2> ia3_value_weight;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -24,7 +24,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 LlamaDecoder<T>::LlamaDecoder(size_t           head_num,
@@ -242,4 +242,4 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
 template class LlamaDecoder<half>;
 template class LlamaDecoder<float>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

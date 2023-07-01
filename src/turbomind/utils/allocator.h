@@ -47,7 +47,7 @@
 #define CUDA_MEMORY_POOL_DISABLED
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class AllocatorType {
     CUDA,
@@ -463,4 +463,4 @@ public:
     }
 };
 #endif
-}  // namespace fastertransformer
+}  // namespace turbomind

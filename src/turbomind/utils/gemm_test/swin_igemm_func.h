@@ -30,7 +30,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* CAUTION : must match cublasLtMatmulTile_t */
 // const char* const matmulTileName[] = {
@@ -42,4 +42,4 @@ namespace fastertransformer {
 int generate_swin_igemm_config(
     int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend = true);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

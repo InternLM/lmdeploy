@@ -5,7 +5,7 @@
 #include "src/turbomind/utils/logger.h"
 #include <pthread.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 class Barrier {
 public:
@@ -34,4 +34,4 @@ private:
     pthread_barrier_t barrier_{};
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

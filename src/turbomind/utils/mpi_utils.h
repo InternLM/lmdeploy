@@ -24,7 +24,7 @@
 #include <stdio.h>
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 #ifdef BUILD_MULTI_GPU
 #define MPICHECK(cmd)                                                                                                  \
@@ -91,4 +91,4 @@ int getCommWorldSize();
 void bcast(void* buffer, size_t size, MpiType dtype, int root, MpiComm comm);
 
 }  // namespace mpi
-}  // namespace fastertransformer
+}  // namespace turbomind

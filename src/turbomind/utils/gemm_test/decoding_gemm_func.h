@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_decoding_gemm_config(int   batch_size,
@@ -55,4 +55,4 @@ size_t calDecodingGemmTestBufSizeInByte(int            batch_size,
                                         int            vocab_size,
                                         CublasDataType data_type);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

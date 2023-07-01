@@ -17,7 +17,7 @@
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/layers/beam_search_layers/BeamSearchLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __global__ void logProbAddCumLogProb(float*       log_probs,
@@ -351,4 +351,4 @@ BeamSearchLayer<T>::~BeamSearchLayer()
 template class BeamSearchLayer<float>;
 template class BeamSearchLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -28,7 +28,7 @@
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class AttentionType {
     UNFUSED_MHA,
@@ -159,4 +159,4 @@ public:
     }
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

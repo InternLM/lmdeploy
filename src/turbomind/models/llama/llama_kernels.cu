@@ -6,7 +6,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 
-namespace fastertransformer {
+namespace turbomind {
 
 // fp16, bf16
 // n is divided by 2 for this impl
@@ -688,4 +688,4 @@ void invokeGatherOutput(int*         output_ids,
         output_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

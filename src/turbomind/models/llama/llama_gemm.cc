@@ -20,7 +20,7 @@
 #include "src/turbomind/utils/gemm_test/gpt_gemm_func.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 int main(int argc, char* argv[])
 {

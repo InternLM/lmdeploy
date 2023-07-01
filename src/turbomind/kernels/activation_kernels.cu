@@ -23,7 +23,7 @@
 #error CUDART_VERSION Undefined!
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* Gelu Activation */
 
@@ -655,4 +655,4 @@ void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stre
 template void invokeSigmoid(float* data, const int size, const float scale, cudaStream_t stream);
 template void invokeSigmoid(half* data, const int size, const float scale, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -16,7 +16,7 @@
 
 #include "src/turbomind/layers/beam_search_layers/OnlineBeamSearchLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 static const int SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
 static const int MAX_K                             = 4;
@@ -246,4 +246,4 @@ OnlineBeamSearchLayer<T>::~OnlineBeamSearchLayer()
 template class OnlineBeamSearchLayer<float>;
 template class OnlineBeamSearchLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

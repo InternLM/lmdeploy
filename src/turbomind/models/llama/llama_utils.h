@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum QuantPolicy {
     kNone = 0x00,
@@ -64,4 +64,4 @@ size_t curandStateGetSize();
 
 bool isDebug();
 
-}  // namespace fastertransformer
+}  // namespace turbomind

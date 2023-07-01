@@ -16,7 +16,7 @@
 
 #include "cuda_fp8_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 #ifdef ENABLE_FP8
 
 template<typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
@@ -121,4 +121,4 @@ template void
 invokeComputeFP8QuantizeScale(float* quant_ptr, const float* weights, const int k, const int n, cudaStream_t stream);
 
 #endif  // ENABLE_FP8
-}  // namespace fastertransformer
+}  // namespace turbomind

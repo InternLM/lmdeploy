@@ -21,7 +21,7 @@
 
 #include "tests/unittests/gtest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 namespace {
 

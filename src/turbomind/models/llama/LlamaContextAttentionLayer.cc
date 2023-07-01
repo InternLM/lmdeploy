@@ -28,7 +28,7 @@
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
@@ -403,4 +403,4 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_c
 template class LlamaContextAttentionLayer<float>;
 template class LlamaContextAttentionLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

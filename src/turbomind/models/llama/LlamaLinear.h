@@ -7,7 +7,7 @@
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaLinear {
@@ -58,4 +58,4 @@ private:
     cudaStream_t     stream_{};
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

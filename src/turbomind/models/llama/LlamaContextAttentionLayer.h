@@ -26,7 +26,7 @@
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaContextAttentionLayer {
@@ -124,4 +124,4 @@ private:
     bool is_allocate_buffer_ = false;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -19,7 +19,7 @@
 #include "src/turbomind/kernels/beam_search_penalty_kernels.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __global__ void add_bias_temperature(T*          logits,
@@ -310,4 +310,4 @@ template void invokeAddBiasApplyPenalties(int                         step,
                                           const int                   min_length,
                                           cudaStream_t                stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

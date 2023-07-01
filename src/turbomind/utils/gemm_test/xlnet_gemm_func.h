@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_xlnet_gemm_config(int   batch_size,
@@ -43,4 +43,4 @@ void generate_xlnet_gemm_config(int   batch_size,
                                 void* buffer_in,
                                 bool  isAppend = true);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -18,7 +18,7 @@
 
 #include "src/turbomind/utils/logger.h"
 #include <curand_kernel.h>
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeTopKSampling(void*          workspace,
@@ -95,4 +95,4 @@ void invokeTopKTopPSampling(void*          workspace,
                             const int*     end_ids,
                             cudaStream_t   stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -20,7 +20,7 @@
 #error CUDART_VERSION Undefined!
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 cublasINT8MMWrapper::cublasINT8MMWrapper(cublasLtHandle_t cublaslt_handle,
                                          cudaStream_t     stream,
                                          cublasAlgoMap*   cublas_algo_map,
@@ -556,4 +556,4 @@ void cublasINT8MMWrapper::SpGemm(
     mu_->unlock();
 }
 #endif
-}  // namespace fastertransformer
+}  // namespace turbomind

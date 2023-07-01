@@ -6,7 +6,7 @@
 
 #include "src/turbomind/utils/Tensor.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 namespace {
 

@@ -14,7 +14,7 @@
 #include <thrust/host_vector.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 CmpMode compare_mode = kCmpNone;
 
@@ -157,4 +157,4 @@ bool isDebug()
     return is_debug;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

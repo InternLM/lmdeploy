@@ -22,7 +22,7 @@
 #include "src/turbomind/utils/memory_utils.h"
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T1, typename T2>
 class FfnFP8Layer: public BaseLayer {
@@ -130,4 +130,4 @@ private:
                                  const float* output_scale) override;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

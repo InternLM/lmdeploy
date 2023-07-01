@@ -17,7 +17,7 @@
 #include "custom_ar_kernels.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 
-namespace fastertransformer {
+namespace turbomind {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -395,4 +395,4 @@ template void invokeOneOrTwoShotAllReduceKernel<__nv_bfloat16>(AllReduceParams<_
                                                                cudaStream_t                    stream);
 #endif
 template void invokeOneOrTwoShotAllReduceKernel<uint32_t>(AllReduceParams<uint32_t>& param, cudaStream_t stream);
-}  // namespace fastertransformer
+}  // namespace turbomind

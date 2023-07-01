@@ -31,7 +31,7 @@
 #define DEFAULT_BLOCK_SIZE 1024
 #define DEFALUT_ALGO_AR_SIZE_THRESHOLD 393216
 
-namespace fastertransformer {
+namespace turbomind {
 
 #ifdef ENABLE_BF16
 typedef struct bf168 {
@@ -60,4 +60,4 @@ void invokeOneOrTwoShotAllReduceKernel(AllReduceParams<T>& param, cudaStream_t s
 
 void kernelLaunchConfig(int& blocks_per_grid, int& threads_per_block, size_t elts, int kernel_algo);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

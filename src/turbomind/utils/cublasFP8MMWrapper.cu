@@ -17,7 +17,7 @@
 #include "cublasFP8MMWrapper.h"
 #include "cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 #define CUBLAS_WORKSPACE_1MB 1048576
 cublasFP8MMWrapper::cublasFP8MMWrapper(cublasLtHandle_t cublaslt_handle,
@@ -1018,4 +1018,4 @@ template void cublasFP8MMWrapper::Gemm_Bias_Act<false, false>(__nv_fp8_e4m3*    
                                                               const float*         output_scale,
                                                               cudaStream_t         stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

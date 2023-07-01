@@ -17,7 +17,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* **************************** debug tools ********************************* */
 
@@ -389,4 +389,4 @@ FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
 }
 
 /* ************************** end of common utils ************************** */
-}  // namespace fastertransformer
+}  // namespace turbomind

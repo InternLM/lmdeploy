@@ -20,7 +20,7 @@
 
 #include "src/turbomind/models/llama/LlamaWeight.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 LlamaWeight<T>::LlamaWeight(size_t     hidden_units,
@@ -121,4 +121,4 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
 template struct LlamaWeight<float>;
 template struct LlamaWeight<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

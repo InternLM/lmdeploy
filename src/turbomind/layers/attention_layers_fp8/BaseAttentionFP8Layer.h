@@ -27,7 +27,7 @@
 #include "src/turbomind/utils/cublasFP8MMWrapper.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 // template<typename T>
 // AttentionType getAttentionType(size_t size_per_head, const int sm, const bool remove_padding, const int max_seq_len,
@@ -62,4 +62,4 @@ public:
     virtual ~BaseAttentionFP8Layer() = default;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

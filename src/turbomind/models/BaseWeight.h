@@ -19,7 +19,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct FtWeight {
@@ -46,4 +46,4 @@ public:
     }
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

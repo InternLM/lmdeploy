@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 Tensor::Tensor():
     // a none tensor.
@@ -456,4 +456,4 @@ void TensorMap::saveNpy(const std::string& base_folder)
     }
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

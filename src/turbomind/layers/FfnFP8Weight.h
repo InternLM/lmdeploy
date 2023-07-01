@@ -18,7 +18,7 @@
 
 #include "FfnWeight.h"
 #include "src/turbomind/utils/ScaleList.h"
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T1, typename T2>
 struct FfnFP8Weight: FfnWeight<T1, T2> {
@@ -27,4 +27,4 @@ struct FfnFP8Weight: FfnWeight<T1, T2> {
     float*     identity_h_scale;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -42,7 +42,7 @@
 // cublas default workspace size: 32MB. Let me make this as a Gemm property.
 #define WORKSPACE_SIZE 33554432
 
-namespace fastertransformer {
+namespace turbomind {
 
 // A wrapper of cublas or cusparse matrix operator.
 //  - GEMM_OP_N = CUBLAS_OP_N or CUSPARSE_OP_N
@@ -677,4 +677,4 @@ size_t compressMatrixB(void**              output,
 
 /* ************************* End of GEMM utils **************************** */
 
-}  // end of namespace fastertransformer
+}  // end of namespace turbomind

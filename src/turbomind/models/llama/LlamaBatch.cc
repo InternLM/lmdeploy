@@ -13,7 +13,7 @@
 #include <sstream>
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void LlamaBatch<T>::verifyRequests(std::vector<std::shared_ptr<Request>>& stop_reqs,
@@ -1039,4 +1039,4 @@ void LlamaBatch<T>::finishRequest(int index, bool force_end)
 template class LlamaBatch<half>;
 template class LlamaBatch<float>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

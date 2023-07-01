@@ -25,7 +25,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class GPUBuf {
@@ -84,4 +84,4 @@ public:
     T*     ptr;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

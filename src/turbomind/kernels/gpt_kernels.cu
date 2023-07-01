@@ -25,7 +25,7 @@
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 // PROMPT_SRC: 0 --> no prompts, 1 --> from loaded prompts, 2 --> from request prompts
 template<typename T, bool OUTPUT_ID, int PROMPT_SRC>
@@ -1108,4 +1108,4 @@ INSTANTIATE_INVOKE_SUM_LENGTH_DIMENSION(__nv_bfloat16);
 #endif
 #undef INSTANTIATE_INVOKE_SUM_LENGTH_DIMENSION
 
-}  // namespace fastertransformer
+}  // namespace turbomind

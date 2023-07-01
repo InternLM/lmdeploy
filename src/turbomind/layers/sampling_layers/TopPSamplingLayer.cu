@@ -25,7 +25,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 static __global__ void set_topp_runtime_args(int             batch_size,
                                              uint            top_k,
@@ -390,4 +390,4 @@ TopPSamplingLayer<T>::~TopPSamplingLayer()
 template class TopPSamplingLayer<float>;
 template class TopPSamplingLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

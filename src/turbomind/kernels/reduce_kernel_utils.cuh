@@ -31,7 +31,7 @@
 
 namespace cg = cooperative_groups;
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<int VPT>
 struct BytesToType;
@@ -363,4 +363,4 @@ __device__ __forceinline__ __nv_bfloat16 clamp_inf_for_half(const float input)
 }
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

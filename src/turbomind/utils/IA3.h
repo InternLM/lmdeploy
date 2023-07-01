@@ -16,7 +16,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum IA3_config {
     KEY_ADAPTER   = 1 << 0,
@@ -43,4 +43,4 @@ static inline IA3_config& operator|=(IA3_config& x, IA3_config y)
     return x = static_cast<IA3_config>(static_cast<int>(x) | static_cast<int>(y));
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

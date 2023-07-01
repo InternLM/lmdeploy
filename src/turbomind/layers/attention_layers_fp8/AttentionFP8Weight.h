@@ -19,7 +19,7 @@
 #include "src/turbomind/layers/attention_layers/AttentionWeight.h"
 #include "src/turbomind/utils/ScaleList.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T1, typename T2>
 struct AttentionFP8Weight: public AttentionWeight<T1, T2> {
@@ -31,4 +31,4 @@ struct AttentionFP8Weight: public AttentionWeight<T1, T2> {
     float*       identity_h_scale;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -27,7 +27,7 @@
 #include <stdexcept>
 #include <vector>
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 namespace {
 

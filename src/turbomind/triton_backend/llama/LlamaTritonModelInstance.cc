@@ -30,7 +30,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T>
 void triton_stream_callback(std::unordered_map<std::string, ft::Tensor>* output_tensors, void* ctx)

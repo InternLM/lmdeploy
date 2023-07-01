@@ -19,7 +19,7 @@
 #include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class BaseBeamSearchLayer: public DynamicDecodeBaseLayer {
@@ -60,8 +60,8 @@ public:
     ~BaseBeamSearchLayer();
 
     void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) override;
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors) override;
+    void forward(std::vector<turbomind::Tensor>*       output_tensors,
+                 const std::vector<turbomind::Tensor>* input_tensors) override;
     void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors) override;
     void forward(TensorMap* output_tensors, TensorMap* input_tensors) override;
@@ -77,4 +77,4 @@ void update_indir_cache_kernelLauncher(int*         tgt_indir_cache,
                                        int          ite,
                                        cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -20,7 +20,7 @@
 #include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeApplyRepetitionPenalty(T*                          logits,
@@ -78,4 +78,4 @@ void invokeMinLengthPenalty(T*           logits,
                             const int    vocab_size_padded,
                             cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

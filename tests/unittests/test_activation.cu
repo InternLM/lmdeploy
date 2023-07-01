@@ -9,7 +9,7 @@
 
 #include "unittest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 #define PRINT_LIMIT 16
 #define EPSILON (1e-20)

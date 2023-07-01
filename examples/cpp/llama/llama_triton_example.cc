@@ -30,7 +30,7 @@
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/word_list.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 constexpr const bool kUSE_MPI = true;
 

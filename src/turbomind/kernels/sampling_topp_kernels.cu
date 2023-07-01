@@ -29,7 +29,7 @@
 constexpr int   ENABLE_SINGLE_PASS_TOP_P = 0;
 constexpr float SINGLE_PASS_THRESHOLD    = 0.9;
 
-namespace fastertransformer {
+namespace turbomind {
 
 namespace segmented_topp_impl {
 
@@ -1426,4 +1426,4 @@ void invokeComputeToppDecay(float*         runtime_top_p,
         runtime_top_p, runtime_initial_top_p, output_ids, top_p_decay, top_p_min, top_p_reset_ids, local_batch_size);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

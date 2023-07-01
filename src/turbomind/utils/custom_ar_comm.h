@@ -26,7 +26,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 class AbstractCustomComm {
 public:
@@ -84,4 +84,4 @@ struct CustomARCommTypeConverter<__nv_bfloat16> {
 };
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -20,7 +20,7 @@
 #include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include <float.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class BeamSearchLayer: public BaseBeamSearchLayer<T> {
@@ -65,4 +65,4 @@ public:
     ~BeamSearchLayer();
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

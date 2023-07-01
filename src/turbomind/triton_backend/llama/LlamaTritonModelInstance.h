@@ -25,7 +25,7 @@
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include <memory>
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T>
 struct LlamaTritonSharedModelInstance {

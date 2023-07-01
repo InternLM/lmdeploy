@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_encoder_gemm_config(int   batch_size,
@@ -42,4 +42,4 @@ void generate_encoder_gemm_config(int   batch_size,
                                   bool  isAppend         = true,
                                   int   tensor_para_size = 1);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -28,7 +28,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 class cublasFP8MMWrapper: public cublasMMWrapper {
 public:
@@ -170,8 +170,8 @@ public:
 
 private:
     int                                 version_major_, version_minor_, version_patch_;
-    fastertransformer::qgmma1x1Launcher qgmmaLauncher;
+    turbomind::qgmma1x1Launcher qgmmaLauncher;
     void*                               cublas_workspace_qgemm_ = nullptr;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

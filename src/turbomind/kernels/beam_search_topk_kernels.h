@@ -18,7 +18,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 // In original beam search implementation, if a beam is finished, we set it as finished
 // and only continue to do beam search on remain beams (namely, beam_width - 1 beams in next step)
@@ -91,4 +91,4 @@ void invokeInsertUnfinishedPath(BeamHypotheses beam_hyps,
                                 const int      beam_width,
                                 cudaStream_t   stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

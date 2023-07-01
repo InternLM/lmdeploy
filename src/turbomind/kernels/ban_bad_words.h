@@ -19,7 +19,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeBanBadWords(T*           logits,
@@ -36,4 +36,4 @@ void invokeBanBadWords(T*           logits,
                        size_t       step,
                        cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

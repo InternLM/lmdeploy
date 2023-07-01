@@ -24,7 +24,7 @@
 #include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class DynamicDecodeLayer: public BaseLayer {
@@ -83,4 +83,4 @@ public:
                  const std::unordered_map<std::string, Tensor>* input_tensors);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

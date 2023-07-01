@@ -23,7 +23,7 @@
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct LlamaWeight {
@@ -67,4 +67,4 @@ private:
     size_t     tensor_para_rank_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

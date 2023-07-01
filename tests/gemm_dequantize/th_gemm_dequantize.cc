@@ -32,7 +32,7 @@ using torch::Tensor;
 
 namespace torch_ext {
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T, typename WeightType>
 Tensor fused_gemm_dq_helper(
@@ -48,7 +48,7 @@ Tensor fused_gemm_dq_helper(
     const WeightType* weight_ptr    = get_ptr<const WeightType>(weight);
     const T*          scales_ptr    = get_ptr<const T>(scales);
 
-    fastertransformer::CutlassFpAIntBGemmRunner<T, WeightType> fused_gemm_dq_runner;
+    turbomind::CutlassFpAIntBGemmRunner<T, WeightType> fused_gemm_dq_runner;
     const int ws_bytes = fused_gemm_dq_runner.getWorkspaceSize(m, n, k);
 
     auto output_tensor = torch::empty({m, n}, torch::dtype(_st).device(torch::kCUDA).requires_grad(false));
@@ -152,7 +152,7 @@ Tensor fused_gemm_dq(Tensor input_activations, Tensor weight, Tensor scales)
 Tensor
 bench_cublas(Tensor input_activations, Tensor weight_dequantized, const int64_t timing_iterations, float& avg_time)
 {
-    using namespace fastertransformer;
+    using namespace turbomind;
     const int m = input_activations.size(0);
     const int n = weight_dequantized.size(1);
     const int k = input_activations.size(1);
@@ -257,7 +257,7 @@ Tensor fused_gemm_dq_bias_act_helper(
     const T*          scales_ptr    = get_ptr<const T>(scales);
     const T*          bias_ptr      = get_ptr<const T>(bias);
 
-    fastertransformer::CutlassFpAIntBGemmRunner<T, WeightType> fused_gemm_dq_runner;
+    turbomind::CutlassFpAIntBGemmRunner<T, WeightType> fused_gemm_dq_runner;
     const int ws_bytes = fused_gemm_dq_runner.getWorkspaceSize(m, n, k);
 
     auto output_tensor = torch::empty({m, n}, torch::dtype(_st).device(torch::kCUDA).requires_grad(false));

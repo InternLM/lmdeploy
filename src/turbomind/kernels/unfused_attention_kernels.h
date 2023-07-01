@@ -17,7 +17,7 @@
 
 #include "src/turbomind/utils/Tensor.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeAddQKVBiasIA3Transpose(T*           q_buf,
@@ -262,4 +262,4 @@ void invokeMaskedSoftMaxWithRelPosBias(T*           qk_buf,
 template<typename T>
 void invokeTransposeAttentions(Tensor& attentions_out, const Tensor& attentions_in, cudaStream_t stream = 0);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -26,7 +26,7 @@
 #include "src/turbomind/utils/allocator.h"
 #include <mutex>
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string inifile)
 {

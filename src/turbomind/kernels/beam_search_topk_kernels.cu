@@ -28,7 +28,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __device__ __forceinline__ T apply_length_penalty(T log_prob, int length, float length_penalty)
@@ -842,4 +842,4 @@ void invokeInsertUnfinishedPath(BeamHypotheses beam_hyps,
     insertUnfinishedPath<<<batch_size, 256, 0, stream>>>(beam_hyps, finished, cum_log_probs, batch_size, beam_width);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

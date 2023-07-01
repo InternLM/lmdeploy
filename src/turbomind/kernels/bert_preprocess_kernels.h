@@ -23,7 +23,7 @@
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #endif  // ENABLE_FP8
 
-namespace fastertransformer {
+namespace turbomind {
 
 void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_pinned_token_num,
                                         size_t*      h_token_num,
@@ -111,4 +111,4 @@ template<typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
 void invokeQuantizeMatrixRebuildPadding(QuantizeMatrixRebuildPaddingParam<T_OUT, T_IN, quantize_mode> param);
 #endif  // ENABLE_FP8
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -35,7 +35,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 LlamaV2<T>::LlamaV2(size_t                       head_num,
@@ -594,4 +594,4 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
 template class LlamaV2<half>;
 template class LlamaV2<float>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

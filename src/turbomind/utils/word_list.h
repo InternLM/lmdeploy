@@ -19,7 +19,7 @@
 #include "Tensor.h"
 #include "stdlib.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 int read_word_list(const std::string& filename, std::vector<int>& tensor_data);
 

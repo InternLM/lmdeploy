@@ -16,7 +16,7 @@
 
 #include "tests/unittests/gtest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 class Int8TestSuite: public FtTestBase {
 

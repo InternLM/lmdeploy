@@ -16,7 +16,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeLogProbFromLogits(float*       cum_log_probs,
@@ -31,4 +31,4 @@ void invokeLogProbFromLogits(float*       cum_log_probs,
                              const size_t workspace_size,
                              cudaStream_t stream,
                              const bool   batch_first = false);
-}  // namespace fastertransformer
+}  // namespace turbomind

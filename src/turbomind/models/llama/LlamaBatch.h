@@ -7,7 +7,7 @@
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaV2;
@@ -150,4 +150,4 @@ private:
     IAllocator*      allocator_{};
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

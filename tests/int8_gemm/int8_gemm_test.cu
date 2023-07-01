@@ -34,7 +34,7 @@
 using torch::Tensor;
 using torch_ext::get_ptr;
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 template<typename T>
 void int8_gemm_test(

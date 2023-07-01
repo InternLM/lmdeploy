@@ -22,7 +22,7 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 struct LlamaDecoderLayerWeight {
@@ -58,4 +58,4 @@ private:
     void mallocWeights();
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

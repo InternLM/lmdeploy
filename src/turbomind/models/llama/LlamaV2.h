@@ -34,7 +34,7 @@
 #include "src/turbomind/utils/nccl_utils.h"
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaV2 {
@@ -183,4 +183,4 @@ private:
     std::thread internal_thread_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

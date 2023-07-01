@@ -23,7 +23,7 @@
 
 #include <algorithm>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
@@ -361,4 +361,4 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
 template class BaseSamplingLayer<float>;
 template class BaseSamplingLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

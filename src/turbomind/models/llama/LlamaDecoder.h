@@ -27,7 +27,7 @@
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaDecoder: public BaseLayer {
@@ -93,4 +93,4 @@ public:
                          const std::vector<LlamaDecoderLayerWeight<T>*>* decoder_layer_weights);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

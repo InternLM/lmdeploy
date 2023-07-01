@@ -18,7 +18,7 @@
 #include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 __global__ void update_indir_cache_kernel(int*        tgt_indir_cache,
                                           const int*  src_indir_cache,
@@ -288,4 +288,4 @@ void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input
 template class BaseBeamSearchLayer<float>;
 template class BaseBeamSearchLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

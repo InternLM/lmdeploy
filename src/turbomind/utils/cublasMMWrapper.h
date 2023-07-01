@@ -25,7 +25,7 @@
 #include <string>
 
 #pragma once
-namespace fastertransformer {
+namespace turbomind {
 
 class cublasMMWrapper {
 protected:
@@ -293,4 +293,4 @@ public:
 #endif
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -30,7 +30,7 @@
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/utils/logger.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 __global__ void log_probs_kernel(float*       log_probs,
@@ -207,4 +207,4 @@ template void invokeLogProbFromLogits(float*       cum_log_probs,
                                       const size_t workspace_size,
                                       cudaStream_t stream,
                                       const bool   batch_first);
-}  // end of namespace fastertransformer
+}  // end of namespace turbomind

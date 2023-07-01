@@ -24,7 +24,7 @@
 #include <utility>
 
 #pragma once
-namespace fastertransformer {
+namespace turbomind {
 
 #define GEMM_NUM 6
 #define GEMM_CONFIG "gemm_config.in"
@@ -102,4 +102,4 @@ public:
     getAlgo(const int batch_count, const int m, const int n, const int k, const CublasDataType data_type);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

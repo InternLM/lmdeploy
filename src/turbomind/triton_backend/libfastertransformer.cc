@@ -63,11 +63,11 @@
 
 std::exception_ptr ptr[8];
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 namespace triton {
 namespace backend {
-namespace fastertransformer_backend {
+namespace turbomind_backend {
 
 #define RESPOND_ALL_AND_RETURN_IF_ERROR(RESPONSES, RESPONSES_COUNT, X)                                                 \
     do {                                                                                                               \
@@ -1905,6 +1905,6 @@ TRITONSERVER_Error* TRITONBACKEND_ModelInstanceExecute(TRITONBACKEND_ModelInstan
 
 }  // extern "C"
 
-}  // namespace fastertransformer_backend
+}  // namespace turbomind_backend
 }  // namespace backend
 }  // namespace triton

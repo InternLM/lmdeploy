@@ -29,7 +29,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 /* CAUTION : must match cublasLtMatmulTile_t */
 const char* const matmulTileName[] = {"UNDEF",  "8x8",     "8x16",    "16x8",    "8x32",    "16x16",  "32x8",
@@ -77,4 +77,4 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
 
 void matInit(int rows, int cols, int8_t* p, int ld);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

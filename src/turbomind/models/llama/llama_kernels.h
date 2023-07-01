@@ -10,7 +10,7 @@
 #include <cuda_runtime.h>
 #include <numeric>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n, cudaStream_t stream);
@@ -163,4 +163,4 @@ inline void dump_sequence_len(int* d_seq_len, int step, int tp_rank, cudaStream_
     FT_LOG_ERROR("--------> rank = %d, step = %d, seq_len = %d <--------", tp_rank, step, h_seq_len);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

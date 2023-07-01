@@ -23,7 +23,7 @@
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void DynamicDecodeLayer<T>::allocateBuffer()
@@ -516,4 +516,4 @@ bool DynamicDecodeLayer<T>::hasDiffRuntimeArgs(TensorMap* input_tensors)
 template class DynamicDecodeLayer<float>;
 template class DynamicDecodeLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -31,7 +31,7 @@
 #include <cusparseLt.h>
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 #define MAX_CONFIG_NUM 20
 #define COL32_ 32
@@ -212,7 +212,7 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
     do {                                                                                                               \
         bool is_valid_val = (val);                                                                                     \
         if (!is_valid_val) {                                                                                           \
-            fastertransformer::myAssert(is_valid_val, __FILE__, __LINE__, (info));                                     \
+            turbomind::myAssert(is_valid_val, __FILE__, __LINE__, (info));                                     \
         }                                                                                                              \
     } while (0)
 
@@ -485,4 +485,4 @@ void compareTwoTensor(
 }
 
 /* ************************** end of common utils ************************** */
-}  // namespace fastertransformer
+}  // namespace turbomind

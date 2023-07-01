@@ -19,7 +19,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 __global__ void stop_words_criterion(const int* output_ids,
                                      const int* parent_ids,
@@ -156,4 +156,4 @@ void invokeLengthCriterion(bool*           finished,
     *should_stop = h_pinned_finished_sum_[0] == batch_size * beam_width;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -21,7 +21,7 @@
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 __inline__ __device__ int target_index(int id1, int id2, int id3, int id4, int dim_1, int dim_2, int dim_3, int dim_4)
 {
@@ -2520,4 +2520,4 @@ INSTANTIATETRANSPOSEATTENTIONS(__nv_bfloat16);
 #endif
 #undef INSTANTIATETRANSPOSEATTENTIONS
 
-}  // namespace fastertransformer
+}  // namespace turbomind

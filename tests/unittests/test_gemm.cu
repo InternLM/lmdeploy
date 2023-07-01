@@ -14,7 +14,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 // Can be replaced by the function provided by a test framework
 

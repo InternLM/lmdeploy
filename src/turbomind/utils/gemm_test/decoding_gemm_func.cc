@@ -16,7 +16,7 @@
 
 #include "src/turbomind/utils/gemm_test/decoding_gemm_func.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_decoding_gemm_config(int   batch_size,
@@ -401,4 +401,4 @@ size_t calDecodingGemmTestBufSizeInByte(int            batch_size,
     return buf_size_in_byte;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

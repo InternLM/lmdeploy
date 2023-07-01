@@ -21,7 +21,7 @@
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include <stdint.h>
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 namespace mmha {
 

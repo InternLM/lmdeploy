@@ -36,7 +36,7 @@
 // #include "tests/unittests/unittest_utils.h"
 #include "tests/unittests/gtest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 struct TemperatureTestParam {
     size_t batch_size;

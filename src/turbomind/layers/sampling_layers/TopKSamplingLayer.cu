@@ -23,7 +23,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<uint TOP_K_MAX>
 __global__ void setup_topk_runtime_args(int    batch_size,
@@ -315,4 +315,4 @@ TopKSamplingLayer<T>::~TopKSamplingLayer()
 template class TopKSamplingLayer<float>;
 template class TopKSamplingLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

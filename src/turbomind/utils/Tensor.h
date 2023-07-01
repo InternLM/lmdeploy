@@ -33,7 +33,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 typedef enum datatype_enum {
     TYPE_INVALID,
@@ -518,4 +518,4 @@ public:
     void             saveNpy(const std::string& base_folder);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

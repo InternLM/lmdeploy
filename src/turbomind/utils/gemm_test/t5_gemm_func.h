@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void generate_t5_gemm_config(int   batch_size,
@@ -66,4 +66,4 @@ size_t calT5GemmTestBufSizeInByte(int            batch_size,
                                   int            tensor_para_size,
                                   CublasDataType data_type);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

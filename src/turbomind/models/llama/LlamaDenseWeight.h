@@ -23,7 +23,7 @@
 #include "src/turbomind/layers/attention_layers/AttentionWeight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class WeightType : int {
     kFP32,
@@ -75,4 +75,4 @@ struct LlamaFfnWeight {
     LlamaDenseWeight<T> output;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

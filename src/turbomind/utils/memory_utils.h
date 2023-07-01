@@ -20,7 +20,7 @@
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void deviceMalloc(T** ptr, size_t size, bool is_random_initialize = true);
@@ -144,4 +144,4 @@ size_t cuda_datatype_size(FtCudaDataType dt);
 template<typename T>
 bool invokeCheckRange(T* buffer, const size_t size, T min, T max, bool* d_within_range, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

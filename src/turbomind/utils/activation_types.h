@@ -18,7 +18,7 @@
 
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class ActivationType {
     Gelu,
@@ -63,4 +63,4 @@ inline bool isGatedActivation(ActivationType activaiton_type)
            || activaiton_type == ActivationType::SiGLU;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

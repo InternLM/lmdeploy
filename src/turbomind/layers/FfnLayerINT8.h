@@ -26,7 +26,7 @@
 #include "src/turbomind/utils/memory_utils.h"
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class GeluFfnLayerINT8;
@@ -77,8 +77,8 @@ public:
 
     ~FfnLayerINT8();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
+    void forward(std::vector<turbomind::Tensor>*       output_tensors,
+                 const std::vector<turbomind::Tensor>* input_tensors,
                  const FfnWeight<T>*                           ffn_weights);
 
     friend GeluFfnLayerINT8<T>;
@@ -143,4 +143,4 @@ private:
     void invokeAddBiasActivation(const int m, const T* bias, ScaleList* scale_list) override;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind
