@@ -158,7 +158,7 @@ void invokeLogProbFromLogits(float*       cum_log_probs,
     // input_lengths: [batch_size]
     // workspace: workspace buffer of size at least sizeof(float) * max_input_length * batch_size.
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // block_size should be multiple of 32 to use warpReduceMax.
     const int block_size = vocab_size < 1024 ? (vocab_size + 31) / 32 * 32 : 1024;
     assert(block_size % 32 == 0);

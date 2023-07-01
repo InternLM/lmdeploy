@@ -112,7 +112,7 @@ BaseBeamSearchLayer<T>::BaseBeamSearchLayer(BaseBeamSearchLayer<T> const& beam_s
 template<typename T>
 BaseBeamSearchLayer<T>::~BaseBeamSearchLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     freeBuffer();
 }
 

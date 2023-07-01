@@ -28,7 +28,7 @@ namespace turbomind {
 template<typename T>
 void DynamicDecodeLayer<T>::allocateBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     h_pinned_finished_sum_ = (int*)allocator_->reMalloc(h_pinned_finished_sum_, sizeof(int), true, true);
     return;
 }
@@ -36,7 +36,7 @@ void DynamicDecodeLayer<T>::allocateBuffer()
 template<typename T>
 void DynamicDecodeLayer<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     allocator_->free((void**)(&h_pinned_finished_sum_), true);
     return;
 }
@@ -44,7 +44,7 @@ void DynamicDecodeLayer<T>::freeBuffer()
 template<typename T>
 void DynamicDecodeLayer<T>::initialize()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     online_beamsearch_decode_ = new OnlineBeamSearchLayer<T>(0,  // max_batch_size, deprecated
                                                              0,  // local_head_num, deprecated
                                                              0,  // size_per_head, deprecated
@@ -123,14 +123,14 @@ DynamicDecodeLayer<T>::DynamicDecodeLayer(size_t           vocab_size,
     vocab_size_padded_(vocab_size_padded),
     cuda_device_prop_(cuda_device_prop)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     initialize();
 }
 
 template<typename T>
 DynamicDecodeLayer<T>::~DynamicDecodeLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     delete online_beamsearch_decode_;
     delete beamsearch_decode_;
     delete topk_decode_;
@@ -145,7 +145,7 @@ DynamicDecodeLayer<T>::DynamicDecodeLayer(DynamicDecodeLayer const& dynamic_deco
     vocab_size_padded_(dynamic_decode_layer.vocab_size_padded_),
     cuda_device_prop_(dynamic_decode_layer.cuda_device_prop_)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     initialize();
 }
 
@@ -169,7 +169,7 @@ void DynamicDecodeLayer<T>::setup(const size_t batch_size, const size_t beam_wid
      *   \param  top_p_reset_ids [batch_size] on gpu, uint32, optional
      */
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     has_diff_runtime_args_ = hasDiffRuntimeArgs(runtime_args);
     if (beam_width == 1) {  // sampling layers
         topk_decode_->setup(batch_size, beam_width, runtime_args);
@@ -181,7 +181,7 @@ template<typename T>
 void DynamicDecodeLayer<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                                     const std::unordered_map<std::string, Tensor>* input_tensors)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TensorMap input_map(*input_tensors);
     TensorMap output_map(*output_tensors);
     forward(&output_map, &input_map);
@@ -235,7 +235,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
      *
      */
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     const int ite  = (int)input_tensors->at("ite").getVal<uint>();
     const int step = input_tensors->at("step").getVal<int>();
     FT_CHECK(input_tensors->at("logits").shape.size() == 3);

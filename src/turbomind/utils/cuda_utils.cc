@@ -57,7 +57,7 @@ template<typename T>
 void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string name)
 {
     if (buf == nullptr) {
-        FT_LOG_WARNING("It is an nullptr, skip!");
+        TM_LOG_WARNING("It is an nullptr, skip!");
         return;
     }
     cudaDeviceSynchronize();
@@ -110,7 +110,7 @@ template<typename T>
 void print_to_screen(const T* result, const int size)
 {
     if (result == nullptr) {
-        FT_LOG_WARNING("It is an nullptr, skip! \n");
+        TM_LOG_WARNING("It is an nullptr, skip! \n");
         return;
     }
     T* tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
@@ -366,7 +366,7 @@ FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
     FtCudaDataType model_file_type;
     INIReader      reader = INIReader(ini_file);
     if (reader.ParseError() < 0) {
-        FT_LOG_WARNING("Can't load %s. Use FP32 as default", ini_file.c_str());
+        TM_LOG_WARNING("Can't load %s. Use FP32 as default", ini_file.c_str());
         model_file_type = FtCudaDataType::FP32;
     }
     else {
@@ -381,7 +381,7 @@ FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
             model_file_type = FtCudaDataType::BF16;
         }
         else {
-            FT_LOG_WARNING("Invalid type %s. Use FP32 as default", weight_data_type_str.c_str());
+            TM_LOG_WARNING("Invalid type %s. Use FP32 as default", weight_data_type_str.c_str());
             model_file_type = FtCudaDataType::FP32;
         }
     }

@@ -35,7 +35,7 @@ cublasMMWrapper::cublasMMWrapper(cublasHandle_t   cublas_handle,
     mu_(mu),
     allocator_(allocator)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (allocator_ != nullptr) {
         cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE, false);
     }
@@ -57,7 +57,7 @@ cublasMMWrapper::cublasMMWrapper(cublasHandle_t     cublas_handle,
     mu_(mu),
     allocator_(allocator)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (allocator_ != nullptr) {
         cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE, false);
     }
@@ -66,7 +66,7 @@ cublasMMWrapper::cublasMMWrapper(cublasHandle_t     cublas_handle,
 
 cublasMMWrapper::~cublasMMWrapper()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_ = nullptr;
     if (allocator_ != nullptr) {
         allocator_->free((void**)(&cublas_workspace_));
@@ -85,7 +85,7 @@ cublasMMWrapper::cublasMMWrapper(const cublasMMWrapper& wrapper):
     mu_(wrapper.mu_),
     allocator_(wrapper.allocator_)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (allocator_ != nullptr) {
         cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE, false);
     }
@@ -110,7 +110,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            cudaDataType_t    computeType,
                            cublasGemmAlgo_t  algo)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
     check_cuda_error(cublasGemmEx(cublas_handle_,
                                   transa,
@@ -147,7 +147,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            void*             C,
                            const int         ldc)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     Gemm(transa, transb, m, n, k, A, lda, B, ldb, C, ldc, 1.0f, 0.0f);
 }
 
@@ -165,7 +165,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            float             f_alpha,
                            float             f_beta)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     half h_alpha = (half)(f_alpha);
     half h_beta  = (half)(f_beta);
 
@@ -396,7 +396,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            void*             C,
                            const int         ldc)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     cudaDataType_t      Atype, Btype, Ctype;
     cublasComputeType_t computeType;
     cudaDataType_t      scaleType;

@@ -85,7 +85,7 @@ void TopKSamplingLayer<T>::allocateBuffer()
 template<typename T>
 void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     BaseSamplingLayer<T>::allocateBuffer(batch_size, top_k, top_p);
     uint max_top_k = top_k.size() > 0 ? top_k.max<uint>() : 1;
     if (max_top_k == 0) {
@@ -120,7 +120,7 @@ void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
 template<typename T>
 void TopKSamplingLayer<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&sampling_workspace_));
         allocator_->free((void**)(&runtime_top_k_buf_));
@@ -140,7 +140,7 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     //     runtime_top_p [1] or [batch_size] on cpu, optional, float.
     //     temperature [1] or [batch_size] on cpu, optional
     //     repetition_penalty [1] or [batch_size] on cpu, optional
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
 
     uint         tmp_top_k     = 0;
@@ -205,7 +205,7 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
     //      output_log_probs [local_batch_size], must be float*, optional
     //          The log probs at the current step.
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() >= 4);
     FT_CHECK(output_tensors->size() >= 1);
 
@@ -308,7 +308,7 @@ TopKSamplingLayer<T>::TopKSamplingLayer(TopKSamplingLayer<T> const& top_k_sampli
 template<typename T>
 TopKSamplingLayer<T>::~TopKSamplingLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     freeBuffer();
 }
 

@@ -184,7 +184,7 @@ void OnlineBeamSearchLayer<T>::allocateBuffer()
 template<typename T>
 void OnlineBeamSearchLayer<T>::allocateBuffer(size_t batch_size, size_t beam_width)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // we need to check 2 * beam_width candidates each time
     // 64 is the max beam width we support now.
     topk_softmax_workspace_size_ =
@@ -234,13 +234,13 @@ template<typename T>
 OnlineBeamSearchLayer<T>::OnlineBeamSearchLayer(OnlineBeamSearchLayer<T> const& beam_search_layer):
     BaseBeamSearchLayer<T>(beam_search_layer)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T>
 OnlineBeamSearchLayer<T>::~OnlineBeamSearchLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template class OnlineBeamSearchLayer<float>;

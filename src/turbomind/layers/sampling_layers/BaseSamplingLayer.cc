@@ -28,7 +28,7 @@ namespace turbomind {
 template<typename T>
 void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     curandstate_buf_ = reinterpret_cast<curandState_t*>(
         allocator_->reMalloc(curandstate_buf_, sizeof(curandState_t) * batch_size, false));
     random_seeds_buf_ = reinterpret_cast<unsigned long long*>(
@@ -55,7 +55,7 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
 template<typename T>
 void BaseSamplingLayer<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&curandstate_buf_));
         allocator_->free((void**)(&random_seeds_buf_));
@@ -122,7 +122,7 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     //         repetition_penalty and presence_penalty are mutually exclusive.
     //     min_length [1] or [batch_size] on cpu, optional
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
     Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
     allocateBuffer(batch_size, runtime_top_k, runtime_top_p);
@@ -245,7 +245,7 @@ template<typename T>
 void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                                    const std::unordered_map<std::string, Tensor>* input_tensors)
 {
-    FT_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
     TensorMap input_map(*input_tensors);
     TensorMap output_map(*output_tensors);
     forward(&output_map, &input_map);
@@ -272,7 +272,7 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     //      output_log_probs [local_batch_size], must be float*, optional
     //          The log probs at the current step.
 
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() >= 4);
     FT_CHECK(output_tensors->size() >= 1);
     const int batch_size       = output_tensors->at("output_ids").shape[1];
@@ -355,7 +355,7 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
         freeBuffer();
     }
     sync_check_cuda_error();
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template class BaseSamplingLayer<float>;

@@ -33,7 +33,7 @@ public:
 
 #define EXPECT_TRUE(cond)                           \
     do { if(!(cond)) {                              \
-        FT_LOG_ERROR("TEST FAIL [%s] at %s:%d",     \
+        TM_LOG_ERROR("TEST FAIL [%s] at %s:%d",     \
                      __func__, __FILE__, __LINE__); \
         throw TestFailureError(__func__);           \
     } } while(false)
@@ -42,7 +42,7 @@ public:
     do {                                                        \
         bool is_ok = checkResult<dtype,ctype>(name, out, ref);  \
         if(!is_ok) {                                            \
-            FT_LOG_ERROR("TEST FAIL [%s] at %s:%d",             \
+            TM_LOG_ERROR("TEST FAIL [%s] at %s:%d",             \
                         __func__, __FILE__, __LINE__);          \
             throw TestFailureError(__func__);                   \
         }                                                       \
@@ -81,7 +81,7 @@ public:
     TensorWrapper(TensorWrapper const& other)
         : allocator(other.allocator), shape(other.shape), type(other.type), data(other.data), tensor(other.tensor)
     {
-        FT_LOG_DEBUG("TensorWrapper copy: this=%p other=%p", data, other.data);
+        TM_LOG_DEBUG("TensorWrapper copy: this=%p other=%p", data, other.data);
     }
     ~TensorWrapper()
     {
@@ -220,11 +220,11 @@ bool _checkResult(std::string name, TensorWrapper& out, TensorWrapper& ref, floa
         bool ok = almostEqual(a, b, atol, rtol);
         // Print the error.
         if( !ok && failures < 4 ) {
-            FT_LOG_ERROR(">> invalid result for i=%lu:", i);
-            FT_LOG_ERROR(">>    found......: %10.6f", a);
-            FT_LOG_ERROR(">>    expected...: %10.6f", b);
-            FT_LOG_ERROR(">>    error......: %.6f", fabsf(a - b));
-            FT_LOG_ERROR(">>    tol........: %.6f", atol + rtol * fabs(b));
+            TM_LOG_ERROR(">> invalid result for i=%lu:", i);
+            TM_LOG_ERROR(">>    found......: %10.6f", a);
+            TM_LOG_ERROR(">>    expected...: %10.6f", b);
+            TM_LOG_ERROR(">>    error......: %.6f", fabsf(a - b));
+            TM_LOG_ERROR(">>    tol........: %.6f", atol + rtol * fabs(b));
         }
 
         // Update the number of failures.
@@ -233,7 +233,7 @@ bool _checkResult(std::string name, TensorWrapper& out, TensorWrapper& ref, floa
 
     // Allow not matched up to 1% elements.
     size_t tol_failures = (size_t)(0.01 * out_size);
-    FT_LOG_INFO("check....... %30s : %s (failures: %.2f%% atol: %.2e rtol: %.2e)",
+    TM_LOG_INFO("check....... %30s : %s (failures: %.2f%% atol: %.2e rtol: %.2e)",
                 name.c_str(), failures <= tol_failures ? "OK" : "FAILED",
                 100. * failures / out_size, atol, rtol);
     return failures <= tol_failures;
@@ -306,7 +306,7 @@ static inline std::string getTestName(const char* func_name, GemmOpPair op_pairs
 
 template<typename T, DataType computeType>
 void testGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
-    FT_LOG_INFO("Matmul function correctness test [m=%ld, n=%ld, k=%ld, %s]",
+    TM_LOG_INFO("Matmul function correctness test [m=%ld, n=%ld, k=%ld, %s]",
                 m, n, k, toString<T, computeType>().c_str());
     cudaStream_t stream;
     check_cuda_error(cudaStreamCreate(&stream));
@@ -324,7 +324,7 @@ void testGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
 
     for (auto &op_pair : op_pairs) {
         std::string tc_name = getTestName(__func__, op_pair, m, n, k);
-        FT_LOG_DEBUG(tc_name);
+        TM_LOG_DEBUG(tc_name);
         computeReference<computeType>(op_pair.transa, op_pair.transb,
                                       expected, a_tensor, b_tensor);
 
@@ -362,7 +362,7 @@ void testGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
 template<typename T, DataType computeType>
 void testGemmConsistencyMatmul(size_t m, size_t n, size_t k) {
     // Test if Gemm is consistent with cublasWrapper
-    FT_LOG_INFO("Matmul function consistency test [m=%ld, n=%ld, k=%ld, %s]",
+    TM_LOG_INFO("Matmul function consistency test [m=%ld, n=%ld, k=%ld, %s]",
                 m, n, k, toString<T, computeType>().c_str());
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
@@ -444,7 +444,7 @@ void testGemmConsistencyMatmul(size_t m, size_t n, size_t k) {
 template<typename T, DataType computeType>
 void testGemmConsistencyBatchedMatmul(size_t m, size_t n, size_t k) {
     // Test if Gemm is consistent with cublasWrapper
-    FT_LOG_INFO("Batched gemm function consistency test [m=%ld, n=%ld, k=%ld, %s]",
+    TM_LOG_INFO("Batched gemm function consistency test [m=%ld, n=%ld, k=%ld, %s]",
                 m, n, k, toString<T, computeType>().c_str());
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
@@ -514,7 +514,7 @@ void testGemmConsistencyBatchedMatmul(size_t m, size_t n, size_t k) {
 
     for (auto &op_pair : op_pairs) {
         std::string tc_name = getTestName(__func__, op_pair, m, n, k);
-        FT_LOG_DEBUG(tc_name);
+        TM_LOG_DEBUG(tc_name);
 
         size_t lda = (op_pair.transa == GEMM_OP_N) ? k : m;
         size_t ldb = (op_pair.transb == GEMM_OP_N) ? n : k;
@@ -578,7 +578,7 @@ void testGemmConsistencyBatchedMatmul(size_t m, size_t n, size_t k) {
 template<typename T, DataType computeType>
 void testGemmConsistencyStridedBatchedMatmul(size_t batch_size, size_t m, size_t n, size_t k) {
     // Test if Gemm is consistent with cublasWrapper
-    FT_LOG_INFO("Strided batched gemm function consistency test [bsz=%ld, m=%ld, n=%ld, k=%ld, %s]",
+    TM_LOG_INFO("Strided batched gemm function consistency test [bsz=%ld, m=%ld, n=%ld, k=%ld, %s]",
                 batch_size, m, n, k, toString<T, computeType>().c_str());
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
@@ -693,7 +693,7 @@ void testGemmConsistencyStridedBatchedMatmul(size_t batch_size, size_t m, size_t
 // but let us keep these template variables for later use.
 template<typename T, DataType computeType>
 void testSpGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
-    FT_LOG_INFO("Sparse gemm function correctness test [m=%ld, n=%ld, k=%ld, %s]",
+    TM_LOG_INFO("Sparse gemm function correctness test [m=%ld, n=%ld, k=%ld, %s]",
                 m, n, k, toString<T, computeType>().c_str());
     cudaStream_t stream;
     check_cuda_error(cudaStreamCreate(&stream));
@@ -712,7 +712,7 @@ void testSpGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
     for (auto &op_pair : op_pairs) {
         // A/B will be switched in SpGemm.
         std::string tc_name = getTestName(__func__, op_pair, m, n, k);
-        FT_LOG_DEBUG(tc_name);
+        TM_LOG_DEBUG(tc_name);
 
         b_tensor.setRandomValues();
         pruneMatrixB(b_tensor.data, stream,
@@ -763,7 +763,7 @@ void testSpGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
 template<typename T, DataType computeType>
 void testSpGemmConsistencyMatmul(size_t m, size_t n, size_t k) {
     // Test if Gemm is consistent with cublasWrapper
-    FT_LOG_INFO("Sparse Matmul function consistency test [m=%ld, n=%ld, k=%ld, %s]",
+    TM_LOG_INFO("Sparse Matmul function consistency test [m=%ld, n=%ld, k=%ld, %s]",
                 m, n, k, toString<T, computeType>().c_str());
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
@@ -799,7 +799,7 @@ void testSpGemmConsistencyMatmul(size_t m, size_t n, size_t k) {
 
     for (auto &op_pair : op_pairs) {
         std::string tc_name = getTestName(__func__, op_pair, m, n, k);
-        FT_LOG_DEBUG(tc_name);
+        TM_LOG_DEBUG(tc_name);
 
         b_tensor.setRandomValues();
         pruneMatrixB(b_tensor.data, stream,
@@ -904,6 +904,6 @@ int main(int argc, char* argv[]) {
         testSpGemmConsistencyMatmul<half, TYPE_FP16>(m, n, k);
     }
 #endif
-    FT_LOG_INFO("Test done");
+    TM_LOG_INFO("Test done");
     return 0;
 }

@@ -36,7 +36,7 @@ void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
                                                    size_t max_q_len,
                                                    size_t max_k_len)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     // no padding
     qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * 3 * local_hidden_units_, true);
@@ -75,7 +75,7 @@ template<typename T>
 void LlamaContextAttentionLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
         allocator_->free((void**)(&qkv_buf_));
         allocator_->free((void**)(&q_buf_2_));
@@ -98,7 +98,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                                    const TensorMap*               input_tensors,
                                                    const LlamaAttentionWeight<T>* weights)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     /**
      * input_tensors:

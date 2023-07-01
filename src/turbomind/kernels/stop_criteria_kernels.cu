@@ -91,7 +91,7 @@ void invokeStopWordsCriterion(const int*   output_ids,
                               int          step,
                               cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     // Check if we have sampled a word from the stop_words list. If so, stop the sequence.
     dim3 block, grid;
     block.x = min(((stop_words_len + 32 - 1) / 32) * 32, 256UL);
@@ -143,7 +143,7 @@ void invokeLengthCriterion(bool*           finished,
 {
     // Check if we have attained the sequence length limit. If so, stop the sequence.
     // In addition, check if all sequences are stopped and return the result in should_stop
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     dim3 block{min(512, uint32_t(batch_size * beam_width))};
     dim3 grid{1};
     h_pinned_finished_sum_[0] = -1;

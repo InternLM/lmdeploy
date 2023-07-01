@@ -222,7 +222,7 @@ void Gemm::gemm(const GemmOp   transa,
                 const float    alpha,
                 const float    beta)
 {
-    FT_LOG_TRACE("Gemm::gemm [m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]", m, n, k, lda, ldb, ldc);
+    TM_LOG_TRACE("Gemm::gemm [m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]", m, n, k, lda, ldb, ldc);
 
     // Implementation copied from cublasMMWrapper::Gemm
     // Switch A and B since both cublas and cublasLt assume a column major layout,
@@ -423,7 +423,7 @@ void Gemm::batchedGemm(const GemmOp       transa,
                        const float        alpha,
                        const float        beta)
 {
-    FT_LOG_TRACE(
+    TM_LOG_TRACE(
         "Gemm::batchedGemm [b=%ld m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]", batch_size, m, n, k, lda, ldb, ldc);
 
     // Switch A and B.
@@ -624,7 +624,7 @@ void Gemm::stridedBatchedGemm(GemmOp        transa,
                               const float   alpha,
                               const float   beta)
 {
-    FT_LOG_TRACE("Gemm::stridedBatchedGemm [b=%ld, m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]",
+    TM_LOG_TRACE("Gemm::stridedBatchedGemm [b=%ld, m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]",
                  batch_size,
                  m,
                  n,
@@ -873,7 +873,7 @@ void SpGemm::gemm(const GemmOp   transa,
                   const float    alpha,
                   const float    beta)
 {
-    FT_LOG_TRACE("SpGemm::gemm [m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]", m, n, k, lda, ldb, ldc);
+    TM_LOG_TRACE("SpGemm::gemm [m=%ld, n=%ld, k=%ld, lda=%ld, ldb=%ld, ldc=%ld]", m, n, k, lda, ldb, ldc);
     checkDataTypeValidity(Atype);
     checkDataTypeValidity(Btype);
     checkDataTypeValidity(Ctype);
@@ -994,7 +994,7 @@ void SpGemm::gemm(const GemmOp   transa,
 
 std::shared_ptr<Gemm> createGemm(IAllocator* allocator, cudaStream_t stream, bool sparse, bool quantized)
 {
-    FT_LOG_TRACE(
+    TM_LOG_TRACE(
         "Create Gemm instance [sparse=%s, quantized=%s]", sparse ? "true" : "false", quantized ? "true" : "false");
     std::shared_ptr<Gemm> gemm;
     if (!sparse) {
@@ -1105,7 +1105,7 @@ cusparseComputeType getCusparseComputeType(DataType ctype)
 
 void pruneMatrixB(void* data, const cudaStream_t& stream, const size_t k, const size_t n, const GemmOp trans)
 {
-    FT_LOG_TRACE("Prune matrix B [k=%ld, n=%ld, op=%s]", k, n, getGemmOpString(trans).c_str());
+    TM_LOG_TRACE("Prune matrix B [k=%ld, n=%ld, op=%s]", k, n, getGemmOpString(trans).c_str());
 
     // Due to A/B switching, the matrix B will be used as a matrix A.
     const cusparseOrder_t order     = CUSPARSE_ORDER_COL;
@@ -1141,7 +1141,7 @@ size_t compressMatrixB(void**              output,
                        const size_t        n,
                        const GemmOp        trans)
 {
-    FT_LOG_TRACE("compressMatrix [k=%ld, n=%ld, dtype=FP16]", k, n);
+    TM_LOG_TRACE("compressMatrix [k=%ld, n=%ld, dtype=FP16]", k, n);
 
     // swap A/B due to column/row major layout mismatch.
     cusparseOrder_t order = CUSPARSE_ORDER_COL;

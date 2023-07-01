@@ -36,8 +36,8 @@ public:
         allocator_(allocator)
     {
         if (rank == 0) {
-            FT_LOG_INFO("[LlamaCacheManager] max_entry_count = %d", (int)max_entry_count_);
-            FT_LOG_INFO("[LlamaCacheManager] chunk_size = %d", (int)chunk_size_);
+            TM_LOG_INFO("[LlamaCacheManager] max_entry_count = %d", (int)max_entry_count_);
+            TM_LOG_INFO("[LlamaCacheManager] chunk_size = %d", (int)chunk_size_);
         }
         allocate(true);
     }

@@ -27,7 +27,7 @@ cublasFP8MMWrapper::cublasFP8MMWrapper(cublasLtHandle_t cublaslt_handle,
                                        IAllocator*      allocator):
     cublasMMWrapper(nullptr, cublaslt_handle, stream, cublas_algo_map, mu, allocator)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK_WITH_INFO(allocator != nullptr, "must pass allocator to cublasFP8MMWrapper");
     cublasVersionCheck();
 
@@ -44,7 +44,7 @@ cublasFP8MMWrapper::cublasFP8MMWrapper(cublasHandle_t   cublas_handle,
                                        IAllocator*      allocator):
     cublasMMWrapper(cublas_handle, cublaslt_handle, stream, cublas_algo_map, mu, allocator)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK_WITH_INFO(allocator != nullptr, "must pass allocator to cublasFP8MMWrapper");
     cublasVersionCheck();
     if (allocator_ != nullptr) {
@@ -54,7 +54,7 @@ cublasFP8MMWrapper::cublasFP8MMWrapper(cublasHandle_t   cublas_handle,
 
 cublasFP8MMWrapper::~cublasFP8MMWrapper()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_ = nullptr;
     if (allocator_ != nullptr) {
         allocator_->free((void**)(&cublas_workspace_qgemm_));
@@ -69,7 +69,7 @@ cublasFP8MMWrapper::cublasFP8MMWrapper(const cublasFP8MMWrapper& wrapper):
                     wrapper.mu_,
                     wrapper.allocator_)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     cublasVersionCheck();
 }
 
@@ -135,7 +135,7 @@ void cublasFP8MMWrapper::Gemm(__nv_bfloat16*       res,
                               cudaStream_t         stream,
                               bool                 fastAccum)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
 
     const void*  devAscalePtr = (const void*)kernel_scale;
@@ -345,7 +345,7 @@ void cublasFP8MMWrapper::Gemm(__nv_fp8_e4m3*       res,
                               cudaStream_t         stream,
                               bool                 fastAccum)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
 
     const void* devAscalePtr = (const void*)kernel_scale;
@@ -534,7 +534,7 @@ void cublasFP8MMWrapper::Conv1x1Gemm(__nv_fp8_e4m3*       res,
                                      const float          output_scale,
                                      cudaStream_t         stream)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
     size_t workspace_size = 0;
     // get workspace size
@@ -615,7 +615,7 @@ void cublasFP8MMWrapper::Gemm_Bias_Act(__nv_bfloat16*       res,
                                        const float*         output_scale,
                                        cudaStream_t         stream)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
 
     const void*  devAscalePtr = (const void*)kernel_scale;
@@ -777,7 +777,7 @@ void cublasFP8MMWrapper::Gemm_Bias_Act(__nv_fp8_e4m3*       res,
                                        const float*         output_scale,
                                        cudaStream_t         stream)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
 
     const void*  devAscalePtr = (const void*)kernel_scale;

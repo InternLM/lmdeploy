@@ -160,7 +160,7 @@ inline void dump_sequence_len(int* d_seq_len, int step, int tp_rank, cudaStream_
     int h_seq_len = -1;
     cudaMemcpyAsync(&h_seq_len, d_seq_len, sizeof(int), cudaMemcpyDefault, st);
     cudaStreamSynchronize(st);
-    FT_LOG_ERROR("--------> rank = %d, step = %d, seq_len = %d <--------", tp_rank, step, h_seq_len);
+    TM_LOG_ERROR("--------> rank = %d, step = %d, seq_len = %d <--------", tp_rank, step, h_seq_len);
 }
 
 }  // namespace turbomind

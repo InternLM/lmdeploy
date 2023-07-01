@@ -23,7 +23,7 @@ namespace turbomind {
 template<typename T>
 ncclDataType_t getNcclDataType()
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     ncclDataType_t nccl_data_type;
     if (std::is_same<T, float>::value) {
         nccl_data_type = ncclFloat;
@@ -56,7 +56,7 @@ ncclDataType_t getNcclDataType()
 template<typename T>
 void ftNcclAllReduceSum(const T* send_buf, T* recv_buf, const int data_size, NcclParam nccl_param, cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     ncclDataType_t nccl_data_type = getNcclDataType<T>();
     NCCLCHECK(ncclGroupStart());
@@ -64,14 +64,14 @@ void ftNcclAllReduceSum(const T* send_buf, T* recv_buf, const int data_size, Ncc
         (const void*)send_buf, (void*)recv_buf, data_size, nccl_data_type, ncclSum, nccl_param.nccl_comm_, stream));
     NCCLCHECK(ncclGroupEnd());
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template<typename T>
 void ftNcclAllGather(
     const T* send_buf, T* recv_buf, const int data_size, const int rank, NcclParam nccl_param, cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     ncclDataType_t nccl_data_type = getNcclDataType<T>();
     NCCLCHECK(ncclGroupStart());
@@ -79,18 +79,18 @@ void ftNcclAllGather(
         ncclAllGather(send_buf + rank * data_size, recv_buf, data_size, nccl_data_type, nccl_param.nccl_comm_, stream));
     NCCLCHECK(ncclGroupEnd());
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template<typename T>
 void ftNcclSend(const T* send_buf, const int data_size, const int peer, NcclParam nccl_param, cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     ncclDataType_t nccl_data_type = getNcclDataType<T>();
     NCCLCHECK(ncclSend(send_buf, data_size, nccl_data_type, peer, nccl_param.nccl_comm_, stream));
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template void
@@ -111,12 +111,12 @@ ftNcclSend(const char* send_buf, const int data_size, const int peer, NcclParam 
 template<typename T>
 void ftNcclRecv(T* recv_buf, const int data_size, const int peer, NcclParam nccl_param, cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     ncclDataType_t nccl_data_type = getNcclDataType<T>();
     NCCLCHECK(ncclRecv(recv_buf, data_size, nccl_data_type, peer, nccl_param.nccl_comm_, stream));
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template void
@@ -136,12 +136,12 @@ ftNcclRecv(char* recv_buf, const int data_size, const int peer, NcclParam nccl_p
 template<typename T>
 void ftNcclBroadCast(T* buff, const int data_size, const int root, NcclParam nccl_param, cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     ncclDataType_t nccl_data_type = getNcclDataType<T>();
     NCCLCHECK(ncclBcast(buff, data_size, nccl_data_type, root, nccl_param.nccl_comm_, stream));
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template void
@@ -215,7 +215,7 @@ void ftNcclGroupEnd()
 
 void ftNcclStreamSynchronize(NcclParam tensor_para, NcclParam pipeline_para, cudaStream_t stream)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     cudaError_t  cudaErr;
     ncclResult_t tensor_ncclErr = ncclSuccess, tensor_ncclAsyncErr = ncclSuccess, pipeline_ncclErr = ncclSuccess,
@@ -229,7 +229,7 @@ void ftNcclStreamSynchronize(NcclParam tensor_para, NcclParam pipeline_para, cud
     while (1) {
         cudaErr = cudaStreamQuery(stream);
         if (cudaErr == cudaSuccess) {
-            FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+            TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
             return;
         }
 
@@ -282,11 +282,11 @@ void ftNcclGetUniqueId(NcclUid& uid)
 
 void ftNcclCommInitRank(NcclParam& param, const int rank, const int world_size, const NcclUid uid)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 #ifdef BUILD_MULTI_GPU
     // Initialize a nccl communicator.
     if (param.nccl_comm_ != nullptr) {
-        FT_LOG_WARNING("NcclParam is already initialized.");
+        TM_LOG_WARNING("NcclParam is already initialized.");
         return;
     }
     param.rank_       = rank;
@@ -294,7 +294,7 @@ void ftNcclCommInitRank(NcclParam& param, const int rank, const int world_size, 
     param.nccl_uid_   = uid.nccl_uid_;
     NCCLCHECK(ncclCommInitRank(&param.nccl_comm_, param.world_size_, param.nccl_uid_, param.rank_));
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 void ftNcclParamDestroy(NcclParam& param)
@@ -311,7 +311,7 @@ void ftNcclInitialize(NcclParam& tensor_para,
                       const int  tensor_para_size,
                       const int  pipeline_para_size)
 {
-    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     // Initialize nccl communication grid of tensor and pipeline parallel groups.
 #ifndef BUILD_MULTI_GPU
     FT_CHECK_WITH_INFO(tensor_para_size == 1,
@@ -331,7 +331,7 @@ void ftNcclInitialize(NcclParam& tensor_para,
 #else
     // Initialize a nccl communicator.
     if (tensor_para.nccl_comm_ != nullptr && pipeline_para.nccl_comm_ != nullptr) {
-        FT_LOG_WARNING("NcclParam is already initialized. Skip NCCL initialization.");
+        TM_LOG_WARNING("NcclParam is already initialized. Skip NCCL initialization.");
         return;
     }
     FT_CHECK(tensor_para.nccl_comm_ == nullptr);
@@ -340,7 +340,7 @@ void ftNcclInitialize(NcclParam& tensor_para,
     FT_CHECK(pipeline_para_size > 0);
 
     if (tensor_para_size == 1 && pipeline_para_size == 1) {
-        FT_LOG_WARNING("Skip NCCL initialization since requested tensor/pipeline parallel sizes are equals to 1.");
+        TM_LOG_WARNING("Skip NCCL initialization since requested tensor/pipeline parallel sizes are equals to 1.");
         tensor_para.rank_         = 0;
         tensor_para.world_size_   = tensor_para_size;
         pipeline_para.rank_       = 0;
@@ -384,19 +384,19 @@ void ftNcclInitialize(NcclParam& tensor_para,
     ncclUniqueId pp_uid;
     // The root of each group creates a nccl uid.
     if (tp_rank == 0) {
-        FT_LOG_DEBUG("rank %d pp rank %d creates nccl uid.", rank, tp_rank);
+        TM_LOG_DEBUG("rank %d pp rank %d creates nccl uid.", rank, tp_rank);
         NCCLCHECK(ncclGetUniqueId(&tp_uid));
     }
     if (pp_rank == 0) {
-        FT_LOG_DEBUG("rank %d pp rank %d creates nccl uid.", rank, pp_rank);
+        TM_LOG_DEBUG("rank %d pp rank %d creates nccl uid.", rank, pp_rank);
         NCCLCHECK(ncclGetUniqueId(&pp_uid));
     }
     // Broadcast nccl uid to share the same nccl uid across gpus in the same group.
-    FT_LOG_DEBUG("Broadcast nccl uid to the others in the same parallel groups.");
+    TM_LOG_DEBUG("Broadcast nccl uid to the others in the same parallel groups.");
     MPI_Bcast(&tp_uid, sizeof(tp_uid), MPI_BYTE, 0, tp_comm);
     MPI_Bcast(&pp_uid, sizeof(pp_uid), MPI_BYTE, 0, pp_comm);
 
-    FT_LOG_DEBUG("Initialize NCCL communicators.");
+    TM_LOG_DEBUG("Initialize NCCL communicators.");
     ncclComm_t tp_nccl_comm, pp_nccl_comm;
     NCCLCHECK(ncclCommInitRank(&tp_nccl_comm, tensor_para_size, tp_uid, tp_rank));
     NCCLCHECK(ncclCommInitRank(&pp_nccl_comm, pipeline_para_size, pp_uid, pp_rank));
@@ -409,13 +409,13 @@ void ftNcclInitialize(NcclParam& tensor_para,
     pipeline_para.rank_       = pp_rank;
     pipeline_para.nccl_uid_   = pp_uid;
     pipeline_para.nccl_comm_  = pp_nccl_comm;
-    FT_LOG_INFO("NCCL initialized rank=%d world_size=%d tensor_para=%s pipeline_para=%s",
+    TM_LOG_INFO("NCCL initialized rank=%d world_size=%d tensor_para=%s pipeline_para=%s",
                 rank,
                 world_size,
                 tensor_para.toString().c_str(),
                 pipeline_para.toString().c_str());
 #endif
-    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 static std::atomic<int>& ncclGroupCount()

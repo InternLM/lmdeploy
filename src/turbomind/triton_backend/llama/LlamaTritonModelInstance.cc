@@ -53,7 +53,7 @@ template<typename T>
 std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert_inputs(
     std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
     move_tensor_H2D(input_tensors->at("input_lengths"), d_input_lengths_, &allocator_);
@@ -126,7 +126,7 @@ template<typename T>
 std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
 LlamaTritonModelInstance<T>::convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     std::unordered_map<std::string, triton::Tensor>* outputs_mapping =
         new std::unordered_map<std::string, triton::Tensor>();
 
@@ -172,9 +172,9 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
 LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors,
                                      ft::AbstractInstanceComm*                                        instance_comm)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // for (const auto& kv : *input_tensors) {
-    //     FT_LOG_INFO("%s: %s", kv.first.c_str(), format_vector(kv.second.shape).c_str());
+    //     TM_LOG_INFO("%s: %s", kv.first.c_str(), format_vector(kv.second.shape).c_str());
     // }
 
     FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,

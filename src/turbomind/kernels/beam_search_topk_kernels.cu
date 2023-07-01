@@ -595,7 +595,7 @@ void invokeTopkBeamSearch(void*           workspace,
                           const int*      end_ids,
                           cudaStream_t    stream)
 {
-    FT_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
     // log_probs: (batch, beam, vocab) cumulative log_probs of beams ending with a token.
     const int vocab_size = vocab_size_padded_;
     // Beam size should be less than or equal to vocab size.

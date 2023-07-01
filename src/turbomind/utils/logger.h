@@ -77,7 +77,7 @@ public:
     }
 
 private:
-    const std::string                              PREFIX      = "[FT]";
+    const std::string                              PREFIX      = "[TM]";
     const std::map<const Level, const std::string> level_name_ = {
         {TRACE, "TRACE"}, {DEBUG, "DEBUG"}, {INFO, "INFO"}, {WARNING, "WARNING"}, {ERROR, "ERROR"}};
 
@@ -106,16 +106,16 @@ private:
     }
 };
 
-#define FT_LOG(level, ...)                                                                                             \
+#define TM_LOG(level, ...)                                                                                             \
     do {                                                                                                               \
         if (turbomind::Logger::getLogger().getLevel() <= level) {                                              \
             turbomind::Logger::getLogger().log(level, __VA_ARGS__);                                            \
         }                                                                                                              \
     } while (0)
 
-#define FT_LOG_TRACE(...) FT_LOG(turbomind::Logger::TRACE, __VA_ARGS__)
-#define FT_LOG_DEBUG(...) FT_LOG(turbomind::Logger::DEBUG, __VA_ARGS__)
-#define FT_LOG_INFO(...) FT_LOG(turbomind::Logger::INFO, __VA_ARGS__)
-#define FT_LOG_WARNING(...) FT_LOG(turbomind::Logger::WARNING, __VA_ARGS__)
-#define FT_LOG_ERROR(...) FT_LOG(turbomind::Logger::ERROR, __VA_ARGS__)
+#define TM_LOG_TRACE(...) TM_LOG(turbomind::Logger::TRACE, __VA_ARGS__)
+#define TM_LOG_DEBUG(...) TM_LOG(turbomind::Logger::DEBUG, __VA_ARGS__)
+#define TM_LOG_INFO(...) TM_LOG(turbomind::Logger::INFO, __VA_ARGS__)
+#define TM_LOG_WARNING(...) TM_LOG(turbomind::Logger::WARNING, __VA_ARGS__)
+#define TM_LOG_ERROR(...) TM_LOG(turbomind::Logger::ERROR, __VA_ARGS__)
 }  // namespace turbomind

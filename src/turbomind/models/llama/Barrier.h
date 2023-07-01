@@ -11,7 +11,7 @@ class Barrier {
 public:
     Barrier(unsigned count)
     {
-        FT_LOG_INFO("Barrier(%d)", (int)count);
+        TM_LOG_INFO("Barrier(%d)", (int)count);
         pthread_barrier_init(&barrier_, nullptr, count);
     }
 

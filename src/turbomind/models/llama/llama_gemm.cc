@@ -25,7 +25,7 @@ namespace ft = turbomind;
 int main(int argc, char* argv[])
 {
     if (argc < 9 || argc > 11) {
-        FT_LOG_ERROR("./bin/llama_gemm batch_size \\ \n"
+        TM_LOG_ERROR("./bin/llama_gemm batch_size \\ \n"
                      "                 beam_width \\ \n"
                      "                 max_input_len \\ \n"
                      "                 head_number \\ \n"
@@ -35,7 +35,7 @@ int main(int argc, char* argv[])
                      "                 data_type \\ \n"
                      "                 tensor_para_size \\\n"
                      "                 is_append (append new config into exist gemm_config.ini or not)");
-        FT_LOG_ERROR("e.g. ./bin/llama_gemm 8 4 32 96 128 49152 51200 1 8 1");
+        TM_LOG_ERROR("e.g. ./bin/llama_gemm 8 4 32 96 128 49152 51200 1 8 1");
         return 0;
     }
 
@@ -50,17 +50,17 @@ int main(int argc, char* argv[])
     const int                tensor_para_size = argc < 10 ? 1 : atoi(argv[9]);
     const bool               is_append        = argc < 11 ? false : (bool)(atoi(argv[10]));
 
-    FT_LOG_INFO("Arguments:");
-    FT_LOG_INFO("  batch_size: %d", batch_size);
-    FT_LOG_INFO("  beam_width: %d", beam_width);
-    FT_LOG_INFO("  max_input_len: %d", max_input_len);
-    FT_LOG_INFO("  head_num: %d", head_num);
-    FT_LOG_INFO("  size_per_head: %d", size_per_head);
-    FT_LOG_INFO("  inter_size: %d", inter_size);
-    FT_LOG_INFO("  vocab_size: %d", vocab_size);
-    FT_LOG_INFO("  data_type: %d", data_type);
-    FT_LOG_INFO("  tensor_para_size: %d", tensor_para_size);
-    FT_LOG_INFO("  is_append: %d", (int)is_append);
+    TM_LOG_INFO("Arguments:");
+    TM_LOG_INFO("  batch_size: %d", batch_size);
+    TM_LOG_INFO("  beam_width: %d", beam_width);
+    TM_LOG_INFO("  max_input_len: %d", max_input_len);
+    TM_LOG_INFO("  head_num: %d", head_num);
+    TM_LOG_INFO("  size_per_head: %d", size_per_head);
+    TM_LOG_INFO("  inter_size: %d", inter_size);
+    TM_LOG_INFO("  vocab_size: %d", vocab_size);
+    TM_LOG_INFO("  data_type: %d", data_type);
+    TM_LOG_INFO("  tensor_para_size: %d", tensor_para_size);
+    TM_LOG_INFO("  is_append: %d", (int)is_append);
     std::cout << std::endl;
 
     void*  gemm_test_buf;

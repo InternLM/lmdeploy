@@ -137,7 +137,7 @@ void initCustomAllReduceComm(std::vector<std::shared_ptr<AbstractCustomComm>>* c
     if (rank_size != RANKS_PER_NODE) {
 #ifdef BUILD_MULTI_GPU
         if (rank_size > 1) {
-            FT_LOG_WARNING("Custom All Reduce only supports 8 Ranks currently. Using NCCL as Comm.");
+            TM_LOG_WARNING("Custom All Reduce only supports 8 Ranks currently. Using NCCL as Comm.");
         }
 #else
         FT_CHECK_WITH_INFO(rank_size == 1,
@@ -158,7 +158,7 @@ void initCustomAllReduceComm(std::vector<std::shared_ptr<AbstractCustomComm>>* c
     }
     custom_all_reduce_comms->at(0)->allocateAndExchangePeerAccessPointer(custom_all_reduce_comms);
 #else
-    FT_LOG_WARNING("Custom All Reduce is not supported before CUDA 11.2. Using NCCL as Comm.");
+    TM_LOG_WARNING("Custom All Reduce is not supported before CUDA 11.2. Using NCCL as Comm.");
     for (size_t i = 0; i < rank_size; i++) {
         custom_all_reduce_comms->push_back(nullptr);
     }

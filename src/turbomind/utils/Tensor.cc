@@ -271,7 +271,7 @@ std::string Tensor::getNumpyTypeDesc(DataType type) const
                                                                     {TYPE_FP64, "f8"}};
 
     if (type == TYPE_BF16) {
-        FT_LOG_WARNING("getNumpyTypeDesc(TYPE_BF16) returns an invalid type 'x' since Numpy doesn't "
+        TM_LOG_WARNING("getNumpyTypeDesc(TYPE_BF16) returns an invalid type 'x' since Numpy doesn't "
                        "support bfloat16 as of now, it will be properly extended if numpy supports. "
                        "Please refer for the discussions https://github.com/numpy/numpy/issues/19808.");
     }
@@ -352,7 +352,7 @@ TensorMap::TensorMap(const std::unordered_map<std::string, Tensor>& tensor_map)
             insert(kv.first, kv.second);
         }
         else {
-            FT_LOG_DEBUG(fmtstr("%s is not a valid tensor, skipping insert into TensorMap", kv.first.c_str()));
+            TM_LOG_DEBUG(fmtstr("%s is not a valid tensor, skipping insert into TensorMap", kv.first.c_str()));
         }
     }
 }
@@ -371,7 +371,7 @@ TensorMap::TensorMap(std::initializer_list<std::pair<std::string, Tensor>> tenso
             insert(pair.first, pair.second);
         }
         else {
-            FT_LOG_DEBUG(fmtstr("%s is not a valid tensor, skipping insert into TensorMap", pair.first.c_str()));
+            TM_LOG_DEBUG(fmtstr("%s is not a valid tensor, skipping insert into TensorMap", pair.first.c_str()));
         }
     }
 }

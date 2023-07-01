@@ -32,7 +32,7 @@ void FfnFP8Layer<T1, T2>::forward(TensorMap*                  output_tensors,
     // output tensors:
     //      output_hidden_state [token_num, d_model],
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() == 1);
     FT_CHECK(output_tensors->size() == 1);
 
@@ -396,7 +396,7 @@ FfnFP8Layer<T1, T2>::FfnFP8Layer(size_t           inter_size,
     inter_size_(inter_size),
     fp8_mode_(fp8_mode)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T1, typename T2>
@@ -410,13 +410,13 @@ FfnFP8Layer<T1, T2>::FfnFP8Layer(FfnFP8Layer<T1, T2> const& ffn_layer):
     inter_size_(ffn_layer.inter_size_),
     fp8_mode_(ffn_layer.fp8_mode_)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T1, typename T2>
 FfnFP8Layer<T1, T2>::~FfnFP8Layer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     cublas_wrapper_ = nullptr;
     freeBuffer();
 }
@@ -430,7 +430,7 @@ void FfnFP8Layer<T1, T2>::allocateBuffer()
 template<typename T1, typename T2>
 void FfnFP8Layer<T1, T2>::allocateBuffer(size_t token_num)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     inter_buf_          = (T1*)allocator_->reMalloc(inter_buf_, sizeof(T1) * token_num * inter_size_, false);
     inter_buf_bf16_     = (T2*)allocator_->reMalloc(inter_buf_bf16_, sizeof(T2) * token_num * inter_size_, false);
@@ -440,7 +440,7 @@ void FfnFP8Layer<T1, T2>::allocateBuffer(size_t token_num)
 template<typename T1, typename T2>
 void FfnFP8Layer<T1, T2>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&inter_buf_));
         allocator_->free((void**)(&inter_buf_bf16_));

@@ -182,7 +182,7 @@ public:
         bool passed = checkResult(param.toString(), d_cum_log_probs, expected_cum_log_probs, batchxbeam);
         EXPECT_TRUE(passed);
 
-        FT_LOG_DEBUG("free host buffers");
+        TM_LOG_DEBUG("free host buffers");
         delete[] expected_cum_log_probs;
         delete[] h_input_lengths;
         delete[] h_input_ids;

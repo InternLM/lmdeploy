@@ -255,8 +255,8 @@ void invokeGenericActivation(T*           out,
                              const int    seq_len,
                              cudaStream_t stream)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_LOG_DEBUG("invokeGenericActivation %d %d %d", m, n, seq_len);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG("invokeGenericActivation %d %d %d", m, n, seq_len);
     using PT                   = typename packed_type<T>::type;
     constexpr int packed_elems = num_elems<PT>::value;
     using PBT                  = typename packed_as<BT, packed_elems>::type;
@@ -272,7 +272,7 @@ void invokeGenericActivation(T*           out,
         block.x = n_threads;
         grid.x  = ceil(m * n / double(n_threads));
     }
-    FT_LOG_DEBUG("%d %d", grid.x, block.x);
+    TM_LOG_DEBUG("%d %d", grid.x, block.x);
     sync_check_cuda_error();
     generic_activation<Activation><<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
                                                                reinterpret_cast<const PBT*>(bias),

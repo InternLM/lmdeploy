@@ -37,7 +37,7 @@ void LlamaContextDecoder<T>::allocateBuffer()
 template<typename T>
 void LlamaContextDecoder<T>::allocateBuffer(size_t batch_size, size_t num_token, size_t max_q_len, size_t max_kv_len)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     attn_ffn_io_    = (T*)allocator_->reMalloc(attn_ffn_io_, sizeof(T) * num_token * hidden_units_, false);
     attention_mask_ = (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * batch_size * max_q_len * max_kv_len, false);
@@ -50,7 +50,7 @@ void LlamaContextDecoder<T>::allocateBuffer(size_t batch_size, size_t num_token,
 template<typename T>
 void LlamaContextDecoder<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&attn_ffn_io_);
         allocator_->free((void**)&padding_offset_);
@@ -94,7 +94,7 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
                                              int                                            layer,
                                              bool                                           is_final)
 {
-    // FT_LOG_ERROR(__PRETTY_FUNCTION__);
+    // TM_LOG_ERROR(__PRETTY_FUNCTION__);
     TensorMap self_attention_input_tensors{
         {"input_query", Tensor{MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}},
         {"attention_mask",
