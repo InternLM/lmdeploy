@@ -148,7 +148,7 @@ size_t curandStateGetSize()
 bool isDebug()
 {
     static const bool is_debug = [] {
-        const auto level = std::getenv("FT_DEBUG_LEVEL");
+        const auto level = std::getenv("TM_DEBUG_LEVEL");
         if (level && level == std::string("DEBUG")) {
             return true;
         }

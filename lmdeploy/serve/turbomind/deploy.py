@@ -227,7 +227,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         del ckpt
 
     for name, param in model_params.items():
-        # transpose all weights as FasterTransformer is expecting column-major
+        # transpose all weights as TurboMind is expecting column-major
         # weights: (output_dims, input_dims) -> (input_dims, output_dims)
         key = name.split('.')[-2]
         if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'w2', 'wo']:
