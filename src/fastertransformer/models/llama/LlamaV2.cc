@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (c) OpenMMLab. All rights reserved.
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
@@ -17,7 +17,8 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
 
 #include "src/fastertransformer/models/llama/LlamaV2.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
@@ -97,7 +98,8 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
             FT_LOG_ERROR("use_context_fmha not support int8");
             assert(0);
         }
-    } else {
+    }
+    else {
         elem_bits = sizeof(T) * 8;
     }
     kv_cache_mgr_ = std::make_unique<LlamaCacheManager>(num_layer_,
@@ -213,7 +215,7 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
                                              static_cast<T*>(nullptr),
                                              pPromptTuningParam<T>{},
                                              input_ids,
-                                             0,  // only used for postion encoding
+                                             0,  // only used for position encoding
                                              token_num,
                                              token_num,
                                              1,

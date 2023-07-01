@@ -19,11 +19,11 @@ template<typename T>
 void LlamaBatch<T>::verifyRequests(std::vector<std::shared_ptr<Request>>& stop_reqs,
                                    std::vector<std::shared_ptr<Request>>& infer_reqs)
 {
-    std::unordered_map<uint64_t, int> occurance;
+    std::unordered_map<uint64_t, int> occurrence;
 
-    auto count_occurance = [&occurance](const std::vector<std::shared_ptr<Request>>& rs) {
+    auto count_occurrence = [&occurrence](const std::vector<std::shared_ptr<Request>>& rs) {
         for (const auto& r : rs) {
-            ++occurance[r->id];
+            ++occurrence[r->id];
         }
     };
 
@@ -33,13 +33,13 @@ void LlamaBatch<T>::verifyRequests(std::vector<std::shared_ptr<Request>>& stop_r
         req.reset();
     };
 
-    auto handle_conflict_or_invalid = [this, &occurance, &invalidate](std::vector<std::shared_ptr<Request>>& rs,
-                                                                      const char*                            type) {
+    auto handle_conflict_or_invalid = [this, &occurrence, &invalidate](std::vector<std::shared_ptr<Request>>& rs,
+                                                                       const char*                            type) {
         for (auto& r : rs) {
             if (r) {
                 int ec = 0;
 
-                if (occurance[r->id] != 1) {
+                if (occurrence[r->id] != 1) {
                     ec = Request::kConflict;
                 }
                 else if (r->start_flag && r->stop_flag) {
@@ -66,8 +66,8 @@ void LlamaBatch<T>::verifyRequests(std::vector<std::shared_ptr<Request>>& stop_r
         rs.resize(count);
     };
 
-    count_occurance(stop_reqs);
-    count_occurance(infer_reqs);
+    count_occurrence(stop_reqs);
+    count_occurrence(infer_reqs);
 
     if (!stop_reqs.empty()) {
         handle_conflict_or_invalid(stop_reqs, "stop");
@@ -129,7 +129,7 @@ void LlamaBatch<T>::handleStopRequests(const std::vector<std::shared_ptr<Request
             ec = 0;
             llama_->kv_cache_mgr_->erase(r->id);
         }
-        // clear output buffers (prevent leaking conversations) if request is successfull
+        // clear output buffers (prevent leaking conversations) if request is successful
         if (ec == 0) {
             auto& output_ids      = r->outputs[rank_].at("output_ids");
             auto& sequence_length = r->outputs[rank_].at("sequence_length");
@@ -407,7 +407,7 @@ void LlamaBatch<T>::initializeGeneration()
     check_cuda_error(
         cudaMemcpyAsync(sequence_lengths_, context_length_buf_, sizeof(int) * batch_size_, cudaMemcpyDefault, stream_));
     // `sequence_lengths_` will be increased by dynamic decode
-    // note that in decoder and in output "sequence length" has differnt semantic
+    // note that in decoder and in output "sequence length" has different semantic
     // - in decoder it means length of sequence that has kv cache already computed
     // - in output it means length of all tokens (the last generated token does not have k/v cache computed yet)
     invokePlusScalar(sequence_lengths_, -1, batch_size_, stream_);

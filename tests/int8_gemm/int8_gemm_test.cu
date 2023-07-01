@@ -38,9 +38,9 @@ namespace ft = fastertransformer;
 
 template<typename T>
 void int8_gemm_test(
-    const int m, 
-    const int n, 
-    const int k, 
+    const int m,
+    const int n,
+    const int k,
     const at::ScalarType output_data_type,
     const QuantMode quant_mode,
     const int iters)

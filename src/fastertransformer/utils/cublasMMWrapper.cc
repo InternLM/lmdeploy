@@ -695,10 +695,10 @@ void cublasMMWrapper::SpGemm(cublasOperation_t transa,
     }
     else {
         // initializing MatDesc takes a lot of time
-        cusparseLtMatDescriptor_t matA, matB, matC;
-        sp_mat_A_desc_map_[mark] = matA;
-        sp_mat_B_desc_map_[mark] = matB;
-        sp_mat_C_desc_map_[mark] = matC;
+        cusparseLtMatDescriptor_t mat_A, mat_B, mat_C;
+        sp_mat_A_desc_map_[mark] = mat_A;
+        sp_mat_B_desc_map_[mark] = mat_B;
+        sp_mat_C_desc_map_[mark] = mat_C;
         CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(&cusparselt_handle_,
                                                           &sp_mat_A_desc_map_[mark],
                                                           num_A_rows,
@@ -752,9 +752,9 @@ size_t cublasMMWrapper::getSparseMatrixSize(int m, int k)
     int             num_A_cols = k;
     int             lda        = num_A_rows;
 
-    cusparseLtMatDescriptor_t matA;
+    cusparseLtMatDescriptor_t mat_A;
     CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(&cusparselt_handle_,
-                                                      &matA,
+                                                      &mat_A,
                                                       num_A_rows,
                                                       num_A_cols,
                                                       lda,
@@ -763,7 +763,7 @@ size_t cublasMMWrapper::getSparseMatrixSize(int m, int k)
                                                       order,
                                                       CUSPARSELT_SPARSITY_50_PERCENT));
     size_t compressed_size = 0;
-    CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&cusparselt_handle_, &matA, &compressed_size));
+    CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&cusparselt_handle_, &mat_A, &compressed_size));
     return compressed_size;
 }
 
@@ -771,11 +771,11 @@ void cublasMMWrapper::compressMatrix(const void* input, void* output, const int 
 {
     cusparseOrder_t           order = CUSPARSE_ORDER_COL;
     cusparseOperation_t       opA   = CUSPARSE_OPERATION_NON_TRANSPOSE;
-    cusparseLtMatDescriptor_t matA;
+    cusparseLtMatDescriptor_t mat_A;
     unsigned                  alignment = 16;
     CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
-        &cusparselt_handle_, &matA, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
-    CHECK_CUSPARSE(cusparseLtSpMMACompress2(&cusparselt_handle_, &matA, true, opA, input, output, stream_))
+        &cusparselt_handle_, &mat_A, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
+    CHECK_CUSPARSE(cusparseLtSpMMACompress2(&cusparselt_handle_, &mat_A, true, opA, input, output, stream_))
     sync_check_cuda_error();
 }
 

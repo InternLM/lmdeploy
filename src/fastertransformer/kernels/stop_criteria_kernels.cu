@@ -149,7 +149,7 @@ void invokeLengthCriterion(bool*           finished,
     h_pinned_finished_sum_[0] = -1;
 
     length_criterion<<<grid, block, 0, stream>>>(
-        finished, should_stop, h_pinned_finished_sum_, sequence_limit_length, batch_size, beam_width, step);    
+        finished, should_stop, h_pinned_finished_sum_, sequence_limit_length, batch_size, beam_width, step);
     while (((volatile int*)h_pinned_finished_sum_)[0] == -1) {};
     sync_check_cuda_error();
 

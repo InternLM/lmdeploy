@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/transformer_triton_backend.hpp
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/transformer_triton_backend.hpp
 
 #pragma once
 

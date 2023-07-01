@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/DenseWeight.h
+// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/DenseWeight.h
 
 #pragma once
 
@@ -25,8 +25,7 @@
 
 namespace fastertransformer {
 
-enum class WeightType : int
-{
+enum class WeightType : int {
     kFP32,
     kFP16,
     kFP8,  // not supported yet
@@ -66,7 +65,7 @@ template<typename T>
 struct LlamaAttentionWeight {
     LlamaDenseWeight<T> qkv;
     LlamaDenseWeight<T> output;
-    std::vector<float> past_kv_scale;
+    std::vector<float>  past_kv_scale;
 };
 
 template<typename T>

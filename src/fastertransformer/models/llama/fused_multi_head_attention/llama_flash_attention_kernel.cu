@@ -10,7 +10,7 @@
 #include <cutlass/half.h>
 #include <cutlass/platform/platform.h>
 
-// modifiy from:
+// modified from:
 // https://github.com/NVIDIA/cutlass/blob/main/examples/41_fused_multi_head_attention/kernel_forward.h
 
 namespace fastertransformer {

@@ -35,7 +35,7 @@ public:
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other) = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other)            = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);

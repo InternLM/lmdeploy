@@ -9,7 +9,7 @@
 inih is released under the New BSD license (see LICENSE.txt). Go to the project
 home page for more info:
 https://github.com/benhoyt/inih
-https://github.com/jtilly/inih 
+https://github.com/jtilly/inih
 */
 
 #ifndef __INI_H__
@@ -344,7 +344,7 @@ public:
     // according to strtof().
     float GetFloat(std::string section, std::string name, float default_value) const;
     float GetFloat(std::string section, std::string name) const;
-  
+
     // Get a boolean value from INI file, returning default_value if not found or if
     // not a valid true/false value. Valid true values are "true", "yes", "on", "1",
     // and valid false values are "false", "no", "off", "0" (not case sensitive).

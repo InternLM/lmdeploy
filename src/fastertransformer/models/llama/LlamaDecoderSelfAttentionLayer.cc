@@ -256,17 +256,17 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         0,        // max_input_length, not used w/o linear_bias_slopes
         input_tensors->getPtr<int>("total_padding_tokens", nullptr),
         step,
-        1.f,      // q_scaling
-        0,        // relative_attention_bias_stride
-        nullptr,  // linear_bias_slopes
-        nullptr,  //  masked_tokens_data,
-        nullptr,  // ia3_tasks
-        nullptr,  // ia3_key_weights
-        nullptr,  // ia3_value_weights
-        nullptr,  // qkv_scale_out
-        nullptr,  // attention_out_scale
-        quant_policy_,        // int8_mode
-        weights->past_kv_scale.data(), // attention kv scale
+        1.f,                            // q_scaling
+        0,                              // relative_attention_bias_stride
+        nullptr,                        // linear_bias_slopes
+        nullptr,                        //  masked_tokens_data,
+        nullptr,                        // ia3_tasks
+        nullptr,                        // ia3_key_weights
+        nullptr,                        // ia3_value_weights
+        nullptr,                        // qkv_scale_out
+        nullptr,                        // attention_out_scale
+        quant_policy_,                  // int8_mode
+        weights->past_kv_scale.data(),  // attention kv scale
         stream_);
     sync_check_cuda_error();
 

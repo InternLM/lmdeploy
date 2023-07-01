@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
+// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
 
 #include "src/fastertransformer/models/llama/LlamaFfnLayer.h"
 #include "src/fastertransformer/kernels/activation_kernels.h"

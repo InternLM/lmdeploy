@@ -17,10 +17,10 @@
 
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/fastertransformer/models/llama/llama_utils.h"
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 #include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #include "src/fastertransformer/utils/cuda_type_utils.cuh"
-#include "src/fastertransformer/models/llama/llama_utils.h"
 #include <assert.h>
 #include <float.h>
 #include <type_traits>
@@ -81,7 +81,8 @@ namespace mmha {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Dh>
-struct Qk_vec_m_ {};
+struct Qk_vec_m_ {
+};
 
 template<>
 struct Qk_vec_m_<float, 32> {
@@ -181,7 +182,8 @@ struct Qk_vec_k_<__nv_fp8_e4m3, 256> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int THREADS_PER_KEY>
-struct K_vec_m_ {};
+struct K_vec_m_ {
+};
 
 template<>
 struct K_vec_m_<float, 4> {
@@ -262,7 +264,8 @@ struct K_vec_k_<__nv_fp8_e4m3, 1> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int V_VEC_SIZE>
-struct V_vec_m_ {};
+struct V_vec_m_ {
+};
 
 template<>
 struct V_vec_m_<float, 1> {
@@ -342,7 +345,8 @@ struct V_vec_k_<__nv_fp8_e4m3, 16> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_FMA
 template<typename T>
-struct Qk_vec_acum_fp32_ {};
+struct Qk_vec_acum_fp32_ {
+};
 
 template<>
 struct Qk_vec_acum_fp32_<float> {
@@ -424,7 +428,8 @@ struct Qk_vec_acum_fp32_<fp8_4_t> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-struct K_vec_acum_fp32_ {};
+struct K_vec_acum_fp32_ {
+};
 
 template<>
 struct K_vec_acum_fp32_<float> {
@@ -486,7 +491,8 @@ struct K_vec_acum_fp32_<fp8_4_t> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_OUT
 template<typename T>
-struct V_vec_acum_fp32_ {};
+struct V_vec_acum_fp32_ {
+};
 
 template<>
 struct V_vec_acum_fp32_<float> {
@@ -1455,14 +1461,15 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                     // Two chunks are separated by L * x elements. A thread write QK_VEC_SIZE elements.
                     int offset = bhi * params.memory_max_len * Dh + co * params.memory_max_len * QK_ELTS_IN_16B
                                  + tlength_circ * QK_ELTS_IN_16B + ci;
-                    
+
                     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
                         Packed_Int8_t k_int8 = quant(k, k_scale);
 
-                        int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache);
+                        int8_t* dst_ptr                                     = reinterpret_cast<int8_t*>(params.k_cache);
                         *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
-                    } else {
+                    }
+                    else {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache[offset]) = vec_conversion<Qk_vec_m, Qk_vec_k>(k);
                     }
                 }
@@ -1483,11 +1490,11 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
                         int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
                         *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
-                    } else {
+                    }
+                    else {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
                             vec_conversion<Qk_vec_m, Qk_vec_k>(k);
                     }
-
                 }
             }
         }
@@ -1565,28 +1572,28 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     constexpr int K_PER_WARP = WARP_SIZE / THREADS_PER_KEY;
 
     // The base pointer for the key in the cache buffer.
-    T* k_cache_batch = nullptr;
+    T*      k_cache_batch      = nullptr;
     int8_t* k_cache_batch_int8 = nullptr;
 
     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
         // convert k_cache_per_sample to int8
         if (params.k_cache_per_sample) {
-            int8_t* ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
+            int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
             k_cache_batch_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki;
-        } else {
-            int8_t* ptr = reinterpret_cast<int8_t*>(params.k_cache);
+        }
+        else {
+            int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache);
             k_cache_batch_int8 = &ptr[bhi * params.memory_max_len * Dh + ki];
         }
-    } else {
-        T* k_cache =
-            params.k_cache_per_sample ?
-                (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki) :
-                &params.k_cache[bhi * params.memory_max_len * Dh + ki];
+    }
+    else {
+        T* k_cache = params.k_cache_per_sample ? (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset
+                                                  + hi * params.memory_max_len * Dh + ki) :
+                                                 &params.k_cache[bhi * params.memory_max_len * Dh + ki];
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
         k_cache_batch = k_cache;
     }
-
 
     // Pick a number of keys to make sure all the threads of a warp enter (due to shfl_sync).
     // int ti_end = div_up(params.timestep, K_PER_WARP) * K_PER_WARP;
@@ -1626,12 +1633,15 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<K_vec_m>::value>::type;
                         using Packed_Float_t = typename packed_type<float, num_elems<K_vec_m>::value>::type;
 
-                        Packed_Int8_t k_vec_m_int8 = *reinterpret_cast<const Packed_Int8_t*>(&k_cache_batch_int8[beam_offset + jj * QK_ELTS_IN_16B]);
+                        Packed_Int8_t k_vec_m_int8 = *reinterpret_cast<const Packed_Int8_t*>(
+                            &k_cache_batch_int8[beam_offset + jj * QK_ELTS_IN_16B]);
                         Packed_Float_t k_vec_m_float = dequant(k_vec_m_int8, k_scale);
 
                         k[ii] = vec_conversion<K_vec_k, Packed_Float_t>(k_vec_m_float);
-                    } else {
-                        k[ii] = vec_conversion<K_vec_k, K_vec_m>((*reinterpret_cast<const K_vec_m*>(&k_cache_batch[beam_offset + jj * QK_ELTS_IN_16B])));
+                    }
+                    else {
+                        k[ii] = vec_conversion<K_vec_k, K_vec_m>(
+                            (*reinterpret_cast<const K_vec_m*>(&k_cache_batch[beam_offset + jj * QK_ELTS_IN_16B])));
                     }
                 }
             }
@@ -1747,28 +1757,29 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     int vi = tidx % THREADS_PER_VALUE * V_VEC_SIZE;
 
     // The base pointer for the value in the cache buffer.
-    T* v_cache = nullptr;
+    T* v_cache       = nullptr;
     T* v_cache_batch = nullptr;
 
-    int8_t* v_cache_int8 = nullptr;
+    int8_t* v_cache_int8       = nullptr;
     int8_t* v_cache_batch_int8 = nullptr;
 
     if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
         if (params.v_cache_per_sample) {
-            int8_t* ptr = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
+            int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
             v_cache_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi;
-        } else {
-            int8_t* ptr = reinterpret_cast<int8_t*>(params.v_cache);
+        }
+        else {
+            int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache);
             v_cache_int8 = &ptr[bhi * params.memory_max_len * Dh + vi];
         }
 
         v_cache_batch_int8 = v_cache_int8;
-    } else {
+    }
+    else {
 
-        v_cache =
-            params.v_cache_per_sample ?
-                (params.v_cache_per_sample[bi] + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi) :
-                &params.v_cache[bhi * params.memory_max_len * Dh + vi];
+        v_cache = params.v_cache_per_sample ? (params.v_cache_per_sample[bi] + params.kv_cache_per_sample_offset
+                                               + hi * params.memory_max_len * Dh + vi) :
+                                              &params.v_cache[bhi * params.memory_max_len * Dh + vi];
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* v_cache_batch = &params.v_cache[bbhi * params.memory_max_len * Dh + vi];
         v_cache_batch = v_cache;
@@ -1822,14 +1833,17 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             const int beam_offset = HAS_BEAMS ? beam_src * params.num_heads * params.memory_max_len * Dh : 0;
             // Load the values from the cache.
             V_vec_k v;
-            
+
             if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
-                Packed_Int8_t  v_vec_m_int8  = *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti * Dh]);
+                Packed_Int8_t v_vec_m_int8 =
+                    *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
 
                 v = vec_conversion<V_vec_k, Packed_Float_t>(v_vec_m_float);
-            } else {
-                v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti * Dh]));
+            }
+            else {
+                v = vec_conversion<V_vec_k, V_vec_m>(
+                    *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti * Dh]));
             }
 
             // Load the logits from shared memory.
@@ -1867,14 +1881,17 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             const int beam_offset = HAS_BEAMS ? beam_src * params.num_heads * params.memory_max_len * Dh : 0;
             // Load the values from the cache.
             V_vec_k v;
-            
+
             if (params.int8_mode & QuantPolicy::kCacheKVInt8) {
-                Packed_Int8_t  v_vec_m_int8  = *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti_circ * Dh]);
+                Packed_Int8_t v_vec_m_int8 =
+                    *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti_circ * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
 
                 v = vec_conversion<V_vec_k, Packed_Float_t>(v_vec_m_float);
-            } else {
-                v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti_circ * Dh]));
+            }
+            else {
+                v = vec_conversion<V_vec_k, V_vec_m>(
+                    *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti_circ * Dh]));
             }
 
             // Load the logits from shared memory.
@@ -1910,7 +1927,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
         // Trigger the loads from the V buffer.
         const auto v_offset = qkv_base_offset + vi;
-        v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&params.v[v_offset]));
+        v                   = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&params.v[v_offset]));
         // Trigger the loads from the V bias buffer.
         // V_vec v_bias = *reinterpret_cast<const V_vec*>(&params.v_bias[hi*Dh + vi]);
 
@@ -1925,7 +1942,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                 using Packed_Int8_t  = typename packed_type<int8_t, num_elems<V_vec_k>::value>::type;
                 Packed_Int8_t v_int8 = quant(v, v_scale);
                 *reinterpret_cast<Packed_Int8_t*>(&v_cache_int8[tlength_circ * Dh]) = v_int8;
-            } else {
+            }
+            else {
                 *reinterpret_cast<V_vec_m*>(&v_cache[tlength_circ * Dh]) = vec_conversion<V_vec_m, V_vec_k>(v);
             }
         }
@@ -1994,7 +2012,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             convert_from_float(*reinterpret_cast<V_vec_m*>(&params.out[bhi * Dh + vi]),
                                mul<V_vec_acum, float, V_vec_acum>(result_scale, out));
 #endif  // FP8_MHA
-        } else {
+        }
+        else {
             convert_from_float(*reinterpret_cast<V_vec_m*>(&params.out[bhi * Dh + vi]), out);
         }
 #else   // MMHA_USE_FP32_ACUM_FOR_OUT
