@@ -374,8 +374,8 @@ install(
     transformer-shared
   EXPORT
     transformer-shared-targets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer
+  LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/turbomind
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/turbomind
 )
 
 install(
