@@ -17,8 +17,8 @@
 #pragma once
 
 #include "encoder_igemm_func.h"  // TODO(bhsueh) Remove this include
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>

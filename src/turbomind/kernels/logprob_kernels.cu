@@ -26,9 +26,9 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
-#include "src/fastertransformer/kernels/logprob_kernels.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/logprob_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/logger.h"
 
 namespace fastertransformer {
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/gemm.h"
+#include "src/turbomind/utils/gemm.h"
 
 namespace fastertransformer {
 

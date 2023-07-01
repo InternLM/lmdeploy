@@ -17,7 +17,7 @@
 #pragma once
 
 #include "FfnWeight.h"
-#include "src/fastertransformer/utils/ScaleList.h"
+#include "src/turbomind/utils/ScaleList.h"
 namespace fastertransformer {
 
 template<typename T1, typename T2>

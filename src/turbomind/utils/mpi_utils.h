@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/logger.h"
 
 #ifdef BUILD_MULTI_GPU
 #include <mpi.h>

@@ -18,12 +18,12 @@
 #include <algorithm>
 #include <float.h>
 
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
-#include "src/fastertransformer/kernels/sampling_topp_kernels.h"
-#include "src/fastertransformer/layers/sampling_layers/TopPSamplingLayer.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/kernels/sampling_topp_kernels.h"
+#include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace fastertransformer {
 

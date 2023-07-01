@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/layers/beam_search_layers/OnlineBeamSearchLayer.h"
+#include "src/turbomind/layers/beam_search_layers/OnlineBeamSearchLayer.h"
 
 namespace fastertransformer {
 

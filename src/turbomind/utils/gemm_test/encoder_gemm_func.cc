@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/gemm_test/encoder_gemm_func.h"
+#include "src/turbomind/utils/gemm_test/encoder_gemm_func.h"
 
 namespace fastertransformer {
 

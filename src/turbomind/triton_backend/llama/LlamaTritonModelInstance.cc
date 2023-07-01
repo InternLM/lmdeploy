@@ -16,13 +16,13 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
-#include "src/fastertransformer/triton_backend/triton_utils.hpp"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/triton_backend/triton_utils.hpp"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <functional>
 #include <numeric>

@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>

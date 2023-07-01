@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 
 namespace fastertransformer {
 

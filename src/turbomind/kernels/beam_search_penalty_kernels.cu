@@ -16,8 +16,8 @@
 
 #include <assert.h>
 
-#include "src/fastertransformer/kernels/beam_search_penalty_kernels.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/kernels/beam_search_penalty_kernels.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 
 namespace fastertransformer {
 

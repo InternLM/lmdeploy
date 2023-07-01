@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <atomic>
 
 namespace fastertransformer {

@@ -20,8 +20,8 @@
 #include <cuda_runtime.h>
 #include <unordered_map>
 
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace fastertransformer {
 

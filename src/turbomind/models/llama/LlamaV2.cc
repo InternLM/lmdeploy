@@ -18,18 +18,18 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGpt.cc
 
-#include "src/fastertransformer/models/llama/LlamaV2.h"
-#include "src/fastertransformer/kernels/decoding_kernels.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
-#include "src/fastertransformer/models/llama/LlamaBatch.h"
-#include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
-#include "src/fastertransformer/models/llama/LlamaWeight.h"
-#include "src/fastertransformer/models/llama/Request.h"
-#include "src/fastertransformer/models/llama/llama_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/models/llama/LlamaV2.h"
+#include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <functional>
 #include <memory>
 #include <sstream>

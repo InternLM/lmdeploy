@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <cublasLt.h>
 #include <cuda_runtime.h>

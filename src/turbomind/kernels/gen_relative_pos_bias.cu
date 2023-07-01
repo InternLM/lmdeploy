@@ -17,8 +17,8 @@
 #include "cublas_v2.h"
 #include "gen_relative_pos_bias.h"
 #include "reduce_kernel_utils.cuh"
-#include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cstdio>
 
 namespace fastertransformer {

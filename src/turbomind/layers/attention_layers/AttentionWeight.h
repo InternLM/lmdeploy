@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/DenseWeight.h"
+#include "src/turbomind/layers/DenseWeight.h"
 
 namespace fastertransformer {
 

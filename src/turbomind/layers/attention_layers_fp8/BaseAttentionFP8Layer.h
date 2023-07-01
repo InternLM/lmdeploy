@@ -19,13 +19,13 @@
 #include <assert.h>
 #include <vector>
 
-#include "src/fastertransformer/layers/BaseLayer.h"
-#include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
-#include "src/fastertransformer/layers/attention_layers_fp8/AttentionFP8Weight.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasFP8MMWrapper.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/layers/BaseLayer.h"
+#include "src/turbomind/layers/attention_layers/BaseAttentionLayer.h"
+#include "src/turbomind/layers/attention_layers_fp8/AttentionFP8Weight.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasFP8MMWrapper.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace fastertransformer {
 

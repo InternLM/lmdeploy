@@ -1,10 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/models/llama/llama_utils.h"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
+#include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 

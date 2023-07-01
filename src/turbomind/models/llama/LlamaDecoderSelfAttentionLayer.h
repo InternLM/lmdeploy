@@ -16,14 +16,14 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/DecoderSelfAttentionLayer.h
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/LlamaDenseWeight.h"
-#include "src/fastertransformer/models/llama/LlamaLinear.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
 namespace fastertransformer {
 

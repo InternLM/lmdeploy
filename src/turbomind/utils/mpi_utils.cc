@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/turbomind/utils/mpi_utils.h"
 
 namespace fastertransformer {
 namespace mpi {

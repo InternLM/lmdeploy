@@ -2,10 +2,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/LlamaDenseWeight.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace fastertransformer {
 

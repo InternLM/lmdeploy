@@ -16,9 +16,9 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptWeight.cc
 
-#include "src/fastertransformer/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/llama/LlamaWeight.h"
 
 namespace fastertransformer {
 

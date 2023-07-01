@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
+#include "src/turbomind/kernels/beam_search_topk_kernels.h"
 
 namespace fastertransformer {
 

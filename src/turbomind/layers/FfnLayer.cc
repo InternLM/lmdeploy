@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/layers/FfnLayer.h"
-#include "src/fastertransformer/kernels/transpose_int8_kernels.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
+#include "src/turbomind/layers/FfnLayer.h"
+#include "src/turbomind/kernels/transpose_int8_kernels.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 

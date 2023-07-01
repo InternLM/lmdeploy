@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/BaseLayer.h"
-#include "src/fastertransformer/layers/FfnFP8Weight.h"
-#include "src/fastertransformer/layers/FfnLayer.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/layers/BaseLayer.h"
+#include "src/turbomind/layers/FfnFP8Weight.h"
+#include "src/turbomind/layers/FfnLayer.h"
+#include "src/turbomind/utils/memory_utils.h"
 #include <vector>
 
 namespace fastertransformer {

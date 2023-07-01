@@ -19,10 +19,10 @@
 #include <string>
 #include <unordered_map>
 
-#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
-#include "src/fastertransformer/layers/BaseLayer.h"
-#include "src/fastertransformer/layers/DynamicDecodeBaseLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopPSamplingLayer.h"
+#include "src/turbomind/kernels/beam_search_topk_kernels.h"
+#include "src/turbomind/layers/BaseLayer.h"
+#include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
+#include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
 
 namespace fastertransformer {
 

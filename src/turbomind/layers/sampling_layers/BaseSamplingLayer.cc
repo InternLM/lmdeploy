@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/layers/sampling_layers/BaseSamplingLayer.h"
-#include "src/fastertransformer/kernels/sampling_penalty_kernels.h"
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
+#include "src/turbomind/kernels/sampling_penalty_kernels.h"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #include <algorithm>
 

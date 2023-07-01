@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
-#include "src/fastertransformer/utils/ScaleList.h"
+#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
+#include "src/turbomind/utils/ScaleList.h"
 
 namespace fastertransformer {
 

@@ -15,7 +15,7 @@
  */
 
 #include "FfnLayerINT8.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 

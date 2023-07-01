@@ -17,16 +17,16 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/GptContextAttentionLayer.cc
 
-#include "src/fastertransformer/models/llama/LlamaContextAttentionLayer.h"
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/unfused_attention_kernels.h"
-#include "src/fastertransformer/models/llama/LlamaNcclGuard.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/models/llama/llama_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
+#include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace fastertransformer {
 

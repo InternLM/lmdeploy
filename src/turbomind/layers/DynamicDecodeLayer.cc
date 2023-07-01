@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
-#include "src/fastertransformer/kernels/ban_bad_words.h"
-#include "src/fastertransformer/kernels/stop_criteria_kernels.h"
-#include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
-#include "src/fastertransformer/layers/beam_search_layers/BeamSearchLayer.h"
-#include "src/fastertransformer/layers/beam_search_layers/OnlineBeamSearchLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopKSamplingLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopPSamplingLayer.h"
+#include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/kernels/ban_bad_words.h"
+#include "src/turbomind/kernels/stop_criteria_kernels.h"
+#include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
+#include "src/turbomind/layers/beam_search_layers/BeamSearchLayer.h"
+#include "src/turbomind/layers/beam_search_layers/OnlineBeamSearchLayer.h"
+#include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
+#include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
 
 namespace fastertransformer {
 

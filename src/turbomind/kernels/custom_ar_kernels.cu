@@ -15,7 +15,7 @@
  */
 
 #include "custom_ar_kernels.h"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 

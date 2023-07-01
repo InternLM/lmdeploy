@@ -1,8 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/models/llama/LlamaCacheManager.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/models/llama/LlamaCacheManager.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 
 namespace fastertransformer {
 

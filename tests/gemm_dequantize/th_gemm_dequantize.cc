@@ -22,9 +22,9 @@
 #include <torch/custom_class.h>
 #include <torch/script.h>
 
-#include "src/fastertransformer/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
-#include "src/fastertransformer/th_op/th_utils.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
+#include "src/turbomind/th_op/th_utils.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
 
 #include "cutlass/numeric_types.h"
 

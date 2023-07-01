@@ -16,10 +16,10 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/transformer_triton_backend.cpp
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/transformer_triton_backend.cpp
 
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/nccl_utils.h"
 
 std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
 AbstractTransformerModel::createNcclParams(const int node_id, const int device_id_start, const bool multi_node)

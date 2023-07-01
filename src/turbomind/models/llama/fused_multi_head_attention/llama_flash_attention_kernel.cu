@@ -1,5 +1,5 @@
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include "42_fused_multi_head_attention/kernel_forward.h"
 #include "mma_accum_lambda_iterator.h"

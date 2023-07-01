@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #pragma once
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/utils/Tensor.h"
 #include <cuda_runtime.h>
 #include <sstream>
 #include <string>

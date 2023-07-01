@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/logger.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <queue>

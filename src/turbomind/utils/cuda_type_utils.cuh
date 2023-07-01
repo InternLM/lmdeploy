@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cuda_bf16_fallbacks.cuh"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_bf16_fallbacks.cuh"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include <cuda.h>
 #include <cuda_fp16.h>
 

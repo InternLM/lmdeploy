@@ -17,12 +17,12 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptDecoder.cc
 
-#include "src/fastertransformer/models/llama/LlamaDecoder.h"
-#include "src/fastertransformer/models/llama/llama_decoder_kernels.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/LlamaDecoder.h"
+#include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 
 namespace fastertransformer {
 

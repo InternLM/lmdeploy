@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/mpi_utils.h"
 
 #include <cuda_runtime.h>
 #ifdef BUILD_MULTI_GPU

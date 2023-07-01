@@ -16,13 +16,13 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.h
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/LlamaV2.h"
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/models/llama/LlamaV2.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include <memory>
 
 namespace ft = fastertransformer;

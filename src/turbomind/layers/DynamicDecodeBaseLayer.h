@@ -19,7 +19,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "src/fastertransformer/layers/BaseLayer.h"
+#include "src/turbomind/layers/BaseLayer.h"
 
 namespace fastertransformer {
 

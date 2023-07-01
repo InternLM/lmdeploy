@@ -2,10 +2,10 @@
 #include <string>     // std::string
 #include <vector>     // std::vector
 
-#include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/logger.h"
 
 #include "unittest_utils.h"
 

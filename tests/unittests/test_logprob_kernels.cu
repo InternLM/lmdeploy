@@ -6,11 +6,11 @@
 #include <vector>
 #include <sys/time.h>
 
-#include "src/fastertransformer/kernels/logprob_kernels.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/logprob_kernels.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #include "tests/unittests/gtest_utils.h"
 

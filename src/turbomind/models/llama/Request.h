@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/utils/Tensor.h"
 #include <condition_variable>
 #include <cstdint>
 #include <future>

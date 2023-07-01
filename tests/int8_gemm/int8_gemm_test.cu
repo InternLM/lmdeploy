@@ -24,10 +24,10 @@
 #include <torch/custom_class.h>
 #include <torch/script.h>
 
-#include "src/fastertransformer/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
-#include "src/fastertransformer/th_op/th_utils.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
+#include "src/turbomind/th_op/th_utils.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/logger.h"
 
 #include "cutlass/numeric_types.h"
 

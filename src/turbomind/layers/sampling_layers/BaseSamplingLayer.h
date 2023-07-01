@@ -19,8 +19,8 @@
 
 #include <curand_kernel.h>
 
-#include "src/fastertransformer/kernels/penalty_types.h"
-#include "src/fastertransformer/layers/DynamicDecodeBaseLayer.h"
+#include "src/turbomind/kernels/penalty_types.h"
+#include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
 
 namespace fastertransformer {
 

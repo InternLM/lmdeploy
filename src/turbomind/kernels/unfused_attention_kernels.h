@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/utils/Tensor.h"
 
 namespace fastertransformer {
 

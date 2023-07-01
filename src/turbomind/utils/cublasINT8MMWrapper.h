@@ -15,9 +15,9 @@
  */
 
 #include "cuda_utils.h"
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
+#include "src/turbomind/layers/attention_layers/AttentionWeight.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>

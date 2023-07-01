@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/ban_bad_words.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/ban_bad_words.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace fastertransformer {
 

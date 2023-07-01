@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/sampling_layers/BaseSamplingLayer.h"
+#include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
 
 namespace fastertransformer {
 

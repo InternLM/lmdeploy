@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
-#include "src/fastertransformer/layers/beam_search_layers/BeamSearchLayer.h"
+#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/layers/beam_search_layers/BeamSearchLayer.h"
 
 namespace fastertransformer {
 

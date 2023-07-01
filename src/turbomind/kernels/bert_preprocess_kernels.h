@@ -15,12 +15,12 @@
  */
 
 #pragma once
-#include "src/fastertransformer/kernels/gen_relative_pos_bias.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/gen_relative_pos_bias.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #ifdef ENABLE_FP8
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #endif  // ENABLE_FP8
 
 namespace fastertransformer {

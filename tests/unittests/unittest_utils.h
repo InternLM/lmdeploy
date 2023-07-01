@@ -26,9 +26,9 @@
 #include <string>      // string
 #include <vector>      // vector
 
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/string_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
 #define PRINT_LIMIT 16
 #define EPSILON (1e-20)

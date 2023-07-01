@@ -16,7 +16,7 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/transformer_triton_backend.hpp
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/transformer_triton_backend.hpp
 
 #pragma once
 
@@ -25,11 +25,11 @@
 #include <sys/time.h>
 #include <vector>
 
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/custom_ar_comm.h"
-#include "src/fastertransformer/utils/instance_comm.h"
-#include "src/fastertransformer/utils/mpi_utils.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/custom_ar_comm.h"
+#include "src/turbomind/utils/instance_comm.h"
+#include "src/turbomind/utils/mpi_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
 namespace ft = fastertransformer;
 

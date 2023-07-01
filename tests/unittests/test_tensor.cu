@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/utils/Tensor.h"
 
 using namespace fastertransformer;
 

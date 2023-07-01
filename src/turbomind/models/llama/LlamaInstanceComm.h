@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/Barrier.h"
-#include "src/fastertransformer/utils/instance_comm.h"
+#include "src/turbomind/models/llama/Barrier.h"
+#include "src/turbomind/utils/instance_comm.h"
 
 namespace fastertransformer {
 

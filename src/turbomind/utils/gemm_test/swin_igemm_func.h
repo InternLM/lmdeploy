@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/gemm_test/encoder_igemm_func.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/gemm_test/encoder_igemm_func.h"
 #include <algorithm>
 #include <cublasLt.h>
 #include <cuda_runtime.h>

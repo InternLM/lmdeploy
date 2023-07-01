@@ -16,7 +16,7 @@
  */
 #pragma once
 
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/logger.h"
 #include <curand_kernel.h>
 namespace fastertransformer {
 

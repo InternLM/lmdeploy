@@ -15,12 +15,12 @@
  */
 
 #include "tests/unittests/gtest_utils.h"
-#include "src/fastertransformer/kernels/gen_relative_pos_bias.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
-#include "src/fastertransformer/kernels/unfused_attention_kernels.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/kernels/gen_relative_pos_bias.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
+#include "src/turbomind/utils/Tensor.h"
 
 #include <curand.h>
 #include <sstream>

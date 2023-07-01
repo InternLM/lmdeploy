@@ -17,7 +17,7 @@
 #include <assert.h>
 #include <float.h>
 
-#include "src/fastertransformer/kernels/sampling_penalty_kernels.h"
+#include "src/turbomind/kernels/sampling_penalty_kernels.h"
 
 namespace fastertransformer {
 

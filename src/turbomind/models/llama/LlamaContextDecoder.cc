@@ -16,15 +16,15 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptContextDecoder.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptContextDecoder.cc
 
-#include "src/fastertransformer/models/llama/LlamaContextDecoder.h"
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
-#include "src/fastertransformer/models/llama/LlamaContextDecoder.h"
-#include "src/fastertransformer/models/llama/llama_decoder_kernels.h"
-#include "src/fastertransformer/models/llama/llama_kernels.h"
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/models/llama/LlamaContextDecoder.h"
+#include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/models/llama/LlamaContextDecoder.h"
+#include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/utils/Tensor.h"
 
 namespace fastertransformer {
 

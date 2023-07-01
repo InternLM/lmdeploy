@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
 #elif (CUDART_VERSION >= 11050)
@@ -22,8 +22,8 @@
 #else
 #include "3rdparty/cub/cub.cuh"
 #endif
-#include "src/fastertransformer/kernels/gpt_kernels.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace fastertransformer {
 

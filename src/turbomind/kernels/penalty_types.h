@@ -19,7 +19,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "src/fastertransformer/utils/string_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
 namespace fastertransformer {
 

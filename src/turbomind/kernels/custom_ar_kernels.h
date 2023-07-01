@@ -21,7 +21,7 @@
 
 #include <iostream>
 
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #define CUSTOM_AR_SIZE_THRESHOLD 50331648
 #define MAX_ALL_REDUCE_BLOCKS 24

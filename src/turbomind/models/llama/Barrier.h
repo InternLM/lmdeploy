@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/logger.h"
 #include <pthread.h>
 
 namespace fastertransformer {
