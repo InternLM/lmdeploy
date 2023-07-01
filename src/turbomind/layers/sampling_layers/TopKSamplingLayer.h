@@ -17,10 +17,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/layers/sampling_layers/BaseSamplingLayer.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
+#include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class TopKSamplingLayer: public BaseSamplingLayer<T> {
@@ -71,4 +71,4 @@ public:
     void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) override;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

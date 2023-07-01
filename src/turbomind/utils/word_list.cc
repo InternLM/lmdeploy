@@ -19,7 +19,7 @@
 
 #include "assert.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 int read_word_list(const std::string& filename, std::vector<int>& file_data)
 {
@@ -47,4 +47,4 @@ int read_word_list(const std::string& filename, std::vector<int>& file_data)
     return 0;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

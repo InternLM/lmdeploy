@@ -10,18 +10,18 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
-#include "src/fastertransformer/kernels/sampling_topp_kernels.h"
-#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopKSamplingLayer.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/kernels/sampling_topp_kernels.h"
+#include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #include "tests/unittests/gtest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 namespace {
 

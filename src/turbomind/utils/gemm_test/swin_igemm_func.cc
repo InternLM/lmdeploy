@@ -16,7 +16,7 @@
 
 #include "swin_igemm_func.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 static const char* showStatus(cublasStatus_t error)
 {
@@ -278,4 +278,4 @@ int generate_swin_igemm_config(
     return 0;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

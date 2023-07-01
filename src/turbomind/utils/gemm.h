@@ -27,13 +27,13 @@
 
 // TODO: Need to remove the dependency of the layer module.
 //   e.g. refactor Weight class to some base module.
-#include "src/fastertransformer/layers/DenseWeight.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/layers/DenseWeight.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasAlgoMap.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -42,7 +42,7 @@
 // cublas default workspace size: 32MB. Let me make this as a Gemm property.
 #define WORKSPACE_SIZE 33554432
 
-namespace fastertransformer {
+namespace turbomind {
 
 // A wrapper of cublas or cusparse matrix operator.
 //  - GEMM_OP_N = CUBLAS_OP_N or CUSPARSE_OP_N
@@ -677,4 +677,4 @@ size_t compressMatrixB(void**              output,
 
 /* ************************* End of GEMM utils **************************** */
 
-}  // end of namespace fastertransformer
+}  // end of namespace turbomind

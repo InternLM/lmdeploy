@@ -9,17 +9,17 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
-#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
-#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopKSamplingLayer.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/kernels/sampling_topk_kernels.h"
+#include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #include "tests/unittests/unittest_utils.h"
 
-using namespace fastertransformer;
+using namespace turbomind;
 
 struct TestCase {
     std::string name;
@@ -48,7 +48,7 @@ struct TestCase {
 
     void print()
     {
-        FT_LOG_INFO(toString());
+        TM_LOG_INFO(toString());
     }
 };
 
@@ -157,11 +157,11 @@ void testCumLogProbComputation(TestCase tc)
     memset(expected_cum_log_probs, 0, sizeof(float) * batch_size * beam_width);
 
 #ifndef NDEBUG
-    FT_LOG_DEBUG("logit values");
+    TM_LOG_DEBUG("logit values");
     printMatrixWithLimit(h_logits, batch_size * beam_width, vocab_size, vocab_size, false);
-    FT_LOG_DEBUG("\nprob values");
+    TM_LOG_DEBUG("\nprob values");
     printMatrixWithLimit(h_probs, batch_size * beam_width, vocab_size, vocab_size, false);
-    FT_LOG_DEBUG("\nlog-prob values");
+    TM_LOG_DEBUG("\nlog-prob values");
     printMatrixWithLimit(h_log_probs, batch_size * beam_width, vocab_size, vocab_size, false);
 #endif
 
@@ -224,7 +224,7 @@ void testCumLogProbComputation(TestCase tc)
 
         dynamic_decode_layer->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
 
-        FT_LOG_DEBUG("Step %2d generated ids", step);
+        TM_LOG_DEBUG("Step %2d generated ids", step);
         cudaD2Hcpy(
             h_output_ids,
             (int*)dynamic_decode_output_tensors.at("output_ids").getPtrWithOffset(step * (batch_size * beam_width)),
@@ -234,7 +234,7 @@ void testCumLogProbComputation(TestCase tc)
         for (size_t i = 0; i < batch_size * beam_width; ++i) {
             int idx = i * vocab_size + h_output_ids[i];
             expected_cum_log_probs[i] += (float)h_log_probs[idx];
-            FT_LOG_DEBUG("| step %2d batch %2d idx %7d id %6d | log-prob %9.4f (expt: %9.4f) "
+            TM_LOG_DEBUG("| step %2d batch %2d idx %7d id %6d | log-prob %9.4f (expt: %9.4f) "
                          "| cum-log-prob %9.4f (expt: %9.4f) | prob %9.4e",
                          (int)step,
                          (int)i,
@@ -246,7 +246,7 @@ void testCumLogProbComputation(TestCase tc)
                          expected_cum_log_probs[i],
                          (float)h_probs[idx]);
         }
-        FT_LOG_DEBUG("");
+        TM_LOG_DEBUG("");
 
 #ifndef NDEBUG
         // print output ids
@@ -285,10 +285,10 @@ void testCumLogProbComputation(TestCase tc)
 
 void printTensors(TensorMap* map, size_t limit = 8)
 {
-    FT_LOG_INFO("Tensors:");
+    TM_LOG_INFO("Tensors:");
     for (auto& kv : *map) {
         Tensor t = kv.second;
-        FT_LOG_INFO(" - %-18s : %s", kv.first.c_str(), t.toString().c_str());
+        TM_LOG_INFO(" - %-18s : %s", kv.first.c_str(), t.toString().c_str());
     }
 }
 
@@ -468,13 +468,13 @@ private:
                     for (auto& expt : expts) {
                         ss << " " << expt;
                     }
-                    FT_LOG_DEBUG("%s", ss.str().c_str());
+                    TM_LOG_DEBUG("%s", ss.str().c_str());
                 }
                 ++failures;
             }
         }
         delete[] h_output_ids;
-        FT_LOG_DEBUG("check...%6s : %s (failures: %d / %d)",
+        TM_LOG_DEBUG("check...%6s : %s (failures: %d / %d)",
                      failures == 0 ? "....OK" : "FAILED",
                      name.c_str(),
                      failures,
@@ -491,7 +491,7 @@ private:
                       float*                     temperature,
                       float*                     repetition_penalty)
     {
-        FT_LOG_INFO("Test %s", name.c_str());
+        TM_LOG_INFO("Test %s", name.c_str());
         std::string tag    = fmtstr("Test %s T=%s", name.c_str(), std::is_same<T, float>::value ? "fp32" : "fp16");
         bool        passed = true;
         for (unsigned long long seed = 0; seed < max_seed; ++seed) {
@@ -518,7 +518,7 @@ private:
             passed &= is_ok;
 #ifndef NDEBUG
             if (!is_ok) {
-                FT_LOG_ERROR("actual output ids");
+                TM_LOG_ERROR("actual output ids");
                 printMatrix(d_output_ids, max_seq_len, batch_size, batch_size, true);
             }
 #endif
@@ -526,7 +526,7 @@ private:
             delete input_tensors;
             this->teardown();
         }
-        FT_LOG_INFO("check...%6s : %s", passed ? "....OK" : "FAILED", tag.c_str());
+        TM_LOG_INFO("check...%6s : %s", passed ? "....OK" : "FAILED", tag.c_str());
         return passed;
     }
 
@@ -539,7 +539,7 @@ private:
                                     float*                     temperature,
                                     float*                     repetition_penalty)
     {
-        FT_LOG_INFO("Test %s", name.c_str());
+        TM_LOG_INFO("Test %s", name.c_str());
         std::string tag    = fmtstr("Test %s T=%s", name.c_str(), std::is_same<T, float>::value ? "fp32" : "fp16");
         bool        passed = true;
         size_t      local_batch_size = 2;
@@ -567,7 +567,7 @@ private:
             passed &= is_ok;
 #ifndef NDEBUG
             if (!is_ok) {
-                FT_LOG_ERROR("actual output ids");
+                TM_LOG_ERROR("actual output ids");
                 printMatrix(d_output_ids, max_seq_len, batch_size, batch_size, true);
             }
 #endif
@@ -575,7 +575,7 @@ private:
             delete input_tensors;
             this->teardown();
         }
-        FT_LOG_INFO("check...%6s : %s", passed ? "....OK" : "FAILED", tag.c_str());
+        TM_LOG_INFO("check...%6s : %s", passed ? "....OK" : "FAILED", tag.c_str());
         return passed;
     }
 
@@ -1229,7 +1229,7 @@ static inline bool isEqualInPeriod(T* vals, size_t size, size_t period_size)
     for (size_t i = 0; i + period_size - 1 < size; i += period_size) {
         for (size_t j = 1; j < period_size; ++j) {
             if (vals[i] != vals[i + j]) {
-                FT_LOG_INFO(" **** *** ** * [%d] %d <> [%d] %d", i, vals[i], i + j, vals[i + j]);
+                TM_LOG_INFO(" **** *** ** * [%d] %d <> [%d] %d", i, vals[i], i + j, vals[i + j]);
                 return false;
             }
         }
@@ -1244,7 +1244,7 @@ static inline bool isEqualInPeriod(T* vals, size_t size, size_t period_size, siz
     for (size_t i = 0; i + period_size - 1 < size; i += period_size) {
         for (size_t j = 1; j < period_size; ++j) {
             if (j != except && vals[i] != vals[i + j]) {
-                FT_LOG_INFO(" **** *** ** * [%d] %d <> [%d] %d", i, vals[i], i + j, vals[i + j]);
+                TM_LOG_INFO(" **** *** ** * [%d] %d <> [%d] %d", i, vals[i], i + j, vals[i + j]);
                 return false;
             }
         }
@@ -1284,7 +1284,7 @@ void testCuandBatchInitialize(const size_t batch_size)
 
     // The same seed produces the same random number.
     bool passed = isEqualInPeriod(h_rand_vals, batch_size, period_size);
-    FT_LOG_INFO("CuandBatchInitTest check....... : %s", passed ? "OK" : "FAILED");
+    TM_LOG_INFO("CuandBatchInitTest check....... : %s", passed ? "OK" : "FAILED");
     EXPECT_TRUE(passed);
 
     delete h_rand_vals;
@@ -1299,7 +1299,7 @@ void testCuandBatchInitialize(const size_t batch_size)
 template<typename T, bool SINGLE_RANDOM_SEED, bool HAS_DIFF_ARGS, bool USE_LOCAL_BATCH>
 void testSamplingLayerCurandInit(TestCase tc)
 {
-    FT_LOG_DEBUG("testSamplingLayerCurandInit %s", tc.toString().c_str());
+    TM_LOG_DEBUG("testSamplingLayerCurandInit %s", tc.toString().c_str());
     const DataType data_type = getTensorType<T>();
 
     const size_t beam_width = 1;
@@ -1376,7 +1376,7 @@ void testSamplingLayerCurandInit(TestCase tc)
     deviceFill(d_end_id_buf, batch_size, end_id);
 
 #ifndef NDEBUG
-    FT_LOG_DEBUG("Random Seeds");
+    TM_LOG_DEBUG("Random Seeds");
     printMatrixWithLimit(random_seed, 1, random_seed_size, random_seed_size, false);
 #endif
 
@@ -1400,7 +1400,7 @@ void testSamplingLayerCurandInit(TestCase tc)
         cudaH2Dcpy(d_logits_buf, h_logits, batchxbeam * vocab_size);
 
 #ifndef NDEBUG
-        FT_LOG_DEBUG("logit values");
+        TM_LOG_DEBUG("logit values");
         printMatrixWithLimit(h_logits, batchxbeam, vocab_size, vocab_size, false);
 #endif
         for (uint ite = 0; ite < iteration_num; ++ite) {
@@ -1434,9 +1434,9 @@ void testSamplingLayerCurandInit(TestCase tc)
             dynamic_decode_layer->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
             sync_check_cuda_error();
 #ifndef NDEBUG
-            FT_LOG_DEBUG("Step %2d generated ids", step);
+            TM_LOG_DEBUG("Step %2d generated ids", step);
             printMatrix(d_output_ids, max_seq_len, batchxbeam, batchxbeam, true);
-            FT_LOG_DEBUG("");
+            TM_LOG_DEBUG("");
 #endif
             // check results.
             cudaD2Hcpy(h_output_ids,
@@ -1452,7 +1452,7 @@ void testSamplingLayerCurandInit(TestCase tc)
                              HAS_DIFF_ARGS ? "true" : "false",
                              USE_LOCAL_BATCH ? "true" : "false",
                              (std::is_same<T, float>::value ? " fp32" : " fp16"));
-    FT_LOG_INFO("check...%s SamplingLayerCurandInitTest %-30s", passed ? "....OK" : "FAILED", tag.c_str());
+    TM_LOG_INFO("check...%s SamplingLayerCurandInitTest %-30s", passed ? "....OK" : "FAILED", tag.c_str());
     EXPECT_TRUE(passed);
 
     free(h_logits);
@@ -1495,13 +1495,13 @@ int main()
         testCumLogProbComputation<float>(tc);
         testCumLogProbComputation<half>(tc);
     }
-    FT_LOG_INFO("testCumLogProbComputation done");
+    TM_LOG_INFO("testCumLogProbComputation done");
 
     SamplingDecodeTest<float> sampling_decode_test;
     sampling_decode_test.testAll();
 
     testCuandBatchInitialize(127);
-    FT_LOG_INFO("testCuandBatchInitialize done");
+    TM_LOG_INFO("testCuandBatchInitialize done");
 
 #define LAUNCH_VARIANTS(T, tc, local_batch)                                                                            \
     testSamplingLayerCurandInit<T, true, false, local_batch>(tc);                                                      \
@@ -1515,7 +1515,7 @@ int main()
         LAUNCH_VARIANTS(half, tc, true);
     }
 #undef LAUNCH_VARIANTS
-    FT_LOG_INFO("testSamplingLayerCurandInit done");
+    TM_LOG_INFO("testSamplingLayerCurandInit done");
 
     return 0;
 }

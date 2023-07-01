@@ -15,11 +15,11 @@
  */
 
 #include "bert_preprocess_kernels.h"
-#include "src/fastertransformer/utils/cuda_bf16_fallbacks.cuh"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_bf16_fallbacks.cuh"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
 
-namespace fastertransformer {
+namespace turbomind {
 
 __global__ void getPaddingOffsetAndCuSeqLensKernel(size_t*    h_valid_word_num,
                                                    int*       tmp_mask_offset,
@@ -467,4 +467,4 @@ template void invokeQuantizeMatrixRebuildPadding<half, __nv_fp8_e4m3, QUANTIZE_M
 
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -8,12 +8,12 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/memory_utils.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/logger.h"
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 namespace {
 
@@ -48,11 +48,11 @@ bool checkResult(std::string name, T* out, T*ref, size_t size, float atol, float
         bool ok = almostEqual(a, b, atol, rtol);
         // Print the error.
         if (!ok && failures < 4) {
-            FT_LOG_ERROR(">> invalid result for i=%lu:", i);
-            FT_LOG_ERROR(">>    found......: %10.6f", a);
-            FT_LOG_ERROR(">>    expected...: %10.6f", b);
-            FT_LOG_ERROR(">>    error......: %.6f", fabsf(a - b));
-            FT_LOG_ERROR(">>    tol........: %.6f", atol + rtol * fabs(b));
+            TM_LOG_ERROR(">> invalid result for i=%lu:", i);
+            TM_LOG_ERROR(">>    found......: %10.6f", a);
+            TM_LOG_ERROR(">>    expected...: %10.6f", b);
+            TM_LOG_ERROR(">>    error......: %.6f", fabsf(a - b));
+            TM_LOG_ERROR(">>    tol........: %.6f", atol + rtol * fabs(b));
         }
         // Update the number of failures.
         failures += ok ? 0 : 1;
@@ -65,7 +65,7 @@ bool checkResult(std::string name, T* out, T*ref, size_t size, float atol, float
     // Allow not matched up to 1% elements.
     size_t tol_failures = (size_t)(0.01 * size);
     if (failures > tol_failures) {
-        FT_LOG_ERROR("%s (failures: %.2f%% atol: %.2e rtol: %.2e rel_gap: %.2e%%)",
+        TM_LOG_ERROR("%s (failures: %.2f%% atol: %.2e rtol: %.2e rel_gap: %.2e%%)",
                      name.c_str(), 100. * failures / size, atol, rtol, 100. * relative_gap);
     }
     return failures <= tol_failures;

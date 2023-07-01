@@ -1,14 +1,14 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/logger.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <queue>
 #include <unordered_map>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 // k-cache layout [L, H, D/x, S[s:], x]
 // v-cache layout [L, H, S[s:], D/x, x]
@@ -36,8 +36,8 @@ public:
         allocator_(allocator)
     {
         if (rank == 0) {
-            FT_LOG_INFO("[LlamaCacheManager] max_entry_count = %d", (int)max_entry_count_);
-            FT_LOG_INFO("[LlamaCacheManager] chunk_size = %d", (int)chunk_size_);
+            TM_LOG_INFO("[LlamaCacheManager] max_entry_count = %d", (int)max_entry_count_);
+            TM_LOG_INFO("[LlamaCacheManager] chunk_size = %d", (int)chunk_size_);
         }
         allocate(true);
     }
@@ -99,4 +99,4 @@ private:
     std::vector<Sequence> device_cache_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

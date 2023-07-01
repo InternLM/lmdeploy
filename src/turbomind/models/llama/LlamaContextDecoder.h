@@ -16,25 +16,25 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptContextDecoder.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptContextDecoder.h
 
 #pragma once
 
-// #include "src/fastertransformer/kernels/add_residual_kernels.h"
-// #include "src/fastertransformer/kernels/layernorm_kernels.h"
-#include "src/fastertransformer/layers/BaseLayer.h"
-// #include "src/fastertransformer/layers/FfnLayer.h"
-// #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
-#include "src/fastertransformer/models/llama/LlamaContextAttentionLayer.h"
-#include "src/fastertransformer/models/llama/LlamaDecoderLayerWeight.h"
-#include "src/fastertransformer/models/llama/LlamaFfnLayer.h"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/custom_ar_comm.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
+// #include "src/turbomind/kernels/add_residual_kernels.h"
+// #include "src/turbomind/kernels/layernorm_kernels.h"
+#include "src/turbomind/layers/BaseLayer.h"
+// #include "src/turbomind/layers/FfnLayer.h"
+// #include "src/turbomind/layers/attention_layers/BaseAttentionLayer.h"
+#include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
+#include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/models/llama/LlamaFfnLayer.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/custom_ar_comm.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaContextDecoder: public BaseLayer {
@@ -112,4 +112,4 @@ public:
                          const std::vector<LlamaDecoderLayerWeight<T>*>* decoder_layer_weights);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

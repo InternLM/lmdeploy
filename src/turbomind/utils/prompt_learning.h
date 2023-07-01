@@ -17,7 +17,7 @@
 
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class PromptLearningType {
     no_prompt,
@@ -26,4 +26,4 @@ enum class PromptLearningType {
     p_prompt_tuning
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

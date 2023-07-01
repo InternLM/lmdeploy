@@ -2,10 +2,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/Barrier.h"
-#include "src/fastertransformer/utils/instance_comm.h"
+#include "src/turbomind/models/llama/Barrier.h"
+#include "src/turbomind/utils/instance_comm.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 class LlamaInstanceComm: public AbstractInstanceComm {
 public:
@@ -31,4 +31,4 @@ private:
     void*   ptr{};
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

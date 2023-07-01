@@ -22,7 +22,7 @@
 #error CUDART_VERSION Undefined!
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 // Utility function to print customMatmulPerf_t structure
 int printPerfStructure(int                       batch_size,
@@ -986,4 +986,4 @@ size_t calGemmTestBufSizeInByteXlnet(
     return max_size * size_per_ele;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

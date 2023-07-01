@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/layers/FfnLayer.h"
-#include "src/fastertransformer/kernels/transpose_int8_kernels.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
+#include "src/turbomind/layers/FfnLayer.h"
+#include "src/turbomind/kernels/transpose_int8_kernels.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
-void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                          const std::vector<fastertransformer::Tensor>* input_tensors,
+void FfnLayer<T>::forward(std::vector<turbomind::Tensor>*       output_tensors,
+                          const std::vector<turbomind::Tensor>* input_tensors,
                           const FfnWeight<T>*                           ffn_weights)
 {
     TensorMap input_tensor({{"ffn_input", input_tensors->at(0)}});
@@ -46,7 +46,7 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     //      expanded_source_row_to_expanded_dest_row [token_num, moe_k] (optional)
     //      expert_for_source_row [token_num, moe_k] (optional)
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() >= 1 && input_tensors->size() <= 5);
     FT_CHECK(output_tensors->size() >= 1 || output_tensors->size() <= 4);
     bool   use_moe = false;
@@ -405,7 +405,7 @@ FfnLayer<T>::FfnLayer(size_t           max_batch_size,
     use_gated_activation_(use_gated_activation),
     int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (int8_mode_ == 0) {
         moe_fc_runner_ = std::make_shared<CutlassMoeFCRunner<T, T>>();
     }
@@ -438,13 +438,13 @@ FfnLayer<T>::FfnLayer(FfnLayer<T> const& ffn_layer):
     weight_only_int8_fc_runner_(ffn_layer.weight_only_int8_fc_runner_),
     int8_fc_runner_(ffn_layer.int8_fc_runner_)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T>
 FfnLayer<T>::~FfnLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     cublas_wrapper_ = nullptr;
     freeBuffer();
 }
@@ -459,7 +459,7 @@ void FfnLayer<T>::allocateBuffer()
 template<typename T>
 void FfnLayer<T>::allocateBuffer(size_t token_num, int moe_k, bool use_moe)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (use_moe) {
         moe_gates_buf_ =
             (T*)allocator_->reMalloc(moe_gates_buf_, sizeof(T) * pad_to_multiple_of_16(token_num * expert_num_), false);
@@ -505,7 +505,7 @@ void FfnLayer<T>::allocateBuffer(size_t token_num, int moe_k, bool use_moe)
 template<typename T>
 void FfnLayer<T>::freeBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&inter_buf_));
         if (use_gated_activation_) {
@@ -712,4 +712,4 @@ template class SiluFfnLayer<half>;
 template class SiluFfnLayer<__nv_bfloat16>;
 #endif
 
-}  // namespace fastertransformer
+}  // namespace turbomind

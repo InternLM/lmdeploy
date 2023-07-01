@@ -20,7 +20,7 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 #define TIMEIT(print, n, stream, fn, ...)                                                                              \
     ({                                                                                                                 \
@@ -57,4 +57,4 @@ struct abs_diff {
     }
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

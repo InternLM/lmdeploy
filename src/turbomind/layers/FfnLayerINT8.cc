@@ -15,13 +15,13 @@
  */
 
 #include "FfnLayerINT8.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
-void FfnLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                              const std::vector<fastertransformer::Tensor>* input_tensors,
+void FfnLayerINT8<T>::forward(std::vector<turbomind::Tensor>*       output_tensors,
+                              const std::vector<turbomind::Tensor>* input_tensors,
                               const FfnWeight<T>*                           ffn_weights)
 {
     // input_tensors: [input (token_num, hidden_dimension)]
@@ -337,4 +337,4 @@ void ReluFfnLayerINT8<T>::invokeAddBiasActivation(const int m, const T* bias, Sc
 template class ReluFfnLayerINT8<float>;
 template class ReluFfnLayerINT8<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

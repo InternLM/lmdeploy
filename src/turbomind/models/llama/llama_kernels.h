@@ -2,15 +2,15 @@
 
 #pragma once
 
-#include "src/fastertransformer/kernels/gpt_kernels.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <assert.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <numeric>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n, cudaStream_t stream);
@@ -160,7 +160,7 @@ inline void dump_sequence_len(int* d_seq_len, int step, int tp_rank, cudaStream_
     int h_seq_len = -1;
     cudaMemcpyAsync(&h_seq_len, d_seq_len, sizeof(int), cudaMemcpyDefault, st);
     cudaStreamSynchronize(st);
-    FT_LOG_ERROR("--------> rank = %d, step = %d, seq_len = %d <--------", tp_rank, step, h_seq_len);
+    TM_LOG_ERROR("--------> rank = %d, step = %d, seq_len = %d <--------", tp_rank, step, h_seq_len);
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

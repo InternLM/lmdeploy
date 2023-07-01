@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_type_utils.cuh"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 #include <curand_kernel.h>
 #include <sys/stat.h>
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void deviceMalloc(T** ptr, size_t size, bool is_random_initialize)
@@ -130,7 +130,7 @@ template<typename T>
 void cudaH2Dcpy(T* tgt, const T* src, const size_t size)
 {
     if (tgt == nullptr || src == nullptr) {
-        FT_LOG_ERROR("cudaH2Dcpy: dst=%p src=%p, size=%d", tgt, src, (int)(sizeof(T) * size));
+        TM_LOG_ERROR("cudaH2Dcpy: dst=%p src=%p, size=%d", tgt, src, (int)(sizeof(T) * size));
     }
     check_cuda_error(cudaMemcpy(tgt, src, sizeof(T) * size, cudaMemcpyHostToDevice));
 }
@@ -313,14 +313,14 @@ std::vector<T> loadWeightFromBinHelper(std::vector<size_t> shape, std::string fi
     }
     size_t size = dim0 * dim1;
     if (size == 0) {
-        FT_LOG_WARNING("shape is zero, skip loading weight from file %s \n", filename.c_str());
+        TM_LOG_WARNING("shape is zero, skip loading weight from file %s \n", filename.c_str());
         return std::vector<T>();
     }
 
     std::vector<T> host_array(size);
     std::ifstream  in(filename, std::ios::in | std::ios::binary);
     if (!in.is_open()) {
-        FT_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
+        TM_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
         return std::vector<T>();
     }
 
@@ -328,12 +328,12 @@ std::vector<T> loadWeightFromBinHelper(std::vector<size_t> shape, std::string fi
     in.seekg(0, in.end);
     in.seekg(0, in.beg);
 
-    FT_LOG_DEBUG("Read " + std::to_string(loaded_data_size) + " bytes from " + filename);
+    TM_LOG_DEBUG("Read " + std::to_string(loaded_data_size) + " bytes from " + filename);
     in.read((char*)host_array.data(), loaded_data_size);
 
     size_t in_get_size = in.gcount();
     if (in_get_size != loaded_data_size) {
-        FT_LOG_WARNING("file %s only has %ld, but request %ld, loading model fails! \n",
+        TM_LOG_WARNING("file %s only has %ld, but request %ld, loading model fails! \n",
                        filename.c_str(),
                        in_get_size,
                        loaded_data_size);
@@ -417,7 +417,7 @@ int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, F
             break;
 #endif
         default:
-            FT_LOG_ERROR("Does not support FtCudaDataType=%d", model_file_type);
+            TM_LOG_ERROR("Does not support FtCudaDataType=%d", model_file_type);
             FT_CHECK(false);
     }
     return 0;
@@ -839,4 +839,4 @@ bool invokeCheckRange(T* buffer, const size_t size, T min, T max, bool* d_within
 template bool
 invokeCheckRange<int>(int* buffer, const size_t size, int min, int max, bool* d_within_range, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

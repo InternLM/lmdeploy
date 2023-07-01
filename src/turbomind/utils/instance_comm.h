@@ -1,6 +1,6 @@
 #pragma once
 
-namespace fastertransformer {
+namespace turbomind {
 
 class AbstractInstanceComm {
 public:
@@ -13,4 +13,4 @@ public:
     virtual void* getSharedObject() = 0;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

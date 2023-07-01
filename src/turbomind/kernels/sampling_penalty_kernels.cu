@@ -17,9 +17,9 @@
 #include <assert.h>
 #include <float.h>
 
-#include "src/fastertransformer/kernels/sampling_penalty_kernels.h"
+#include "src/turbomind/kernels/sampling_penalty_kernels.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 // TODO Add half2 implementation
 template<typename T>
@@ -534,4 +534,4 @@ template void invokeMinLengthPenalty(half*        logits,
                                      const int    vocab_size_padded,
                                      cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

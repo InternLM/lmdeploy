@@ -2,16 +2,16 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/logger.h"
 #include <pthread.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 class Barrier {
 public:
     Barrier(unsigned count)
     {
-        FT_LOG_INFO("Barrier(%d)", (int)count);
+        TM_LOG_INFO("Barrier(%d)", (int)count);
         pthread_barrier_init(&barrier_, nullptr, count);
     }
 
@@ -34,4 +34,4 @@ private:
     pthread_barrier_t barrier_{};
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

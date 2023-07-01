@@ -16,12 +16,12 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <stdlib.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 // clang-format off
 template<typename T> struct GeluActivation;
@@ -107,4 +107,4 @@ void invokeAddBiasTanh(T* out, const T* bias, const int m, const int n, cudaStre
 template<typename T>
 void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/kernels/online_softmax_beamsearch_kernels.h"
-#include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
+#include "src/turbomind/kernels/online_softmax_beamsearch_kernels.h"
+#include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class OnlineBeamSearchLayer: public BaseBeamSearchLayer<T> {
@@ -62,4 +62,4 @@ public:
     ~OnlineBeamSearchLayer();
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

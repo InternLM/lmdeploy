@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/fastertransformer/models/llama/prefix_cache.h"
+#include "src/turbomind/models/llama/prefix_cache.h"
 
 // <L,H,D/X,s,X> -> <L,H,D/X,S[:s],X>
 template<typename T>

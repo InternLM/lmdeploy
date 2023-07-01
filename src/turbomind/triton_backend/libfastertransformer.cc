@@ -52,22 +52,22 @@
 #include "triton/core/tritonbackend.h"
 
 // FT's libraries have dependency with triton's lib
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
-#include "src/fastertransformer/utils/Tensor.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/instance_comm.h"
-#include "src/fastertransformer/utils/mpi_utils.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/instance_comm.h"
+#include "src/turbomind/utils/mpi_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
 std::exception_ptr ptr[8];
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 namespace triton {
 namespace backend {
-namespace fastertransformer_backend {
+namespace turbomind_backend {
 
 #define RESPOND_ALL_AND_RETURN_IF_ERROR(RESPONSES, RESPONSES_COUNT, X)                                                 \
     do {                                                                                                               \
@@ -1905,6 +1905,6 @@ TRITONSERVER_Error* TRITONBACKEND_ModelInstanceExecute(TRITONBACKEND_ModelInstan
 
 }  // extern "C"
 
-}  // namespace fastertransformer_backend
+}  // namespace turbomind_backend
 }  // namespace backend
 }  // namespace triton

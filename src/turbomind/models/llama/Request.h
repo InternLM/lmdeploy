@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/Tensor.h"
+#include "src/turbomind/utils/Tensor.h"
 #include <condition_variable>
 #include <cstdint>
 #include <future>
@@ -10,7 +10,7 @@
 #include <queue>
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 struct Request {
     uint64_t id;
@@ -87,4 +87,4 @@ private:
     std::condition_variable              cv_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

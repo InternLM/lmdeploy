@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename... Args>
 inline std::string fmtstr(const std::string& format, Args... args)
@@ -81,4 +81,4 @@ inline std::string arr2str(T* arr, size_t size)
     ss << ")";
     return ss.str();
 }
-}  // namespace fastertransformer
+}  // namespace turbomind

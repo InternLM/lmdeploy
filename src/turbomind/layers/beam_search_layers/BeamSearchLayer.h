@@ -16,11 +16,11 @@
 
 #pragma once
 
-#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
-#include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
+#include "src/turbomind/kernels/beam_search_topk_kernels.h"
+#include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include <float.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class BeamSearchLayer: public BaseBeamSearchLayer<T> {
@@ -65,4 +65,4 @@ public:
     ~BeamSearchLayer();
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

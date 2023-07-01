@@ -17,7 +17,7 @@
 #pragma once
 #include "stdlib.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 #define ACTIVATION_AMAX_NUM 72
 #define INT8O_GEMM_NUM 8
@@ -48,4 +48,4 @@ struct ScaleList {
     size_t       p4_offset_    = ACTIVATION_AMAX_NUM + 9 * 768 + INT8O_GEMM_NUM;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

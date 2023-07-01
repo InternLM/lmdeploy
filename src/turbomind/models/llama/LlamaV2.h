@@ -17,24 +17,24 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.h
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGpt.h
 
 #pragma once
 
-#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
-#include "src/fastertransformer/models/llama/Barrier.h"
-#include "src/fastertransformer/models/llama/LlamaBatch.h"
-#include "src/fastertransformer/models/llama/LlamaContextDecoder.h"
-#include "src/fastertransformer/models/llama/LlamaDecoder.h"
-#include "src/fastertransformer/models/llama/LlamaWeight.h"
-#include "src/fastertransformer/models/llama/Request.h"
-#include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
-#include "src/fastertransformer/utils/instance_comm.h"
-#include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/models/llama/Barrier.h"
+#include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/models/llama/LlamaContextDecoder.h"
+#include "src/turbomind/models/llama/LlamaDecoder.h"
+#include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/instance_comm.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <unordered_map>
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 class LlamaV2 {
@@ -183,4 +183,4 @@ private:
     std::thread internal_thread_;
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

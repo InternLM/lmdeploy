@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/cuda_fp8_utils.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "src/fastertransformer/utils/string_utils.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_fp8_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
 #include "stdlib.h"
 #include <cuda_fp16.h>
@@ -33,7 +33,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace fastertransformer {
+namespace turbomind {
 
 typedef enum datatype_enum {
     TYPE_INVALID,
@@ -135,13 +135,13 @@ struct Tensor {
     template<typename T>
     inline T getVal(size_t index) const
     {
-        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         FT_CHECK(where == MEMORY_CPU);
         FT_CHECK(data != nullptr);
         FT_CHECK_WITH_INFO(index < size(), "index is larger than buffer size");
 
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -151,9 +151,9 @@ struct Tensor {
     template<typename T>
     inline T getVal() const
     {
-        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -163,9 +163,9 @@ struct Tensor {
     template<typename T>
     inline T* getPtr() const
     {
-        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getPtr with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getPtr with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -174,7 +174,7 @@ struct Tensor {
 
     inline void* getPtrWithOffset(size_t offset) const
     {
-        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         if (data == nullptr) {
             return (void*)data;
         }
@@ -187,9 +187,9 @@ struct Tensor {
     template<typename T>
     inline T* getPtrWithOffset(size_t offset) const
     {
-        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -207,7 +207,7 @@ struct Tensor {
     T max() const
     {
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -230,7 +230,7 @@ struct Tensor {
     T min() const
     {
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -253,7 +253,7 @@ struct Tensor {
     T any(T val) const
     {
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -272,7 +272,7 @@ struct Tensor {
     T all(T val) const
     {
         if (getTensorType<T>() != type) {
-            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+            TM_LOG_DEBUG("getVal with type %s, but data type is: %s",
                          getNumpyTypeDesc(getTensorType<T>()).c_str(),
                          getNumpyTypeDesc(type).c_str());
         }
@@ -324,7 +324,7 @@ public:
 
     inline bool isExist(const std::string& key) const
     {
-        FT_LOG_DEBUG("%s for key: %s", __PRETTY_FUNCTION__, key.c_str());
+        TM_LOG_DEBUG("%s for key: %s", __PRETTY_FUNCTION__, key.c_str());
         return tensor_map_.find(key) != tensor_map_.end();
     }
 
@@ -355,7 +355,7 @@ public:
 
     inline Tensor& at(const std::string& key)
     {
-        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        TM_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
         FT_CHECK_WITH_INFO(isExist(key),
                            fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
                                   key.c_str(),
@@ -374,7 +374,7 @@ public:
 
     inline Tensor& at(const std::string& key, Tensor& default_tensor)
     {
-        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        TM_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
         if (isExist(key)) {
             return tensor_map_.at(key);
         }
@@ -383,7 +383,7 @@ public:
 
     inline Tensor at(const std::string& key, Tensor& default_tensor) const
     {
-        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        TM_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
         if (isExist(key)) {
             return tensor_map_.at(key);
         }
@@ -392,7 +392,7 @@ public:
 
     inline Tensor& at(const std::string& key, Tensor&& default_tensor)
     {
-        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        TM_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
         if (isExist(key)) {
             return tensor_map_.at(key);
         }
@@ -518,4 +518,4 @@ public:
     void             saveNpy(const std::string& base_folder);
 };
 
-}  // namespace fastertransformer
+}  // namespace turbomind

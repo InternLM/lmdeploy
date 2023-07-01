@@ -17,8 +17,8 @@
 #pragma once
 
 #include "3rdparty/INIReader.h"
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
-#include "src/fastertransformer/utils/logger.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/logger.h"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>
@@ -31,7 +31,7 @@
 #include <cusparseLt.h>
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 #define MAX_CONFIG_NUM 20
 #define COL32_ 32
@@ -137,7 +137,7 @@ inline void syncAndCheck(const char* const file, int const line)
                 throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
                                          + " " + file + ":" + std::to_string(line) + " \n");
             }
-            FT_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
+            TM_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
         }
     }
 
@@ -212,7 +212,7 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
     do {                                                                                                               \
         bool is_valid_val = (val);                                                                                     \
         if (!is_valid_val) {                                                                                           \
-            fastertransformer::myAssert(is_valid_val, __FILE__, __LINE__, (info));                                     \
+            turbomind::myAssert(is_valid_val, __FILE__, __LINE__, (info));                                     \
         }                                                                                                              \
     } while (0)
 
@@ -442,14 +442,14 @@ void compareTwoTensor(
     }
 
     if (print_size > 0) {
-        FT_LOG_INFO("  id |   pred  |   ref   |abs diff | rel diff (%) |");
+        TM_LOG_INFO("  id |   pred  |   ref   |abs diff | rel diff (%) |");
     }
     float mean_abs_diff = 0.0f;
     float mean_rel_diff = 0.0f;
     int   count         = 0;
     for (int i = 0; i < size; i++) {
         if (i < print_size) {
-            FT_LOG_INFO("%4d | % 6.4f | % 6.4f | % 6.4f | % 7.4f |",
+            TM_LOG_INFO("%4d | % 6.4f | % 6.4f | % 6.4f | % 7.4f |",
                         i,
                         (float)h_pred[i],
                         (float)h_ref[i],
@@ -474,7 +474,7 @@ void compareTwoTensor(
     }
     mean_abs_diff = mean_abs_diff / (float)count;
     mean_rel_diff = mean_rel_diff / (float)count;
-    FT_LOG_INFO("mean_abs_diff: % 6.4f, mean_rel_diff: % 6.4f (%%)", mean_abs_diff, mean_rel_diff);
+    TM_LOG_INFO("mean_abs_diff: % 6.4f, mean_rel_diff: % 6.4f (%%)", mean_abs_diff, mean_rel_diff);
 
     if (fd != nullptr) {
         fprintf(fd, "mean_abs_diff: % 6.4f, mean_rel_diff: % 6.4f (%%)", mean_abs_diff, mean_rel_diff);
@@ -485,4 +485,4 @@ void compareTwoTensor(
 }
 
 /* ************************** end of common utils ************************** */
-}  // namespace fastertransformer
+}  // namespace turbomind

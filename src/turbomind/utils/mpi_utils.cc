@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/turbomind/utils/mpi_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 namespace mpi {
 
 #ifdef BUILD_MULTI_GPU
@@ -119,4 +119,4 @@ void bcast(void* buffer, size_t size, MpiType dtype, int root, MpiComm comm)
 }
 
 }  // namespace mpi
-}  // namespace fastertransformer
+}  // namespace turbomind

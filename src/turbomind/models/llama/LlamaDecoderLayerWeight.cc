@@ -16,13 +16,13 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.cc
 
-#include "src/fastertransformer/models/llama/LlamaDecoderLayerWeight.h"
-#include "src/fastertransformer/utils/logger.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     hidden_units,
@@ -122,12 +122,12 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     deviceMalloc((T**)&self_attn_norm_weights, hidden_units_);
     deviceMalloc((T**)&ffn_norm_weights, hidden_units_);
 
-    fastertransformer::mallocWeights(self_attn_weights.qkv, attn_bias_);
-    fastertransformer::mallocWeights(self_attn_weights.output, attn_bias_);
+    turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_);
+    turbomind::mallocWeights(self_attn_weights.output, attn_bias_);
 
-    fastertransformer::mallocWeights(ffn_weights.gating, false);
-    fastertransformer::mallocWeights(ffn_weights.intermediate, false);
-    fastertransformer::mallocWeights(ffn_weights.output, false);
+    turbomind::mallocWeights(ffn_weights.gating, false);
+    turbomind::mallocWeights(ffn_weights.intermediate, false);
+    turbomind::mallocWeights(ffn_weights.output, false);
 }
 
 template<typename T>
@@ -175,4 +175,4 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
 template struct LlamaDecoderLayerWeight<float>;
 template struct LlamaDecoderLayerWeight<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

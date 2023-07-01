@@ -16,13 +16,13 @@
 
 #pragma once
 
-#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
 
 #include <assert.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
 
-namespace fastertransformer {
+namespace turbomind {
 
 enum class PositionEmbeddingType {
     relative,
@@ -52,4 +52,4 @@ void invokeGenRelativePosBiasV2(T*            relative_position_bias,
                                 const int     cpb_mlp_out_dim,
                                 const int     head_num,
                                 cudaStream_t  stream);
-}  // namespace fastertransformer
+}  // namespace turbomind

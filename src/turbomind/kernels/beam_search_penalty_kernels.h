@@ -17,10 +17,10 @@
 
 #include <cuda_fp16.h>
 
-#include "src/fastertransformer/kernels/penalty_types.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/turbomind/kernels/penalty_types.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 template<typename T>
 void invokeAddBiasApplyPenalties(int                         step,
@@ -45,4 +45,4 @@ void invokeAddBiasApplyPenalties(int                         step,
                                  const int                   min_length,
                                  cudaStream_t                stream);
 
-}  // namespace fastertransformer
+}  // namespace turbomind

@@ -16,17 +16,17 @@
  */
 
 // Modified from
-// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/triton_backend/multi_gpu_gpt/ParallelGptTritonModel.cc
 
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "3rdparty/INIReader.h"
-#include "src/fastertransformer/models/llama/LlamaInstanceComm.h"
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
-#include "src/fastertransformer/utils/allocator.h"
+#include "src/turbomind/models/llama/LlamaInstanceComm.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/allocator.h"
 #include <mutex>
 
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 
 std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string inifile)
 {
@@ -61,34 +61,34 @@ void LlamaTritonModel<T>::handleMissingParams()
 {
     if (!max_batch_size_) {
         max_batch_size_ = 32;
-        FT_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.", (int)max_batch_size_);
+        TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.", (int)max_batch_size_);
     }
 
     if (!session_len_) {
         session_len_ = 2160;
-        FT_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)session_len_);
+        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)session_len_);
     }
 
     if (!max_context_token_num_) {
         max_context_token_num_ = (int)std::sqrt(max_batch_size_);
-        FT_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
+        TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
                        (int)max_context_token_num_);
     }
 
     if (!step_length_) {
         step_length_ = 1;
-        FT_LOG_WARNING("[LlamaTritonModel] `step_length` is not set, default to %d.", (int)step_length_);
+        TM_LOG_WARNING("[LlamaTritonModel] `step_length` is not set, default to %d.", (int)step_length_);
     }
 
     if (!cache_max_entry_count_) {
         cache_max_entry_count_ = 32;
-        FT_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %d.",
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %d.",
                        (int)cache_max_entry_count_);
     }
 
     if (!cache_chunk_size_) {
         cache_chunk_size_ = cache_max_entry_count_;
-        FT_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.", (int)cache_chunk_size_);
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.", (int)cache_chunk_size_);
     }
 }
 
@@ -341,7 +341,7 @@ LlamaTritonModel<T>::createNcclParams(const int node_id, const int device_id_sta
         return AbstractTransformerModel::createNcclParams(node_id, device_id_start, multi_node);
     }
     else {
-        FT_LOG_INFO("Skipping NCCL param creation.");
+        TM_LOG_INFO("Skipping NCCL param creation.");
 
         const int tensor_para_size   = getTensorParaSize();
         const int pipeline_para_size = getPipelineParaSize();

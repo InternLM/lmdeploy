@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/layers/beam_search_layers/OnlineBeamSearchLayer.h"
+#include "src/turbomind/layers/beam_search_layers/OnlineBeamSearchLayer.h"
 
-namespace fastertransformer {
+namespace turbomind {
 
 static const int SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
 static const int MAX_K                             = 4;
@@ -184,7 +184,7 @@ void OnlineBeamSearchLayer<T>::allocateBuffer()
 template<typename T>
 void OnlineBeamSearchLayer<T>::allocateBuffer(size_t batch_size, size_t beam_width)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // we need to check 2 * beam_width candidates each time
     // 64 is the max beam width we support now.
     topk_softmax_workspace_size_ =
@@ -234,16 +234,16 @@ template<typename T>
 OnlineBeamSearchLayer<T>::OnlineBeamSearchLayer(OnlineBeamSearchLayer<T> const& beam_search_layer):
     BaseBeamSearchLayer<T>(beam_search_layer)
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T>
 OnlineBeamSearchLayer<T>::~OnlineBeamSearchLayer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template class OnlineBeamSearchLayer<float>;
 template class OnlineBeamSearchLayer<half>;
 
-}  // namespace fastertransformer
+}  // namespace turbomind

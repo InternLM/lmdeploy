@@ -20,7 +20,7 @@
 #error CUDART_VERSION Undefined!
 #endif
 
-namespace fastertransformer {
+namespace turbomind {
 
 int batch_size_;
 int seq_len_;
@@ -1329,4 +1329,4 @@ int generate_encoder_igemm_config(
     return 0;
 }
 
-}  // namespace fastertransformer
+}  // namespace turbomind

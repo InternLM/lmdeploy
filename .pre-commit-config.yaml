@@ -3,7 +3,7 @@ repos:
     rev: 4.0.1
     hooks:
       - id: flake8
-        args: ["--exclude=llama_service/fastertransformer/triton_model/llama_models/*, configs/*"]
+        args: ["--exclude=lmdeploy/turbomind/triton_models/*"]
   - repo: https://github.com/PyCQA/isort
     rev: 5.11.5
     hooks:
