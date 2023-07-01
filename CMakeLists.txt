@@ -13,7 +13,7 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
-project(FasterTransformer LANGUAGES CXX CUDA)
+project(TurboMind LANGUAGES CXX CUDA)
 
 find_package(CUDA 10.2 REQUIRED)
 
@@ -354,18 +354,18 @@ set_target_properties(transformer-shared PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(transformer-shared PUBLIC -lcudart -lcublas -lcublasLt -lcurand)
 
 include(GNUInstallDirs)
-set(INSTALL_CONFIGDIR ${CMAKE_INSTALL_LIBDIR}/cmake/FasterTransformer)
+set(INSTALL_CONFIGDIR ${CMAKE_INSTALL_LIBDIR}/cmake/TurboMind)
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
-  ${CMAKE_CURRENT_LIST_DIR}/cmake/FasterTransformerConfig.cmake.in
-  ${CMAKE_CURRENT_BINARY_DIR}/FasterTransformerConfig.cmake
+  ${CMAKE_CURRENT_LIST_DIR}/cmake/TurboMindConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/TurboMindConfig.cmake
   INSTALL_DESTINATION ${INSTALL_CONFIGDIR}
 )
 
 install(
   FILES
-  ${CMAKE_CURRENT_BINARY_DIR}/FasterTransformerConfig.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/TurboMindConfig.cmake
   DESTINATION ${INSTALL_CONFIGDIR}
 )
 
@@ -382,7 +382,7 @@ install(
   EXPORT
     transformer-shared-targets
   FILE
-    FasterTransformerTargets.cmake
+    TurboMindTargets.cmake
   DESTINATION
     ${INSTALL_CONFIGDIR}
 )
@@ -391,9 +391,9 @@ export(
   EXPORT
     transformer-shared-targets
   FILE
-    ${CMAKE_CURRENT_BINARY_DIR}/FasterTransformerTargets.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/TurboMindTargets.cmake
   NAMESPACE
     TritonCore::
 )
 
-export(PACKAGE FasterTransformer)
+export(PACKAGE TurboMind)

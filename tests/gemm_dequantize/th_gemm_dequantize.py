@@ -13,14 +13,14 @@ class TestGemmDequantize(unittest.TestCase):
     def setUp(self) -> None:
         torch.classes.load_library('lib/libth_transformer.so')
         torch.classes.load_library('lib/libgemm_dq_unit_ops.so')
-        self.unpack_packed_int4s = torch.ops.fastertransformer.unpack_int4_packed_tensor_to_int8
-        self.pack_int4s = torch.ops.fastertransformer.pack_int8_tensor_to_packed_int4
+        self.unpack_packed_int4s = torch.ops.turbomind.unpack_int4_packed_tensor_to_int8
+        self.pack_int4s = torch.ops.turbomind.pack_int8_tensor_to_packed_int4
         self.fused_gemm_dq = torch.ops.gemm_dq_unit_ops.fused_gemm_dq
         self.fused_gemm_dq_bias_act = torch.ops.gemm_dq_unit_ops.fused_gemm_dq_bias_act
         self.bench = torch.ops.gemm_dq_unit_ops.benchmark_against_cublas_fp
-        self.preprocess_weights_for_mixed_gemm = torch.ops.fastertransformer.preprocess_weights_for_mixed_gemm
+        self.preprocess_weights_for_mixed_gemm = torch.ops.turbomind.preprocess_weights_for_mixed_gemm
 
-        self.symmetric_quantizer = torch.ops.fastertransformer._symmetric_quantize_last_axis_of_batched_matrix
+        self.symmetric_quantizer = torch.ops.turbomind._symmetric_quantize_last_axis_of_batched_matrix
 
         torch.manual_seed(734876213)
 
