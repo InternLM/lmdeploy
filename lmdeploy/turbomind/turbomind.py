@@ -90,7 +90,7 @@ class TurboMind:
         device = f'cuda:{self.device_id}'
         np_one_ui = np.ones((1, ), dtype=np.uint32)
         np_one_ui64 = np.ones((1, ), dtype=np.uint64)
-        np_one_i = np.ones((1, ), dtype=np.uint32)
+        np_one_i = np.ones((1, ), dtype=np.int32)
         np_one_f = np.ones((1, ), dtype=np.float32)
         
         if isinstance(input_ids[0], int):

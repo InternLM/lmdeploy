@@ -26,7 +26,7 @@ def main(model_name, model_path, tokenizer_model_path, session_id: int = 1):
             pass
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt)
+            input_ids = tokenizer.encode(prompt, add_special_tokens=False)
 
             for res, tokens in generator.stream_infer(
                     session_id=session_id,
@@ -47,7 +47,7 @@ def main(model_name, model_path, tokenizer_model_path, session_id: int = 1):
                 output = tokenizer.decode(res[step:], skip_special_tokens=True)
                 print(f'session {session_id}, {tokens}, {output}')
                 # update step
-                step = tokens
+                step = tokens-1
 
         nth_round += 1
 
