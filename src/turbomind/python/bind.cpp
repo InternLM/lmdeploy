@@ -1,12 +1,12 @@
-#include "src/fastertransformer/python/dlpack.h"
-#include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/python/dlpack.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include <memory>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
-namespace ft = fastertransformer;
+namespace ft = turbomind;
 using namespace pybind11::literals;
 
 // prepare to bind container
