@@ -328,6 +328,7 @@ class Chatbot:
                      f'#input tokens {input_tokens}, ' \
                      f'history tokens {session.sequence_length}, ' \
                      f'request length {request_output_len}'
+            logger.warning(errmsg)
             yield StatusCode.TRITON_SESSION_OUT_OF_LIMIT, errmsg, 0
             return
 
