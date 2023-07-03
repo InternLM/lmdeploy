@@ -27,13 +27,13 @@
 include(CMakeFindDependencyMacro)
 
 get_filename_component(
-  FASTERTRANSFORMER_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH
+  TURBOMIND_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH
 )
 
-list(APPEND CMAKE_MODULE_PATH ${FASTERTRANSFORMER_CMAKE_DIR})
+list(APPEND CMAKE_MODULE_PATH ${TURBOMIND_CMAKE_DIR})
 
 if(NOT TARGET transformer-shared)
-  include("${FASTERTRANSFORMER_CMAKE_DIR}/FasterTransformerTargets.cmake")
+  include("${TURBOMIND_CMAKE_DIR}/TurboMindTargets.cmake")
 endif()
 
-set(FASTERTRANSFORMER_LIBRARIES transformer-shared)
+set(TURBOMIND_LIBRARIES transformer-shared)
