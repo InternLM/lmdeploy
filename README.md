@@ -62,7 +62,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 - Support persistent-batch inference
 
-  TODO: gif to show what persistent batch is
+https://github.com/open-mmlab/lmdeploy/assets/25839884/c7657456-a69f-407b-8208-ba7e671e1c88
 
 ## Quick Start
 
