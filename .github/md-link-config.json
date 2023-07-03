@@ -1,0 +1,33 @@
+{
+  "ignorePatterns": [
+
+    {
+      "pattern": "^https://developer.nvidia.com/"
+    },
+    {
+      "pattern": "^https://docs.openvino.ai/"
+    },
+    {
+      "pattern": "^https://developer.android.com/"
+    },
+    {
+      "pattern": "^https://developer.qualcomm.com/"
+    },
+    {
+      "pattern": "^http://localhost"
+    }
+  ],
+  "httpHeaders": [
+    {
+      "urls": ["https://github.com/", "https://guides.github.com/", "https://help.github.com/", "https://docs.github.com/"],
+      "headers": {
+        "Accept-Encoding": "zstd, br, gzip, deflate"
+      }
+    }
+  ],
+  "timeout": "20s",
+  "retryOn429": true,
+  "retryCount": 5,
+  "fallbackRetryDelay": "30s",
+  "aliveStatusCodes": [200, 206, 429]
+}
