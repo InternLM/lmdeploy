@@ -40,7 +40,7 @@ public:
 
     virtual void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) = 0;
     virtual void forward(std::vector<turbomind::Tensor>*       output_tensors,
-                         const std::vector<turbomind::Tensor>* input_tensors)             = 0;
+                         const std::vector<turbomind::Tensor>* input_tensors)                     = 0;
     virtual void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                          const std::unordered_map<std::string, Tensor>* input_tensors)            = 0;
     virtual void forward(TensorMap* output_tensors, TensorMap* input_tensors)                     = 0;

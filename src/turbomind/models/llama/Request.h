@@ -25,7 +25,8 @@ struct Request {
     using Callback = std::function<void(std::unordered_map<std::string, Tensor>*)>;
     Callback stream_cb;
 
-    enum {
+    enum
+    {
         kInvalid  = 1,
         kConflict = 2,
         kBusy     = 3,

@@ -35,7 +35,8 @@ namespace turbomind {
 
 const float FP8_E4M3_MAX = 480.0f;
 
-enum QUANTIZE_MODE {
+enum QUANTIZE_MODE
+{
     PER_CHANNEL,
     PER_TENSOR,
     PER_CHANNEL_WEIGHT_PER_TENSOR_ACT

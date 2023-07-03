@@ -398,9 +398,8 @@ template void invokeBuildRelativeAttentionBias(__nv_bfloat16*              relat
 template<typename T_OUT, typename T_IN>
 __global__ void getLastTokenDequantize(getLastTokenDequantizeParam<T_OUT, T_IN> param)
 {
-    param.output[blockIdx.x * param.d_model + threadIdx.x] =
-        (T_OUT)((float)param.input[blockIdx.x * param.max_seq_len * param.d_model + threadIdx.x]
-                * __ldg(param.input_scale));
+    param.output[blockIdx.x * param.d_model + threadIdx.x] = (T_OUT)(
+        (float)param.input[blockIdx.x * param.max_seq_len * param.d_model + threadIdx.x] * __ldg(param.input_scale));
 }
 
 template<typename T_OUT, typename T_IN>

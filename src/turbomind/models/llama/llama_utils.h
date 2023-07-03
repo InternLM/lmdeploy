@@ -9,7 +9,8 @@
 
 namespace turbomind {
 
-enum QuantPolicy {
+enum QuantPolicy
+{
     kNone = 0x00,
     // reserve 0x01 and 0x02 for backward compatibility
     kReserve1 = 0x01,
@@ -18,7 +19,8 @@ enum QuantPolicy {
     kCacheKVInt8 = 0x04,
 };
 
-enum CmpMode {
+enum CmpMode
+{
     kCmpNone,
     kCmpRead,
     kCmpWrite,
