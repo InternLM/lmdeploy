@@ -99,21 +99,13 @@ def main(model_path: str,
     _start = time.perf_counter()
 
     # TODO: update to the multithread version
-    # for i in range(concurrency):
-    #     proc = Thread(target=infer,
-    #                       args=(tm_model, i + 1, input_ids, output_seqlen,
-    #                             test_round, que))
-    #     procs.append(proc)
-    #     proc.start()
+    for i in range(concurrency):
+        proc = Thread(target=infer,
+                          args=(tm_model, i + 1, input_ids, output_seqlen,
+                                test_round, que))
+        procs.append(proc)
+        proc.start()
 
-    batched_session_id = tuple(range(1, concurrency + 1))
-    batched_input_ids = [input_ids] * concurrency
-    proc = Thread(
-        target=infer,
-        args=(tm_model, batched_session_id, batched_input_ids, output_seqlen,
-              test_round, que))
-    procs.append(proc)
-    proc.start()
     try:
         for proc in procs:
             proc.join()

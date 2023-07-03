@@ -306,7 +306,7 @@ PYBIND11_MODULE(_turbomind, m)
             "forward",
             [](AbstractTransformerModelInstance* model, std::shared_ptr<TensorMap> input_tensors, ft::AbstractInstanceComm* inst_comm) {
                 return model->forward(input_tensors, inst_comm);
-            },
+            }, py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
             "inst_comm"_a = nullptr);
 
