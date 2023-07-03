@@ -143,7 +143,7 @@ def export(model_name: str,
         # parameters for turbomind
         max_batch_size=32,
         max_context_token_num=4,
-        session_len=2048,
+        session_len=2056,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=8,
