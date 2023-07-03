@@ -62,7 +62,7 @@ LMDeploy 是 [MMRazor](https://github.com/open-mmlab/mmrazor) 和 [MMDeploy](htt
 
 - 支持 persistent batch 推理方式
 
-https://github.com/open-mmlab/lmdeploy/assets/25839884/c3848e45-e34a-4ac0-9893-866e21cefd42
+![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
 
 ## 快速上手
 
