@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 cmake_minimum_required(VERSION 3.8)
+project(_turbomind)
 
 find_package(pybind11 CONFIG)
 if(NOT pybind11_FOUND)
@@ -11,12 +12,13 @@ if(NOT pybind11_FOUND)
     find_package(pybind11 CONFIG)
 endif()
 
-set(ModuleName _turbomind)
-pybind11_add_module(${ModuleName} bind.cpp)
-target_link_libraries(${ModuleName} PRIVATE TransformerTritonBackend 
-    LlamaTritonBackend tensor
-    custom_ar_comm memory_utils -lcublasLt)
-target_compile_features(${ModuleName} PRIVATE cxx_std_14)
+pybind11_add_module(${PROJECT_NAME} bind.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE TransformerTritonBackend 
+    LlamaTritonBackend custom_ar_comm memory_utils)
+target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_14)
 
-install(TARGETS ${ModuleName}
-DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer)
+set_target_properties(${PROJECT_NAME} PROPERTIES
+        BUILD_RPATH "\$ORIGIN"
+        INSTALL_RPATH "\$ORIGIN")
+
+install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
