@@ -388,6 +388,11 @@ install(
     ${INSTALL_CONFIGDIR}
 )
 
+# install python api
+install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+
+
 export(
   EXPORT
     transformer-shared-targets

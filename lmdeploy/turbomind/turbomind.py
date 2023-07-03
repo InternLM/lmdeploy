@@ -11,8 +11,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
-# sys.path.append(osp.join(lmdeploy_dir, 'lib'))
-sys.path.append(osp.join(lmdeploy_dir, '..', 'build', 'lib'))
+sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm
 
 
