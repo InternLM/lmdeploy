@@ -188,7 +188,7 @@ triton::DataType getDataType(DLDataType data_type)
     }
 }
 
-std::unique_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
+std::shared_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
 {
     auto& dl_tensor = tensor->dl_tensor;
     auto  where     = getMemoryType(dl_tensor.device);
@@ -197,7 +197,7 @@ std::unique_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* t
     std::vector<size_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
     auto                data = dl_tensor.data;
 
-    return std::make_unique<triton::Tensor>(where, dtype, shape, data);
+    return std::make_shared<triton::Tensor>(where, dtype, shape, data);
 }
 
 PYBIND11_MODULE(_turbomind, m)
@@ -239,7 +239,7 @@ PYBIND11_MODULE(_turbomind, m)
         .value("MEMORY_GPU", triton::MemoryType::MEMORY_GPU);
 
     // tensor
-    py::class_<triton::Tensor>(m, "Tensor")
+    py::class_<triton::Tensor, std::shared_ptr<triton::Tensor>>(m, "Tensor")
         .def_readonly("where", &triton::Tensor::where)
         .def_readonly("type", &triton::Tensor::type)
         .def_readonly("shape", &triton::Tensor::shape)
@@ -292,7 +292,7 @@ PYBIND11_MODULE(_turbomind, m)
             DLManagedTensor* dlmt =
                 static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
             auto ret = DLManagedTensorToTritonTensor(dlmt);
-            return ret.release();
+            return ret;
         },
         "dl_managed_tensor"_a);
 
@@ -304,8 +304,8 @@ PYBIND11_MODULE(_turbomind, m)
         // }, "input_tensors"_a, py::return_value_policy::reference_internal)
         .def(
             "forward",
-            [](AbstractTransformerModelInstance* model, TensorMap& input_tensors, ft::AbstractInstanceComm* inst_comm) {
-                return model->forward(make_shared_nodel(input_tensors), inst_comm);
+            [](AbstractTransformerModelInstance* model, std::shared_ptr<TensorMap> input_tensors, ft::AbstractInstanceComm* inst_comm) {
+                return model->forward(input_tensors, inst_comm);
             },
             "input_tensors"_a,
             "inst_comm"_a = nullptr);

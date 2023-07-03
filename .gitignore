@@ -6,3 +6,4 @@ workspace/
 .cache
 *build*/
 lmdeploy/lib/
+dist/
