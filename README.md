@@ -35,7 +35,7 @@ English | [简体中文](README_zh-CN.md)
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
 
-- **Efficient Inference Engine TurboMind**: Based on [FasterTransformer](https://github.com/NVIDIA/FasterTransformer), we have implemented an efficient inference engine - TurboMind, which supports the inference of LLaMA and its variant models on NVIDIA GPUs.
+- **Efficient Inference Engine (TurboMind)**: Based on [FasterTransformer](https://github.com/NVIDIA/FasterTransformer), we have implemented an efficient inference engine - TurboMind, which supports the inference of LLaMA and its variant models on NVIDIA GPUs.
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, it remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
@@ -79,7 +79,7 @@ Weights for the LLaMA models can be obtained from by filling out [this form](htt
 
 Run one of the following commands to serve a LLaMA model on NVIDIA GPU server:
 
-<details open>
+<details close>
 <summary><b>7B</b></summary>
 
 ```shell
@@ -90,7 +90,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 </details>
 
-<details open>
+<details close>
 <summary><b>13B</b></summary>
 
 ```shell
