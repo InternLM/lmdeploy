@@ -173,6 +173,8 @@ python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 - `use_context_fmha` 改为 0，表示关闭
 - `quant_policy` 设置为 4。此参数默认为 0，表示不开启
 
+这里是[量化测试结果](./docs/quantization.md)。
+
 ## 贡献指南
 
 我们感谢所有的贡献者为改进和提升 LMDeploy 所作出的努力。请参考[贡献指南](.github/CONTRIBUTING.md)来了解参与项目贡献的相关指引。
