@@ -50,19 +50,23 @@
 
 ## 简介
 
-LMDeploy 是 [MMRazor](https://github.com/open-mmlab/mmrazor) 和 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 团队联合开发的，针对 LLM 进行轻量化、部署和服务的工具箱。它拥有以下核心功能：
+LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发，是涵盖了 LLM 任务的全套轻量化、部署和服务解决方案。
+这个强大的工具箱提供以下核心功能：
 
-- 基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) 实现的高效推理引擎 **TurboMind**, 支持 LLaMA 及其变体模型在 NVIDIA 设备上的推理
+- **高效推理引擎 TurboMind**：基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)，我们实现了高效推理引擎 TurboMind，它支持 LLaMA 及其变体模型在 NVIDIA GPU 上的推理。
 
-- 实现 interactive mode 推理方式。通过缓存多轮对话过程中attention的k/v，记住对话历史，从而避免重复decode历史会话
+- **交互推理方式**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。
 
-<div align="center">
-  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
-</div>
+  <div align="center">
+    <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
+  </div>
 
-- 支持 persistent batch 推理方式
+- **persistent batch 推理**：进一步优化模型执行效率。
 
-![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
+  ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
+
+- **多 GPU 部署和量化**：我们提供了全面的模型部署和量化支持，已经在 7～100B 模型上完成验证。
+
 
 ## 快速上手
 
