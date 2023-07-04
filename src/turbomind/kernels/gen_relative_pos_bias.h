@@ -24,7 +24,8 @@
 
 namespace turbomind {
 
-enum class PositionEmbeddingType {
+enum class PositionEmbeddingType
+{
     relative,
     absolute,
 };

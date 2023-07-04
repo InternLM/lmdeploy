@@ -27,7 +27,8 @@ namespace turbomind {
 class Logger {
 
 public:
-    enum Level {
+    enum Level
+    {
         TRACE   = 0,
         DEBUG   = 10,
         INFO    = 20,
@@ -40,7 +41,7 @@ public:
         thread_local Logger instance;
         return instance;
     }
-    Logger(Logger const&)         = delete;
+    Logger(Logger const&) = delete;
     void operator=(Logger const&) = delete;
 
     template<typename... Args>
@@ -108,8 +109,8 @@ private:
 
 #define TM_LOG(level, ...)                                                                                             \
     do {                                                                                                               \
-        if (turbomind::Logger::getLogger().getLevel() <= level) {                                              \
-            turbomind::Logger::getLogger().log(level, __VA_ARGS__);                                            \
+        if (turbomind::Logger::getLogger().getLevel() <= level) {                                                      \
+            turbomind::Logger::getLogger().log(level, __VA_ARGS__);                                                    \
         }                                                                                                              \
     } while (0)
 

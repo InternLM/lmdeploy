@@ -169,9 +169,9 @@ public:
                        cudaStream_t         stream);
 
 private:
-    int                                 version_major_, version_minor_, version_patch_;
+    int                         version_major_, version_minor_, version_patch_;
     turbomind::qgmma1x1Launcher qgmmaLauncher;
-    void*                               cublas_workspace_qgemm_ = nullptr;
+    void*                       cublas_workspace_qgemm_ = nullptr;
 };
 
 }  // namespace turbomind
