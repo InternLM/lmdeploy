@@ -158,7 +158,7 @@ Then adjust `config.ini`
 - `use_context_fmha` changed to 0, means off
 - `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
-Here is [quantization test results](./docs/quantization.md).
+Here is [quantization test results](./docs/zh_cn/quantization.md).
 
 ## Contributing
 
