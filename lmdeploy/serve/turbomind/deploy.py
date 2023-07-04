@@ -307,7 +307,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     model_params = {}
 
     _qweight = 'weight'
-    _suffixes = [_qweight]
+    _suffixes = [_qweight, 'bias']
 
     _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
     _files = sorted(_files)
@@ -321,7 +321,9 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     def get_tensor(name):
         return _params[name]
 
-    def get_tensor_transposed(name):
+    def get_tensor_transposed(name: str):
+        if not name in _params and name.find('bias'):
+            return None
         return _params[name].t()
 
     for i in range(1000):
@@ -331,20 +333,21 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             for suffix in _suffixes:
                 q, k, v, o = map(get_tensor_transposed,
                                  map(('{}.' + suffix).format, _qkvo))
-                if suffix == 'bias':
-                    check_zero(q), check_zero(k), check_zero(v), check_zero(o)
-                else:
-                    # q, k has different layout for fb & hf, convert to fb's
-                    # layout
-                    q = permute(q)
-                    k = permute(k)
-                    if suffix == _qweight:  # weight, qweight
-                        # insert a dimension for splitting heads later
-                        qkv = torch.stack((q, k, v), dim=1)
-                    else:  # scales, zeros
-                        qkv = torch.stack((q, k, v), dim=0).squeeze(dim=-1)
-                    for k, v in [('w_qkv', qkv), ('wo', o)]:
-                        model_params[f'layers.{i}.attention.{k}.{suffix}'] = v
+                if q is None:
+                    continue
+                # q, k has different layout for fb & hf, convert to fb's
+                # layout
+                q = permute(q)
+                k = permute(k)
+                if suffix == _qweight:  # weight, qweight
+                    # insert a dimension for splitting heads later
+                    qkv = torch.stack((q, k, v), dim=1)
+                else:  # scales, zeros, bias
+                    qkv = torch.stack((q.squeeze(), k.squeeze(), v.squeeze()),
+                                      dim=0).squeeze(dim=-1)
+                    print(suffix, qkv.shape)
+                for k, v in [('w_qkv', qkv), ('wo', o)]:
+                    model_params[f'layers.{i}.attention.{k}.{suffix}'] = v
             # ffn weights
             _w123 = [
                 f'model.layers.{i}.mlp.{t}_proj'
@@ -353,15 +356,12 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             for suffix in _suffixes:
                 w1, w2, w3 = map(get_tensor_transposed,
                                  map(('{}.' + suffix).format, _w123))
-                if suffix == 'bias':
-                    check_zero(w1), check_zero(w2), check_zero(w3)
-                else:
-                    if suffix in ['scales', 'zeros']:
-                        w1, w2, w3 = map(lambda x: x.squeeze(dim=-1),
-                                         [w1, w2, w3])
-                    for k, v in [('w1', w1), ('w2', w2), ('w3', w3)]:
-                        model_params[
-                            f'layers.{i}.feed_forward.{k}.{suffix}'] = v
+                if w1 is None:
+                    continue
+                if suffix in ['scales', 'zeros', 'bias']:
+                    w1, w2, w3 = map(lambda x: x.squeeze(dim=-1), [w1, w2, w3])
+                for k, v in [('w1', w1), ('w2', w2), ('w3', w3)]:
+                    model_params[f'layers.{i}.feed_forward.{k}.{suffix}'] = v
             other = [('attention_norm.weight', 'input_layernorm.weight'),
                      ('ffn_norm.weight', 'post_attention_layernorm.weight')]
             for ft, hf in other:
@@ -372,7 +372,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         except KeyError:
             break
 
-    assert num_layer == i, 'miss matched layers: {num_layer} vs {i}'
+    assert num_layer == i, f'miss matched layers: {num_layer} vs {i}'
 
     other = [('tok_embeddings.weight', 'model.embed_tokens.weight'),
              ('norm.weight', 'model.norm.weight'),
