@@ -60,12 +60,11 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
 </div>
 
+- **Multi-GPU Model Deployment and Quantization**: We provide comprehensive support for model deployment and quantization, and have successfully validated it on models ranging from 7B to 100B parameters.
+
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
 ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
-
-- **Multi-GPU Model Deployment and Quantization**: We provide comprehensive support for model deployment and quantization, and have successfully validated it on models ranging from 7B to 100B parameters.
-
 
 ## Quick Start
 
