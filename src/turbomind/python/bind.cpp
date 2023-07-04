@@ -299,9 +299,6 @@ PYBIND11_MODULE(_turbomind, m)
     // transformer model instance
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
     py::class_<AbstractTransformerModelInstance>(m, "AbstractTransformerModelInstance")
-        // .def("forward", [](AbstractTransformerModelInstance* model, TensorVector& input_tensors){
-        //     return model->forward(make_shared_nodel(input_tensors));
-        // }, "input_tensors"_a, py::return_value_policy::reference_internal)
         .def(
             "forward",
             [](AbstractTransformerModelInstance* model, std::shared_ptr<TensorMap> input_tensors, ft::AbstractInstanceComm* inst_comm) {

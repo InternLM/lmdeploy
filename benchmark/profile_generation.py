@@ -88,8 +88,8 @@ def main(model_path: str,
     stop_words = model.stop_words
     tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
 
-    # warmup(tm_model, concurrency, session_len,
-    #        output_seqlen)
+    warmup(tm_model, concurrency, session_len,
+           output_seqlen)
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)
