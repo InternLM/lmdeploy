@@ -87,7 +87,7 @@ def stats_past_key_values(past_key_values: List[torch.Tensor],
             k_obs = k_obs_list[layer * num_tp + tp]
             v_obs = v_obs_list[layer * num_tp + tp]
             # K Cache Shape: [Bs, Heads, Tokens,  Dims]
-            per_tp_heads = k_cache.size(2) // num_tp
+            per_tp_heads = k_cache.size(1) // num_tp
             k_obs(k_cache[:, tp * per_tp_heads:(tp + 1) * per_tp_heads])
             v_obs(v_cache[:, tp * per_tp_heads:(tp + 1) * per_tp_heads])
 
