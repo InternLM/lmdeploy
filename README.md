@@ -41,7 +41,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 ## Performance
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/269f1e0a-678b-4d64-91ed-167afabdb936)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/5501e803-d946-4fd2-ac48-a9ecc7a9efbb)
 
 ## Quick Start
 

@@ -52,7 +52,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 10%
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/269f1e0a-678b-4d64-91ed-167afabdb936)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/5501e803-d946-4fd2-ac48-a9ecc7a9efbb)
 
 ## 快速上手
 
