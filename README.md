@@ -40,7 +40,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, it remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
 <div align="center">
-  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
+  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
 </div>
 
 - **Multi-GPU Model Deployment and Quantization**: We provide comprehensive support for model deployment and quantization, and have successfully validated it on models ranging from 7B to 100B parameters.
