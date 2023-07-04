@@ -244,7 +244,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
 int read_start_ids(size_t            batch_size,
                    std::vector<int>* v_start_lengths,
                    std::vector<int>* v_start_ids,
-                   size_t&           max_input_len,
+                   size_t            max_input_len,
                    const int         end_id,
                    const int         beam_width,
                    std::string       file_name);
@@ -261,13 +261,13 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     std::cerr << "request_batch_size=" << request_batch_size << "\n";
 
-    const int start_id = reader.GetInteger("request", "start_id");
-    const int end_id   = reader.GetInteger("request", "end_id");
+    const int start_id      = reader.GetInteger("request", "start_id");
+    const int end_id        = reader.GetInteger("request", "end_id");
+    const int max_input_len = reader.GetInteger("request", "max_input_len");
 
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
 
-    size_t max_input_len = 0;
     read_start_ids(request_batch_size,
                    &v_start_lengths,
                    &v_start_ids,
@@ -427,6 +427,7 @@ int main(int argc, char* argv[])
     const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
     const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
     const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
+    std::vector<int> seq_lens(batch_size);
     // step 6: check results
     if (node_id == 0) {
         std::string fName   = "out";
@@ -439,7 +440,6 @@ int main(int argc, char* argv[])
             // int*   hBuf     = new int[outCount];
             std::vector<int> hBuf(outCount);
             ft::cudaD2Hcpy(hBuf.data(), d_output_ids, outCount);
-            std::vector<int> seq_lens(batch_size);
             ft::cudaD2Hcpy(seq_lens.data(), d_seq_lens, batch_size);
             std::cout << "sequence length: ";
             for (int i = 0; i < batch_size; ++i) {
@@ -503,7 +503,7 @@ int main(int argc, char* argv[])
                " FT-CPP-GPT-Triton-time %.2f ms\n",
                batch_size,
                beam_width,
-               seq_len,
+               seq_lens[0],
                ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
     }
 
@@ -516,7 +516,7 @@ int main(int argc, char* argv[])
 int read_start_ids(size_t            batch_size,
                    std::vector<int>* v_start_lengths,
                    std::vector<int>* v_start_ids,
-                   size_t&           max_input_len,
+                   size_t            max_input_len,
                    const int         end_id,
                    const int         beam_width,
                    std::string       file_name)
@@ -531,14 +531,14 @@ int read_start_ids(size_t            batch_size,
         while (std::getline(start_id_file, line)) {
             std::stringstream lineStream(line);
             std::string       vals;
-            int               i1 = 0;
             std::vector<int>  tmp_vec;
             while (std::getline(lineStream, vals, ',')) {
                 tmp_vec.push_back(std::stoi(vals));
-                i1++;
+                if (tmp_vec.size() == max_input_len)
+                    break;
             }
             tmp_start_ids.push_back(tmp_vec);
-            tmp_start_lengths.push_back(i1);
+            tmp_start_lengths.push_back(tmp_vec.size());
             line_num++;
         }
         if (batch_size == 0) {
@@ -551,25 +551,18 @@ int read_start_ids(size_t            batch_size,
         return 0;
     }
 
-    max_input_len = tmp_start_lengths.data()[0];
-    for (uint i = 1; i < (uint)tmp_start_lengths.size(); i++) {
-        max_input_len = max_input_len > tmp_start_lengths.data()[i] ? max_input_len : tmp_start_lengths.data()[i];
-    }
-
-    while ((int)tmp_start_lengths.size() < batch_size) {
-        std::vector<int> padding_ids;
-        for (int i = 0; i < max_input_len; i++) {
-            padding_ids.push_back(end_id);
-        }
-        tmp_start_ids.push_back(padding_ids);
-        tmp_start_lengths.push_back(max_input_len);
-    }
 
     // Add padding
     for (int i = 0; i < (int)tmp_start_ids.size(); i++) {
         for (int j = (int)tmp_start_ids[i].size(); j < max_input_len; j++) {
             tmp_start_ids[i].push_back(end_id);
         }
+    }
+
+    // Pad to batch_size
+    for (int i = (int)tmp_start_lengths.size(); i < batch_size; i++) {
+        tmp_start_ids.push_back(tmp_start_ids[0]);
+        tmp_start_lengths.push_back(tmp_start_lengths[0]);
     }
 
     for (int i = 0; i < (int)tmp_start_ids.size(); i++) {
