@@ -173,11 +173,18 @@ def get_c4_new(tokenizer, nsamples, seed, seqlen, model):
 
 def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     from datasets import load_dataset
-
-    dataset = load_dataset(
-        'json',
-        data_files='https://the-eye.eu/public/AI/pile/val.jsonl.zst',
-        split='train')
+    from datasets.builder import DatasetGenerationError
+    try:
+        dataset = load_dataset(
+            'json',
+            data_files='https://the-eye.eu/public/AI/pile/val.jsonl.zst',
+            split='train')
+    except DatasetGenerationError:
+        raise InterruptedError('There have been some issues when generating '
+                             'the dataset, you could try to download it '
+                             'locally first, and replace the `data_files`'
+                             'with local addresses or use other datasets '
+                             '(c4, wiki, ptb).')
     dataset = dataset.shuffle(seed=seed)
     samples = []
     n_run = 0

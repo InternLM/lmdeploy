@@ -97,10 +97,10 @@ def main(model: str,
          granularity: str = 'per_tensor',
          symmetry: bool = True,
          offload: bool = False,
-         max_seq_len: int = 512,
+         max_seq_len: int = 2048,
          num_tp: int = 1,
-         calib_dataset: str = 'pileval',
-         calib_samples: int = 512,
+         calib_dataset: str = 'c4',
+         calib_samples: int = 128,
          output_dir: str = './kv_scales'):
     assert granularity in ['per_tensor'], \
         'Currently, only support per-tensor quantization for the kv cache.'
