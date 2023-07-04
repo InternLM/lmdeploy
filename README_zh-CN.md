@@ -44,7 +44,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
     <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
   </div>
 
-- **多 GPU 部署和量化**：我们提供了全面的模型部署和量化支持，已经在 7～100B 模型上完成验证。
+- **多 GPU 部署和量化**：我们提供了全面的模型部署和量化支持，已在不同规模上完成验证。
 
 - **persistent batch 推理**：进一步优化模型执行效率。
 
@@ -79,7 +79,7 @@ make -j$(nproc) && make install
 
 执行如下命令，可以把 LLaMA 模型部署到 NVIDIA GPU Server：
 
-<details open>
+<details close>
 <summary><b>7B</b></summary>
 
 ```shell
@@ -90,7 +90,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 </details>
 
-<details open>
+<details close>
 <summary><b>13B</b></summary>
 
 ```shell
