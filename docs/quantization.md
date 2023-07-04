@@ -19,7 +19,7 @@
 
 ## 精度影响
 
-以下是 `kCacheKVInt8` 方法在各数据集的精度损失，数值仅供参考。
+以下是 `kCacheKVInt8` 方法仅用 c4 数据集量化，在其他数据集的精度损失，数值仅供参考。
 
 | task | dataset | version | metric | diff |
 | :-: | :-: | :-: | :-: | :-: |
