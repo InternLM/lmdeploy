@@ -151,6 +151,15 @@ python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
 首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 weight 目录下。
+
+```
+python -m lmdeploy.lite.apis.kv_qparams \
+  --model $HF_MODEL \
+  --output_dir $DEPLOY_WEIGHT_DIR \
+  --symmetry True \ # 对称量化或非对称量化，默认为 True
+  --offload  False \ # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
+```
+
 然后调整 `config.ini`
 
 - `use_context_fmha` 改为 0，表示关闭
