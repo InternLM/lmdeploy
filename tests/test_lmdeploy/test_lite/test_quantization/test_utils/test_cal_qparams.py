@@ -26,13 +26,13 @@ def test_cal_qparams():
 
     # Test per-group absmax method
     qparams = cal_qparams_per_group_absmax(w, 8, 16)
-    assert qparams.scales.shape == (64, 1)
+    assert qparams.scales.shape == (64, 4, 1)
     assert qparams.zero_points is None
 
     # Test per-group minmax method
     qparams = cal_qparams_per_group_minmax(w, 8, 16)
-    assert qparams.scales.shape == (64, 1)
-    assert qparams.zero_points.shape == (64, 1)
+    assert qparams.scales.shape == (64, 4, 1)
+    assert qparams.zero_points.shape == (64, 4, 1)
 
     # Test per-tensor absmax method
     qparams = cal_qparams_per_tensor_absmax(w, 8)

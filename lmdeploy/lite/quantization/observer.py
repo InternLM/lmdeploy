@@ -25,12 +25,11 @@ class Observer:
         """
         self.enabled = enabled
 
-    def __call__(self, *args: Any, **kwds: Any) -> Any:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Apply the observer function on the input if the observer is enabled.
-
         Args:
             *args: Variable length argument list.
-            **kwds: Arbitrary keyword arguments.
+            **kwargs: Arbitrary keyword arguments.
         """
         if self.enabled:
-            self.buffer.append(self.fn(*args, **kwds))
+            self.buffer.append(self.fn(*args, **kwargs))

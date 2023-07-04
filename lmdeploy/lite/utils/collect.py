@@ -39,7 +39,7 @@ def collect_target_modules(model: nn.Module,
             the result.
 
     Returns:
-        dict: A dictionary containing the target weight tensors in the model.
+        dict: A dictionary containing the target modules in the model.
     """
     target_modules = {}
     for name, module in model.named_modules():

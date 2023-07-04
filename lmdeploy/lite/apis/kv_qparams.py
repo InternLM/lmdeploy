@@ -50,7 +50,8 @@ def minmax(tensor: torch.Tensor) -> Tuple[float, float]:
 
 def stats_past_key_values(past_key_values: List[torch.Tensor],
                           k_obs_list: List[Observer],
-                          v_obs_list: List[Observer], symmetry: bool) -> None:
+                          v_obs_list: List[Observer], symmetry: bool,
+                          num_tp: int) -> None:
     """Collects statistics for past key values.
 
     Args:
@@ -64,7 +65,7 @@ def stats_past_key_values(past_key_values: List[torch.Tensor],
     """
     if len(k_obs_list) == 0 and len(v_obs_list) == 0:
         num_layers = len(past_key_values)
-        for _ in range(num_layers):
+        for _ in range(num_layers * num_tp):
             if symmetry:
                 k_observer = Observer(absmax)
                 v_observer = Observer(absmax)
@@ -78,14 +79,17 @@ def stats_past_key_values(past_key_values: List[torch.Tensor],
             k_obs_list.append(k_observer)
             v_obs_list.append(v_observer)
 
-    assert len(k_obs_list) == len(past_key_values)
-    assert len(v_obs_list) == len(past_key_values)
+    assert len(k_obs_list) == len(past_key_values) * num_tp
+    assert len(v_obs_list) == len(past_key_values) * num_tp
 
-    for i, (k_cache, v_cache) in enumerate(past_key_values):
-        k_obs = k_obs_list[i]
-        v_obs = v_obs_list[i]
-        k_obs(k_cache)
-        v_obs(v_cache)
+    for layer, (k_cache, v_cache) in enumerate(past_key_values):
+        for tp in range(num_tp):
+            k_obs = k_obs_list[layer * num_tp + tp]
+            v_obs = v_obs_list[layer * num_tp + tp]
+            # K Cache Shape: [Bs, Tokens, Heads, Dims]
+            per_tp_heads = k_cache.size(2) // num_tp
+            k_obs(k_cache[:, :, tp * per_tp_heads:(tp + 1) * per_tp_heads])
+            v_obs(v_cache[:, :, tp * per_tp_heads:(tp + 1) * per_tp_heads])
 
 
 def main(model: str,
@@ -94,17 +98,18 @@ def main(model: str,
          symmetry: bool = True,
          offload: bool = False,
          max_seq_len: int = 2048,
+         num_tp: int = 1,
          calib_dataset: str = 'c4',
          calib_samples: int = 128,
-         output_dir: str = './'):
+         output_dir: str = './kv_scales'):
     assert granularity in ['per_tensor'], \
-        'Currently, only support per-tensor quantization  for the kv cache.'
+        'Currently, only support per-tensor quantization for the kv cache.'
     assert bits == 8, \
         'Currently, only support 8-bit quantization for the kv cache.'
     assert calib_dataset in ['c4', 'ptb', 'wikitext2'], \
         'Currently, only support `c4`, `ptb`, or `wikitext2`.'
 
-    tokenizer = AutoTokenizer.from_pretrained(model)
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
     model = AutoModel.from_pretrained(model)
     model.use_cache = True
 
@@ -135,7 +140,7 @@ def main(model: str,
                 output = model(data[0].to('cuda'))
                 kv_cache = output.past_key_values
                 stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
-                                      symmetry)
+                                      symmetry, num_tp)
     else:
         model.to('cuda')
         with torch.inference_mode():
@@ -143,30 +148,26 @@ def main(model: str,
                 output = model(data[0].to('cuda'))
                 kv_cache = output.past_key_values
                 stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
-                                      symmetry)
+                                      symmetry, num_tp)
 
     import numpy as np
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if symmetry:
-        kv_scales = []
-        for i, (k_obs, v_obs) in enumerate(zip(k_obs_list, v_obs_list)):
+    for i, (k_obs, v_obs) in enumerate(zip(k_obs_list, v_obs_list)):
 
+        layer = i // num_tp
+        tp = i % num_tp
+        save_path = out_dir / f'layers.{layer}.past_kv_scale.{tp}.weight'
+        if symmetry:
             k_scale = max(k_obs.buffer) / (2**(bits - 1) - 1)
             v_scale = max(v_obs.buffer) / (2**(bits - 1) - 1)
 
-            kv_scales.append([k_scale, v_scale])
-            print(f'Layer {i} KV scales done.')
-        kv_scales = np.array(kv_scales)
-        print(f'kv scales shape is {kv_scales.shape}')
-        np.save(out_dir / 'kv_scales.npy', kv_scales)
+            kv_qparams = np.array([k_scale, v_scale], dtype=np.float32)
+            kv_qparams.tofile(save_path)
+            print(f'Layer {layer} TP {tp} KV scales done.')
 
-    else:
-        kv_scales = []
-        kv_zeros = []
-        for i, (k_obs, v_obs) in enumerate(zip(k_obs_list, v_obs_list)):
-
+        else:
             k_min = min([min_k for min_k, _ in k_obs.buffer])
             k_max = max([max_k for _, max_k in k_obs.buffer])
 
@@ -179,17 +180,10 @@ def main(model: str,
             k_zero = (-k_min / k_scale).round()
             v_zero = (-v_min / v_scale).round()
 
-            kv_scales.append([k_scale, v_scale])
-            kv_zeros.append([k_zero, v_zero])
+            kv_qparams = np.array([k_scale, k_zero, v_scale, v_zero],
+                                  dtype=np.float32)
+            kv_qparams.tofile(save_path)
             print(f'Layer {i} KV scales&zeros done.')
-
-        kv_scales = np.array(kv_scales)
-        kv_zeros = np.array(kv_zeros)
-
-        print(f'kv scales shape is {kv_scales.shape}')
-        print(f'kv zeros shape is {kv_zeros.shape}')
-        np.save(out_dir / 'kv_scales.npy', kv_scales)
-        np.save(out_dir / 'kv_zeros.npy', kv_zeros)
 
 
 if __name__ == '__main__':

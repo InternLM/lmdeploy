@@ -27,8 +27,8 @@ def cal_qparams_per_channel_minmax(w: torch.Tensor, n_bits: int) -> QParams:
     """Calculate quantization parameters for each channel using min and max
     values."""
 
-    w_min = w.min(dim=-1, keepdim=True)[0].clamp_(max=0)
-    w_max = w.max(dim=-1, keepdim=True)[0].clamp_(min=0)
+    w_min = w.min(dim=-1, keepdim=True)[0]
+    w_max = w.max(dim=-1, keepdim=True)[0]
 
     q_max = 2**n_bits - 1
     scales = (w_max - w_min)
@@ -50,7 +50,7 @@ def cal_qparams_per_group_absmax(w: torch.Tensor, n_bits: int,
         'Input channels should be greater than or equal to group_size.'
     assert inc % group_size == 0, \
         'Input channels should be divisible by group_size.'
-    scales = w.abs().reshape(outc, group_size, -1).max(dim=-1, keepdim=True)[0]
+    scales = w.abs().reshape(outc, -1, group_size).max(dim=-1, keepdim=True)[0]
     q_max = 2**(n_bits - 1) - 1
     scales = scales.clamp_(min=1e-5).div_(q_max)
     return QParams(scales=scales, zero_points=None)
