@@ -1,12 +1,6 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
-[![codecov](https://codecov.io/gh/open-mmlab/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/lmdeploy)
-[![license](https://img.shields.io/github/license/open-mmlab/lmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
-
 [English](README.md) | 简体中文
 
 </div>
@@ -40,16 +34,25 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 - **交互推理方式**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。
 
-  <div align="center">
-    <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
-  </div>
-
 - **多 GPU 部署和量化**：我们提供了全面的模型部署和量化支持，已在不同规模上完成验证。
 
 - **persistent batch 推理**：进一步优化模型执行效率。
 
   ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
 
+## 性能
+
+如下图所示，我们对比了 facebookresearch/llama、HuggingFace Transformers、DeepSpeed 在 7B 模型上的token生成的速度。
+
+测试设备：NVIDIA A100(80G)
+
+测试指标：吞吐量（token/s)
+
+测试数据：输入token数为1，生成token数为2048
+
+TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 10%
+
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/269f1e0a-678b-4d64-91ed-167afabdb936)
 
 ## 快速上手
 
@@ -73,11 +76,11 @@ mkdir build && cd build
 make -j$(nproc) && make install
 ```
 
+### 部署 InternLM
+
 ### 部署 [LLaMA](https://github.com/facebookresearch/llama) 服务
 
-请填写[这张表](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)，获取 LLaMA 模型权重。
-
-执行如下命令，可以把 LLaMA 模型部署到 NVIDIA GPU Server：
+请填写[这张表](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)，获取 LLaMA 模型权重
 
 <details close>
 <summary><b>7B</b></summary>
@@ -103,7 +106,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 ### 部署 [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/) 服务
 
-<details open>
+<details close>
 <summary><b>7B</b></summary>
 
 ```shell
@@ -119,7 +122,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 </details>
 
-<details>
+<details close>
 <summary><b>13B</b></summary>
 
 ```shell

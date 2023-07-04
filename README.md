@@ -1,12 +1,6 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
-[![codecov](https://codecov.io/gh/open-mmlab/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/lmdeploy)
-[![license](https://img.shields.io/github/license/open-mmlab/lmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
-
 English | [简体中文](README_zh-CN.md)
 
 </div>
@@ -39,15 +33,15 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, it remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
-<div align="center">
-  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
-</div>
-
 - **Multi-GPU Model Deployment and Quantization**: We provide comprehensive support for model deployment and quantization, and have successfully validated it on models ranging from 7B to 100B parameters.
 
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
 ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
+
+## Performance
+
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/269f1e0a-678b-4d64-91ed-167afabdb936)
 
 ## Quick Start
 
@@ -63,7 +57,7 @@ cd lmdeploy
 pip install -e .
 ```
 
-### Build
+<!-- ### Build
 
 Pull docker image `openmmlab/lmdeploy:latest` and build lmdeploy libs in its launched container
 
@@ -71,13 +65,16 @@ Pull docker image `openmmlab/lmdeploy:latest` and build lmdeploy libs in its lau
 mkdir build && cd build
 ../generate.sh
 make -j$(nproc) && make install
+``` -->
+
+### Serving InternLM
+
+```shell
 ```
 
 ### Serving [LLaMA](https://github.com/facebookresearch/llama)
 
 Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form)
-
-Run one of the following commands to serve a LLaMA model on NVIDIA GPU server:
 
 <details close>
 <summary><b>7B</b></summary>
@@ -103,7 +100,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 ### Serving [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/)
 
-<details open>
+<details close>
 <summary><b>7B</b></summary>
 
 ```shell
@@ -119,7 +116,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 </details>
 
-<details>
+<details close>
 <summary><b>13B</b></summary>
 
 ```shell
