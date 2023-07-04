@@ -75,11 +75,11 @@ def init_model(
 def main(
     model_path: str,
     tokenizer_path: str = None,
-    max_new_tokens=64,
+    max_new_tokens: int = 64,
     temperature: float = 0.8,
     top_p: float = 0.95,
     seed: int = 1,
-    use_fast_tokenizer=True,
+    use_fast_tokenizer: bool = True,
 ):
     torch.manual_seed(seed)
 
