@@ -124,7 +124,7 @@ public:
 
     virtual void forward(std::vector<turbomind::Tensor>*       output_tensors,
                          const std::vector<turbomind::Tensor>* input_tensors,
-                         const FfnWeight<T>*                           ffn_weights);
+                         const FfnWeight<T>*                   ffn_weights);
     virtual void forward(TensorMap* output_tensors, TensorMap* input_tensors, const FfnWeight<T>* ffn_weights);
 };
 

@@ -47,7 +47,8 @@ namespace turbomind {
 // A wrapper of cublas or cusparse matrix operator.
 //  - GEMM_OP_N = CUBLAS_OP_N or CUSPARSE_OP_N
 //  - GEMM_OP_T = CUBLAS_OP_T or CUSPARSE_OP_T
-enum GemmOp {
+enum GemmOp
+{
     GEMM_OP_N,
     GEMM_OP_T
 };

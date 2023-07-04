@@ -7,3 +7,5 @@ workspace/
 *build*/
 lmdeploy/lib/
 dist/
+examples/cpp/llama/*.csv
+

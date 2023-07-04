@@ -377,6 +377,7 @@ install(
     transformer-shared-targets
   LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/turbomind
   ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/turbomind
+  RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
 )
 
 install(

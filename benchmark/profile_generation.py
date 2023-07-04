@@ -79,7 +79,7 @@ def main(model_path: str,
          model_name: str,
          tokenlizer: str,
          concurrency: int = 1,
-         session_len: int = 2048,
+         session_len: int = 2056,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
@@ -132,7 +132,7 @@ def main(model_path: str,
     token_latency_max = np.max(stats[:, 2], axis=0)
     token_latency_ave = np.mean(stats[:, 2], axis=0)
     throughput = np.sum(stats[:, 1], axis=0) / np.sum(stats[:, 2], axis=0)
-    print(f'\n{"-" * 50}\ncocurrency: {concurrency}, input_tokens: '
+    print(f'\n{"-" * 50}\nconcurrency: {concurrency}, input_tokens: '
           f'{input_seqlen}, output_tokens: {output_seqlen}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
           f'first_token latency(min, max, ave): '
