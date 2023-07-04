@@ -155,16 +155,16 @@ In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can s
 First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
 
 ```
-```
+
 
 python3 -m lmdeploy.lite.apis.kv_qparams \
---model $HF_MODEL \
---output_dir $DEPLOY_WEIGHT_DIR \
---symmetry True \\   # Whether to use symmetric or asymmetric quantization.
---offload  False \\  # Whether to offload some modules to CPU to save GPU memory.
---num_tp 1 \\   # The number of GPUs used for tensor parallelism
+  --model $HF_MODEL \
+  --output_dir $DEPLOY_WEIGHT_DIR \
+  --symmetry True \   # Whether to use symmetric or asymmetric quantization.
+  --offload  False \  # Whether to offload some modules to CPU to save GPU memory.
+  --num_tp 1 \   # The number of GPUs used for tensor parallelism
 
-```
+
 ```
 
 Then adjust `config.ini`
