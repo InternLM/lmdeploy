@@ -1,3 +1,4 @@
+import os.path as osp
 from typing import List
 
 import fire
@@ -21,11 +22,6 @@ class Tokenizer:
             self.end_id = self.model.eos_token_id
             self.pad_id = self.model.pad_token_id
 
-        print(f'vocab_size = {self.vocab_size}')
-        print(f'start_id = {self.start_id}')
-        print(f'end_id = {self.end_id}')
-        print(f'pad_id = {self.pad_id}')
-
     def encode(self, s: str):
         if hasattr(self.model, 'Encode'):
             return self.model.Encode(s, add_bos=True)
@@ -46,11 +42,22 @@ def main(model_file: str = '/data/llama/model/tokenizer.model',
     if encode_file:
         with open(encode_file, 'r') as f:
             xs = tokenizer.encode(f.read())
-            print(','.join(map(str, xs)))
+            xs = ','.join(map(str, xs))
+            print(xs)
+
+        output_dir = osp.dirname(osp.abspath(__file__))
+        with open(osp.join(output_dir, 'start_ids.csv'), 'w') as f:
+            f.write(xs)
+
     elif decode_file:
         with open(decode_file, 'r') as f:
-            ys = tokenizer.decode(f.read())
-            print(ys)
+            token_ids = f.read()
+            token_ids = token_ids.splitlines()
+            for _token_ids in token_ids:
+                _token_ids = _token_ids.split(',')
+                _token_ids = [int(token_id) for token_id in _token_ids]
+                ys = tokenizer.decode(_token_ids)
+                print(ys)
     else:
         first = True
         while True:
