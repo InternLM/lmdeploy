@@ -171,12 +171,45 @@ def get_c4_new(tokenizer, nsamples, seed, seqlen, model):
     return trainloader, valenc
 
 
+def get_pileval(tokenizer, nsamples, seed, seqlen=512):
+    from datasets import load_dataset
+
+    dataset = load_dataset(
+        'json',
+        data_files='https://the-eye.eu/public/AI/pile/val.jsonl.zst',
+        split='train')
+    dataset = dataset.shuffle(seed=seed)
+    samples = []
+    n_run = 0
+    for data in dataset:
+        line = data['text']
+        line = line.strip()
+        line_encoded = tokenizer.encode(line)
+        if len(line_encoded) > 512:
+            continue
+        sample = torch.tensor([line_encoded])
+        if sample.numel() == 0:
+            continue
+        samples.append(sample)
+        n_run += 1
+        if n_run == nsamples:
+            break
+    # now concatenate all samples and split according to block size
+    cat_samples = torch.cat(samples, dim=1)
+    n_split = cat_samples.shape[1] // seqlen
+    print(f' * Split into {n_split} blocks')
+    return [
+        cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)
+    ], None
+
+
 def get_calib_loaders(name,
                       tokenizer,
                       nsamples=128,
                       seed=0,
                       seqlen=2048,
                       model=''):
+
     if 'wikitext2' in name:
         return get_wikitext2(tokenizer, nsamples, seed, seqlen, model)
     if 'ptb' in name:
@@ -187,3 +220,6 @@ def get_calib_loaders(name,
         if 'new' in name:
             return get_c4_new(tokenizer, nsamples, seed, seqlen, model)
         return get_c4(tokenizer, nsamples, seed, seqlen, model)
+
+    if 'pileval' in name:
+        return get_pileval(tokenizer, nsamples, seed, seqlen)

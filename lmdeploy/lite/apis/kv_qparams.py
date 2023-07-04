@@ -86,10 +86,10 @@ def stats_past_key_values(past_key_values: List[torch.Tensor],
         for tp in range(num_tp):
             k_obs = k_obs_list[layer * num_tp + tp]
             v_obs = v_obs_list[layer * num_tp + tp]
-            # K Cache Shape: [Bs, Tokens, Heads, Dims]
+            # K Cache Shape: [Bs, Heads, Tokens,  Dims]
             per_tp_heads = k_cache.size(2) // num_tp
-            k_obs(k_cache[:, :, tp * per_tp_heads:(tp + 1) * per_tp_heads])
-            v_obs(v_cache[:, :, tp * per_tp_heads:(tp + 1) * per_tp_heads])
+            k_obs(k_cache[:, tp * per_tp_heads:(tp + 1) * per_tp_heads])
+            v_obs(v_cache[:, tp * per_tp_heads:(tp + 1) * per_tp_heads])
 
 
 def main(model: str,
@@ -97,17 +97,17 @@ def main(model: str,
          granularity: str = 'per_tensor',
          symmetry: bool = True,
          offload: bool = False,
-         max_seq_len: int = 2048,
+         max_seq_len: int = 512,
          num_tp: int = 1,
-         calib_dataset: str = 'c4',
-         calib_samples: int = 128,
+         calib_dataset: str = 'pileval',
+         calib_samples: int = 512,
          output_dir: str = './kv_scales'):
     assert granularity in ['per_tensor'], \
         'Currently, only support per-tensor quantization for the kv cache.'
     assert bits == 8, \
         'Currently, only support 8-bit quantization for the kv cache.'
-    assert calib_dataset in ['c4', 'ptb', 'wikitext2'], \
-        'Currently, only support `c4`, `ptb`, or `wikitext2`.'
+    assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
+        'Currently, only support `c4`, `ptb`, `wikitext2`, or `pileval`.'
 
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
     model = AutoModel.from_pretrained(model)
@@ -137,7 +137,10 @@ def main(model: str,
             offload_mod = OFFLOAD_MOD_MAP[type(model)]
         with memory_efficient_inference(model, offload_mod):
             for data in tqdm(calib_loader, desc='Calibrating: '):
-                output = model(data[0].to('cuda'))
+                if isinstance(data, torch.Tensor):
+                    output = model(data.to('cuda'))
+                else:
+                    output = model(data[0].to('cuda'))
                 kv_cache = output.past_key_values
                 stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
                                       symmetry, num_tp)
@@ -145,8 +148,12 @@ def main(model: str,
         model.to('cuda')
         with torch.inference_mode():
             for data in tqdm(calib_loader, desc='Calibrating: '):
-                output = model(data[0].to('cuda'))
+                if isinstance(data, torch.Tensor):
+                    output = model(data.to('cuda'))
+                else:
+                    output = model(data[0].to('cuda'))
                 kv_cache = output.past_key_values
+
                 stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
                                       symmetry, num_tp)
 
