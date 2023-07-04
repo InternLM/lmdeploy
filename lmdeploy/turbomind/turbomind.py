@@ -51,6 +51,7 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
+                 data_type: str = 'fp16',
                  session_len: int = 2048,
                  eos_id: int = 2,
                  stop_words: List[int] = None,
@@ -68,7 +69,10 @@ class TurboMind:
         self.world_size = self.node_num * self.gpu_count
         self.rank = self.node_id * self.gpu_count + self.device_id
         self.session_len = session_len
-        model = _tm.AbstractTransformerModel.create_llama_model(model_path)
+
+        weight_dir = osp.join(model_path, 'triton_models', 'weights')
+        model = _tm.AbstractTransformerModel.create_llama_model(
+            weight_dir, tensor_para_size=self.gpu_count, data_type=data_type)
         model.create_shared_weights(self.device_id, self.rank)
         self.model = model
         self.stop_words = _stop_words(stop_words)

@@ -1,5 +1,6 @@
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include <memory>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -309,7 +310,29 @@ PYBIND11_MODULE(_turbomind, m)
 
     // transformer model
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
-        .def_static("create_llama_model", &AbstractTransformerModel::createLlamaModel, "model_dir"_a)
+        // .def_static("create_llama_model", &AbstractTransformerModel::createLlamaModel, "model_dir"_a)
+        .def_static("create_llama_model", [](std::string model_dir,
+                                             size_t      tensor_para_size,
+                                             size_t      pipeline_para_size,
+                                             int         enable_custom_all_reduce,
+                                             std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
+
+            if (data_type == "half" || data_type == "fp16") {
+                return std::make_shared<LlamaTritonModel<half>>(tensor_para_size,
+                                                                pipeline_para_size,
+                                                                enable_custom_all_reduce,
+                                                                model_dir);
+            }else {
+                return std::make_shared<LlamaTritonModel<float>>(tensor_para_size,
+                                                                pipeline_para_size,
+                                                                enable_custom_all_reduce,
+                                                                model_dir);
+            }
+        }, "model_dir"_a,
+            "tensor_para_size"_a=1,
+            "pipeline_para_size"_a=1,
+            "enable_custom_all_reduce"_a=0,
+            "data_type"_a="half")
         .def("create_nccl_params",
              &AbstractTransformerModel::createNcclParams,
              "node_id"_a,
