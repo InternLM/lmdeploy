@@ -70,8 +70,8 @@ class Tokenizer:
 class Preprocessor:
     def __init__(self, tokenizer:Tokenizer):
         self.tokenizer = tokenizer
-        self.bos_token_id = tokenizer.start_id
-        self.eos_token_id = tokenizer.end_id
+        self.bos_token_id = tokenizer.bos_token_id
+        self.eos_token_id = tokenizer.eos_token_id
 
     def __call__(self, *args, **kwargs):
         return self.infer(*args, **kwargs)
@@ -108,8 +108,8 @@ class Preprocessor:
 class Postprocessor:
     def __init__(self, tokenizer:Tokenizer):
         self.tokenizer = tokenizer
-        self.bos_token_id = tokenizer.start_id
-        self.eos_token_id = tokenizer.end_id
+        self.bos_token_id = tokenizer.bos_token_id
+        self.eos_token_id = tokenizer.eos_token_id
 
     def __call__(self, *args, **kwargs):
         return self.infer(*args, **kwargs)
