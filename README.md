@@ -168,6 +168,15 @@ python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
 First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
+```
+```
+python -m lmdeploy.lite.apis.kv_qparams \
+  --model $HF_MODEL \
+  --output_dir $DEPLOY_WEIGHT_DIR \
+  --symmetry True \ # Whether to use symmetric or asymmetric quantization.
+  --offload  False \ # Whether to offload some modules to CPU to save GPU memory.
+```
+```
 Then adjust `config.ini`
 
 - `use_context_fmha` changed to 0, means off
