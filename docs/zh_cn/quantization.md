@@ -4,7 +4,7 @@
 测试方法：
 1. 运行 `deploy.py`，切分 100B 模型到 8 个 GPU 上
 2. 运行量化脚本，得到量化参数，放到 weights 目录
-3. 修改配置文件，使 [kCacheKVInt8](../src/turbomind/models/llama/llama_utils.h) 选项生效
+3. 修改配置文件，使 [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) 选项生效
 4. 执行测试数据集，和 fp16 版本对比精度和显存使用情况
 
 ## 显存降低
