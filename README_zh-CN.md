@@ -50,106 +50,68 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 测试数据：输入token数为1，生成token数为2048
 
-TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 10%
+TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/068dd596-96d8-4877-8b25-fb037c58ab3c)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/c9395fbd-2f48-442c-9a8b-ab59672ee03f)
 
 ## 快速上手
 
 ### 安装
 
 ```shell
-conda create -n open-mmlab python=3.8
-conda activate open-mmlab
-git clone https://github.com/open-mmlab/lmdeploy.git
+conda create -n lmdeploy python=3.8
+conda activate lmdeploy
+git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 pip install -e .
 ```
 
-<!--
-### 编译
-
-下载 docker image `openmmlab/lmdeploy:latest`，挂载 lmdeploy 的数据卷，启动 container，在 container 内执行以下命令：
-
-```shell
-mkdir build && cd build
-../generate.sh
-make -j$(nproc) && make install
-``` -->
-
 ### 部署 InternLM
 
-### 部署 [LLaMA](https://github.com/facebookresearch/llama) 服务
-
-请填写[这张表](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)，获取 LLaMA 模型权重
-
-<details close>
-<summary><b>7B</b></summary>
+#### 获取 InternLM 模型
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-7B /path/to/llama-7b llama \
-    --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+# 1. 下载 InternLM 模型
+
+# 2. 转换为 trubomind 要求的格式。默认存放路径为 ./workspace
+python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
+
 ```
 
-</details>
-
-<details close>
-<summary><b>13B</b></summary>
+#### 使用 turbomind 推理
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-13B /path/to/llama-13b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
+    python3 -m lmdeploy.turbomind.chat internlm /workspace
 ```
 
-</details>
+#### 部署推理服务
 
-### 部署 [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/) 服务
-
-<details close>
-<summary><b>7B</b></summary>
+使用下面的命令启动推理服务：
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-7b \
-  --target-model-path /path/to/vicuna-7b \
-  --delta-path lmsys/vicuna-7b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-7B /path/to/vicuna-7b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+bash workspace/service_docker_up.sh
 ```
 
-</details>
-
-<details close>
-<summary><b>13B</b></summary>
+你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-13b \
-  --target-model-path /path/to/vicuna-13b \
-  --delta-path lmsys/vicuna-13b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-13B /path/to/vicuna-13b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+python3 lmdeploy.serve.client {server_ip_addresss}:33337
 ```
 
-</details>
+也可以通过 WebUI 方式来对话：
 
-## 通过命令行推理
-
-```shell
-python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
+```
+python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
-## 使用浏览器推理
+下图是这两种方法的样例展示：
 
-```shell
-python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 ```
+TODO: two side-by-side gif. The left one is command line demo, the other is web ui demo, including how to launch web ui
+```
+
+其他模型的部署方式，比如 LLaMA，vicuna，请参考[这里](docs/zh_cn/serving.md)
 
 ## 量化部署
 

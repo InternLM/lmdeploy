@@ -49,9 +49,9 @@ Metrics: Throughput (token/s)
 
 Test Data: The number of input tokens is 1, and the number of generated tokens is 2048
 
-The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 10% higher than DeepSpeed overall.
+The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall.
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/068dd596-96d8-4877-8b25-fb037c58ab3c)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/c9395fbd-2f48-442c-9a8b-ab59672ee03f)
 
 ## Quick Start
 
@@ -60,101 +60,59 @@ The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 10% highe
 Below are quick steps for installation:
 
 ```shell
-conda create -n open-mmlab python=3.8
-conda activate open-mmlab
-git clone https://github.com/open-mmlab/lmdeploy.git
+conda create -n lmdeploy python=3.8
+conda activate lmdeploy
+git clone clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 pip install -e .
 ```
 
-<!-- ### Build
+### Deploy InternLM
 
-Pull docker image `openmmlab/lmdeploy:latest` and build lmdeploy libs in its launched container
-
-```shell
-mkdir build && cd build
-../generate.sh
-make -j$(nproc) && make install
-``` -->
-
-### Serving InternLM
+#### Get InternLM model
 
 ```shell
+# 1. Download InternLM model
+
+# 2. Convert InternLM model to turbomind's format, which will be in "./workspace" by default
+python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
+
 ```
 
-### Serving [LLaMA](https://github.com/facebookresearch/llama)
-
-Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form)
-
-<details close>
-<summary><b>7B</b></summary>
+#### Inference by TurboMind
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-7B /path/to/llama-7b llama \
-    --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
+    python3 -m lmdeploy.turbomind.chat internlm /workspace
 ```
 
-</details>
+#### Serving
 
-<details close>
-<summary><b>13B</b></summary>
+Launch inference server by:
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-13B /path/to/llama-13b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+bash workspace/service_docker_up.sh
 ```
 
-</details>
-
-### Serving [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/)
-
-<details close>
-<summary><b>7B</b></summary>
+Then, you can communicate with the inference server by command line,
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-7b \
-  --target-model-path /path/to/vicuna-7b \
-  --delta-path lmsys/vicuna-7b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-7B /path/to/vicuna-7b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+python3 lmdeploy.serve.client {server_ip_addresss}:33337
 ```
 
-</details>
+or webui,
 
-<details close>
-<summary><b>13B</b></summary>
-
-```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-13b \
-  --target-model-path /path/to/vicuna-13b \
-  --delta-path lmsys/vicuna-13b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-13B /path/to/vicuna-13b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+```
+python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
-</details>
+Here are examples:
 
-## Inference with Command Line Interface
-
-```shell
-python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
+```
+TODO: two side-by-side gif. The left one is command line demo, the other is web ui demo, including how to launch web ui
 ```
 
-## Inference with Web UI
-
-```shell
-python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
-```
-
-## User Guide
+For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 
 ## Quantization
 
