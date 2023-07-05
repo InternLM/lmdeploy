@@ -80,13 +80,13 @@ class TurboMind:
         self.model = model
         self.stop_words = _stop_words(stop_words)
 
-    def create_instance(self, stream=0):
-        return TurboMindInstance(self, stream)
+    def create_instance(self, cuda_stream_id=0):
+        return TurboMindInstance(self, cuda_stream_id)
 
 
 class TurboMindInstance:
 
-    def __init__(self, tm_model, stream=0):
+    def __init__(self, tm_model, cuda_stream_id=0):
         self.tm_model = tm_model
 
         self.device_id = tm_model.device_id
@@ -94,7 +94,7 @@ class TurboMindInstance:
         self.stop_words = tm_model.stop_words
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
-        self.stream = stream
+        self.cuda_stream_id = cuda_stream_id
 
         # create instance
         model = tm_model.model
@@ -103,9 +103,9 @@ class TurboMindInstance:
         instance_comm = model.create_instance_comm(tm_model.gpu_count)
 
         model_inst = model.create_model_instance(self.device_id, self.rank,
-                                                 self.stream, nccl_params,
-                                                 custom_comms[0])
-        model_inst.register_callback(self._forward_callback)
+                                                 self.cuda_stream_id,
+                                                 nccl_params, custom_comms[0])
+        # model_inst.register_callback(self._forward_callback)
         self.model_inst = model_inst
         self.instance_comm = instance_comm
         self.que = Queue()
@@ -136,7 +136,11 @@ class TurboMindInstance:
                      temperature=0.8,
                      repetition_penalty=1.05,
                      ignore_eos=False,
-                     random_seed=None):
+                     random_seed=None,
+                     stream_output=False):
+
+        if stream_output:
+            self.model_inst.register_callback(self._forward_callback)
 
         if len(input_ids) == 0:
             input_ids = []
@@ -229,3 +233,6 @@ class TurboMindInstance:
                     self.que.get()
                 self.thread.join()
                 break
+
+        if stream_output:
+            self.model_inst.unregister_callback()

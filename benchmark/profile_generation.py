@@ -33,8 +33,12 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
 
         # TODO: ignore first token
         first_token_latency = timestamps[0] - start
-        token_latency = timestamps[-1] - timestamps[0]
-        token = tokens[-1] - tokens[0]
+        if len(timestamps) == 1:
+            token_latency = timestamps[0] - start
+            token = tokens[0]
+        else:
+            token_latency = timestamps[-1] - timestamps[0]
+            token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
     que.put((session_id, stats))
 

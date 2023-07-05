@@ -16,6 +16,7 @@ def input_prompt():
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
+
 def main(model_name, model_path, session_id: int = 1):
     tm_model = tm.TurboMind(model_path)
     generator = tm_model.create_instance()
@@ -53,6 +54,7 @@ def main(model_name, model_path, session_id: int = 1):
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
+                    stream_output=True,
                     request_output_len=512,
                     sequence_start=(nth_round == 1),
                     sequence_end=False,
