@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
-from typing import Sequence, Optional, Union
-from torch.nn.utils.rnn import pad_sequence
+from typing import Sequence, Union
+
 import torch
+from torch.nn.utils.rnn import pad_sequence
+
 
 class Tokenizer:
 
@@ -67,8 +69,10 @@ class Tokenizer:
             return self.model.decode(t,
                                      skip_special_tokens=skip_special_tokens)
 
+
 class Preprocessor:
-    def __init__(self, tokenizer:Tokenizer):
+
+    def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
@@ -87,13 +91,13 @@ class Preprocessor:
             ids, ids' length and requested output length
         """
         if isinstance(prompts, str):
-            input0 = [[prompts]]
+            _ = [[prompts]]
         elif isinstance(prompts, Sequence):
-            input0 = [[prompt] for prompt in prompts]
+            _ = [[prompt] for prompt in prompts]
         else:
             assert 0, f'str or Sequence[str] prompts are expected but got ' \
                       f'{type(prompts)}'
-        
+
         start_ids = [
             torch.IntTensor(self.tokenizer.encode(prompt))
             for prompt in prompts
@@ -106,7 +110,8 @@ class Preprocessor:
 
 
 class Postprocessor:
-    def __init__(self, tokenizer:Tokenizer):
+
+    def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id

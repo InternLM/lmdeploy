@@ -1,26 +1,27 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Iterable
-import sys
 import os.path as osp
-import torch
+import sys
+from typing import Iterable, List
+
 import numpy as np
-import lmdeploy
-from lmdeploy.model import MODELS
-from .tokenizer import Tokenizer, Preprocessor, Postprocessor
+import torch
 from torch.nn.utils.rnn import pad_sequence
+
+import lmdeploy
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
-import _turbomind as _tm
+import _turbomind as _tm  # noqa: E402
 
 
 def _stop_words(stop_words: List[int]):
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
-            all(isinstance(elem, int) for elem in stop_words), \
-            f'stop_words must be a list but got {type(stop_words)}'
+           all(isinstance(elem, int) for elem in stop_words), \
+           f'stop_words must be a list but got {type(stop_words)}'
+
     # each id in stop_words represents a stop word
     # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
     # detailed explanation about fastertransformer's stop_words
@@ -136,8 +137,9 @@ class TurboMindInstance:
 
         input_ids = [torch.IntTensor(ids) for ids in input_ids]
         input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(
-            input_ids, batch_first=True, padding_value=self.eos_id)
+        input_ids = pad_sequence(input_ids,
+                                 batch_first=True,
+                                 padding_value=self.eos_id)
         input_lengths = input_lengths.detach().cpu().numpy()
 
         if isinstance(session_id, int):
@@ -147,8 +149,9 @@ class TurboMindInstance:
         inputs = dict(
             input_ids=input_ids,
             input_lengths=input_lengths,
-            request_output_len=np.full(
-                input_lengths.shape, request_output_len, dtype=np.uint32),
+            request_output_len=np.full(input_lengths.shape,
+                                       request_output_len,
+                                       dtype=np.uint32),
             runtime_top_k=_broadcast_np(top_k, np.uint32),
             runtime_top_p=_broadcast_np(top_p, np.float32),
             temperature=_broadcast_np(temperature, np.float32),

@@ -1,4 +1,5 @@
-from lmdeploy.turbomind.tokenizer import Tokenizer, Preprocessor, Postprocessor
+from lmdeploy.turbomind.tokenizer import Postprocessor, Preprocessor, Tokenizer
+
 
 def main():
     tokenizer = Tokenizer('huggyllama/llama-7b')
@@ -11,6 +12,7 @@ def main():
 
     decode_prompts = postprocessor(*tokens)
     print(decode_prompts)
+
 
 if __name__ == '__main__':
     main()

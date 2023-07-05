@@ -1,8 +1,10 @@
+import random
+
 import fire
+from transformers import AutoTokenizer
+
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
-from transformers import AutoTokenizer
-import random
 
 
 def input_prompt():
@@ -46,8 +48,8 @@ def main(model_name, model_path, tokenizer_model_path, session_id: int = 1):
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]
                 # decode res
-                response = tokenizer.decode(
-                    res[step:], skip_special_tokens=True)
+                response = tokenizer.decode(res[step:],
+                                            skip_special_tokens=True)
                 print(f'session {session_id}, {tokens}, {response}')
                 # update step
                 step = tokens - 1

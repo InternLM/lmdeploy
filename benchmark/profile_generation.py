@@ -1,14 +1,14 @@
 # import multiprocessing as mp
-from threading import Thread
-from queue import Queue
 import time
+from queue import Queue
+from threading import Thread
 
 import fire
 import numpy as np
-
-from lmdeploy.turbomind import TurboMind
-from lmdeploy.model import MODELS
 from transformers import AutoTokenizer
+
+from lmdeploy.model import MODELS
+from lmdeploy.turbomind import TurboMind
 
 
 def infer(model, session_id: int, input_ids: str, output_seqlen: int,
@@ -19,13 +19,12 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
         start = time.perf_counter()
         timestamps = [start]
         tokens = [0]
-        for outputs in chatbot.stream_infer(
-                session_id,
-                input_ids,
-                request_output_len=output_seqlen,
-                sequence_start=True,
-                sequence_end=True,
-                ignore_eos=True):
+        for outputs in chatbot.stream_infer(session_id,
+                                            input_ids,
+                                            request_output_len=output_seqlen,
+                                            sequence_start=True,
+                                            sequence_end=True,
+                                            ignore_eos=True):
             res, token = outputs[0]
             timestamps.append(time.perf_counter())
             tokens.append(token)
@@ -48,13 +47,12 @@ def warmup(model,
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
-            for _ in chatbot.stream_infer(
-                    session_id,
-                    input_ids=[1],
-                    request_output_len=output_seqlen,
-                    sequence_start=True,
-                    sequence_end=True,
-                    ignore_eos=True):
+            for _ in chatbot.stream_infer(session_id,
+                                          input_ids=[1],
+                                          request_output_len=output_seqlen,
+                                          sequence_start=True,
+                                          sequence_end=True,
+                                          ignore_eos=True):
                 continue
 
     _start = time.perf_counter()
@@ -88,8 +86,7 @@ def main(model_path: str,
     stop_words = model.stop_words
     tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
 
-    warmup(tm_model, concurrency, session_len,
-           output_seqlen)
+    warmup(tm_model, concurrency, session_len, output_seqlen)
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)
@@ -101,8 +98,8 @@ def main(model_path: str,
     # TODO: update to the multithread version
     for i in range(concurrency):
         proc = Thread(target=infer,
-                          args=(tm_model, i + 1, input_ids, output_seqlen,
-                                test_round, que))
+                      args=(tm_model, i + 1, input_ids, output_seqlen,
+                            test_round, que))
         procs.append(proc)
         proc.start()
 

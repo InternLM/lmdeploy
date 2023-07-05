@@ -13,7 +13,7 @@ if(NOT pybind11_FOUND)
 endif()
 
 pybind11_add_module(${PROJECT_NAME} bind.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE TransformerTritonBackend 
+target_link_libraries(${PROJECT_NAME} PRIVATE TransformerTritonBackend
     LlamaTritonBackend custom_ar_comm memory_utils)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_14)
 
