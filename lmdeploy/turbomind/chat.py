@@ -16,6 +16,13 @@ def input_prompt():
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
+def valid_str(string, coding='utf-8'):
+    invalid_chars = [b'\xef\xbf\xbd']
+    bstr = bytes(string, coding)
+    for invalid_char in invalid_chars:
+        bstr = bstr.replace(invalid_char, b'')
+    ret = bstr.decode(encoding=coding, errors='ignore')
+    return ret
 
 def main(model_name, model_path, session_id: int = 1):
     tm_model = tm.TurboMind(model_path)
@@ -70,9 +77,11 @@ def main(model_name, model_path, session_id: int = 1):
                 # decode res
                 response = tokenizer.decode(
                     res, skip_special_tokens=True)[response_size:]
+                response = valid_str(response)
                 print(f'{response}', end='', flush=True)
                 response_size += len(response)
-                # update step
+
+            # update step
             step += len(input_ids) + tokens
             print()
 
