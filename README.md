@@ -51,7 +51,7 @@ Test Data: The number of input tokens is 1, and the number of generated tokens i
 
 The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall.
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/c9395fbd-2f48-442c-9a8b-ab59672ee03f)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/1aa64d01-621c-4b53-8e48-e66bc4636b3b)
 
 ## Quick Start
 
