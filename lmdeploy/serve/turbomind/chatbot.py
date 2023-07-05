@@ -34,6 +34,7 @@ class Session:
 class StatusCode(Enum):
     TRITON_STREAM_END = 0  # end of streaming
     TRITON_STREAM_ING = 1  # response is in streaming
+    TRITON_SESSION_READY = 2  # session is ready for inference
     TRITON_SERVER_ERR = -1  # triton server's error
     TRITON_SESSION_CLOSED = -2  # session has been closed
     TRITON_SESSION_OUT_OF_LIMIT = -3  # request length out of limit
@@ -79,9 +80,9 @@ class Chatbot:
                  tritonserver_addr: str,
                  model_name: str,
                  session_len: int = 2048,
-                 top_p: float = 1.0,
-                 top_k: int = 40,
-                 temperature: float = 1.0,
+                 top_p: float = 0.8,
+                 top_k: int = None,
+                 temperature: float = 0.8,
                  repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
@@ -340,6 +341,7 @@ class Chatbot:
 
         preseq_length = session.sequence_length
         session.response = ''
+        session.status = StatusCode.TRITON_SESSION_READY
 
         que = queue.Queue()
         producer = threading.Thread(target=self._stream_producer,
@@ -375,8 +377,6 @@ class Chatbot:
                 prepare_tensor('input_ids', input_ids),
                 prepare_tensor('input_lengths', input_lengths),
                 prepare_tensor('request_output_len', request_output_len),
-                prepare_tensor('runtime_top_k',
-                               cfg.top_k * np.ones((1, 1), dtype=np.uint32)),
                 prepare_tensor('runtime_top_p',
                                cfg.top_p * np.ones((1, 1), dtype=np.float32)),
                 prepare_tensor(
@@ -389,6 +389,10 @@ class Chatbot:
                 prepare_tensor('step',
                                preseq_length * np.ones((1, 1), dtype=np.int32))
             ]
+            if cfg.top_k is not None:
+                inputs += prepare_tensor(
+                    'runtime_top_k',
+                    cfg.top_k * np.ones((1, 1), dtype=np.uint32)),
             if cfg.stop_words is not None:
                 inputs += [prepare_tensor('stop_words_list', cfg.stop_words)]
             if cfg.bad_words is not None:
@@ -435,6 +439,7 @@ class Chatbot:
                 yield StatusCode.TRITON_STREAM_END, \
                       session.response[len(session.prompt):], \
                       session.sequence_length - preseq_length
+                session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
                 logger.error(f'got error from turbomind, code '
@@ -472,10 +477,16 @@ class Chatbot:
                                          sequence_length)
                 text = output_str[0].decode()
                 if display:
-                    new_text = text[len(session.response):]
-                    print(new_text, end='', flush=True)
+                    if len(text) > len(session.prompt):
+                        if session.status == StatusCode.TRITON_SESSION_READY:
+                            new_text = text[len(session.prompt):]
+                            session.status = StatusCode.TRITON_STREAM_ING
+                        else:
+                            new_text = text[len(session.response):]
+                        print(new_text, end='', flush=True)
                 session.response = text
                 if len(session.response) > len(session.prompt):
+                    session.status = StatusCode.TRITON_STREAM_ING
                     yield (StatusCode.TRITON_STREAM_ING,
                            session.response[len(session.prompt):],
                            sequence_length.squeeze())

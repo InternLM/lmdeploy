@@ -280,13 +280,11 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     if osp.exists(tokenizer_path):
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
-        for json_file in os.listdir(model_path):
-            if json_file.endswith(
-                    '.json') and json_file != 'pytorch_model.bin.index.json':
-                json_path = osp.join(model_path, json_file)
-                shutil.copy(
-                    json_path,
-                    osp.join(triton_models_path, 'tokenizer', json_file))
+        for _file in os.listdir(model_path):
+            if _file.endswith('.json') or _file.endswith('.py'):
+                json_path = osp.join(model_path, _file)
+                shutil.copy(json_path,
+                            osp.join(triton_models_path, 'tokenizer', _file))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
         exit(-1)
