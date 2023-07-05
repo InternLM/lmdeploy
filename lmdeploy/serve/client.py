@@ -13,7 +13,7 @@ def input_prompt():
 
 
 def main(tritonserver_addr: str, model_name: str, session_id: int = 1):
-    log_level = os.environ.get('SERVICE_LOG_LEVEL', 'ERROR')
+    log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')
     chatbot = Chatbot(tritonserver_addr,
                       model_name,
                       log_level=log_level,
