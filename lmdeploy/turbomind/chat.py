@@ -16,7 +16,6 @@ def input_prompt():
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
-
 def main(model_name, model_path, session_id: int = 1):
     tm_model = tm.TurboMind(model_path)
     generator = tm_model.create_instance()
@@ -40,8 +39,7 @@ def main(model_name, model_path, session_id: int = 1):
                     input_ids=[input_ids],
                     request_output_len=512,
                     sequence_start=False,
-                    sequence_end=True,
-                    stop=True):
+                    sequence_end=True):
                 pass
             nth_round = 1
             step = 0
@@ -76,7 +74,7 @@ def main(model_name, model_path, session_id: int = 1):
             step += len(input_ids) + tokens
             print()
 
-        nth_round += 1
+            nth_round += 1
 
 
 if __name__ == '__main__':
