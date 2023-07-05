@@ -146,6 +146,8 @@ python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
 python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 ```
 
+![](https://private-user-images.githubusercontent.com/41138331/f4352172-d8b1-49aa-b658-50ce72b896a5)
+
 ## 量化部署
 
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
