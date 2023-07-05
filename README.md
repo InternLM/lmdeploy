@@ -1,12 +1,6 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
-[![codecov](https://codecov.io/gh/InternLM/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/InternLM/lmdeploy)
-[![license](https://img.shields.io/github/license/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
-
 English | [简体中文](README_zh-CN.md)
 
 </div>
@@ -39,15 +33,25 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, it remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
-<div align="center">
-  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
-</div>
-
 - **Multi-GPU Model Deployment and Quantization**: We provide comprehensive model deployment and quantification support, and have been validated at different scales.
 
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
 ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
+
+## Performance
+
+As shown in the figure below, we have compared the token generation speed among facebookresearch/llama, HuggingFace Transformers, and DeepSpeed on the 7B model.
+
+Target Device: NVIDIA A100(80G)
+
+Metrics: Throughput (token/s)
+
+Test Data: The number of input tokens is 1, and the number of generated tokens is 2048
+
+The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x
+
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/1aa64d01-621c-4b53-8e48-e66bc4636b3b)
 
 ## Quick Start
 
@@ -56,100 +60,59 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 Below are quick steps for installation:
 
 ```shell
-conda create -n open-mmlab python=3.8
-conda activate open-mmlab
-git clone https://github.com/open-mmlab/lmdeploy.git
+conda create -n lmdeploy python=3.10
+conda activate lmdeploy
+git clone clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 pip install -e .
 ```
 
-### Build
+### Deploy InternLM
 
-Pull docker image `openmmlab/lmdeploy:latest` and build lmdeploy libs in its launched container
+#### Get InternLM model
 
 ```shell
-mkdir build && cd build
-../generate.sh
-make -j$(nproc) && make install
+# 1. Download InternLM model
+
+# 2. Convert InternLM model to turbomind's format, which will be in "./workspace" by default
+python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
+
 ```
 
-### Serving [LLaMA](https://github.com/facebookresearch/llama)
-
-Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform?usp=send_form)
-
-Run one of the following commands to serve a LLaMA model on NVIDIA GPU server:
-
-<details close>
-<summary><b>7B</b></summary>
+#### Inference by TurboMind
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-7B /path/to/llama-7b llama \
-    --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
+    python3 -m lmdeploy.turbomind.chat internlm /workspace
 ```
 
-</details>
-
-<details close>
-<summary><b>13B</b></summary>
-
-```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-13B /path/to/llama-13b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+```{note}
+When inferring with FP16 precision, the InternLM-7B model requires at least 22.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
 ```
 
-</details>
+#### Serving
 
-### Serving [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/)
-
-<details open>
-<summary><b>7B</b></summary>
+Launch inference server by:
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-7b \
-  --target-model-path /path/to/vicuna-7b \
-  --delta-path lmsys/vicuna-7b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-7B /path/to/vicuna-7b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+bash workspace/service_docker_up.sh
 ```
 
-</details>
-
-<details>
-<summary><b>13B</b></summary>
+Then, you can communicate with the inference server by command line,
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-13b \
-  --target-model-path /path/to/vicuna-13b \
-  --delta-path lmsys/vicuna-13b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-13B /path/to/vicuna-13b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+python3 lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 ```
 
-</details>
+or webui,
 
-## Inference with Command Line Interface
-
-```shell
-python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
 ```
-
-## Inference with Web UI
-
-```shell
-python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
+python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
 ![](https://github.com/open-mmlab/lmdeploy/assets/41138331/f4352172-d8b1-49aa-b658-50ce72b896a5)
 
-## User Guide
+For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 
 ## Quantization
 
