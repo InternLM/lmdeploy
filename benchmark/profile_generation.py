@@ -1,102 +1,115 @@
-import multiprocessing as mp
+# import multiprocessing as mp
 import time
+from queue import Queue
+from threading import Thread
 
 import fire
 import numpy as np
+from transformers import AutoTokenizer
 
-from lmdeploy.serve.turbomind.chatbot import Chatbot
+from lmdeploy.model import MODELS
+from lmdeploy.turbomind import TurboMind
 
 
-def infer(chatbot, session_id: int, prompt: str, output_seqlen: int,
-          test_round: int, que: mp.Queue):
+def infer(model, session_id: int, input_ids: str, output_seqlen: int,
+          test_round: int, que: Queue):
+    chatbot = model.create_instance()
     stats = []
     for i in range(test_round):
-        timestamps = []
-        tokens = []
         start = time.perf_counter()
-        for status, res, token in chatbot.stream_infer(
-                session_id,
-                prompt,
-                request_output_len=output_seqlen,
-                sequence_start=True,
-                sequence_end=True):
+        timestamps = [start]
+        tokens = [0]
+        for outputs in chatbot.stream_infer(session_id,
+                                            input_ids,
+                                            request_output_len=output_seqlen,
+                                            sequence_start=True,
+                                            sequence_end=True,
+                                            ignore_eos=True):
+            res, token = outputs[0]
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
-        first_token_latency = timestamps[0] - start
+        # TODO: ignore first token
+        first_token_latency = timestamps[1] - start
         token_latency = timestamps[-1] - timestamps[0]
         token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
-        chatbot.reset_session()
     que.put((session_id, stats))
 
 
-def warmup(tritonserver_addr: str,
-           model_name: str,
+def warmup(model,
            concurrency: int,
            session_len: int,
            output_seqlen: int,
            warmup_round: int = 4):
     print('start to warmup ...')
 
-    def _infer(_chatbot, session_id):
+    def _infer(model, session_id):
+        chatbot = model.create_instance()
         for _ in range(warmup_round):
-            for _, _, _ in chatbot.stream_infer(
-                    session_id,
-                    prompt='',
-                    request_output_len=output_seqlen,
-                    sequence_start=True,
-                    sequence_end=True):
+            for _ in chatbot.stream_infer(session_id,
+                                          input_ids=[1],
+                                          request_output_len=output_seqlen,
+                                          sequence_start=True,
+                                          sequence_end=True,
+                                          ignore_eos=True):
                 continue
-            chatbot.reset_session()
 
     _start = time.perf_counter()
-    chatbots = [
-        Chatbot(tritonserver_addr=tritonserver_addr,
-                model_name=model_name,
-                session_len=session_len,
-                ignore_eos=True,
-                profile_generation=True) for _ in range(concurrency)
-    ]
     procs = []
-    for i, chatbot in enumerate(chatbots):
-        proc = mp.Process(target=_infer, args=(chatbot, i + 1))
+    for i in range(concurrency):
+        proc = Thread(target=_infer, args=(model, i + 1))
         procs.append(proc)
         proc.start()
-    for proc in procs:
-        proc.join()
+
+    try:
+        for proc in procs:
+            proc.join()
+    except Exception:
+        for proc in procs:
+            proc.stop()
+        exit(1)
     _end = time.perf_counter()
     print(f'end warmup, elapsed time: {round(_end - _start, 2)}s')
 
 
-def main(tritonserver_addr: str,
+def main(model_path: str,
          model_name: str,
+         tokenlizer: str,
          concurrency: int = 1,
-         session_len: int = 2048,
+         session_len: int = 2056,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
-    warmup(tritonserver_addr, model_name, concurrency, session_len,
-           output_seqlen)
+    tokenizer = AutoTokenizer.from_pretrained(tokenlizer)
+    model = MODELS.get(model_name)()
+    stop_words = model.stop_words
+    tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
+
+    warmup(tm_model, concurrency, session_len, output_seqlen)
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)
-    que = mp.Queue()
+    input_ids = tokenizer.encode(prompt)
+    que = Queue()
     procs = []
     _start = time.perf_counter()
+
+    # TODO: update to the multithread version
     for i in range(concurrency):
-        chatbot = Chatbot(tritonserver_addr=tritonserver_addr,
-                          model_name=model_name,
-                          session_len=session_len,
-                          ignore_eos=True,
-                          profile_generation=True)
-        proc = mp.Process(target=infer,
-                          args=(chatbot, i + 1, prompt, output_seqlen,
-                                test_round, que))
+        proc = Thread(target=infer,
+                      args=(tm_model, i + 1, input_ids, output_seqlen,
+                            test_round, que))
         procs.append(proc)
         proc.start()
-    for proc in procs:
-        proc.join()
+
+    try:
+        for proc in procs:
+            proc.join()
+    except Exception:
+        for proc in procs:
+            proc.stop()
+        exit(1)
     _end = time.perf_counter()
     elapsed_time = _end - _start
 
@@ -116,7 +129,7 @@ def main(tritonserver_addr: str,
     token_latency_max = np.max(stats[:, 2], axis=0)
     token_latency_ave = np.mean(stats[:, 2], axis=0)
     throughput = np.sum(stats[:, 1], axis=0) / np.sum(stats[:, 2], axis=0)
-    print(f'\n{"-" * 50}\ncocurrency: {concurrency}, input_tokens: '
+    print(f'\n{"-" * 50}\nconcurrency: {concurrency}, input_tokens: '
           f'{input_seqlen}, output_tokens: {output_seqlen}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
           f'first_token latency(min, max, ave): '

@@ -1,22 +1,5 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
-  <div>&nbsp;</div>
-  <div align="center">
-    <b><font size="5">OpenMMLab website</font></b>
-    <sup>
-        <a href="https://openmmlab.com">
-        <i><font size="4">HOT</font></i>
-      </a>
-    </sup>
-    &nbsp;&nbsp;&nbsp;&nbsp;
-    <b><font size="5">OpenMMLab platform</font></b>
-    <sup>
-      <a href="https://platform.openmmlab.com">
-        <i><font size="4">TRY IT OUT</font></i>
-      </a>
-    </sup>
-  </div>
-  <div>&nbsp;</div>
 
 [![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
 [![codecov](https://codecov.io/gh/open-mmlab/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/lmdeploy)
@@ -50,19 +33,22 @@
 
 ## 简介
 
-LMDeploy 是 [MMRazor](https://github.com/open-mmlab/mmrazor) 和 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 团队联合开发的，针对 LLM 进行轻量化、部署和服务的工具箱。它拥有以下核心功能：
+LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发，是涵盖了 LLM 任务的全套轻量化、部署和服务解决方案。
+这个强大的工具箱提供以下核心功能：
 
-- 基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) 实现的高效推理引擎 **TurboMind**, 支持 LLaMA 及其变体模型在 NVIDIA 设备上的推理
+- **高效推理引擎 TurboMind**：基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)，我们实现了高效推理引擎 TurboMind，它支持 LLaMA 及其变体模型在 NVIDIA GPU 上的推理。
 
-- 实现 interactive mode 推理方式。通过缓存多轮对话过程中attention的k/v，记住对话历史，从而避免重复decode历史会话
+- **交互推理方式**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。
 
-<div align="center">
-  <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true" width="600"/>
-</div>
+  <div align="center">
+    <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
+  </div>
 
-- 支持 persistent batch 推理方式
+- **多 GPU 部署和量化**：我们提供了全面的模型部署和量化支持，已在不同规模上完成验证。
 
-  TODO: gif to show what persistent batch is
+- **persistent batch 推理**：进一步优化模型执行效率。
+
+  ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
 
 ## 快速上手
 
@@ -92,7 +78,7 @@ make -j$(nproc) && make install
 
 执行如下命令，可以把 LLaMA 模型部署到 NVIDIA GPU Server：
 
-<details open>
+<details close>
 <summary><b>7B</b></summary>
 
 ```shell
@@ -103,7 +89,7 @@ bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turb
 
 </details>
 
-<details open>
+<details close>
 <summary><b>13B</b></summary>
 
 ```shell
@@ -164,10 +150,22 @@ python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
 首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 weight 目录下。
+
+```
+python3 -m lmdeploy.lite.apis.kv_qparams \
+  --model $HF_MODEL \
+  --output_dir $DEPLOY_WEIGHT_DIR \
+  --symmetry True \ # 对称量化或非对称量化，默认为 True
+  --offload  False \ # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
+  --num_tp 1  \  # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+```
+
 然后调整 `config.ini`
 
 - `use_context_fmha` 改为 0，表示关闭
 - `quant_policy` 设置为 4。此参数默认为 0，表示不开启
+
+这里是[量化测试结果](./docs/zh_cn/quantization.md)。
 
 ## 贡献指南
 

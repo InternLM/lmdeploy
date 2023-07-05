@@ -22,7 +22,7 @@ namespace turbomind {
 template<typename T>
 void FfnLayerINT8<T>::forward(std::vector<turbomind::Tensor>*       output_tensors,
                               const std::vector<turbomind::Tensor>* input_tensors,
-                              const FfnWeight<T>*                           ffn_weights)
+                              const FfnWeight<T>*                   ffn_weights)
 {
     // input_tensors: [input (token_num, hidden_dimension)]
     // output_tensors: [output (token_num, hidden_dimension)]

@@ -39,6 +39,7 @@ endif()
 if(NOT USE_TRITONSERVER_DATATYPE)
   option(USE_TRITONSERVER_DATATYPE "Build triton backend for triton server" OFF)
 endif()
+option(BUILD_PY_FFI "Build python ffi" ON)
 
 include(FetchContent)
 
@@ -84,7 +85,7 @@ if(USE_TRITONSERVER_DATATYPE)
   add_definitions("-DUSE_TRITONSERVER_DATATYPE")
 endif()
 
-set(CXX_STD "14" CACHE STRING "C++ standard")
+set(CXX_STD "17" CACHE STRING "C++ standard")
 
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
@@ -376,6 +377,7 @@ install(
     transformer-shared-targets
   LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/turbomind
   ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/turbomind
+  RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
 )
 
 install(
@@ -386,6 +388,11 @@ install(
   DESTINATION
     ${INSTALL_CONFIGDIR}
 )
+
+# install python api
+install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+
 
 export(
   EXPORT

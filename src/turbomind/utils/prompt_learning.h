@@ -19,7 +19,8 @@
 
 namespace turbomind {
 
-enum class PromptLearningType {
+enum class PromptLearningType
+{
     no_prompt,
     soft_prompt,
     prefix_prompt,

@@ -1159,8 +1159,7 @@ void streaming_callback(std::shared_ptr<std::unordered_map<std::string, Tensor>>
     for (auto& response : *responses) {
         if (response != nullptr) {
             LOG_MESSAGE(TRITONSERVER_LOG_VERBOSE, (std::string("start to send streaming response")).c_str());
-            LOG_IF_ERROR(TRITONBACKEND_ResponseSend(response, 0, nullptr),
-                         "failed to send TurboMind backend response");
+            LOG_IF_ERROR(TRITONBACKEND_ResponseSend(response, 0, nullptr), "failed to send TurboMind backend response");
             LOG_MESSAGE(TRITONSERVER_LOG_VERBOSE, (std::string("streaming response is sent")).c_str());
         }
         else {
@@ -1354,11 +1353,10 @@ ModelInstanceState::Execute(std::vector<TRITONBACKEND_Response*>*               
         }
     }
     catch (std::exception& ex) {
-        SendErrorForResponses(
-            responses,
-            response_count,
-            TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_INTERNAL,
-                                  ("TurboMind execute failure: " + std::string(ex.what())).c_str()));
+        SendErrorForResponses(responses,
+                              response_count,
+                              TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_INTERNAL,
+                                                    ("TurboMind execute failure: " + std::string(ex.what())).c_str()));
     }
     auto output_tensors = output_tensors_list[0];
     return output_tensors;

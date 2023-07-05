@@ -43,7 +43,8 @@ namespace turbomind {
 namespace mpi {
 
 // A wrapper of MPI data type. MPI_TYPE_{data_type}
-enum MpiType {
+enum MpiType
+{
     MPI_TYPE_BYTE,
     MPI_TYPE_CHAR,
     MPI_TYPE_INT,
@@ -53,7 +54,8 @@ enum MpiType {
 };
 
 // A wrapper of the level of MPI thread support
-enum MpiThreadSupport {
+enum MpiThreadSupport
+{
     THREAD_SINGLE,
     THREAD_FUNNELED,
     THREAD_SERIALIZED,

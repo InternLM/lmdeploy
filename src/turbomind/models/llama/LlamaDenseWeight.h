@@ -25,7 +25,8 @@
 
 namespace turbomind {
 
-enum class WeightType : int {
+enum class WeightType : int
+{
     kFP32,
     kFP16,
     kFP8,  // not supported yet
