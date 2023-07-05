@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
 import sys
+from queue import Queue
+from threading import Thread
 from typing import Iterable, List
 
 import numpy as np
@@ -103,8 +105,23 @@ class TurboMindInstance:
         model_inst = model.create_model_instance(self.device_id, self.rank,
                                                  self.stream, nccl_params,
                                                  custom_comms[0])
+        model_inst.register_callback(self._forward_callback)
         self.model_inst = model_inst
         self.instance_comm = instance_comm
+        self.que = Queue()
+        self.thread = None
+
+    def _forward_callback(self, result, ctx):
+        self.que.put((False, result))
+
+    def _forward_thread(self, inputs):
+
+        def _func():
+            output = self.model_inst.forward(inputs, self.instance_comm)
+            self.que.put((True, output))
+
+        self.thread = Thread(target=_func)
+        self.thread.start()
 
     def stream_infer(self,
                      session_id,
@@ -137,26 +154,25 @@ class TurboMindInstance:
 
         input_ids = [torch.IntTensor(ids) for ids in input_ids]
         input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
-        input_lengths = input_lengths.detach().cpu().numpy()
+        input_ids = pad_sequence(
+            input_ids, batch_first=True, padding_value=self.eos_id)
 
         if isinstance(session_id, int):
             session_id = [session_id]
         assert len(session_id) == batch_size
 
+        step = _broadcast_np(step, np.int32)
+
         inputs = dict(
             input_ids=input_ids,
             input_lengths=input_lengths,
-            request_output_len=np.full(input_lengths.shape,
-                                       request_output_len,
-                                       dtype=np.uint32),
+            request_output_len=np.full(
+                input_lengths.shape, request_output_len, dtype=np.uint32),
             runtime_top_k=_broadcast_np(top_k, np.uint32),
             runtime_top_p=_broadcast_np(top_p, np.float32),
             temperature=_broadcast_np(temperature, np.float32),
             repetition_penalty=_broadcast_np(repetition_penalty, np.float32),
-            step=_broadcast_np(step, np.int32),
+            step=step,
 
             # session input
             session_len=self.session_len *
@@ -183,12 +199,33 @@ class TurboMindInstance:
         if random_seed is not None:
             inputs['random_seed'] = _broadcast_np(random_seed, np.uint64)
         tm_inputs = _np_dict_to_tm_dict(inputs)
-        tm_outputs = self.model_inst.forward(tm_inputs, self.instance_comm)
 
-        outputs = _tm_dict_to_torch_dict(tm_outputs)
+        # start forward thread
+        self._forward_thread(tm_inputs)
 
-        # TODO: Add stream output
-        output_ids = outputs['output_ids'][:, 0, :]
-        sequence_length = outputs['sequence_length'].long()[:, 0]
-        return [[(output[:l], l.item())]
-                for output, l in zip(output_ids, sequence_length)]
+        seq_start = input_lengths + input_lengths.new_tensor(step)
+
+        # generator
+        while True:
+            while self.que.qsize() > 1:
+                self.que.get()
+
+            finish, tm_outputs = self.que.get()
+
+            outputs = _tm_dict_to_torch_dict(tm_outputs)
+
+            output_ids = outputs['output_ids'][:, 0, :]
+            sequence_length = outputs['sequence_length'].long()[:, 0].cpu()
+            output_ids = [
+                output_id[s:l] for output_id, s, l in zip(
+                    output_ids, seq_start, sequence_length)
+            ]
+            sequence_length -= seq_start.to(sequence_length.device)
+            yield [(output, l.item())
+                   for output, l in zip(output_ids, sequence_length)]
+
+            if finish:
+                while self.que.qsize() > 0:
+                    self.que.get()
+                self.thread.join()
+                break

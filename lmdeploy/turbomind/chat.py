@@ -1,3 +1,4 @@
+import os
 import os.path as osp
 import random
 
@@ -6,6 +7,8 @@ from transformers import AutoTokenizer
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
+
+os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 def input_prompt():
@@ -30,10 +33,25 @@ def main(model_name, model_path, session_id: int = 1):
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
-            pass
+            prompt = model.get_prompt('', nth_round == 1)
+            input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            for outputs in generator.stream_infer(
+                    session_id=session_id,
+                    input_ids=[input_ids],
+                    request_output_len=512,
+                    sequence_start=False,
+                    sequence_end=True,
+                    stop=True):
+                pass
+            nth_round = 1
+            step = 0
+            seed = random.getrandbits(64)
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            print(f'session {session_id}')
+            print(f'{prompt}', end='', flush=True)
+            response_size = 0
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
@@ -51,10 +69,12 @@ def main(model_name, model_path, session_id: int = 1):
                 res, tokens = outputs[0]
                 # decode res
                 response = tokenizer.decode(
-                    res[step:], skip_special_tokens=True)
-                print(f'session {session_id}, {tokens}, {response}')
+                    res, skip_special_tokens=True)[response_size:]
+                print(f'{response}', end='', flush=True)
+                response_size += len(response)
                 # update step
-                step = tokens - 1
+            step += len(input_ids) + tokens
+            print()
 
         nth_round += 1
 

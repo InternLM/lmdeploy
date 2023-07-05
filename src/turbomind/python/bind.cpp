@@ -1,7 +1,8 @@
 #include "src/turbomind/python/dlpack.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include <memory>
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -302,37 +303,45 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<AbstractTransformerModelInstance>(m, "AbstractTransformerModelInstance")
         .def(
             "forward",
-            [](AbstractTransformerModelInstance* model, std::shared_ptr<TensorMap> input_tensors, ft::AbstractInstanceComm* inst_comm) {
-                return model->forward(input_tensors, inst_comm);
-            }, py::call_guard<py::gil_scoped_release>(),
+            [](AbstractTransformerModelInstance* model,
+               std::shared_ptr<TensorMap>        input_tensors,
+               ft::AbstractInstanceComm*         inst_comm) { return model->forward(input_tensors, inst_comm); },
+            py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
-            "inst_comm"_a = nullptr);
+            "inst_comm"_a = nullptr)
+        .def(
+            "register_callback",
+            [](AbstractTransformerModelInstance* self, triton_stream_cb_t cb, py::object ctx) {
+                self->registerCallback(cb, ctx.ptr());
+            },
+            "callback"_a,
+            "context"_a = nullptr)
+        .def("unregister_callback", &AbstractTransformerModelInstance::unRegisterCallback);
 
     // transformer model
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
         // .def_static("create_llama_model", &AbstractTransformerModel::createLlamaModel, "model_dir"_a)
-        .def_static("create_llama_model", [](std::string model_dir,
-                                             size_t      tensor_para_size,
-                                             size_t      pipeline_para_size,
-                                             int         enable_custom_all_reduce,
-                                             std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
-
-            if (data_type == "half" || data_type == "fp16") {
-                return std::make_shared<LlamaTritonModel<half>>(tensor_para_size,
-                                                                pipeline_para_size,
-                                                                enable_custom_all_reduce,
-                                                                model_dir);
-            }else {
-                return std::make_shared<LlamaTritonModel<float>>(tensor_para_size,
-                                                                pipeline_para_size,
-                                                                enable_custom_all_reduce,
-                                                                model_dir);
-            }
-        }, "model_dir"_a,
-            "tensor_para_size"_a=1,
-            "pipeline_para_size"_a=1,
-            "enable_custom_all_reduce"_a=0,
-            "data_type"_a="half")
+        .def_static(
+            "create_llama_model",
+            [](std::string model_dir,
+               size_t      tensor_para_size,
+               size_t      pipeline_para_size,
+               int         enable_custom_all_reduce,
+               std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
+                if (data_type == "half" || data_type == "fp16") {
+                    return std::make_shared<LlamaTritonModel<half>>(
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                }
+                else {
+                    return std::make_shared<LlamaTritonModel<float>>(
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                }
+            },
+            "model_dir"_a,
+            "tensor_para_size"_a         = 1,
+            "pipeline_para_size"_a       = 1,
+            "enable_custom_all_reduce"_a = 0,
+            "data_type"_a                = "half")
         .def("create_nccl_params",
              &AbstractTransformerModel::createNcclParams,
              "node_id"_a,

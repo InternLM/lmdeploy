@@ -1,4 +1,5 @@
 # import multiprocessing as mp
+import os.path as osp
 import time
 from queue import Queue
 from threading import Thread
@@ -17,20 +18,21 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
     stats = []
     for i in range(test_round):
         start = time.perf_counter()
-        timestamps = [start]
-        tokens = [0]
-        for outputs in chatbot.stream_infer(session_id,
-                                            input_ids,
-                                            request_output_len=output_seqlen,
-                                            sequence_start=True,
-                                            sequence_end=True,
-                                            ignore_eos=True):
+        timestamps = []
+        tokens = []
+        for outputs in chatbot.stream_infer(
+                session_id,
+                input_ids,
+                request_output_len=output_seqlen,
+                sequence_start=True,
+                sequence_end=True,
+                ignore_eos=True):
             res, token = outputs[0]
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
         # TODO: ignore first token
-        first_token_latency = timestamps[1] - start
+        first_token_latency = timestamps[0] - start
         token_latency = timestamps[-1] - timestamps[0]
         token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
@@ -47,12 +49,13 @@ def warmup(model,
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
-            for _ in chatbot.stream_infer(session_id,
-                                          input_ids=[1],
-                                          request_output_len=output_seqlen,
-                                          sequence_start=True,
-                                          sequence_end=True,
-                                          ignore_eos=True):
+            for _ in chatbot.stream_infer(
+                    session_id,
+                    input_ids=[1],
+                    request_output_len=output_seqlen,
+                    sequence_start=True,
+                    sequence_end=True,
+                    ignore_eos=True):
                 continue
 
     _start = time.perf_counter()
@@ -75,13 +78,13 @@ def warmup(model,
 
 def main(model_path: str,
          model_name: str,
-         tokenlizer: str,
          concurrency: int = 1,
          session_len: int = 2056,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
-    tokenizer = AutoTokenizer.from_pretrained(tokenlizer)
+    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path)
     model = MODELS.get(model_name)()
     stop_words = model.stop_words
     tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
@@ -97,9 +100,9 @@ def main(model_path: str,
 
     # TODO: update to the multithread version
     for i in range(concurrency):
-        proc = Thread(target=infer,
-                      args=(tm_model, i + 1, input_ids, output_seqlen,
-                            test_round, que))
+        proc = Thread(
+            target=infer,
+            args=(tm_model, i + 1, input_ids, output_seqlen, test_round, que))
         procs.append(proc)
         proc.start()
 
