@@ -80,9 +80,9 @@ class Chatbot:
                  tritonserver_addr: str,
                  model_name: str,
                  session_len: int = 2048,
-                 top_p: float = 1.0,
-                 top_k: int = 40,
-                 temperature: float = 1.0,
+                 top_p: float = 0.8,
+                 top_k: int = None,
+                 temperature: float = 0.8,
                  repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
@@ -377,8 +377,6 @@ class Chatbot:
                 prepare_tensor('input_ids', input_ids),
                 prepare_tensor('input_lengths', input_lengths),
                 prepare_tensor('request_output_len', request_output_len),
-                prepare_tensor('runtime_top_k',
-                               cfg.top_k * np.ones((1, 1), dtype=np.uint32)),
                 prepare_tensor('runtime_top_p',
                                cfg.top_p * np.ones((1, 1), dtype=np.float32)),
                 prepare_tensor(
@@ -391,6 +389,10 @@ class Chatbot:
                 prepare_tensor('step',
                                preseq_length * np.ones((1, 1), dtype=np.int32))
             ]
+            if cfg.top_k is not None:
+                inputs += prepare_tensor(
+                    'runtime_top_k',
+                    cfg.top_k * np.ones((1, 1), dtype=np.uint32)),
             if cfg.stop_words is not None:
                 inputs += [prepare_tensor('stop_words_list', cfg.stop_words)]
             if cfg.bad_words is not None:
