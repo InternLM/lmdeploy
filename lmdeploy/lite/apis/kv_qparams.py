@@ -6,7 +6,8 @@ import fire
 import torch
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
-from transformers.models.llama.modeling_llama import (LlamaDecoderLayer, LlamaForCausalLM) # E501
+from transformers.models.llama.modeling_llama import (LlamaDecoderLayer,
+                                                      LlamaForCausalLM)
 
 from lmdeploy.lite.quantization import Observer
 from lmdeploy.lite.utils import get_calib_loaders, memory_efficient_inference
@@ -47,7 +48,10 @@ def minmax(tensor: torch.Tensor) -> Tuple[float, float]:
     return (tensor.min().item(), tensor.max().item())
 
 
-def stats_past_key_values(past_key_values: List[torch.Tensor], k_obs_list: List[Observer], v_obs_list: List[Observer], symmetry: bool, num_tp: int) -> None: # E501
+def stats_past_key_values(past_key_values: List[torch.Tensor],
+                          k_obs_list: List[Observer],
+                          v_obs_list: List[Observer], symmetry: bool,
+                          num_tp: int) -> None:
     """Collects statistics for past key values.
 
     Args:
@@ -110,7 +114,10 @@ def main(model: str,
     model.use_cache = True
 
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=max_seq_len) # E501
+    calib_loader, _ = get_calib_loaders(calib_dataset,
+                                        tokenizer,
+                                        nsamples=calib_samples,
+                                        seqlen=max_seq_len)
 
     k_obs_list = list()
     v_obs_list = list()
@@ -135,7 +142,8 @@ def main(model: str,
                 else:
                     output = model(data[0].to('cuda'))
                 kv_cache = output.past_key_values
-                stats_past_key_values(kv_cache, k_obs_list, v_obs_list, symmetry, num_tp) # E501
+                stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
+                                      symmetry, num_tp)
     else:
         model.to('cuda')
         with torch.inference_mode():
@@ -146,7 +154,8 @@ def main(model: str,
                     output = model(data[0].to('cuda'))
                 kv_cache = output.past_key_values
 
-                stats_past_key_values(kv_cache, k_obs_list, v_obs_list, symmetry, num_tp) # E501
+                stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
+                                      symmetry, num_tp)
 
     import numpy as np
     out_dir = Path(output_dir)
@@ -175,9 +184,8 @@ def main(model: str,
             k_scale = (k_max - k_min) / (2**bits - 1)
             v_scale = (v_max - v_min) / (2**bits - 1)
 
-            kv_qparams = np.array([k_scale, k_min, v_scale, v_min], dtype=np.float32) # E501
-
-            print(kv_qparams)
+            kv_qparams = np.array([k_scale, k_min, v_scale, v_min],
+                                  dtype=np.float32)
             kv_qparams.tofile(save_path)
             print(f'Layer {i} KV scales&zeros done.')
 
