@@ -37,7 +37,7 @@
 3. 执行量化脚本，得到量化参数，放到 weights 目录；修改配置文件，使 [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) 选项生效
 4. 再次执行 `client.py`，读取 int8 版本精度
 
-以下是 `kCacheKVInt8` 方法仅用 c4 数据集量化，在 mmlu-social-science 数据集的精度损失。
+以下是 `kCacheKVInt8` 方法仅从 c4 数据集，随机选择 128 条数据量化，在 mmlu-social-science 数据集的精度损失。
 
 | task |       dataset       | metric | fp16  | int8  | diff  |
 | :--: | :-----------------: | :----: | :---: | :---: | :---: |

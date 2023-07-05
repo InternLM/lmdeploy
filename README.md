@@ -43,7 +43,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
 </div>
 
-- **Multi-GPU Model Deployment and Quantization**: We provide comprehensive support for model deployment and quantization, and have successfully validated it on models ranging from 7B to 100B parameters.
+- **Multi-GPU Model Deployment and Quantization**: We provide comprehensive model deployment and quantification support, and have been validated at different scales.
 
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
@@ -155,16 +155,12 @@ In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can s
 First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
 
 ```
-
-
 python3 -m lmdeploy.lite.apis.kv_qparams \
   --model $HF_MODEL \
   --output_dir $DEPLOY_WEIGHT_DIR \
   --symmetry True \   # Whether to use symmetric or asymmetric quantization.
   --offload  False \  # Whether to offload some modules to CPU to save GPU memory.
   --num_tp 1 \   # The number of GPUs used for tensor parallelism
-
-
 ```
 
 Then adjust `config.ini`
