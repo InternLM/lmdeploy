@@ -5,4 +5,7 @@ __pycache__/
 workspace/
 .cache
 *build*/
+lmdeploy/lib/
+dist/
 examples/cpp/llama/*.csv
+
