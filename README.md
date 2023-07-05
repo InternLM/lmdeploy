@@ -119,7 +119,11 @@ For the deployment of other supported models, such as LLaMA, vicuna, you can fin
 ### Single GPU
 
 ```shell
-python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL
+python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
+    --max_new_tokens 64 \
+    --temperture 0.8 \
+    --top_p 0.95 \
+    --seed 0
 ```
 
 ### Tensor Parallel with DeepSpeed
@@ -130,7 +134,7 @@ deepspeed --module --num_gpus 2 lmdeploy.torch.chat \
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \
-    --seed 6
+    --seed 0
 ```
 
 ## Quantization
