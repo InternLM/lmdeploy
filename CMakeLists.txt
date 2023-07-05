@@ -40,6 +40,7 @@ if(NOT USE_TRITONSERVER_DATATYPE)
   option(USE_TRITONSERVER_DATATYPE "Build triton backend for triton server" OFF)
 endif()
 option(BUILD_PY_FFI "Build python ffi" ON)
+option(BUILD_TEST "Build tests" OFF)
 
 include(FetchContent)
 
@@ -283,7 +284,9 @@ link_directories(
 add_subdirectory(src)
 add_subdirectory(examples)
 
-add_subdirectory(tests)
+if(BUILD_TEST)
+    add_subdirectory(tests)
+endif()
 
 # # Mesaure the compile time
 option(MEASURE_BUILD_TIME "Measure the build time of each module" OFF)
