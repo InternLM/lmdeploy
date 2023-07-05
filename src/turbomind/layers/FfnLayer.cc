@@ -23,7 +23,7 @@ namespace turbomind {
 template<typename T>
 void FfnLayer<T>::forward(std::vector<turbomind::Tensor>*       output_tensors,
                           const std::vector<turbomind::Tensor>* input_tensors,
-                          const FfnWeight<T>*                           ffn_weights)
+                          const FfnWeight<T>*                   ffn_weights)
 {
     TensorMap input_tensor({{"ffn_input", input_tensors->at(0)}});
     TensorMap output_tensor({{"ffn_output", output_tensors->at(0)}});

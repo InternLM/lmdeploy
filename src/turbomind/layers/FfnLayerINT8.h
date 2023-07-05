@@ -79,7 +79,7 @@ public:
 
     void forward(std::vector<turbomind::Tensor>*       output_tensors,
                  const std::vector<turbomind::Tensor>* input_tensors,
-                 const FfnWeight<T>*                           ffn_weights);
+                 const FfnWeight<T>*                   ffn_weights);
 
     friend GeluFfnLayerINT8<T>;
     friend ReluFfnLayerINT8<T>;

@@ -639,7 +639,8 @@ void generate_gpt_gemm_config(int   batch_size,
                     cudaStream_t              streams[1]  = {stream};
                     CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
                         &handle, &mat_A, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
-                    CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_B, k, n, k, alignment, CUDA_R_16F, order))
+                    CHECK_CUSPARSE(
+                        cusparseLtDenseDescriptorInit(&handle, &mat_B, k, n, k, alignment, CUDA_R_16F, order))
                     CHECK_CUSPARSE(
                         cusparseLtDenseDescriptorInit(&handle, &mat_C, m, n, m, alignment, CUDA_R_16F, order))
                     cudaDeviceSynchronize();

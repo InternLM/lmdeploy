@@ -91,15 +91,15 @@ void generate_xlnet_gemm_config(int   batch_size,
     int               ldc[gemm_num];
     int               strideC[gemm_num];
     cublasOperation_t transa[gemm_num]     = {CUBLAS_OP_N,
-                                              CUBLAS_OP_N,
-                                              CUBLAS_OP_T,
-                                              CUBLAS_OP_T,
-                                              CUBLAS_OP_T,
-                                              CUBLAS_OP_T,
-                                              CUBLAS_OP_N,
-                                              CUBLAS_OP_T,
-                                              CUBLAS_OP_N,
-                                              CUBLAS_OP_N};
+                                          CUBLAS_OP_N,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_N,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_N,
+                                          CUBLAS_OP_N};
     cublasOperation_t transb[gemm_num]     = {CUBLAS_OP_N};
     int               batchCount[gemm_num] = {1};
     char              mess[gemm_num][256];

@@ -30,7 +30,7 @@
 LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发，是涵盖了 LLM 任务的全套轻量化、部署和服务解决方案。
 这个强大的工具箱提供以下核心功能：
 
-- **高效推理引擎 TurboMind**：基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)，我们实现了高效推理引擎 TurboMind，它支持 LLaMA 及其变体模型在 NVIDIA GPU 上的推理。
+- **高效推理引擎 TurboMind**：基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)，我们实现了高效推理引擎 TurboMind，支持 InternLM、LLaMA、vicuna等模型在 NVIDIA GPU 上的推理。
 
 - **交互推理方式**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。
 
@@ -117,6 +117,16 @@ TODO: two side-by-side gif. The left one is command line demo, the other is web 
 
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
 首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 weight 目录下。
+
+```
+python3 -m lmdeploy.lite.apis.kv_qparams \
+  --model $HF_MODEL \
+  --output_dir $DEPLOY_WEIGHT_DIR \
+  --symmetry True \ # 对称量化或非对称量化，默认为 True
+  --offload  False \ # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
+  --num_tp 1  \  # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+```
+
 然后调整 `config.ini`
 
 - `use_context_fmha` 改为 0，表示关闭
