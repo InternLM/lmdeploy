@@ -34,6 +34,7 @@ class Session:
 class StatusCode(Enum):
     TRITON_STREAM_END = 0  # end of streaming
     TRITON_STREAM_ING = 1  # response is in streaming
+    TRITON_SESSION_READY = 2  # session is ready for inference
     TRITON_SERVER_ERR = -1  # triton server's error
     TRITON_SESSION_CLOSED = -2  # session has been closed
     TRITON_SESSION_OUT_OF_LIMIT = -3  # request length out of limit
@@ -340,6 +341,7 @@ class Chatbot:
 
         preseq_length = session.sequence_length
         session.response = ''
+        session.status = StatusCode.TRITON_SESSION_READY
 
         que = queue.Queue()
         producer = threading.Thread(target=self._stream_producer,
@@ -435,6 +437,7 @@ class Chatbot:
                 yield StatusCode.TRITON_STREAM_END, \
                       session.response[len(session.prompt):], \
                       session.sequence_length - preseq_length
+                session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
                 logger.error(f'got error from turbomind, code '
@@ -472,10 +475,16 @@ class Chatbot:
                                          sequence_length)
                 text = output_str[0].decode()
                 if display:
-                    new_text = text[len(session.response):]
-                    print(new_text, end='', flush=True)
+                    if len(text) > len(session.prompt):
+                        if session.status == StatusCode.TRITON_SESSION_READY:
+                            new_text = text[len(session.prompt):]
+                            session.status = StatusCode.TRITON_STREAM_ING
+                        else:
+                            new_text = text[len(session.response):]
+                        print(new_text, end='', flush=True)
                 session.response = text
                 if len(session.response) > len(session.prompt):
+                    session.status = StatusCode.TRITON_STREAM_ING
                     yield (StatusCode.TRITON_STREAM_ING,
                            session.response[len(session.prompt):],
                            sequence_length.squeeze())
