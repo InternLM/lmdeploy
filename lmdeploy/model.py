@@ -39,7 +39,7 @@ class InternLM:
                    f'{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
-            return f'\n{self.eoa}{self.user}:{prompt}{self.eoh}\n' \
+            return f'\n{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
 
     @property
