@@ -293,13 +293,21 @@ inline __device__ float2 float2div(float a, float2 b)
     return c;
 }
 
-static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale)
+inline __device__ float2 float2sub(float zp, float2 val)
+{
+    float2 ret;
+    ret.x = val.x - zp;
+    ret.y = val.y - zp;
+    return ret;
+}
+
+static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale, const float zp)
 {
     half4 dst;
-    dst.x = __float2half(value.x * scale);
-    dst.y = __float2half(value.y * scale);
-    dst.z = __float2half(value.z * scale);
-    dst.w = __float2half(value.w * scale);
+    dst.x = __float2half(value.x * scale + zp);
+    dst.y = __float2half(value.y * scale + zp);
+    dst.z = __float2half(value.z * scale + zp);
+    dst.w = __float2half(value.w * scale + zp);
     return dst;
 }
 
@@ -339,7 +347,8 @@ __global__ void extend_value_cache_int8(int8_t**     v_dst,
                                         const int*   history_length,
                                         const int    max_q_len,
                                         const int    max_seq_len,
-                                        const float  v_scale)
+                                        const float  v_scale,
+                                        const float  v_zp)
 {
     const int     batch_id = blockIdx.y;
     const int     head_id  = blockIdx.z;
@@ -373,12 +382,12 @@ __global__ void extend_value_cache_int8(int8_t**     v_dst,
         const auto value  = val_src[src_idx];
         auto       to_ptr = reinterpret_cast<uint32_t*>(val_dst + dst_idx);
 
-        float2 float2_0 = float2div(v_scale, mmha::half2_to_float2(value.x));
-        float2 float2_1 = float2div(v_scale, mmha::half2_to_float2(value.y));
+        float2 float2_0 = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.x)));
+        float2 float2_1 = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.y)));
         to_ptr[0]       = float4_to_char4(float2_0.x, float2_0.y, float2_1.x, float2_1.y);
 
-        float2_0  = float2div(v_scale, mmha::half2_to_float2(value.z));
-        float2_1  = float2div(v_scale, mmha::half2_to_float2(value.w));
+        float2_0  = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.z)));
+        float2_1  = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.w)));
         to_ptr[1] = float4_to_char4(float2_0.x, float2_0.y, float2_1.x, float2_1.y);
     }
 }
@@ -415,7 +424,8 @@ void invokeExtendKVCache(T**          k_dst,
                                                                history_length,
                                                                max_q_len,
                                                                max_seq_len,
-                                                               kv_scale[0]);
+                                                               kv_scale[0],
+                                                               kv_scale[1]);
 
         extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(reinterpret_cast<int8_t**>(v_dst),
                                                                dst_offset,
@@ -426,7 +436,8 @@ void invokeExtendKVCache(T**          k_dst,
                                                                history_length,
                                                                max_q_len,
                                                                max_seq_len,
-                                                               kv_scale[1]);
+                                                               kv_scale[2],
+                                                               kv_scale[3]);
     }
     else {
         extend_value_cache<<<grid, block_sz, 0, stream>>>(k_dst,
@@ -533,7 +544,8 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
                                            const int*     seq_length,
                                            const int      max_kv_len,
                                            const int      max_seq_len,
-                                           const float    v_scale)
+                                           const float    v_scale,
+                                           const float    v_zp)
 {
     const int     batch_id = blockIdx.y;
     const int     head_id  = blockIdx.z;
@@ -566,8 +578,8 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
         const auto from_ptr = reinterpret_cast<const char4*>(val_src + src_idx);
         auto       to_ptr   = reinterpret_cast<half4*>(val_dst + dst_idx);
 
-        to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale);
-        to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale);
+        to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale, v_zp);
+        to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale, v_zp);
     }
 }
 
@@ -601,7 +613,8 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   key_length,
                                                                   max_kv_len,
                                                                   max_seq_len,
-                                                                  kv_scale[0]);
+                                                                  kv_scale[0],
+                                                                  kv_scale[1]);
 
         transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(val_cache_trans,
                                                                   reinterpret_cast<const int8_t**>(val_cache),
@@ -611,7 +624,8 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   key_length,
                                                                   max_kv_len,
                                                                   max_seq_len,
-                                                                  kv_scale[1]);
+                                                                  kv_scale[2],
+                                                                  kv_scale[3]);
     }
     else {
         transpose_value_cache<<<grid, block_sz, 0, stream>>>(

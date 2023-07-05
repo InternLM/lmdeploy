@@ -95,7 +95,7 @@ def stats_past_key_values(past_key_values: List[torch.Tensor],
 def main(model: str,
          bits: int = 8,
          granularity: str = 'per_tensor',
-         symmetry: bool = True,
+         symmetry: bool = False,
          offload: bool = False,
          max_seq_len: int = 2048,
          num_tp: int = 1,
@@ -162,7 +162,8 @@ def main(model: str,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for i, (k_obs, v_obs) in enumerate(zip(k_obs_list, v_obs_list)):
-
+        # for 8bit
+        # q ranges from [-127,+127]
         layer = i // num_tp
         tp = i % num_tp
         save_path = out_dir / f'layers.{layer}.past_kv_scale.{tp}.weight'
@@ -174,10 +175,12 @@ def main(model: str,
 
             kv_qparams = np.array([k_scale, v_scale], dtype=np.float32)
             kv_qparams.tofile(save_path)
-            print(f'Layer {layer} TP {tp} KV scales done.')
+            print(f'Layer {layer} TP {tp} KV scales {kv_qparams} done.')
 
         else:
-            # quant: q = (f - zp) / scale
+            # zp = (min+max) / 2
+            # scale = (max-min) / 255
+            # quant: q = (f-zp) / scale
             # dequant: f = q * scale + zp
             k_min = min([min_k for min_k, _ in k_obs.buffer])
             k_max = max([max_k for _, max_k in k_obs.buffer])
@@ -188,10 +191,13 @@ def main(model: str,
             k_scale = (k_max - k_min) / (2**bits - 1)
             v_scale = (v_max - v_min) / (2**bits - 1)
 
-            kv_qparams = np.array([k_scale, k_min, v_scale, v_min],
+            k_zp = (k_max + k_min) / 2
+            v_zp = (v_max + v_min) / 2
+            
+            kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp],
                                   dtype=np.float32)
             kv_qparams.tofile(save_path)
-            print(f'Layer {i} KV scales&zeros done.')
+            print(f'Layer {i} KV scales&zeros {kv_qparams} done.')
 
 
 if __name__ == '__main__':

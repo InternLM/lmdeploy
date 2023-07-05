@@ -155,7 +155,7 @@ python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
 python3 -m lmdeploy.lite.apis.kv_qparams \
   --model $HF_MODEL \
   --output_dir $DEPLOY_WEIGHT_DIR \
-  --symmetry True \ # 对称量化或非对称量化，默认为 True
+  --symmetry False \ # 对称量化或非对称量化，默认为 False
   --offload  False \ # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
   --num_tp 1  \  # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
