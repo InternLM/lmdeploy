@@ -23,7 +23,7 @@
 
 ![](../../resources/batch_memory.png)
 
-因为每个并发需要 1030MB 显存为 2048 token 保存 kv_cache，而服务端需要考量高并发场景的成本，所以量化 kv_cache 比直接量化 weight更合适。
+因为每个并发需要 1030MB 显存为 2048 token 保存 kv_cache，而服务端需要考量高并发场景的成本，所以量化 kv_cache 比直接量化 weight 更合适。
 
 需要注意的是，`kCacheKVInt8` 和 `WeightInt4` 两种方案可以同时运行，我们后续将提供相关实现。
 

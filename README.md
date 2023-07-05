@@ -106,11 +106,7 @@ or webui,
 python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
-Here are examples:
-
-```
-TODO: two side-by-side gif. The left one is command line demo, the other is web ui demo, including how to launch web ui
-```
+![](https://github.com/open-mmlab/lmdeploy/assets/41138331/f4352172-d8b1-49aa-b658-50ce72b896a5)
 
 For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 

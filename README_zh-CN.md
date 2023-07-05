@@ -105,11 +105,7 @@ python3 lmdeploy.serve.client {server_ip_addresss}:33337
 python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
-下图是这两种方法的样例展示：
-
-```
-TODO: two side-by-side gif. The left one is command line demo, the other is web ui demo, including how to launch web ui
-```
+![](https://github.com/open-mmlab/lmdeploy/assets/41138331/f4352172-d8b1-49aa-b658-50ce72b896a5)
 
 其他模型的部署方式，比如 LLaMA，vicuna，请参考[这里](docs/zh_cn/serving.md)
 
