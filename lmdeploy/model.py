@@ -29,8 +29,8 @@ class InternLM:
     def __init__(self):
         self.system = ''
         self.user = '<|User|>'
-        self.eoh = '<TOKENS_UNUSED_0>'
-        self.eoa = '<TOKENS_UNUSED_1>'
+        self.eoh = '<eoh>'
+        self.eoa = '<eoa>'
         self.assistant = '<|Bot|>'
 
     def get_prompt(self, prompt, sequence_start=True):
