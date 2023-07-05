@@ -24,21 +24,23 @@ class Vicuna:
 
 
 @MODELS.register_module(name='internlm')
-class Puyu:
+class InternLM:
 
     def __init__(self):
         self.system = ''
         self.user = '<|User|>'
-        self.eou = '<TOKENS_UNUSED_0>'
+        self.eoh = '<TOKENS_UNUSED_0>'
+        self.eoa = '<TOKENS_UNUSED_1>'
         self.assistant = '<|Bot|>'
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
             return f'{self.system}\n' \
-                   f'{self.user}:{prompt}{self.eou}\n' \
+                   f'{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
-            return f'\n{self.user}:{prompt}{self.eou}\n{self.assistant}:'
+            return f'\n{self.eoa}{self.user}:{prompt}{self.eoh}\n' \
+                   f'{self.assistant}:'
 
     @property
     def stop_words(self):
