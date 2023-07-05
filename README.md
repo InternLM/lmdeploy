@@ -114,9 +114,9 @@ python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 
 For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 
-## Inference with PyTorch
+### Inference with PyTorch
 
-### Single GPU
+#### Single GPU
 
 ```shell
 python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
@@ -126,7 +126,7 @@ python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
     --seed 0
 ```
 
-### Tensor Parallel with DeepSpeed
+#### Tensor Parallel with DeepSpeed
 
 ```shell
 deepspeed --module --num_gpus 2 lmdeploy.torch.chat \
