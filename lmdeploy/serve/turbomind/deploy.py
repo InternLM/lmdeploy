@@ -322,7 +322,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         return _params[name]
 
     def get_tensor_transposed(name: str):
-        if not name in _params and name.find('bias'):
+        if name not in _params and name.find('bias'):
             return None
         return _params[name].t()
 
