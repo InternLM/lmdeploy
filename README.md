@@ -49,7 +49,7 @@ Metrics: Throughput (token/s)
 
 Test Data: The number of input tokens is 1, and the number of generated tokens is 2048
 
-The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall.
+The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x
 
 ![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/1aa64d01-621c-4b53-8e48-e66bc4636b3b)
 
@@ -60,7 +60,7 @@ The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% highe
 Below are quick steps for installation:
 
 ```shell
-conda create -n lmdeploy python=3.8
+conda create -n lmdeploy python=3.10
 conda activate lmdeploy
 git clone clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
@@ -84,6 +84,10 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
 ```shell
 docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
     python3 -m lmdeploy.turbomind.chat internlm /workspace
+```
+
+```{note}
+When inferring with FP16 precision, the InternLM-7B model requires at least 22.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
 ```
 
 #### Serving

@@ -50,7 +50,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 测试数据：输入token数为1，生成token数为2048
 
-TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%
+TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
 
 ![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/1aa64d01-621c-4b53-8e48-e66bc4636b3b)
 
@@ -59,7 +59,7 @@ TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15
 ### 安装
 
 ```shell
-conda create -n lmdeploy python=3.8
+conda create -n lmdeploy python=3.10
 conda activate lmdeploy
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
@@ -83,6 +83,10 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
 ```shell
 docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
     python3 -m lmdeploy.turbomind.chat internlm /workspace
+```
+
+```{note}
+turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 22.7G。建议使用 3090, V100，A100等型号的显卡
 ```
 
 #### 部署推理服务
