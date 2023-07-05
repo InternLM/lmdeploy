@@ -39,6 +39,7 @@ endif()
 if(NOT USE_TRITONSERVER_DATATYPE)
   option(USE_TRITONSERVER_DATATYPE "Build triton backend for triton server" OFF)
 endif()
+option(BUILD_PY_FFI "Build python ffi" ON)
 
 include(FetchContent)
 
@@ -387,6 +388,11 @@ install(
   DESTINATION
     ${INSTALL_CONFIGDIR}
 )
+
+# install python api
+install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+
 
 export(
   EXPORT
