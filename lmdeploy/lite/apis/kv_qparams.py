@@ -167,6 +167,8 @@ def main(model: str,
         tp = i % num_tp
         save_path = out_dir / f'layers.{layer}.past_kv_scale.{tp}.weight'
         if symmetry:
+            # quant: q = f / scale
+            # dequant: f = q * scale 
             k_scale = max(k_obs.buffer) / (2**(bits - 1) - 1)
             v_scale = max(v_obs.buffer) / (2**(bits - 1) - 1)
 
@@ -175,6 +177,8 @@ def main(model: str,
             print(f'Layer {layer} TP {tp} KV scales done.')
 
         else:
+            # quant: q = (f - zp) / scale
+            # dequant: f = q * scale + zp
             k_min = min([min_k for min_k, _ in k_obs.buffer])
             k_max = max([max_k for _, max_k in k_obs.buffer])
 
