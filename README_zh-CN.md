@@ -100,7 +100,7 @@ bash workspace/service_docker_up.sh
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-python3 lmdeploy.serve.client {server_ip_addresss}:33337
+python3 lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 ```
 
 也可以通过 WebUI 方式来对话：
