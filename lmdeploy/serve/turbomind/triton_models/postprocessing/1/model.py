@@ -34,7 +34,7 @@ class Tokenizer:
             self.end_id = self.model.eos_token_id
             # save tokenizer.json to reuse
             if not osp.exists(backend_tokenizer_file) and \
-                    self.model.hasattr('backend_tokenizer'):
+                    hasattr(self.model, 'backend_tokenizer'):
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     def encode(self, s: str):
