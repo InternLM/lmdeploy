@@ -52,7 +52,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 10%
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/5501e803-d946-4fd2-ac48-a9ecc7a9efbb)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/068dd596-96d8-4877-8b25-fb037c58ab3c)
 
 ## 快速上手
 
@@ -66,6 +66,7 @@ cd lmdeploy
 pip install -e .
 ```
 
+<!--
 ### 编译
 
 下载 docker image `openmmlab/lmdeploy:latest`，挂载 lmdeploy 的数据卷，启动 container，在 container 内执行以下命令：
@@ -74,7 +75,7 @@ pip install -e .
 mkdir build && cd build
 ../generate.sh
 make -j$(nproc) && make install
-```
+``` -->
 
 ### 部署 InternLM
 

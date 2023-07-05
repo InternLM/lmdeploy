@@ -41,7 +41,17 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 ## Performance
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/5501e803-d946-4fd2-ac48-a9ecc7a9efbb)
+As shown in the figure below, we have compared the token generation speed among facebookresearch/llama, HuggingFace Transformers, and DeepSpeed on the 7B model.
+
+Target Device: NVIDIA A100(80G)
+
+Metrics: Throughput (token/s)
+
+Test Data: The number of input tokens is 1, and the number of generated tokens is 2048
+
+The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 10% higher than DeepSpeed overall.
+
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/068dd596-96d8-4877-8b25-fb037c58ab3c)
 
 ## Quick Start
 
