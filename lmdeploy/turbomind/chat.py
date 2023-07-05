@@ -1,3 +1,5 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import os.path as osp
 import random
 
 import fire
@@ -13,9 +15,10 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def main(model_name, model_path, tokenizer_model_path, session_id: int = 1):
+def main(model_name, model_path, session_id: int = 1):
     tm_model = tm.TurboMind(model_path)
     generator = tm_model.create_instance()
+    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path)
     model = MODELS.get(model_name)()
 
