@@ -20,13 +20,12 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
         start = time.perf_counter()
         timestamps = []
         tokens = []
-        for outputs in chatbot.stream_infer(
-                session_id,
-                input_ids,
-                request_output_len=output_seqlen,
-                sequence_start=True,
-                sequence_end=True,
-                ignore_eos=True):
+        for outputs in chatbot.stream_infer(session_id,
+                                            input_ids,
+                                            request_output_len=output_seqlen,
+                                            sequence_start=True,
+                                            sequence_end=True,
+                                            ignore_eos=True):
             res, token = outputs[0]
             timestamps.append(time.perf_counter())
             tokens.append(token)
@@ -53,13 +52,12 @@ def warmup(model,
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
-            for _ in chatbot.stream_infer(
-                    session_id,
-                    input_ids=[1],
-                    request_output_len=output_seqlen,
-                    sequence_start=True,
-                    sequence_end=True,
-                    ignore_eos=True):
+            for _ in chatbot.stream_infer(session_id,
+                                          input_ids=[1],
+                                          request_output_len=output_seqlen,
+                                          sequence_start=True,
+                                          sequence_end=True,
+                                          ignore_eos=True):
                 continue
 
     _start = time.perf_counter()
@@ -104,9 +102,9 @@ def main(model_path: str,
 
     # TODO: update to the multithread version
     for i in range(concurrency):
-        proc = Thread(
-            target=infer,
-            args=(tm_model, i + 1, input_ids, output_seqlen, test_round, que))
+        proc = Thread(target=infer,
+                      args=(tm_model, i + 1, input_ids, output_seqlen,
+                            test_round, que))
         procs.append(proc)
         proc.start()
 

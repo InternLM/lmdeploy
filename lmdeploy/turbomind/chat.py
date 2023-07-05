@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import os
 import os.path as osp
 import random
@@ -16,6 +17,7 @@ def input_prompt():
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
+
 def valid_str(string, coding='utf-8'):
     invalid_chars = [b'\xef\xbf\xbd']
     bstr = bytes(string, coding)
@@ -23,6 +25,7 @@ def valid_str(string, coding='utf-8'):
         bstr = bstr.replace(invalid_char, b'')
     ret = bstr.decode(encoding=coding, errors='ignore')
     return ret
+
 
 def main(model_name, model_path, session_id: int = 1):
     tm_model = tm.TurboMind(model_path)
@@ -42,12 +45,11 @@ def main(model_name, model_path, session_id: int = 1):
         elif prompt == 'end':
             prompt = model.get_prompt('', nth_round == 1)
             input_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    request_output_len=512,
-                    sequence_start=False,
-                    sequence_end=True):
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=[input_ids],
+                                                  request_output_len=512,
+                                                  sequence_start=False,
+                                                  sequence_end=True):
                 pass
             nth_round = 1
             step = 0

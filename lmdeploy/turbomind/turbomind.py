@@ -158,8 +158,9 @@ class TurboMindInstance:
 
         input_ids = [torch.IntTensor(ids) for ids in input_ids]
         input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(
-            input_ids, batch_first=True, padding_value=self.eos_id)
+        input_ids = pad_sequence(input_ids,
+                                 batch_first=True,
+                                 padding_value=self.eos_id)
 
         if isinstance(session_id, int):
             session_id = [session_id]
@@ -170,8 +171,9 @@ class TurboMindInstance:
         inputs = dict(
             input_ids=input_ids,
             input_lengths=input_lengths,
-            request_output_len=np.full(
-                input_lengths.shape, request_output_len, dtype=np.uint32),
+            request_output_len=np.full(input_lengths.shape,
+                                       request_output_len,
+                                       dtype=np.uint32),
             runtime_top_k=_broadcast_np(top_k, np.uint32),
             runtime_top_p=_broadcast_np(top_p, np.float32),
             temperature=_broadcast_np(temperature, np.float32),
