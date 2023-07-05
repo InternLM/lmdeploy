@@ -390,7 +390,9 @@ install(
 )
 
 # install python api
-install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+if (BUILD_PY_FFI)
+  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+endif ()
 install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
 
 
