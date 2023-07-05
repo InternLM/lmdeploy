@@ -21,7 +21,7 @@ class InternLMDecorator(Decorator):
     regex = re.compile(r'<\|Bot\|>:(.*)')
 
     def decorate(self, prompt):
-        return f'<|User|>:{prompt}<TOKENS_UNUSED_0>'
+        return f'<|User|>:{prompt}<eoh>'
 
     def extract(self, gen_out):
         return self.regex.search(gen_out).group(1)

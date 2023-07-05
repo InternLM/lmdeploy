@@ -2,8 +2,22 @@
 
 import re
 
-from transformers import PreTrainedTokenizerFast
+from transformers import (PreTrainedTokenizerFast, StoppingCriteria,
+                          StoppingCriteriaList)
 from transformers.generation.streamers import BaseStreamer
+
+
+def get_utils(model):
+    name = model.__class__.__name__
+    if name == 'InferenceEngine':
+        name = model.module.__class__.__name__
+
+    if name == 'InternLMForCausalLM':
+        stop_criteria = InternLMStoppingCriteria()
+        stop_criteria = StoppingCriteriaList([stop_criteria])
+        return InternLMDecorator, InternLMStreamer, stop_criteria
+    else:
+        return BaseDecorator, DecodeOutputStreamer, None
 
 
 class DecodeOutputStreamer(BaseStreamer):
@@ -52,6 +66,26 @@ class DecodeOutputStreamer(BaseStreamer):
         print('\n')
 
 
+class InternLMStreamer(DecodeOutputStreamer):
+    """Output generated tokens to shell."""
+
+    def __init__(self, tokenizer, skip_prompt=True) -> None:
+        BaseStreamer().__init__()
+        self.tokenizer = tokenizer
+        self.skip_prompt = skip_prompt
+        self.gen_len = 0
+        self.hex_regex = re.compile(r'^<0x([0-9ABCDEF]+)>$')
+
+    def decode(self, value):
+        tok = self.tokenizer.decode(value)
+        if res := self.hex_regex.match(tok):
+            tok = chr(int(res.group(1), 16))
+        if tok == '</s>' or tok == '<eoa>':
+            tok = '\n'
+
+        return tok
+
+
 class BaseDecorator:
 
     @classmethod
@@ -61,3 +95,21 @@ class BaseDecorator:
     @classmethod
     def extract(cls, gen_out):
         return gen_out
+
+
+class InternLMDecorator(BaseDecorator):
+    regex = re.compile(r'<\|Bot\|>:(.*)')
+
+    @classmethod
+    def decorate(cls, prompt):
+        return f'<|User|>:{prompt}<eoh>'
+
+    @classmethod
+    def extract(cls, gen_out):
+        return cls.regex.search(gen_out).group(1)
+
+
+class InternLMStoppingCriteria(StoppingCriteria):
+
+    def __call__(self, input_ids, *args, **kwargs) -> bool:
+        return input_ids[0, -1] in [2, 103028]

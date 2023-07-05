@@ -77,7 +77,7 @@ def init_model(
 def main(
     model_path: str,
     tokenizer_path: str = None,
-    max_new_tokens: int = 64,
+    max_new_tokens: int = 996,
     temperature: float = 0.8,
     top_p: float = 0.95,
     seed: int = 1,
@@ -106,7 +106,7 @@ def main(
         top_p=top_p,
     )
 
-    Decorator, Streamer = get_utils(model)
+    Decorator, Streamer, stop_criteria = get_utils(model)
 
     # warmup
     warmup_config = GenerationConfig(
@@ -154,7 +154,10 @@ def main(
 
             prompt = Decorator.decorate(prompt)
             ids = tokenizer.encode(prompt, return_tensors='pt')
-            model.generate(ids, gen_config, streamer=streamer)
+            model.generate(ids,
+                           gen_config,
+                           streamer=streamer,
+                           stopping_criteria=stop_criteria)
 
 
 if __name__ == '__main__':
