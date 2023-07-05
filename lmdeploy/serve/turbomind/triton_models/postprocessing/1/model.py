@@ -27,12 +27,14 @@ class Tokenizer:
             if not osp.exists(backend_tokenizer_file):
                 print('WARNING: Can not find tokenizer.json. '
                       'It may take long time to initialize the tokenizer.')
-            self.model = AutoTokenizer.from_pretrained(model_folder)
+            self.model = AutoTokenizer.from_pretrained(model_folder,
+                                                       trust_remote_code=True)
             self.vocab_size = self.model.vocab_size
             self.start_id = self.model.bos_token_id
             self.end_id = self.model.eos_token_id
             # save tokenizer.json to reuse
-            if not osp.exists(backend_tokenizer_file):
+            if not osp.exists(backend_tokenizer_file) and \
+                    self.model.hasattr('backend_tokenizer'):
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     def encode(self, s: str):
