@@ -50,3 +50,14 @@ class DecodeOutputStreamer(BaseStreamer):
 
     def end(self):
         print('\n')
+
+
+class BaseDecorator:
+
+    @classmethod
+    def decorate(cls, prompt):
+        return prompt
+
+    @classmethod
+    def extract(cls, gen_out):
+        return gen_out

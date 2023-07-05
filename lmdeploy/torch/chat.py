@@ -17,7 +17,7 @@ try:
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
                               GenerationConfig)
 
-    from .streamer import DecodeOutputStreamer
+    from .utils import get_utils
 
     _is_transformers_available = True
 except ImportError:
@@ -48,11 +48,13 @@ def init_model(
                           'Please install with `pip install transformers`.\n')
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path,
-                                              use_fast=use_fast_tokenizer)
+                                              use_fast=use_fast_tokenizer,
+                                              trust_remote_code=True)
 
     torch.set_default_device(local_rank)
     model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                 torch_dtype=torch.float16)
+                                                 torch_dtype=torch.float16,
+                                                 trust_remote_code=True)
 
     if not _is_deepspeed_available:
         warnings.warn('deepspeed is not installed, ',
@@ -104,6 +106,8 @@ def main(
         top_p=top_p,
     )
 
+    Decorator, Streamer = get_utils(model)
+
     # warmup
     warmup_config = GenerationConfig(
         max_new_tokens=1,
@@ -144,9 +148,11 @@ def main(
                 print('illegal instruction')
         else:
             if _on_master:
-                streamer = DecodeOutputStreamer(tokenizer)
+                streamer = Streamer(tokenizer)
             else:
                 streamer = None
+
+            prompt = Decorator.decorate(prompt)
             ids = tokenizer.encode(prompt, return_tensors='pt')
             model.generate(ids, gen_config, streamer=streamer)
 
