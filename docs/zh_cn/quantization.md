@@ -17,7 +17,7 @@
 | 32 | 47073 | 30625 | -16448 |
 | 48 | 63553 | 38881 | -24672 |
 
-相对于直接量化 Weight（如 [GPTQ-for-LLaMa](github.com/qwopqwop200/GPTQ-for-LLaMa)），我们做了两种方案在 7B 模型中的内存增长对比预估，部分数据来自 [llama.cpp](https://github.com/ggerganov/llama.cpp)。
+相对于直接量化 Weight（如 [GPTQ-for-LLaMa](https://github.com/qwopqwop200/GPTQ-for-LLaMa/)），我们做了两种方案在 7B 模型中的内存增长对比预估，部分数据来自 [llama.cpp](https://github.com/ggerganov/llama.cpp)。
 
 ![](../../resources/batch_memory.png)
 
