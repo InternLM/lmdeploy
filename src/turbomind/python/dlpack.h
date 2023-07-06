@@ -69,9 +69,11 @@ typedef struct {
  * \brief The device type in DLDevice.
  */
 #ifdef __cplusplus
-typedef enum: int32_t {
+typedef enum: int32_t
+{
 #else
-typedef enum {
+typedef enum
+{
 #endif
     /*! \brief CPU device */
     kDLCPU = 1,
@@ -134,7 +136,8 @@ typedef struct {
 /*!
  * \brief The type code options DLDataType.
  */
-typedef enum {
+typedef enum
+{
     /*! \brief signed integer */
     kDLInt = 0U,
     /*! \brief unsigned integer */

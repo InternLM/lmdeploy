@@ -1272,7 +1272,7 @@ template<typename T,  // The type of the inputs. Supported types: float and half
          int  THREADS_PER_VALUE,  // The number of threads per value.
          int  THREADS_PER_BLOCK,  // The number of threads in a threadblock.
          bool HAS_BEAMS,
-         int  QUANT_POLICY>       // quantization method
+         int  QUANT_POLICY>  // quantization method
 __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> params)
 {
 
@@ -1464,7 +1464,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
                     if (not QUANT_POLICY) {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache[offset]) = vec_conversion<Qk_vec_m, Qk_vec_k>(k);
-                    } else if (QUANT_POLICY == 4) {
+                    }
+                    else if (QUANT_POLICY == 4) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
                         Packed_Int8_t k_int8 = quant(k, k_scale);
 
@@ -1486,7 +1487,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                     if (not QUANT_POLICY) {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
                             vec_conversion<Qk_vec_m, Qk_vec_k>(k);
-                    } else if (QUANT_POLICY == 4) {
+                    }
+                    else if (QUANT_POLICY == 4) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
                         Packed_Int8_t k_int8 = quant(k, k_scale);
 
@@ -1575,11 +1577,12 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     if (not QUANT_POLICY) {
         k_cache_batch = params.k_cache_per_sample ? (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset
-                                                  + hi * params.memory_max_len * Dh + ki) :
-                                                 &params.k_cache[bhi * params.memory_max_len * Dh + ki];
+                                                     + hi * params.memory_max_len * Dh + ki) :
+                                                    &params.k_cache[bhi * params.memory_max_len * Dh + ki];
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
-    } else if (QUANT_POLICY == 4) {
+    }
+    else if (QUANT_POLICY == 4) {
         // convert k_cache_per_sample to int8
         if (params.k_cache_per_sample) {
             int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
@@ -1628,7 +1631,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                     if (not QUANT_POLICY) {
                         k[ii] = vec_conversion<K_vec_k, K_vec_m>(
                             (*reinterpret_cast<const K_vec_m*>(&k_cache_batch[beam_offset + jj * QK_ELTS_IN_16B])));
-                    } else if (QUANT_POLICY == 4) {
+                    }
+                    else if (QUANT_POLICY == 4) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<K_vec_m>::value>::type;
                         using Packed_Float_t = typename packed_type<float, num_elems<K_vec_m>::value>::type;
 
@@ -1766,7 +1770,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* v_cache_batch = &params.v_cache[bbhi * params.memory_max_len * Dh + vi];
         v_cache_batch = v_cache;
-    } else if (QUANT_POLICY == 4) {
+    }
+    else if (QUANT_POLICY == 4) {
         if (params.v_cache_per_sample) {
             int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
             v_cache_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi;
@@ -1831,7 +1836,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             if (not QUANT_POLICY) {
                 v = vec_conversion<V_vec_k, V_vec_m>(
                     *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti * Dh]));
-            } else if (QUANT_POLICY == 4) {
+            }
+            else if (QUANT_POLICY == 4) {
                 Packed_Int8_t v_vec_m_int8 =
                     *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
@@ -1877,7 +1883,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             if (not QUANT_POLICY) {
                 v = vec_conversion<V_vec_k, V_vec_m>(
                     *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti_circ * Dh]));
-            } else if (QUANT_POLICY == 4) {
+            }
+            else if (QUANT_POLICY == 4) {
                 Packed_Int8_t v_vec_m_int8 =
                     *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti_circ * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
@@ -1931,7 +1938,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
             if (not QUANT_POLICY) {
                 *reinterpret_cast<V_vec_m*>(&v_cache[tlength_circ * Dh]) = vec_conversion<V_vec_m, V_vec_k>(v);
-            } else if (QUANT_POLICY == 4) {
+            }
+            else if (QUANT_POLICY == 4) {
                 using Packed_Int8_t  = typename packed_type<int8_t, num_elems<V_vec_k>::value>::type;
                 Packed_Int8_t v_int8 = quant(v, v_scale);
                 *reinterpret_cast<Packed_Int8_t*>(&v_cache_int8[tlength_circ * Dh]) = v_int8;
