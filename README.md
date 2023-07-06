@@ -62,7 +62,7 @@ Below are quick steps for installation:
 ```shell
 conda create -n lmdeploy python=3.10
 conda activate lmdeploy
-git clone clone https://github.com/InternLM/lmdeploy.git
+git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 pip install -e .
 ```
@@ -73,6 +73,14 @@ pip install -e .
 
 ```shell
 # 1. Download InternLM model
+
+# Make sure you have git-lfs installed (https://git-lfs.com)
+git lfs install
+git clone https://huggingface.co/internlm/internlm-7b /path/to/internlm-7b
+
+# if you want to clone without large files – just their pointers
+# prepend your git clone with the following env var:
+GIT_LFS_SKIP_SMUDGE=1
 
 # 2. Convert InternLM model to turbomind's format, which will be in "./workspace" by default
 python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf

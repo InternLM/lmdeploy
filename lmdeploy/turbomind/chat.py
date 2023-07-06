@@ -32,7 +32,9 @@ def main(model_name, model_path, session_id: int = 1):
     tm_model = tm.TurboMind(model_path, stop_words=model.stop_words)
     generator = tm_model.create_instance()
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_model_path, trust_remote_code=True)
+    model = MODELS.get(model_name)()
 
     nth_round = 1
     step = 0

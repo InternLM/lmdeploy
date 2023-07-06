@@ -5,3 +5,4 @@ safetensors
 setuptools
 transformers<4.30.0
 tritonclient==2.33.0
+pybind11
