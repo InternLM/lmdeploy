@@ -1,12 +1,6 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
-[![codecov](https://codecov.io/gh/open-mmlab/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/open-mmlab/lmdeploy)
-[![license](https://img.shields.io/github/license/open-mmlab/lmdeploy.svg)](https://github.com/open-mmlab/mmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/open-mmlab/lmdeploy)](https://github.com/open-mmlab/lmdeploy/issues)
-
 [English](README.md) | 简体中文
 
 </div>
@@ -36,13 +30,9 @@
 LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发，是涵盖了 LLM 任务的全套轻量化、部署和服务解决方案。
 这个强大的工具箱提供以下核心功能：
 
-- **高效推理引擎 TurboMind**：基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)，我们实现了高效推理引擎 TurboMind，它支持 LLaMA 及其变体模型在 NVIDIA GPU 上的推理。
+- **高效推理引擎 TurboMind**：基于 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)，我们实现了高效推理引擎 TurboMind，支持 InternLM、LLaMA、vicuna等模型在 NVIDIA GPU 上的推理。
 
 - **交互推理方式**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。
-
-  <div align="center">
-    <img src="https://github.com/NVIDIA/FasterTransformer/blob/main/docs/images/gpt/gpt_interactive_generation.2.png?raw=true"/>
-  </div>
 
 - **多 GPU 部署和量化**：我们提供了全面的模型部署和量化支持，已在不同规模上完成验证。
 
@@ -50,101 +40,78 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
   ![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
 
+## 性能
+
+如下图所示，我们对比了 facebookresearch/llama、HuggingFace Transformers、DeepSpeed 在 7B 模型上的token生成的速度。
+
+测试设备：NVIDIA A100(80G)
+
+测试指标：吞吐量（token/s)
+
+测试数据：输入token数为1，生成token数为2048
+
+TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
+
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/1aa64d01-621c-4b53-8e48-e66bc4636b3b)
+
 ## 快速上手
 
 ### 安装
 
 ```shell
-conda create -n open-mmlab python=3.8
-conda activate open-mmlab
-git clone https://github.com/open-mmlab/lmdeploy.git
+conda create -n lmdeploy python=3.10
+conda activate lmdeploy
+git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 pip install -e .
 ```
 
-### 编译
+### 部署 InternLM
 
-下载 docker image `openmmlab/lmdeploy:latest`，挂载 lmdeploy 的数据卷，启动 container，在 container 内执行以下命令：
-
-```shell
-mkdir build && cd build
-../generate.sh
-make -j$(nproc) && make install
-```
-
-### 部署 [LLaMA](https://github.com/facebookresearch/llama) 服务
-
-请填写[这张表](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)，获取 LLaMA 模型权重。
-
-执行如下命令，可以把 LLaMA 模型部署到 NVIDIA GPU Server：
-
-<details close>
-<summary><b>7B</b></summary>
+#### 获取 InternLM 模型
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-7B /path/to/llama-7b llama \
-    --tokenizer_path /path/to/tokenizer/model
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+# 1. 下载 InternLM 模型
+
+# 2. 转换为 trubomind 要求的格式。默认存放路径为 ./workspace
+python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
+
 ```
 
-</details>
-
-<details close>
-<summary><b>13B</b></summary>
+#### 使用 turbomind 推理
 
 ```shell
-python3 lmdeploy/serve/turbomind/deploy.py llama-13B /path/to/llama-13b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 2
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
+    python3 -m lmdeploy.turbomind.chat internlm /workspace
 ```
 
-</details>
+```{note}
+turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 22.7G。建议使用 3090, V100，A100等型号的显卡
+```
 
-### 部署 [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/) 服务
+#### 部署推理服务
 
-<details open>
-<summary><b>7B</b></summary>
+使用下面的命令启动推理服务：
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-7b \
-  --target-model-path /path/to/vicuna-7b \
-  --delta-path lmsys/vicuna-7b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-7B /path/to/vicuna-7b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+bash workspace/service_docker_up.sh
 ```
 
-</details>
-
-<details>
-<summary><b>13B</b></summary>
+你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-python3 -m pip install fschat
-python3 -m fastchat.model.apply_delta \
-  --base-model-path /path/to/llama-13b \
-  --target-model-path /path/to/vicuna-13b \
-  --delta-path lmsys/vicuna-13b-delta-v1.1
-
-python3 lmdeploy/serve/turbomind/deploy.py vicuna-13B /path/to/vicuna-13b hf
-bash workspace/service_docker_up.sh --lib-dir $(pwd)/build/install/backends/turbomind
+python3 lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 ```
 
-</details>
+也可以通过 WebUI 方式来对话：
 
-## 通过命令行推理
-
-```shell
-python3 lmdeploy/serve/client.py {server_ip_addresss}:33337
+```
+python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
-## 使用浏览器推理
+![](https://github.com/open-mmlab/lmdeploy/assets/41138331/f4352172-d8b1-49aa-b658-50ce72b896a5)
 
-```shell
-python3 lmdeploy/app.py {server_ip_addresss}:33337 {model_name}
-```
+其他模型的部署方式，比如 LLaMA，vicuna，请参考[这里](docs/zh_cn/serving.md)
 
 ## 量化部署
 
