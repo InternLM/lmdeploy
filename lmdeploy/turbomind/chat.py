@@ -28,11 +28,11 @@ def valid_str(string, coding='utf-8'):
 
 
 def main(model_name, model_path, session_id: int = 1):
-    tm_model = tm.TurboMind(model_path)
+    model = MODELS.get(model_name)()
+    tm_model = tm.TurboMind(model_path, stop_words=model.stop_words)
     generator = tm_model.create_instance()
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path)
-    model = MODELS.get(model_name)()
 
     nth_round = 1
     step = 0
@@ -45,11 +45,12 @@ def main(model_name, model_path, session_id: int = 1):
         elif prompt == 'end':
             prompt = model.get_prompt('', nth_round == 1)
             input_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            for outputs in generator.stream_infer(session_id=session_id,
-                                                  input_ids=[input_ids],
-                                                  request_output_len=512,
-                                                  sequence_start=False,
-                                                  sequence_end=True):
+            for outputs in generator.stream_infer(
+                    session_id=session_id,
+                    input_ids=[input_ids],
+                    request_output_len=512,
+                    sequence_start=False,
+                    sequence_end=True):
                 pass
             nth_round = 1
             step = 0
