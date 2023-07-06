@@ -62,7 +62,7 @@ Below are quick steps for installation:
 ```shell
 conda create -n lmdeploy python=3.10
 conda activate lmdeploy
-git clone clone https://github.com/InternLM/lmdeploy.git
+git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 pip install -e .
 ```
