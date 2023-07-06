@@ -122,6 +122,29 @@ python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 
 For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 
+### Inference with PyTorch
+
+#### Single GPU
+
+```shell
+python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
+    --max_new_tokens 64 \
+    --temperture 0.8 \
+    --top_p 0.95 \
+    --seed 0
+```
+
+#### Tensor Parallel with DeepSpeed
+
+```shell
+deepspeed --module --num_gpus 2 lmdeploy.torch.chat \
+    $NAME_OR_PATH_TO_HF_MODEL \
+    --max_new_tokens 64 \
+    --temperture 0.8 \
+    --top_p 0.95 \
+    --seed 0
+```
+
 ## Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
