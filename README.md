@@ -51,7 +51,7 @@ Test Data: The number of input tokens is 1, and the number of generated tokens i
 
 The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/67539920/bb9fdf35-8dc5-41f5-ad5e-33df786665e3)
+![benchmark](https://user-images.githubusercontent.com/12756472/251422522-e94a3db9-eb16-432a-8d8c-078945e7b99a.png)
 
 ## Quick Start
 
