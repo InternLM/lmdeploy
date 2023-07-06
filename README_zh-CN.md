@@ -89,7 +89,7 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-7b hf
 #### 使用 turbomind 推理
 
 ```shell
-docker run -rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
+docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
     python3 -m lmdeploy.turbomind.chat internlm /workspace
 ```
 
