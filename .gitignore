@@ -1,6 +1,6 @@
 .vscode/
 .idea/
-.egg/
+.eggs/
 __pycache__/
 *.egg-info/
 workspace/
