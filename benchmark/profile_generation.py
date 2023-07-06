@@ -86,7 +86,8 @@ def main(model_path: str,
          output_seqlen: int = 512,
          test_round: int = 10):
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
+                                              trust_remote_code=True)
     model = MODELS.get(model_name)()
     stop_words = model.stop_words
     tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
