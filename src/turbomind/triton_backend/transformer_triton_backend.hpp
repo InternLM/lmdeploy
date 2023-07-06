@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <sys/time.h>
@@ -263,7 +264,7 @@ struct Tensor {
 
 }  // namespace triton
 
-using triton_stream_cb_t = void(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>, void*);
+using triton_stream_cb_t = std::function<void(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>, void*)>;
 
 struct AbstractTransformerModel;
 struct AbstractTransformerModelInstance;
@@ -281,7 +282,7 @@ struct AbstractTransformerModelInstance {
         return forward(input_tensors);
     }
 
-    void registerCallback(triton_stream_cb_t* cb, void* ctx)
+    void registerCallback(triton_stream_cb_t cb, void* ctx)
     {
         stream_cb_  = cb;
         stream_ctx_ = ctx;
@@ -293,8 +294,8 @@ struct AbstractTransformerModelInstance {
         stream_ctx_ = nullptr;
     }
 
-    triton_stream_cb_t* stream_cb_  = nullptr;
-    void*               stream_ctx_ = nullptr;
+    triton_stream_cb_t stream_cb_  = nullptr;
+    void*              stream_ctx_ = nullptr;
 };
 
 struct AbstractTransformerModel {

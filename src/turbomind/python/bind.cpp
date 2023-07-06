@@ -2,6 +2,7 @@
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include <memory>
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -307,7 +308,15 @@ PYBIND11_MODULE(_turbomind, m)
                ft::AbstractInstanceComm*         inst_comm) { return model->forward(input_tensors, inst_comm); },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
-            "inst_comm"_a = nullptr);
+            "inst_comm"_a = nullptr)
+        .def(
+            "register_callback",
+            [](AbstractTransformerModelInstance* self, triton_stream_cb_t cb, py::object ctx) {
+                self->registerCallback(cb, ctx.ptr());
+            },
+            "callback"_a,
+            "context"_a = nullptr)
+        .def("unregister_callback", &AbstractTransformerModelInstance::unRegisterCallback);
 
     // transformer model
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")

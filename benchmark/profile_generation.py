@@ -1,4 +1,5 @@
 # import multiprocessing as mp
+import os.path as osp
 import time
 from queue import Queue
 from threading import Thread
@@ -17,8 +18,8 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
     stats = []
     for i in range(test_round):
         start = time.perf_counter()
-        timestamps = [start]
-        tokens = [0]
+        timestamps = []
+        tokens = []
         for outputs in chatbot.stream_infer(session_id,
                                             input_ids,
                                             request_output_len=output_seqlen,
@@ -30,9 +31,13 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
             tokens.append(token)
 
         # TODO: ignore first token
-        first_token_latency = timestamps[1] - start
-        token_latency = timestamps[-1] - timestamps[0]
-        token = tokens[-1] - tokens[0]
+        first_token_latency = timestamps[0] - start
+        if len(timestamps) == 1:
+            token_latency = timestamps[0] - start
+            token = tokens[0]
+        else:
+            token_latency = timestamps[-1] - timestamps[0]
+            token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
     que.put((session_id, stats))
 
@@ -75,13 +80,14 @@ def warmup(model,
 
 def main(model_path: str,
          model_name: str,
-         tokenlizer: str,
          concurrency: int = 1,
          session_len: int = 2056,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
-    tokenizer = AutoTokenizer.from_pretrained(tokenlizer)
+    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
+                                              trust_remote_code=True)
     model = MODELS.get(model_name)()
     stop_words = model.stop_words
     tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
