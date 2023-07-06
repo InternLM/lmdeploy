@@ -37,7 +37,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
-![PersistentBatchInference](https://github.com/open-mmlab/lmdeploy/assets/25839884/8f8b57b8-42af-4b71-ad74-e75f39b10694)
+![PersistentBatchInference](https://github.com/InternLM/lmdeploy/assets/67539920/e3876167-0671-44fc-ac52-5a0f9382493e)
 
 ## Performance
 
@@ -51,7 +51,7 @@ Test Data: The number of input tokens is 1, and the number of generated tokens i
 
 The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/1aa64d01-621c-4b53-8e48-e66bc4636b3b)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/67539920/bb9fdf35-8dc5-41f5-ad5e-33df786665e3)
 
 ## Quick Start
 
@@ -118,7 +118,7 @@ or webui,
 python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
-![](https://github.com/open-mmlab/lmdeploy/assets/41138331/f4352172-d8b1-49aa-b658-50ce72b896a5)
+![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
 For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 
