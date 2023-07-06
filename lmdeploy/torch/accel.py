@@ -3,7 +3,7 @@ import torch
 
 
 class LoadNoInit:
-    """Initialize model without  parameter initialization."""
+    """Initialize model without parameter initialization."""
 
     def __init__(self):
         self.constant_ = torch.nn.init.constant_
