@@ -349,7 +349,7 @@ PYBIND11_MODULE(_turbomind, m)
              "multi_node"_a      = false)
         .def(
             "create_custom_comms",
-            [](std::shared_ptr<AbstractTransformerModel>& model, int world_size) {
+            [](AbstractTransformerModel* model, int world_size) {
                 std::vector<std::shared_ptr<ft::AbstractCustomComm>> ret;
                 model->createCustomComms(&ret, world_size);
                 return ret;
@@ -358,7 +358,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def("create_instance_comm", &AbstractTransformerModel::createInstanceComm, "size"_a)
         .def(
             "create_model_instance",
-            [](std::shared_ptr<AbstractTransformerModel>&                        model,
+            [](AbstractTransformerModel*                                         model,
                int                                                               deviceId,
                int                                                               rank,
                long                                                              stream_id,
@@ -367,12 +367,14 @@ PYBIND11_MODULE(_turbomind, m)
                 cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_id);
                 return model->createModelInstance(deviceId, rank, stream, nccl_params, custom_all_reduce_comm);
             },
+            py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a,
             "stream"_a,
             "nccl_params"_a,
             "custom_all_reduce_comm"_a = nullptr)
-        .def("create_shared_weights", &AbstractTransformerModel::createSharedWeights, "device_id"_a, "rank"_a)
+        .def("create_shared_weights", &AbstractTransformerModel::createSharedWeights,
+            py::call_guard<py::gil_scoped_release>(), "device_id"_a, "rank"_a)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)

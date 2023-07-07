@@ -60,7 +60,7 @@ def main(model_name, model_path, session_id: int = 1):
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt, add_special_tokens=False)
             print(f'session {session_id}')
-            print(f'{prompt}', end='', flush=True)
+            print(f'{prompt} ', end='', flush=True)
             response_size = 0
             for outputs in generator.stream_infer(
                     session_id=session_id,
