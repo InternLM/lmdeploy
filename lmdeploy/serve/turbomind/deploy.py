@@ -339,7 +339,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
 
                     if qkv is None:
                         continue
-                    _shape = qkv.shape[0]
+                    _shape = qkv.shape[1] // 3
                     qkv = torch.split(qkv, [_shape, _shape, _shape], dim=1)
                     q = qkv[0]
                     k = qkv[1]
