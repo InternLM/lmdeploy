@@ -90,7 +90,6 @@ class TurboMind:
         self.model = model
         self.nccl_params = model.create_nccl_params(self.node_id)
         torch.cuda.synchronize()
-        self.instance_comm = model.create_instance_comm(self.gpu_count)
 
         # create weight
         for device_id in range(self.gpu_count):
@@ -118,7 +117,8 @@ class TurboMindInstance:
         self.session_len = tm_model.session_len
 
         self.nccl_params = tm_model.nccl_params
-        self.instance_comm = tm_model.instance_comm
+        self.instance_comm = tm_model.model.create_instance_comm(
+            self.gpu_count)
 
         # create model instances
         model_insts = [None] * self.gpu_count

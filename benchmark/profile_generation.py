@@ -90,10 +90,7 @@ def main(model_path: str,
                                               trust_remote_code=True)
     model = MODELS.get(model_name)()
     stop_words = model.stop_words
-    # TODO: enable tp profile
-    tm_model = TurboMind(model_path=model_path,
-                         stop_words=stop_words,
-                         tensor_parallel_size=1)
+    tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
 
     warmup(tm_model, concurrency, session_len, output_seqlen)
 
