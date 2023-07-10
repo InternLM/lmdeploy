@@ -3,7 +3,6 @@
 import os
 import warnings
 
-import fire
 import torch
 
 try:
@@ -161,7 +160,3 @@ def main(
                            gen_config,
                            streamer=streamer,
                            stopping_criteria=stop_criteria)
-
-
-if __name__ == '__main__':
-    fire.Fire(main)

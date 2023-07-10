@@ -126,7 +126,7 @@ python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 #### 单个 GPU
 
 ```shell
-python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
+python3 -m lmdeploy.thchat $NAME_OR_PATH_TO_HF_MODEL\
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \
@@ -136,7 +136,7 @@ python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
 #### 使用 DeepSpeed 实现张量并行
 
 ```shell
-deepspeed --module --num_gpus 2 lmdeploy.torch.chat \
+deepspeed --module --num_gpus 2 lmdeploy.thchat \
     $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
     --temperture 0.8 \
