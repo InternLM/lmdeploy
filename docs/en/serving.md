@@ -2,7 +2,7 @@
 
 ## Serving [LLaMA](https://github.com/facebookresearch/llama)
 
-Weights for the LLaMA models can be obtained from by filling out [this form](<(https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)>)
+Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)
 
 <details open>
 <summary><b>7B</b></summary>
