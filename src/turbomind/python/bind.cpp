@@ -373,8 +373,11 @@ PYBIND11_MODULE(_turbomind, m)
             "stream"_a,
             "nccl_params"_a,
             "custom_all_reduce_comm"_a = nullptr)
-        .def("create_shared_weights", &AbstractTransformerModel::createSharedWeights,
-            py::call_guard<py::gil_scoped_release>(), "device_id"_a, "rank"_a)
+        .def("create_shared_weights",
+             &AbstractTransformerModel::createSharedWeights,
+             py::call_guard<py::gil_scoped_release>(),
+             "device_id"_a,
+             "rank"_a)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
