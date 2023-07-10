@@ -1023,49 +1023,49 @@ inline __device__ Float8_ float_from_int8(int64_t u)
 }
 // clang-format on
 
-inline __device__ int8_t quant(float a, const float scale)
+inline __device__ int8_t quant(float a, const float scale, const float zp)
 {
     int8_t int8;
-    int8 = round(max(-128.f, min(127.f, a / scale)));
+    int8 = round(max(-128.f, min(127.f, (a - zp) / scale)));
     return int8;
 }
 
-inline __device__ short quant(float2 a, const float scale)
+inline __device__ short quant(float2 a, const float scale, const float zp)
 {
     union {
         int8_t int8[2];
         short  int16;
     };
 
-    int8[0] = round(max(-128.f, min(127.f, a.x / scale)));
-    int8[1] = round(max(-128.f, min(127.f, a.y / scale)));
+    int8[0] = round(max(-128.f, min(127.f, (a.x - zp) / scale)));
+    int8[1] = round(max(-128.f, min(127.f, (a.y - zp) / scale)));
     return int16;
 }
 
-inline __device__ int32_t quant(float4 a, const float scale)
+inline __device__ int32_t quant(float4 a, const float scale, const float zp)
 {
     union {
         int8_t  int8[4];
         int32_t int32;
     };
 
-    int8[0] = round(max(-128.f, min(127.f, a.x / scale)));
-    int8[1] = round(max(-128.f, min(127.f, a.y / scale)));
-    int8[2] = round(max(-128.f, min(127.f, a.z / scale)));
-    int8[3] = round(max(-128.f, min(127.f, a.w / scale)));
+    int8[0] = round(max(-128.f, min(127.f, (a.x - zp) / scale)));
+    int8[1] = round(max(-128.f, min(127.f, (a.y - zp) / scale)));
+    int8[2] = round(max(-128.f, min(127.f, (a.z - zp) / scale)));
+    int8[3] = round(max(-128.f, min(127.f, (a.w - zp) / scale)));
     return int32;
 }
 
 // float16 to int8
-inline __device__ int8_t quant(uint16_t a, const float scale)
+inline __device__ int8_t quant(uint16_t a, const float scale, const float zp)
 {
     int8_t int8;
     float  b = half_to_float(a);
-    int8     = round(max(-128.f, min(127.f, b / scale)));
+    int8     = round(max(-128.f, min(127.f, (b - zp) / scale)));
     return int8;
 }
 // float16x2 to int8x2
-inline __device__ int16_t quant(uint a, const float scale)
+inline __device__ int16_t quant(uint a, const float scale, const float zp)
 {
     union {
         int8_t int8[2];
@@ -1073,44 +1073,44 @@ inline __device__ int16_t quant(uint a, const float scale)
     };
     float2 b = half2_to_float2(a);
 
-    int8[0] = round(max(-128.f, min(127.f, b.x / scale)));
-    int8[1] = round(max(-128.f, min(127.f, b.y / scale)));
+    int8[0] = round(max(-128.f, min(127.f, (b.x - zp) / scale)));
+    int8[1] = round(max(-128.f, min(127.f, (b.y - zp) / scale)));
     return int16;
 }
 // float16x4 to int8x4
-inline __device__ int32_t quant(uint2 a, const float scale)
+inline __device__ int32_t quant(uint2 a, const float scale, const float zp)
 {
     union {
         int16_t int16[2];
         int32_t int32;
     };
 
-    int16[0] = quant(a.x, scale);
-    int16[1] = quant(a.y, scale);
+    int16[0] = quant(a.x, scale, zp);
+    int16[1] = quant(a.y, scale, zp);
     return int32;
 }
 // float16x8 to int8x8
-inline __device__ int64_t quant(uint4 a, const float scale)
+inline __device__ int64_t quant(uint4 a, const float scale, const float zp)
 {
     union {
         int16_t int16[4];
         int64_t int64;
     };
 
-    int16[0] = quant(a.x, scale);
-    int16[1] = quant(a.y, scale);
-    int16[2] = quant(a.z, scale);
-    int16[3] = quant(a.w, scale);
+    int16[0] = quant(a.x, scale, zp);
+    int16[1] = quant(a.y, scale, zp);
+    int16[2] = quant(a.z, scale, zp);
+    int16[3] = quant(a.w, scale, zp);
     return int64;
 }
 // int8 to float32, then `vec_conversion` to target format
-inline __device__ float dequant(int8_t a, const float scale)
+inline __device__ float dequant(int8_t a, const float scale, const float zp)
 {
-    float b = a * scale;
+    float b = a * scale + zp;
     return b;
 }
 // int8x2 to float32x2
-inline __device__ float2 dequant(int16_t a, const float scale)
+inline __device__ float2 dequant(int16_t a, const float scale, const float zp)
 {
     union {
         int8_t  int8[2];
@@ -1119,12 +1119,12 @@ inline __device__ float2 dequant(int16_t a, const float scale)
     int16 = a;
 
     float2 b;
-    b.x = int8[0] * scale;
-    b.y = int8[1] * scale;
+    b.x = int8[0] * scale + zp;
+    b.y = int8[1] * scale + zp;
     return b;
 }
 // int8x4 to float32x4
-inline __device__ float4 dequant(int32_t a, const float scale)
+inline __device__ float4 dequant(int32_t a, const float scale, const float zp)
 {
     union {
         int8_t  int8[4];
@@ -1133,14 +1133,14 @@ inline __device__ float4 dequant(int32_t a, const float scale)
     int32 = a;
 
     float4 b;
-    b.x = (int8[0] * scale);
-    b.y = (int8[1] * scale);
-    b.z = (int8[2] * scale);
-    b.w = (int8[3] * scale);
+    b.x = (int8[0] * scale) + zp;
+    b.y = (int8[1] * scale) + zp;
+    b.z = (int8[2] * scale) + zp;
+    b.w = (int8[3] * scale) + zp;
     return b;
 }
 
-inline __device__ Float8_ dequant(int64_t a, const float scale)
+inline __device__ Float8_ dequant(int64_t a, const float scale, const float zp)
 {
     union {
         int16_t int16[4];
@@ -1149,10 +1149,10 @@ inline __device__ Float8_ dequant(int64_t a, const float scale)
     int64 = a;
 
     Float8_ b;
-    b.x = dequant(int16[0], scale);
-    b.y = dequant(int16[1], scale);
-    b.z = dequant(int16[2], scale);
-    b.w = dequant(int16[3], scale);
+    b.x = dequant(int16[0], scale, zp);
+    b.y = dequant(int16[1], scale, zp);
+    b.z = dequant(int16[2], scale, zp);
+    b.w = dequant(int16[3], scale, zp);
     return b;
 }
 
@@ -1272,7 +1272,7 @@ template<typename T,  // The type of the inputs. Supported types: float and half
          int  THREADS_PER_VALUE,  // The number of threads per value.
          int  THREADS_PER_BLOCK,  // The number of threads in a threadblock.
          bool HAS_BEAMS,
-         int  QUANT_POLICY>  // quantization method
+         int  QUANT_POLICY>       // quantization method
 __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> params)
 {
 
@@ -1387,7 +1387,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     // past kv quant param
     const float k_scale = params.attention_k_scale;
+    const float k_zp    = params.attention_k_zp;
     const float v_scale = params.attention_v_scale;
+    const float v_zp    = params.attention_v_zp;
 
     // Trigger the loads from the Q and K buffers.
     Qk_vec_k q;
@@ -1464,10 +1466,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
                     if (not QUANT_POLICY) {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache[offset]) = vec_conversion<Qk_vec_m, Qk_vec_k>(k);
-                    }
-                    else if (QUANT_POLICY == 4) {
+                    } else if (QUANT_POLICY == 4) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
-                        Packed_Int8_t k_int8 = quant(k, k_scale);
+                        Packed_Int8_t k_int8 = quant(k, k_scale, k_zp);
 
                         int8_t* dst_ptr                                     = reinterpret_cast<int8_t*>(params.k_cache);
                         *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
@@ -1487,10 +1488,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                     if (not QUANT_POLICY) {
                         *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
                             vec_conversion<Qk_vec_m, Qk_vec_k>(k);
-                    }
-                    else if (QUANT_POLICY == 4) {
+                    } else if (QUANT_POLICY == 4) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
-                        Packed_Int8_t k_int8 = quant(k, k_scale);
+                        Packed_Int8_t k_int8 = quant(k, k_scale, k_zp);
 
                         int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
                         *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
@@ -1577,12 +1577,11 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     if (not QUANT_POLICY) {
         k_cache_batch = params.k_cache_per_sample ? (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset
-                                                     + hi * params.memory_max_len * Dh + ki) :
-                                                    &params.k_cache[bhi * params.memory_max_len * Dh + ki];
+                                                  + hi * params.memory_max_len * Dh + ki) :
+                                                 &params.k_cache[bhi * params.memory_max_len * Dh + ki];
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
-    }
-    else if (QUANT_POLICY == 4) {
+    } else if (QUANT_POLICY == 4) {
         // convert k_cache_per_sample to int8
         if (params.k_cache_per_sample) {
             int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
@@ -1631,14 +1630,13 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                     if (not QUANT_POLICY) {
                         k[ii] = vec_conversion<K_vec_k, K_vec_m>(
                             (*reinterpret_cast<const K_vec_m*>(&k_cache_batch[beam_offset + jj * QK_ELTS_IN_16B])));
-                    }
-                    else if (QUANT_POLICY == 4) {
+                    } else if (QUANT_POLICY == 4) {
                         using Packed_Int8_t  = typename packed_type<int8_t, num_elems<K_vec_m>::value>::type;
                         using Packed_Float_t = typename packed_type<float, num_elems<K_vec_m>::value>::type;
 
                         Packed_Int8_t k_vec_m_int8 = *reinterpret_cast<const Packed_Int8_t*>(
                             &k_cache_batch_int8[beam_offset + jj * QK_ELTS_IN_16B]);
-                        Packed_Float_t k_vec_m_float = dequant(k_vec_m_int8, k_scale);
+                        Packed_Float_t k_vec_m_float = dequant(k_vec_m_int8, k_scale, k_zp);
 
                         k[ii] = vec_conversion<K_vec_k, Packed_Float_t>(k_vec_m_float);
                     }
@@ -1770,8 +1768,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* v_cache_batch = &params.v_cache[bbhi * params.memory_max_len * Dh + vi];
         v_cache_batch = v_cache;
-    }
-    else if (QUANT_POLICY == 4) {
+    } else if (QUANT_POLICY == 4) {
         if (params.v_cache_per_sample) {
             int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
             v_cache_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi;
@@ -1836,11 +1833,10 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             if (not QUANT_POLICY) {
                 v = vec_conversion<V_vec_k, V_vec_m>(
                     *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti * Dh]));
-            }
-            else if (QUANT_POLICY == 4) {
+            } else if (QUANT_POLICY == 4) {
                 Packed_Int8_t v_vec_m_int8 =
                     *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti * Dh]);
-                Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
+                Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale, v_zp);
 
                 v = vec_conversion<V_vec_k, Packed_Float_t>(v_vec_m_float);
             }
@@ -1883,11 +1879,10 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             if (not QUANT_POLICY) {
                 v = vec_conversion<V_vec_k, V_vec_m>(
                     *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti_circ * Dh]));
-            }
-            else if (QUANT_POLICY == 4) {
+            } else if (QUANT_POLICY == 4) {
                 Packed_Int8_t v_vec_m_int8 =
                     *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti_circ * Dh]);
-                Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale);
+                Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale, v_zp);
 
                 v = vec_conversion<V_vec_k, Packed_Float_t>(v_vec_m_float);
             }
@@ -1938,10 +1933,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
             if (not QUANT_POLICY) {
                 *reinterpret_cast<V_vec_m*>(&v_cache[tlength_circ * Dh]) = vec_conversion<V_vec_m, V_vec_k>(v);
-            }
-            else if (QUANT_POLICY == 4) {
+            } else if (QUANT_POLICY == 4) {
                 using Packed_Int8_t  = typename packed_type<int8_t, num_elems<V_vec_k>::value>::type;
-                Packed_Int8_t v_int8 = quant(v, v_scale);
+                Packed_Int8_t v_int8 = quant(v, v_scale, v_zp);
                 *reinterpret_cast<Packed_Int8_t*>(&v_cache_int8[tlength_circ * Dh]) = v_int8;
             }
         }
