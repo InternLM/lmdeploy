@@ -63,7 +63,9 @@ def _export_asym(key_stats: dict,
         tp_k_max = torch.chunk(k_max, tp)
         tp_v_max = torch.chunk(v_max, tp)
         for i in range(tp):
-            # quant: q = (f - zp) / scale
+            # zp = (min+max) / 2
+            # scale = (max-min) / 255
+            # quant: q = (f-zp) / scale
             # dequant: f = q * scale + zp
             k_min = tp_k_min[i].min()
             v_min = tp_v_min[i].min()
@@ -73,8 +75,11 @@ def _export_asym(key_stats: dict,
 
             k_scale = (k_max - k_min) / (2**bits - 1)
             v_scale = (v_max - v_min) / (2**bits - 1)
+            
+            k_zp = (k_max + k_min) / 2
+            v_zp = (v_max + v_min) / 2
 
-            kv_qparams = np.array([k_scale, k_min, v_scale, v_min],
+            kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp],
                                   dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
             kv_qparams.tofile(out_path)

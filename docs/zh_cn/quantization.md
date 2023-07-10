@@ -2,7 +2,7 @@
 
 ## 显存测试
 
-测试对象为 [Chinese-LLaMa-Alpaca 7B](https://github.com/ymcui/Chinese-LLaMA-Alpaca) 指令模型。
+测试对象为 [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) 模型。
 测试方法：
 
 1. 使用 `deploy.py` 转换模型，修改 `workspace` 配置中的最大并发数；调整 `llama_config.ini` 中的请求数
@@ -29,7 +29,16 @@
 
 ## 精度测试
 
-测试对象为 [Chinese-LLaMa-Alpaca 7B](https://github.com/ymcui/Chinese-LLaMA-Alpaca) 指令模型。
+量化方法是 PTQ，相关公式如下：
+
+```
+zp = (min+max) / 2
+scale = (max-min) / 255
+quant: q = round( (f-zp) / scale)
+dequant: f = q * scale + zp
+```
+
+测试对象为 [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) 指令模型。
 测试方法：
 
 1. 用 `deploy.py` 转换模型，运行 docker 服务
@@ -37,18 +46,14 @@
 3. 执行量化脚本，得到量化参数，放到 weights 目录；修改配置文件，使 [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) 选项生效
 4. 再次执行 `client.py`，读取 int8 版本精度
 
-以下是 `kCacheKVInt8` 方法仅从 c4 数据集，随机选择 128 条数据量化，在 mmlu-social-science 数据集的精度损失。
+以下是 `kCacheKVInt8` 方法仅从 c4 数据集，随机选择 128 条数据 PTQ 量化。量化后使用 [opencompass](https://github.com/InternLM/opencompass) 测试。
 
-| task |       dataset       | metric | fp16  | int8  | diff  |
-| :--: | :-----------------: | :----: | :---: | :---: | :---: |
-| Exam | mmlu-social-science | score  | 31.81 | 32.00 | +0.19 |
-
-我们注意到精度有轻微提升，mmlu-social-science 一共 3065 个选择题，具体差异如下：
-
-|             类型             | 个数 |
-| :--------------------------: | :--: |
-| fp16 版回答错误，int8 版变对 |  72  |
-| fp16 版回答正确，int8 版变错 |  66  |
-|     两版均答错且答案不同     | 118  |
-
-我们已经在更大的模型上验证了更多数据集，将持续更新结果。
+|     task      |     dataset     |    metric     | int8  | fp16  | diff  |
+| :-----------: | :-------------: | :-----------: | :---: | :---: | :---: |
+|   Language    |   winogrande    |   accuracy    | 60.77 | 61.48 | -0.71 |
+|   Knowledge   |       nq        |     score     | 2.69  | 2.60  | +0.09 |
+|   Reasoning   |      gsm8k      |   accuracy    | 33.28 | 34.72 | -1.44 |
+|   Reasoning   |       bbh       | naive_average | 20.12 | 20.51 | -0.39 |
+| Understanding | openbookqa_fact |   accuracy    | 82.40 | 82.20 | +0.20 |
+| Understanding |   eprstmt-dev   |   accuracy    | 90.62 | 88.75 | +1.87 |
+|    Safety     |   crows_pairs   |   accuracy    | 32.56 | 31.43 | +1.13 |

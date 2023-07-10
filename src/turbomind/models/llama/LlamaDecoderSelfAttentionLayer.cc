@@ -153,7 +153,9 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     if (int8_mode & QuantPolicy::kCacheKVInt8) {
         params.attention_k_scale = attention_kv_scale[0];
-        params.attention_v_scale = attention_kv_scale[1];
+        params.attention_k_zp    = attention_kv_scale[1];
+        params.attention_v_scale = attention_kv_scale[2];
+        params.attention_v_zp    = attention_kv_scale[3];
     }
 
     PUSH_RANGE("scaled dot-product fusion");
