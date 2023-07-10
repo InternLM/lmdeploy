@@ -48,6 +48,17 @@ bash workspace/service_docker_up.sh
 
 </details>
 
+### 部署 [Baichuan](https://github.com/baichuan-inc/Baichuan-7B/) 服务
+<details open>
+<summary><b>7B</b></summary>
+
+```shell
+python3 lmdeploy/serve/turbomind/deploy.py baichuan-7B /path/to/baichuan-7b hf
+bash workspace/service_docker_up.sh
+```
+
+</details>
+
 ### 部署 [Vicuna](https://lmsys.org/blog/2023-03-30-vicuna/) 服务
 
 <details open>

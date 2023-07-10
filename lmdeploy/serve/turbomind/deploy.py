@@ -323,14 +323,32 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         if name not in _params and name.find('bias'):
             return None
         return _params[name].t()
+    
+    w_pack = False
+    if 'model.layers.0.self_attn.W_pack.weight' in _params:
+        w_pack = True
 
     for i in range(1000):
         try:
             # attention weights
-            _qkvo = [f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo']
             for suffix in _suffixes:
-                q, k, v, o = map(get_tensor_transposed,
-                                 map(('{}.' + suffix).format, _qkvo))
+                if w_pack:
+                    _qkvo = [f'model.layers.{i}.self_attn.{t}' for t in ['W_pack', 'o_proj']]
+                    qkv, o = map(get_tensor_transposed,
+                                    map(('{}.' + suffix).format, _qkvo))
+
+                    if qkv is None:
+                        continue
+                    _shape = qkv.shape[0]
+                    qkv = torch.split(qkv, [_shape, _shape, _shape], dim=1)
+                    q = qkv[0]
+                    k = qkv[1]
+                    v = qkv[2]
+
+                else:
+                    _qkvo = [f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo']
+                    q, k, v, o = map(get_tensor_transposed,
+                                    map(('{}.' + suffix).format, _qkvo)) 
                 if q is None:
                     continue
                 # q, k has different layout for fb & hf, convert to fb's
