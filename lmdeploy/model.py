@@ -61,20 +61,6 @@ class Llama:
         return None
 
 
-@MODELS.register_module(name='baichuan')
-class Baichuan:
-
-    def __init__(self):
-        pass
-
-    def get_prompt(self, prompt, sequence_start=True):
-        return prompt
-
-    @property
-    def stop_words(self):
-        return None
-
-
 def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \

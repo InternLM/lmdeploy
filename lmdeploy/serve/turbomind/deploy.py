@@ -125,7 +125,7 @@ def export(model_name: str,
 
     # export config and save it to {out_dir}/config.ini
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
-    assert _vocab_size == vocab_size, \
+    assert _vocab_size >= vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
     cfg = dict(llama=dict(
         model_name=model_name,
@@ -340,10 +340,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                     if qkv is None:
                         continue
                     _shape = qkv.shape[1] // 3
-                    qkv = torch.split(qkv, [_shape, _shape, _shape], dim=1)
-                    q = qkv[0]
-                    k = qkv[1]
-                    v = qkv[2]
+                    _qkv = torch.split(qkv, [_shape, _shape, _shape], dim=1)
+                    q = _qkv[0]
+                    k = _qkv[1]
+                    v = _qkv[2]
 
                 else:
                     _qkvo = [f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo']
