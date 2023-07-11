@@ -146,9 +146,10 @@ def export(model_name: str,
         session_len=2056,
         step_length=1,
         cache_max_entry_count=48,
-        cache_chunk_size=8,
+        cache_chunk_size=1,
         use_context_fmha=1,
-        quant_policy=0))
+        quant_policy=0,
+        tensor_para_size=tp))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -323,7 +324,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         if name not in _params and name.find('bias'):
             return None
         return _params[name].t()
-    
+
     w_pack = False
     if 'model.layers.0.self_attn.W_pack.weight' in _params:
         w_pack = True
@@ -333,9 +334,12 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             # attention weights
             for suffix in _suffixes:
                 if w_pack:
-                    _qkvo = [f'model.layers.{i}.self_attn.{t}' for t in ['W_pack', 'o_proj']]
+                    _qkvo = [
+                        f'model.layers.{i}.self_attn.{t}'
+                        for t in ['W_pack', 'o_proj']
+                    ]
                     qkv, o = map(get_tensor_transposed,
-                                    map(('{}.' + suffix).format, _qkvo))
+                                 map(('{}.' + suffix).format, _qkvo))
 
                     if qkv is None:
                         continue
@@ -346,9 +350,11 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                     v = _qkv[2]
 
                 else:
-                    _qkvo = [f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo']
+                    _qkvo = [
+                        f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo'
+                    ]
                     q, k, v, o = map(get_tensor_transposed,
-                                    map(('{}.' + suffix).format, _qkvo)) 
+                                     map(('{}.' + suffix).format, _qkvo))
                 if q is None:
                     continue
                 # q, k has different layout for fb & hf, convert to fb's
