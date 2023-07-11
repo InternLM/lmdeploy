@@ -27,9 +27,11 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def main(model_name, model_path, session_id: int = 1):
+def main(model_name, model_path, tp=1, session_id: int = 1):
     model = MODELS.get(model_name)()
-    tm_model = tm.TurboMind(model_path, stop_words=model.stop_words)
+    tm_model = tm.TurboMind(model_path,
+                            stop_words=model.stop_words,
+                            tensor_parallel_size=tp)
     generator = tm_model.create_instance()
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
