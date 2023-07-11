@@ -17,6 +17,7 @@ try:
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
                               GenerationConfig)
 
+    from .accel import LoadNoInit
     from .utils import get_utils
 
     _is_transformers_available = True
@@ -51,10 +52,14 @@ def init_model(
                                               use_fast=use_fast_tokenizer,
                                               trust_remote_code=True)
 
-    torch.set_default_device(local_rank)
-    model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                 torch_dtype=torch.float16,
-                                                 trust_remote_code=True)
+    if torch.__version__ >= '2':
+        torch.set_default_device(local_rank)
+
+    with LoadNoInit():
+        model = AutoModelForCausalLM.from_pretrained(model_path,
+                                                     torch_dtype=torch.float16,
+                                                     trust_remote_code=True)
+    model = model.cuda(local_rank)
 
     if not _is_deepspeed_available:
         warnings.warn('deepspeed is not installed, ',
@@ -68,8 +73,6 @@ def init_model(
             # replace the model with the kernel injector
             max_out_tokens=2048,
         )
-
-    # print(f"model is loaded on device {model.device}")
 
     return tokenizer, model
 
@@ -115,7 +118,7 @@ def main(
         temperature=temperature,
         top_p=top_p,
     )
-    model.generate(torch.tensor([[1]]), warmup_config)
+    model.generate(torch.tensor([[1]], device=local_rank), warmup_config)
 
     # print("READY ...")
     _on_master = local_rank == 0
@@ -154,7 +157,7 @@ def main(
 
             prompt = Decorator.decorate(prompt)
             ids = tokenizer.encode(prompt, return_tensors='pt')
-            model.generate(ids,
+            model.generate(ids.cuda(local_rank),
                            gen_config,
                            streamer=streamer,
                            stopping_criteria=stop_criteria)

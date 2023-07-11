@@ -121,6 +121,29 @@ python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 
 其他模型的部署方式，比如 LLaMA，vicuna，请参考[这里](docs/zh_cn/serving.md)
 
+### 基于 PyTorch 的推理
+
+#### 单个 GPU
+
+```shell
+python3 -m lmdeploy.pytorch.chat $NAME_OR_PATH_TO_HF_MODEL\
+    --max_new_tokens 64 \
+    --temperture 0.8 \
+    --top_p 0.95 \
+    --seed 0
+```
+
+#### 使用 DeepSpeed 实现张量并行
+
+```shell
+deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
+    $NAME_OR_PATH_TO_HF_MODEL \
+    --max_new_tokens 64 \
+    --temperture 0.8 \
+    --top_p 0.95 \
+    --seed 0
+```
+
 ## 量化部署
 
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
