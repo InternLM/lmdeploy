@@ -45,14 +45,15 @@ def get_session_len(model_path, default_value=2048):
 def main(model_name, model_path, tp=1, session_id: int = 1):
     model = MODELS.get(model_name)()
     session_len = get_session_len(model_path)
+    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
+                                              trust_remote_code=True)
     tm_model = tm.TurboMind(model_path,
+                            eos_id=tokenizer.eos_token_id,
                             stop_words=model.stop_words,
                             session_len=session_len,
                             tensor_parallel_size=tp)
     generator = tm_model.create_instance()
-    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
-                                              trust_remote_code=True)
 
     nth_round = 1
     step = 0
