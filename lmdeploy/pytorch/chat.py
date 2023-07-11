@@ -40,10 +40,19 @@ def init_model(
     local_rank=0,
     world_size=1,
 ):
-    """Note:
-    If the model is converted from new version of transformers,
-        use_fast_tokenizer should be True.
-    If using depodaca/llama-xb-hf, use_fast_tokenizer should be False.
+    """Initialize model and tokenizer from given path.
+
+    Args:
+        model_path (str): Path to model.
+        tokenizer_path (str): Path to tokenizer.
+        use_fast_tokenizer (bool): Whether to use fast tokenizer.
+        local_rank (int): Local rank of current process.
+        world_size (int): World size of current process.
+
+    Note:
+        If the model is converted from new version of transformers,
+            use_fast_tokenizer should be True.
+        If using depodaca/llama-xb-hf, use_fast_tokenizer should be False.
     """
 
     if not _is_transformers_available:
@@ -88,7 +97,17 @@ def main(
     seed: int = 0,
     use_fast_tokenizer: bool = True,
 ):
-    """Start chat session from given model."""
+    """Start chat session with given model.
+
+    Args:
+        model_path (str): Path to model.
+        tokenizer_path (str): Path to tokenizer.
+        max_new_tokens (int): Maximum number of tokens to generate.
+        temperature (float): Temperature for sampling.
+        top_p (float): Top p for sampling.
+        seed (int): Random seed.
+        use_fast_tokenizer (bool): Whether to use fast tokenizer.
+    """
 
     torch.manual_seed(seed)
 
