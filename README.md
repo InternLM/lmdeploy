@@ -127,7 +127,7 @@ For the deployment of other supported models, such as LLaMA, vicuna, you can fin
 #### Single GPU
 
 ```shell
-python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
+python3 -m lmdeploy.pytorch.chat $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \
@@ -137,7 +137,7 @@ python3 -m lmdeploy.torch.chat $NAME_OR_PATH_TO_HF_MODEL\
 #### Tensor Parallel with DeepSpeed
 
 ```shell
-deepspeed --module --num_gpus 2 lmdeploy.torch.chat \
+deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
     --temperture 0.8 \
@@ -148,7 +148,7 @@ deepspeed --module --num_gpus 2 lmdeploy.torch.chat \
 ## Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
-First execute the quantization script, and the quantization parameters are stored in the weight directory transformed by `deploy.py`.
+First execute the quantization script, and the quantization parameters are stored in the `workspace/triton_models/weights` transformed by `deploy.py`.
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
@@ -159,7 +159,7 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
   --num_tp 1 \   # The number of GPUs used for tensor parallelism
 ```
 
-Then adjust `config.ini`
+Then adjust `workspace/triton_models/weights/config.ini`
 
 - `use_context_fmha` changed to 0, means off
 - `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled

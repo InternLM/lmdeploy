@@ -125,7 +125,7 @@ def export(model_name: str,
 
     # export config and save it to {out_dir}/config.ini
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
-    assert _vocab_size == vocab_size, \
+    assert _vocab_size >= vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
     cfg = dict(llama=dict(
         model_name=model_name,
@@ -323,14 +323,32 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         if name not in _params and name.find('bias'):
             return None
         return _params[name].t()
+    
+    w_pack = False
+    if 'model.layers.0.self_attn.W_pack.weight' in _params:
+        w_pack = True
 
     for i in range(1000):
         try:
             # attention weights
-            _qkvo = [f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo']
             for suffix in _suffixes:
-                q, k, v, o = map(get_tensor_transposed,
-                                 map(('{}.' + suffix).format, _qkvo))
+                if w_pack:
+                    _qkvo = [f'model.layers.{i}.self_attn.{t}' for t in ['W_pack', 'o_proj']]
+                    qkv, o = map(get_tensor_transposed,
+                                    map(('{}.' + suffix).format, _qkvo))
+
+                    if qkv is None:
+                        continue
+                    _shape = qkv.shape[1] // 3
+                    _qkv = torch.split(qkv, [_shape, _shape, _shape], dim=1)
+                    q = _qkv[0]
+                    k = _qkv[1]
+                    v = _qkv[2]
+
+                else:
+                    _qkvo = [f'model.layers.{i}.self_attn.{t}_proj' for t in 'qkvo']
+                    q, k, v, o = map(get_tensor_transposed,
+                                    map(('{}.' + suffix).format, _qkvo)) 
                 if q is None:
                     continue
                 # q, k has different layout for fb & hf, convert to fb's

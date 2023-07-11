@@ -2,7 +2,7 @@
 
 ## Serving [LLaMA](https://github.com/facebookresearch/llama)
 
-Weights for the LLaMA models can be obtained from by filling out [this form](<(https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)>)
+Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)
 
 <details open>
 <summary><b>7B</b></summary>
@@ -41,7 +41,7 @@ bash workspace/service_docker_up.sh
 <summary><b>65B</b></summary>
 
 ```shell
-python3 lmdeploy.serve.turbomind.deploy llama-13B /path/to/llama-13b llama \
+python3 lmdeploy.serve.turbomind.deploy llama-65B /path/to/llama-65b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 8
 bash workspace/service_docker_up.sh
 ```
