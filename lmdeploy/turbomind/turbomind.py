@@ -18,6 +18,7 @@ import _turbomind as _tm  # noqa: E402
 
 
 def _stop_words(stop_words: List[int]):
+    """return list of stop-words to numpy.ndarray."""
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
@@ -33,6 +34,7 @@ def _stop_words(stop_words: List[int]):
 
 
 def _np_dict_to_tm_dict(np_dict: dict):
+    """map numpy.ndarray to turbomind's tensor."""
     ret = _tm.TensorMap()
     for k, v in np_dict.items():
         ret[k] = _tm.from_dlpack(v)
@@ -41,6 +43,7 @@ def _np_dict_to_tm_dict(np_dict: dict):
 
 
 def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
+    """map turbomind's tensor to torch's tensor."""
     ret = dict()
     for k, v in tm_dict.items():
         if v.type == _tm.DataType.TYPE_UINT32:
@@ -51,6 +54,19 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
 
 
 class TurboMind:
+    """LMDeploy's inference engine.
+
+    Args:
+        model_path (str): the path of turbomind's model
+        data_type (str): the data type
+        session_len (int): the max length of a session
+        eos_id (int): eos token id
+        stop_words (List[int]): token ids of stop-words
+        device_id (int): the id of a gpu card
+        node_id (int): the id of a node
+        device_num (int): the number of gpu cards
+        node_num (int): the number of node
+    """
 
     def __init__(self,
                  model_path: str,
@@ -81,10 +97,23 @@ class TurboMind:
         self.stop_words = _stop_words(stop_words)
 
     def create_instance(self, cuda_stream_id=0):
+        """Create a turbomind instance.
+
+        Args:
+            cuda_stream_id(int): identity of a cuda stream
+        Returns:
+            TurboMindInstance: an instance of turbomind
+        """
         return TurboMindInstance(self, cuda_stream_id)
 
 
 class TurboMindInstance:
+    """Instance of TurboMind.
+
+    Args:
+        tm_model (str): turbomind's model path
+        cuda_stream_id(int): identity of a cuda stream
+    """
 
     def __init__(self, tm_model, cuda_stream_id=0):
         self.tm_model = tm_model
@@ -138,7 +167,28 @@ class TurboMindInstance:
                      ignore_eos=False,
                      random_seed=None,
                      stream_output=False):
+        """Perform model inference.
 
+        Args:
+            session_id (int): the id of a session
+            input_ids (numpy.ndarray): the token ids of a prompt
+            request_output_len (int): the max number of to-be-generated tokens
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
+            step (int): the offset of the k/v cache
+            stop (bool): indicator for cancelling the session
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+            are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+              1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+            random_seed (int): seed used by sampling
+            stream_output (bool): indicator for stream output
+        """
         if stream_output:
             self.model_inst.register_callback(self._forward_callback)
 

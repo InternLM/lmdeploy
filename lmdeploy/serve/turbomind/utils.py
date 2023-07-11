@@ -92,6 +92,12 @@ def prepare_tensor(name, input_tensor):
 
 
 class Preprocessor:
+    """Tokenize prompts.
+
+    Args:
+        tritonserver_addr (str): the communication address of the inference
+          server
+    """
 
     def __init__(self, tritonserver_addr: str):
         self.tritonserver_addr = tritonserver_addr
@@ -134,6 +140,12 @@ class Preprocessor:
 
 
 class Postprocessor:
+    """De-tokenize prompts.
+
+    Args:
+        tritonserver_addr (str): the communication address of the inference
+          server
+    """
 
     def __init__(self, tritonserver_addr: str):
         self.tritonserver_addr = tritonserver_addr

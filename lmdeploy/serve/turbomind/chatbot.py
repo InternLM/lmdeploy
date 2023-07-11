@@ -42,6 +42,7 @@ class StatusCode(Enum):
 
 
 def stream_callback(que, result, error):
+    """callback function invoked by triton client."""
     if error:
         print(error)
         que.put(dict(errcode=StatusCode.TRITON_SERVER_ERR, errmsg=f'{error}'))
@@ -50,6 +51,7 @@ def stream_callback(que, result, error):
 
 
 def get_logger(log_file=None, log_level=logging.INFO):
+    """Return the logger."""
     from .utils import get_logger
     logger = get_logger('service.ft', log_file=log_file, log_level=log_level)
     return logger
@@ -258,17 +260,21 @@ class Chatbot:
         return status
 
     def reset_session(self):
+        """reset session."""
         self._session = None
 
     def _get_bos(self):
+        """return bos token id."""
         token_ids, _ = self.preprocess('<BOS>')
         return token_ids[0][0]
 
     def _get_eos(self):
+        """return eos token id."""
         token_ids, _ = self.preprocess('<EOS>')
         return token_ids[0][0]
 
     def _stop_words(self, stop_words: List[int]):
+        """return stop-word's token id."""
         if stop_words is None:
             return None
         assert isinstance(stop_words, List) and \
@@ -283,6 +289,8 @@ class Chatbot:
         return stop_words
 
     def _get_prompt(self, prompt: str, sequence_start: bool):
+        """return the concatenated prompt according to the model's chat
+        template."""
         if self.profile_generation or self.profile_serving:
             return prompt
         return self.model.get_prompt(prompt, sequence_start)
@@ -294,6 +302,19 @@ class Chatbot:
                       sequence_start: bool = True,
                       sequence_end: bool = False,
                       cancel: bool = False):
+        """communicate with inference server to chat, or cancel a session, or
+        end a session.
+
+        Args:
+            session (Session): an instance of a session
+            prompt (str): the concatenated prompt
+            request_output_len (int): the max number of tokens to be generated
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
+            cancel (bool): indicator for cancelling the session
+        Yields:
+            tuple: status, text, generated token number
+        """
         logger = get_logger(log_level=self.log_level)
         logger.info(f'session {session.session_id}, '
                     f'request id {session.request_id}, '
@@ -368,6 +389,22 @@ class Chatbot:
     def _stream_producer(tritonserver_addr, session, que, cfg, input_ids,
                          input_lengths, request_output_len, sequence_start,
                          sequence_end, preseq_length, cancel):
+        """Send a request to the triton inference server.
+
+        Args:
+            tritonserver_addr (str): the communication address of the inference
+                server
+            session (Session): an instance of a session
+            que (multiprocessing.Queue): response queue
+            cfg:
+            input_ids (numpy.ndarray): token ids of input prompt
+            input_lengths (numpy.ndarray): length of input_ids
+            request_output_len (int): the max number of tokens to be generated
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
+            preseq_length (int): the history sequence length
+            cancel (bool): indicator for cancelling the session
+        """
         request_output_len = np.full(input_lengths.shape,
                                      request_output_len).astype(np.uint32)
 
@@ -432,7 +469,23 @@ class Chatbot:
     @staticmethod
     def stream_consumer(postprocess, res_queue, session, preseq_length, cancel,
                         logger, display, profile_generation, eos_id):
+        """Consume the response from the triton inference server.
 
+        Args:
+            postprocess (callable): postprocess function for
+                the generated tokens
+            res_queue (multiprocessing.Queue): response queue
+            session (Session): an instance of a session
+            preseq_length (int): the history sequence length
+            cancel (bool): indicator for cancelling the session
+            logger (util.Logger):
+            display (bool): display the text in the consolo interface or not
+            profile_generation (bool): indicator for profiling token generation
+            eos_id (int): eos token id
+
+        Yields:
+            tuple: status, text, generated token number
+        """
         while True:
             result = res_queue.get()
             if result is None:
