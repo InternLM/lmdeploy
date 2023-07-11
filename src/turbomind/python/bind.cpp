@@ -27,7 +27,6 @@ std::shared_ptr<T> make_shared_nodel(T data)
 
 DLDevice getDLDevice(triton::Tensor& tensor)
 {
-    // TODO: find a way to set the right device_id
     int device_id = 0;
     if (tensor.where == triton::MEMORY_GPU) {
         cudaPointerAttributes ptr_attr;
@@ -329,7 +328,6 @@ PYBIND11_MODULE(_turbomind, m)
 
     // transformer model
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
-        // .def_static("create_llama_model", &AbstractTransformerModel::createLlamaModel, "model_dir"_a)
         .def_static(
             "create_llama_model",
             [](std::string model_dir,
