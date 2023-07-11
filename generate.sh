@@ -6,7 +6,5 @@ cmake .. \
     -DCMAKE_INSTALL_PREFIX=./install \
     -DBUILD_PY_FFI=ON \
     -DBUILD_MULTI_GPU=ON \
-    -DBUILD_CUTLASS_MOE=OFF \
-    -DBUILD_CUTLASS_MIXED_GEMM=OFF \
     -DCMAKE_CUDA_FLAGS="-lineinfo" \
     -DUSE_NVTX=ON
