@@ -41,7 +41,7 @@ bash workspace/service_docker_up.sh
 <summary><b>65B</b></summary>
 
 ```shell
-python3 lmdeploy.serve.turbomind.deploy llama-13B /path/to/llama-13b llama \
+python3 lmdeploy.serve.turbomind.deploy llama-65B /path/to/llama-65b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 8
 bash workspace/service_docker_up.sh
 ```
