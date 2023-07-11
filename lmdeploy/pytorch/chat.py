@@ -26,6 +26,8 @@ except ImportError:
 
 
 def input_prompt():
+    """Helper function for getting input from users."""
+
     print('\ndouble enter to end input >>> ', end='')
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
@@ -86,6 +88,8 @@ def main(
     seed: int = 0,
     use_fast_tokenizer: bool = True,
 ):
+    """Start chat session from given model."""
+
     torch.manual_seed(seed)
 
     local_rank = int(os.getenv('LOCAL_RANK', '0'))

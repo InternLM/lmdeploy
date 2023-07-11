@@ -8,6 +8,7 @@ from transformers.generation.streamers import BaseStreamer
 
 
 def get_utils(model):
+    """Get utils by model type."""
     name = model.__class__.__name__
     if name == 'InferenceEngine':
         name = model.module.__class__.__name__
@@ -54,6 +55,8 @@ class DecodeOutputStreamer(BaseStreamer):
         return tok + ' '
 
     def put(self, value):
+        """Callback function to print generated tokens."""
+
         if self.gen_len == 0 and self.skip_prompt:
             pass
         else:
@@ -63,6 +66,8 @@ class DecodeOutputStreamer(BaseStreamer):
         self.gen_len += 1
 
     def end(self):
+        """Callback function to finish generation."""
+
         print('\n')
 
 
@@ -87,17 +92,22 @@ class InternLMStreamer(DecodeOutputStreamer):
 
 
 class BaseDecorator:
+    """Base decorator for prompt and generated output."""
 
     @classmethod
     def decorate(cls, prompt):
+        """Add special tokens to prompt."""
         return prompt
 
     @classmethod
     def extract(cls, gen_out):
+        """Extract generated output from model output."""
         return gen_out
 
 
 class InternLMDecorator(BaseDecorator):
+    """Decorator for InternLM."""
+
     regex = re.compile(r'<\|Bot\|>:(.*)')
 
     @classmethod
@@ -110,6 +120,7 @@ class InternLMDecorator(BaseDecorator):
 
 
 class InternLMStoppingCriteria(StoppingCriteria):
+    """Stopping criteria for HF version of InternLM."""
 
     def __call__(self, input_ids, *args, **kwargs) -> bool:
         return input_ids[0, -1] in [2, 103028]
