@@ -1,6 +1,7 @@
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include <cuda_runtime.h>
 #include <memory>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -26,7 +27,15 @@ std::shared_ptr<T> make_shared_nodel(T data)
 
 DLDevice getDLDevice(triton::Tensor& tensor)
 {
-    DLDevice device{.device_id = 0};
+    // TODO: find a way to set the right device_id
+    int device_id = 0;
+    if (tensor.where == triton::MEMORY_GPU) {
+        cudaPointerAttributes ptr_attr;
+        cudaPointerGetAttributes(&ptr_attr, tensor.data);
+        device_id = ptr_attr.device;
+    }
+
+    DLDevice device{.device_id = device_id};
 
     switch (tensor.where) {
         case triton::MEMORY_CPU:
