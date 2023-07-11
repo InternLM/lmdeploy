@@ -192,6 +192,7 @@ class TritonPythonModel:
         print('Cleaning up...')
 
     def _postprocessing(self, tokens_batch, sequence_length):
+        """decode token ids into texts."""
         outputs = []
         for beam_tokens, beam_len in zip(tokens_batch, sequence_length):
             for tokens, _len in zip(beam_tokens, beam_len):

@@ -85,6 +85,7 @@ def get_logger(name: str,
 
 
 def prepare_tensor(name, input_tensor):
+    """Create grpcclient's InferInput instance according to a given tensor."""
     t = grpcclient.InferInput(name, list(input_tensor.shape),
                               np_to_triton_dtype(input_tensor.dtype))
     t.set_data_from_numpy(input_tensor)

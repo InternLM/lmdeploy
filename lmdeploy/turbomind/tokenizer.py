@@ -90,6 +90,11 @@ class Tokenizer:
 
 
 class Preprocessor:
+    """Tokenize prompts.
+
+    Args:
+        tokenizer (Tokenizer): an instance of tokenizer
+    """
 
     def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
@@ -129,6 +134,11 @@ class Preprocessor:
 
 
 class Postprocessor:
+    """De-tokenize token ids.
+
+    Args:
+        tokenizer (Tokenizer): an instance of tokenizer
+    """
 
     def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
