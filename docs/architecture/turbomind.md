@@ -46,7 +46,7 @@ The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of Turbo
 
 ## LLaMa implementation
 
-Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifications to support the LLaMa family. Some improvements are made to support high performance inference of conversational models, most importantly
+Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifications to support the LLaMa family. Some improvements are made to enable high performance inference of conversational models, most importantly
 
 - To support fast context decoding in multi-round conversation. The attention implementation in context decoder is replaced with a [cutlass](https://github.com/NVIDIA/cutlass)-based FMHA implementation that supports mis-matching Q/K lengths.
 - To support the discontinuity in KV cache inside the batch, indirect buffer pointers are introduced in both context FMHA and generation FMHA.
