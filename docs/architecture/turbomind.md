@@ -44,7 +44,7 @@ The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of Turbo
 - Victim (evicted) sequences are not erased entirely but converted to the most compact form, i.e. token IDs. When the same sequence id is fetched later (_cache-miss_) the token IDs is decoded by FMHA backed context decoder and converted back to KV cache.
 - The eviction and conversion are handled automatically inside TurboMind and thus transparent to the users. __From the user's aspect, system that use TurboMind has access to infinite device memory.__
 
-## LLaMa implenetation
+## LLaMa implementation
 
 Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifications to support the LLaMa family. Some improvements are made to support high performance inference of conversational models, most importantly
 
