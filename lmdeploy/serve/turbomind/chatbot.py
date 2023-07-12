@@ -274,7 +274,7 @@ class Chatbot:
         return token_ids[0][0]
 
     def _stop_words(self, stop_words: List[int]):
-        """return stop-word's token id."""
+        """return stop-words' token ids."""
         if stop_words is None:
             return None
         assert isinstance(stop_words, List) and \

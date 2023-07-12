@@ -7,7 +7,7 @@ from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
 def input_prompt():
-    """Input a prompt in the consolo interface."""
+    """Input a prompt in the console interface."""
     print('\ndouble enter to end input >>> ', end='')
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))

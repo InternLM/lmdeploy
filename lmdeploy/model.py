@@ -6,7 +6,7 @@ MODELS = Registry('model', locations=['lmdeploy.model'])
 
 @MODELS.register_module(name='vicuna')
 class Vicuna:
-    """Chat template for vicuna model."""
+    """Chat template of vicuna model."""
 
     def __init__(self):
         self.system = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """  # noqa: E501
@@ -31,13 +31,13 @@ class Vicuna:
 
     @property
     def stop_words(self):
-        """Return the stop-word's token ids."""
+        """Return the stop-words' token ids."""
         return None
 
 
 @MODELS.register_module(name='internlm')
 class InternLM:
-    """Chat template for InternLM model."""
+    """Chat template of InternLM model."""
 
     def __init__(self):
         self.system = ''
@@ -67,7 +67,7 @@ class InternLM:
 
     @property
     def stop_words(self):
-        """Return the stop-word's token ids."""
+        """Return the stop-words' token ids."""
         return [103027, 103028]
 
 
@@ -93,7 +93,7 @@ class Llama:
 
     @property
     def stop_words(self):
-        """Return the stop-word's token ids."""
+        """Return the stop-words' token ids."""
         return None
 
 
