@@ -36,7 +36,7 @@ You may recognize this feature as "continuous batching" in other repos. But duri
 
 ## KV Cache Manager
 
-The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of TurboMind is a memory pool like object that also implements LRU policy so that it can be viewed as a form of __cache of KV caches__. It works in the following way
+The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of TurboMind is a memory-pool-liked object that also implements LRU policy so that it can be viewed as a form of __cache of KV caches__. It works in the following way
 
 - All device memory required for KV cache is allocated by the manager. A fixed number of slots is pre-configured to match the memory size of the system. Each slot corresponds to the memory required by the KV cache of a single sequence. Allocation chunk-size can be configure to implement pre-allocate/on-demand style allocation policy (or something in-between).
 - When space for the KV cache of a new sequence is requested but no free slots left in the pool, the least recently used sequence is evicted from the cache and its device memory is directly reused by the new sequence. However, this is not the end of the story.
