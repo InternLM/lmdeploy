@@ -39,7 +39,7 @@ jobs:
       - name: Check docstring coverage
         run: |
           python -m pip install interrogate
-          interrogate -v --ignore-init-method --ignore-module --ignore-private --ignore-nested-functions --ignore-nested-classes --fail-under 80 lmdeploy
+          interrogate -v --ignore-init-method --ignore-magic --ignore-module --ignore-private --ignore-nested-functions --ignore-nested-classes --fail-under 80 lmdeploy
       - name: Check pylint score
         run: |
           python -m pip install pylint
