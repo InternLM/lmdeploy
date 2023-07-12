@@ -51,7 +51,7 @@ Our implementation of the LLaMa family models is modified from Gpt-NeoX model in
 - To support fast context decoding in multi-round conversation. The attention implementation in context decoder is replaced with a [cutlass](https://github.com/NVIDIA/cutlass)-based FMHA implementation that supports mis-matching Q/K lengths.
 - To support the discontinuity in KV cache inside the batch, indirect buffer pointers are introduced in both context FMHA and generation FMHA.
 - To support concurrent inference with persistent batch, new synchronization mechanism is designed to orchestrate the worker threads running in tensor parallel mode.
-- To maximize the throughput, we implement INT8 KV cache support because in real-world serving scenario, KV cache costs more memory and consumes more memory bandwidth that weights or other activations.
+- To maximize the throughput, we implement INT8 KV cache support to increase the max batch size. It's effective because in real-world serving scenario, KV cache costs more memory and consumes more memory bandwidth that weights or other activations.
 - To resolve NCCL hang when running multiple model instances in TP mode within a single process, NCCL APIs are now guarded by host-side synchronization barriers.
 
 ## API
