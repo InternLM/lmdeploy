@@ -1,6 +1,6 @@
 # Architecture of TurboMind
 
-TurboMind is an inference engine that supports high throughput inference for conversational LLMs, it's based on NVIDIA [FasterTransformer](https://github.com/NVIDIA/FasterTransformer). Major features of TurboMind includes an efficient LLaMa implementation, the persistent batch inference model and an extendable KV cache manager.  
+TurboMind is an inference engine that supports high throughput inference for conversational LLMs. It's based on NVIDIA's [FasterTransformer](https://github.com/NVIDIA/FasterTransformer). Major features of TurboMind include an efficient LLaMa implementation, the persistent batch inference model and an extendable KV cache manager.  
 
 ## High level overview of TurboMind 
 
@@ -26,39 +26,39 @@ TurboMind is an inference engine that supports high throughput inference for con
 
 ## Persistent Batch 
 
-You may know this feature as "continuous batching" in other repos. But during the concurrent development of the feature, we model the inference of a conversational LLM as a persistently running batch whose lifetime spans the entire serving process, hence the name "persistent batch". To put it simply
+You may recognize this feature as "continuous batching" in other repos. But during the concurrent development of the feature, we modeled the inference of a conversational LLM as a persistently running batch whose lifetime spans the entire serving process, hence the name "persistent batch". To put it simply
 
 - The persistent batch as N pre-configured batch slots.
-- Requests join the batch when there are free slots available. A batch slot is released and can be reused when the generation of the requested tokens is finished.
-- On _cache-hits_ (see below), __history tokens don't need to be decoded in every round of a conversation, generation of response tokens will start instantly__.
-- The batch grows or shrinks automatically to minimize useless computations.
+- Requests join the batch when there are free slots available. A batch slot is released and can be reused once the generation of the requested tokens is finished.
+- __On cache-hits (see below), history tokens don't need to be decoded in every round of a conversation; generation of response tokens will start instantly.__
+- The batch grows or shrinks automatically to minimize unnecessary computations.
 
 
 ## KV Cache Manager
 
 The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of TurboMind is a memory pool like object that also implements LRU policy so that it can be viewed as a form of __cache of KV caches__. It works in the following way
 
-- All device memory required for KV cache is allocated by the manager. A fix number of slots is pre-configured to match the memory size of the system. Each slot corresponds to the memory required by the KV cache of a single sequence. Allocation chunk-size can be configure to implement pre-allocate/on-demand style allocation policy (or something in-between).
+- All device memory required for KV cache is allocated by the manager. A fixed number of slots is pre-configured to match the memory size of the system. Each slot corresponds to the memory required by the KV cache of a single sequence. Allocation chunk-size can be configure to implement pre-allocate/on-demand style allocation policy (or something in-between).
 - When space for the KV cache of a new sequence is requested but no free slots left in the pool, the least recently used sequence is evicted from the cache and its device memory is directly reused by the new sequence. However, this is not the end of the story.
-- Fetch sequence currently resides in the one of the slots resembles _cache-hit_, the history KV cache is returned directly and no context decoding is needed.
+- Fetching sequence currently resides in one of the slots resembles a _cache-hit_, the history KV cache is returned directly and no context decoding is needed.
 - Victim (evicted) sequences are not erased entirely but converted to its most compact form, i.e. token IDs. When the same sequence id is fetched later (_cache-miss_) the token IDs will be decoded by FMHA backed context decoder and converted back to KV cache.
 - The eviction and conversion are handled automatically inside TurboMind and thus transparent to the users. __From the user's aspect, system that use TurboMind has access to infinite device memory.__
 
 ## LLaMa implementation
 
-Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifications to support the LLaMa family. Some improvements are made to enable high performance inference of conversational models, most importantly
+Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifications to support the LLaMa family, we made some improvements to enable high performance inference of conversational models, most importantly:
 
-- To support fast context decoding in multi-round conversation. The attention implementation in context decoder is replaced with a [cutlass](https://github.com/NVIDIA/cutlass)-based FMHA implementation that supports mis-matching Q/K lengths.
-- To support the discontinuity in KV cache inside the batch, indirect buffer pointers are introduced in both context FMHA and generation FMHA.
-- To support concurrent inference with persistent batch, new synchronization mechanism is designed to orchestrate the worker threads running in tensor parallel mode.
-- To maximize the throughput, we implement INT8 KV cache support to increase the max batch size. It's effective because in real-world serving scenario, KV cache costs more memory and consumes more memory bandwidth than weights or other activations.
-- To resolve NCCL hang when running multiple model instances in TP mode within a single process, NCCL APIs are now guarded by host-side synchronization barriers.
+- To support fast context decoding in multi-round conversations. We replaced the attention implementation in context decoder with a [cutlass](https://github.com/NVIDIA/cutlass)-based FMHA implementation that supports mismatched Q/K lengths.
+- We introduced indirect buffer pointers in both context FMHA and generation FMHA to support the discontinuity in KV cache within the batch.
+- To support concurrent inference with persistent batch, new synchronization mechanism was designed to orchestrate the worker threads running in tensor parallel mode.
+- To maximize the throughput, we implement INT8 KV cache support to increase the max batch size. It's effective because in real-world serving scenarios, KV cache costs more memory and consumes more memory bandwidth than weights or other activations.
+- We resolved an NCCL hang issue when running multiple model instances in TP mode within a single process, NCCL APIs are now guarded by host-side synchronization barriers.
 
 ## API
 
-TurboMind support Python API that enables streaming output and tensor parallel mode. 
+TurboMind supports a Python API that enables streaming output and tensor parallel mode. 
 
-Serving capability using [tritonserver](https://github.com/triton-inference-server/server) is also inherited from FasterTransformer. However, to support submitting concurrent requests into our persistent batch model, we no longer use sequence batching or dynamic batching as FT does. The bookkeeping of request and sequence states are managed by TurboMind instead.
+The ability to use [tritonserver](https://github.com/triton-inference-server/server) for serving is also inherited from FasterTransformer. However, to support submitting concurrent requests into our persistent batch model, we no longer use sequence batching or dynamic batching as FasterTransformer does. The bookkeeping of request and sequence states are managed by TurboMind instead.
 
 ## Difference between FasterTransformer and TurboMind
 
