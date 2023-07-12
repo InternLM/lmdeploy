@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
 import sys
+from configparser import ConfigParser
 from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
@@ -65,10 +66,8 @@ class TurboMind:
     def __init__(self,
                  model_path: str,
                  data_type: str = 'fp16',
-                 session_len: int = 2048,
                  eos_id: int = 2,
-                 stop_words: List[int] = None,
-                 tensor_parallel_size: int = torch.cuda.device_count()):
+                 stop_words: List[int] = None):
         self.eos_id = eos_id
 
         # mpi
@@ -76,12 +75,28 @@ class TurboMind:
         node_id = mpi_comm.Get_rank()
         node_num = mpi_comm.Get_size()
 
+        # read meta from model path
+        self.gpu_count = 1
+        self.session_len = 2048
+        ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
+        with open(ini_path, 'r') as f:
+            parser = ConfigParser()
+            parser.read_file(f)
+            section_name = ''
+            if 'turbomind' in parser:
+                section_name = 'turbomind'
+            elif 'llama' in parser:
+                section_name = 'llama'
+
+            if len(section_name) > 0:
+                self.gpu_count = parser.getint(section_name,
+                                               'tensor_para_size')
+                self.session_len = parser.getint(section_name, 'session_len')
+
         # params
         self.node_id = node_id
         self.node_num = node_num
-        self.gpu_count = tensor_parallel_size
         self.world_size = self.node_num * self.gpu_count
-        self.session_len = session_len
 
         # create model
         weight_dir = osp.join(model_path, 'triton_models', 'weights')

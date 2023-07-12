@@ -42,11 +42,7 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
     que.put((session_id, stats))
 
 
-def warmup(model,
-           concurrency: int,
-           session_len: int,
-           output_seqlen: int,
-           warmup_round: int = 4):
+def warmup(model, concurrency: int, output_seqlen: int, warmup_round: int = 4):
     print('start to warmup ...')
 
     def _infer(model, session_id):
@@ -81,7 +77,6 @@ def warmup(model,
 def main(model_path: str,
          model_name: str,
          concurrency: int = 1,
-         session_len: int = 2056,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
@@ -92,7 +87,7 @@ def main(model_path: str,
     stop_words = model.stop_words
     tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
 
-    warmup(tm_model, concurrency, session_len, output_seqlen)
+    warmup(tm_model, concurrency, output_seqlen)
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)

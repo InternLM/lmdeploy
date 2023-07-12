@@ -2,7 +2,6 @@
 import os
 import os.path as osp
 import random
-from configparser import ConfigParser
 
 import fire
 from transformers import AutoTokenizer
@@ -28,31 +27,14 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def get_session_len(model_path, default_value=2048):
-    ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
-    try:
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-            if 'llama' in parser:
-                if 'session_len' in parser.options('llama'):
-                    return parser.getint('llama', 'session_len')
-    except Exception:
-        return default_value
-    return default_value
-
-
-def main(model_name, model_path, tp=1, session_id: int = 1):
+def main(model_name, model_path, session_id: int = 1):
     model = MODELS.get(model_name)()
-    session_len = get_session_len(model_path)
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
                                               trust_remote_code=True)
     tm_model = tm.TurboMind(model_path,
                             eos_id=tokenizer.eos_token_id,
-                            stop_words=model.stop_words,
-                            session_len=session_len,
-                            tensor_parallel_size=tp)
+                            stop_words=model.stop_words)
     generator = tm_model.create_instance()
 
     nth_round = 1
