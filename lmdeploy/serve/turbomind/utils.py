@@ -85,6 +85,7 @@ def get_logger(name: str,
 
 
 def prepare_tensor(name, input_tensor):
+    """Create grpcclient's InferInput instance according to a given tensor."""
     t = grpcclient.InferInput(name, list(input_tensor.shape),
                               np_to_triton_dtype(input_tensor.dtype))
     t.set_data_from_numpy(input_tensor)
@@ -92,6 +93,12 @@ def prepare_tensor(name, input_tensor):
 
 
 class Preprocessor:
+    """Tokenize prompts.
+
+    Args:
+        tritonserver_addr (str): the communication address of the inference
+          server
+    """
 
     def __init__(self, tritonserver_addr: str):
         self.tritonserver_addr = tritonserver_addr
@@ -134,6 +141,12 @@ class Preprocessor:
 
 
 class Postprocessor:
+    """De-tokenize prompts.
+
+    Args:
+        tritonserver_addr (str): the communication address of the inference
+          server
+    """
 
     def __init__(self, tritonserver_addr: str):
         self.tritonserver_addr = tritonserver_addr

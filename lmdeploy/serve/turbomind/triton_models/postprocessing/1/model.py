@@ -9,6 +9,11 @@ import triton_python_backend_utils as pb_utils
 
 
 class Tokenizer:
+    """Tokenize prompts or de-tokenize tokens into texts.
+
+    Args:
+        model_file (str): the path of the tokenizer model
+    """
 
     def __init__(self, model_file: str):
         model_folder = osp.split(model_file)[0]
@@ -38,6 +43,13 @@ class Tokenizer:
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     def encode(self, s: str):
+        """Tokenize a prompt.
+
+        Args:
+            s (str): a prompt
+        Returns:
+            list[int]: token ids
+        """
         if not self.use_hf_model:
             add_bos = False
             add_eos = False
@@ -59,6 +71,13 @@ class Tokenizer:
             return self.model.encode(s, add_special_tokens=add_special_tokens)
 
     def decode(self, t: List[int]):
+        """De-tokenize.
+
+        Args:
+            t (List[int]): a list of token ids
+        Returns:
+            str: text of decoding tokens
+        """
         if not self.use_hf_model:
             return self.model.Decode(t)
         else:
@@ -173,6 +192,7 @@ class TritonPythonModel:
         print('Cleaning up...')
 
     def _postprocessing(self, tokens_batch, sequence_length):
+        """decode token ids into texts."""
         outputs = []
         for beam_tokens, beam_len in zip(tokens_batch, sequence_length):
             for tokens, _len in zip(beam_tokens, beam_len):

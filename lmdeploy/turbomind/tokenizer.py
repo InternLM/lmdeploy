@@ -7,6 +7,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 class Tokenizer:
+    """Tokenize prompts or de-tokenize tokens into texts.
+
+    Args:
+        model_file (str): the path of the tokenizer model
+    """
 
     def __init__(self, model_file: str):
         if model_file.endswith('.model'):
@@ -41,6 +46,13 @@ class Tokenizer:
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     def encode(self, s: str):
+        """Tokenize a prompt.
+
+        Args:
+            s (str): a prompt
+        Returns:
+            list[int]: token ids
+        """
         if not self.use_hf_model:
             add_bos = False
             add_eos = False
@@ -62,6 +74,13 @@ class Tokenizer:
             return self.model.encode(s, add_special_tokens=add_special_tokens)
 
     def decode(self, t: Sequence[int]):
+        """De-tokenize.
+
+        Args:
+            t (List[int]): a list of token ids
+        Returns:
+            str: text of decoding tokens
+        """
         if not self.use_hf_model:
             return self.model.Decode(t)
         else:
@@ -71,6 +90,11 @@ class Tokenizer:
 
 
 class Preprocessor:
+    """Tokenize prompts.
+
+    Args:
+        tokenizer (Tokenizer): an instance of tokenizer
+    """
 
     def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
@@ -110,6 +134,11 @@ class Preprocessor:
 
 
 class Postprocessor:
+    """De-tokenize token ids.
+
+    Args:
+        tokenizer (Tokenizer): an instance of tokenizer
+    """
 
     def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
