@@ -42,14 +42,14 @@ The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of Turbo
 - When space for the KV cache of a new sequence is requested but no free slots left in the pool, the least recently used sequence is evicted from the cache and its device memory is directly reused by the new sequence. However, this is not the end of the story.
 - Fetch sequence currently resides in the one of the slots resembles _cache-hit_, the history KV cache is returned directly and no context decoding is needed.
 - Victim (evicted) sequences are not erased entirely but converted to the most compact form, i.e. token IDs. When the same sequence id is fetched later (_cache-miss_) the token IDs is decoded by FMHA backed context decoder and converted back to KV cache.
-- The eviction and conversion are handled automatically inside TurboMind and thus transparent to the users. __From the user's aspect, system that use TurboMind has access to infinite devcie memory.__
+- The eviction and conversion are handled automatically inside TurboMind and thus transparent to the users. __From the user's aspect, system that use TurboMind has access to infinite device memory.__
 
 ## LLaMa implenetation
 
-Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifcations to support the LLaMa family. Some improvements are made to support high performance inference of conversational models, most importantly
+Our implementation of the LLaMa family models is modified from Gpt-NeoX model in FasterTransformer. In addition to basic refactoring and modifications to support the LLaMa family. Some improvements are made to support high performance inference of conversational models, most importantly
 
-- To support fast context decoding in multi-round conversation. The attention implementation in context decoder is replaced with a [cutlass](https://github.com/NVIDIA/cutlass)-based FMHA implementation that supports mis-matching Q/K lenghts.
-- To support the discontinuity in KV cache inside the batch, indirect buffer pointers are introduced in both conetxt FMHA and generation FMHA.
+- To support fast context decoding in multi-round conversation. The attention implementation in context decoder is replaced with a [cutlass](https://github.com/NVIDIA/cutlass)-based FMHA implementation that supports mis-matching Q/K lengths.
+- To support the discontinuity in KV cache inside the batch, indirect buffer pointers are introduced in both context FMHA and generation FMHA.
 - To support concurrent inference with persistent batch, new synchronization mechanism is designed to orchestrate the worker threads running in tensor parallel mode.
 - To maximize the throughput, we implement INT8 KV cache support because in real-world serving scenario, KV cache costs more memory and consumes more memory bandwidth that weights or other activations.
 - To resolve NCCL hang when running multiple model instances in TP mode within a single process, NCCL APIs are now guarded by host-side synchronization barriers.
