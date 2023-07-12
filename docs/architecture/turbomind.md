@@ -41,7 +41,7 @@ The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of Turbo
 - All device memory required for KV cache is allocated by the manager. A fix number of slots is pre-configured to match the memory size of the system. Each slot corresponds to the memory required by the KV cache of a single sequence. Allocation chunk-size can be configure to implement pre-allocate/on-demand style allocation policy (or something in-between).
 - When space for the KV cache of a new sequence is requested but no free slots left in the pool, the least recently used sequence is evicted from the cache and its device memory is directly reused by the new sequence. However, this is not the end of the story.
 - Fetch sequence currently resides in the one of the slots resembles _cache-hit_, the history KV cache is returned directly and no context decoding is needed.
-- Victim (evicted) sequences are not erased entirely but converted to the most compact form, i.e. token IDs. When the same sequence id is fetched later (_cache-miss_) the token IDs is decoded by FMHA backed context decoder and converted back to KV cache.
+- Victim (evicted) sequences are not erased entirely but converted to the most compact form, i.e. token IDs. When the same sequence id is fetched later (_cache-miss_) the token IDs will be decoded by FMHA backed context decoder and converted back to KV cache.
 - The eviction and conversion are handled automatically inside TurboMind and thus transparent to the users. __From the user's aspect, system that use TurboMind has access to infinite device memory.__
 
 ## LLaMa implementation
