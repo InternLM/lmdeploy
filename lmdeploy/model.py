@@ -58,8 +58,7 @@ class InternLM:
             str: the concatenated prompt
         """
         if sequence_start:
-            return f'{self.system}\n' \
-                   f'{self.user}:{prompt}{self.eoh}\n' \
+            return f'<bos>{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
