@@ -109,13 +109,13 @@ bash workspace/service_docker_up.sh
 Then, you can communicate with the inference server by command line,
 
 ```shell
-python3 lmdeploy.serve.client {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 ```
 
 or webui,
 
 ```
-python3 lmdeploy.app {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
