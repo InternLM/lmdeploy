@@ -8,7 +8,7 @@ Weights for the LLaMA models can be obtained from by filling out [this form](htt
 <summary><b>7B</b></summary>
 
 ```shell
-python3 lmdeploy.serve.turbomind.deploy llama-7B /path/to/llama-7b llama \
+python3 -m lmdeploy.serve.turbomind.deploy llama-7B /path/to/llama-7b llama \
     --tokenizer_path /path/to/tokenizer/model
 bash workspace/service_docker_up.sh
 ```
@@ -19,7 +19,7 @@ bash workspace/service_docker_up.sh
 <summary><b>13B</b></summary>
 
 ```shell
-python3 lmdeploy.serve.turbomind.deploy llama-13B /path/to/llama-13b llama \
+python3 -m lmdeploy.serve.turbomind.deploy llama-13B /path/to/llama-13b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 2
 bash workspace/service_docker_up.sh
 ```
@@ -30,7 +30,7 @@ bash workspace/service_docker_up.sh
 <summary><b>30B</b></summary>
 
 ```shell
-python3 lmdeploy.serve.turbomind.deploy llama-32B /path/to/llama-30b llama \
+python3 -m lmdeploy.serve.turbomind.deploy llama-32B /path/to/llama-30b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 4
 bash workspace/service_docker_up.sh
 ```
@@ -41,7 +41,7 @@ bash workspace/service_docker_up.sh
 <summary><b>65B</b></summary>
 
 ```shell
-python3 lmdeploy.serve.turbomind.deploy llama-65B /path/to/llama-65b llama \
+python3 -m lmdeploy.serve.turbomind.deploy llama-65B /path/to/llama-65b llama \
     --tokenizer_path /path/to/tokenizer/model --tp 8
 bash workspace/service_docker_up.sh
 ```
