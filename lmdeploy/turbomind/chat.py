@@ -13,12 +13,14 @@ os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 def input_prompt():
+    """Input a prompt in the consolo interface."""
     print('\ndouble enter to end input >>> ', end='')
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
 
 def valid_str(string, coding='utf-8'):
+    """decode text according to its encoding type."""
     invalid_chars = [b'\xef\xbf\xbd']
     bstr = bytes(string, coding)
     for invalid_char in invalid_chars:
@@ -28,6 +30,14 @@ def valid_str(string, coding='utf-8'):
 
 
 def main(model_name, model_path, session_id: int = 1):
+    """An example to perform model inference through the command line
+    interface.
+
+    Args:
+        model_name (str): the name of the deployed model
+        model_path (str): the path of the deployed model
+        session_id (int): the identical id of a session
+    """
     model = MODELS.get(model_name)()
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,

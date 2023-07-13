@@ -11,6 +11,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 class Tokenizer:
+    """Tokenize prompts or de-tokenize tokens into texts.
+
+    Args:
+        model_file (str): the path of the tokenizer model
+    """
 
     def __init__(self, model_file: str):
         model_folder = osp.split(model_file)[0]
@@ -40,6 +45,13 @@ class Tokenizer:
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     def encode(self, s: str):
+        """Tokenize a prompt.
+
+        Args:
+            s (str): a prompt
+        Returns:
+            list[int]: token ids
+        """
         if not self.use_hf_model:
             add_bos = False
             add_eos = False
@@ -61,6 +73,13 @@ class Tokenizer:
             return self.model.encode(s, add_special_tokens=add_special_tokens)
 
     def decode(self, t: List[int]):
+        """De-tokenize.
+
+        Args:
+            t (List[int]): a list of token ids
+        Returns:
+            str: text of decoding tokens
+        """
         if not self.use_hf_model:
             return self.model.Decode(t)
         else:
@@ -187,6 +206,13 @@ class TritonPythonModel:
         print('Cleaning up...')
 
     def _create_request(self, query):
+        """Tokenize prompts and return the token ids and their length.
+
+        Args:
+            query (List[str]): a list of prompt
+        Returns:
+            tuple: token ids and their length
+        """
         start_ids = [
             torch.IntTensor(self.tokenizer.encode(s[0].decode()))
             for s in query

@@ -7,12 +7,22 @@ from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
 def input_prompt():
+    """Input a prompt in the console interface."""
     print('\ndouble enter to end input >>> ', end='')
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
 
 def main(tritonserver_addr: str, model_name: str, session_id: int = 1):
+    """An example to communicate with inference server through the command line
+    interface.
+
+    Args:
+        tritonserver_addr (str): the address in format "ip:port" of
+          triton inference server
+        model_name (str): the name of the deployed model
+        session_id (int): the identical id of a session
+    """
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')
     chatbot = Chatbot(tritonserver_addr,
                       model_name,

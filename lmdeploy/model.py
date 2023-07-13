@@ -6,6 +6,7 @@ MODELS = Registry('model', locations=['lmdeploy.model'])
 
 @MODELS.register_module(name='vicuna')
 class Vicuna:
+    """Chat template of vicuna model."""
 
     def __init__(self):
         self.system = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """  # noqa: E501
@@ -13,6 +14,16 @@ class Vicuna:
         self.assistant = 'ASSISTANT'
 
     def get_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
         if sequence_start:
             return f'{self.system} {self.user}: {prompt} {self.assistant}:'
         else:
@@ -20,11 +31,13 @@ class Vicuna:
 
     @property
     def stop_words(self):
+        """Return the stop-words' token ids."""
         return None
 
 
 @MODELS.register_module(name='internlm')
 class InternLM:
+    """Chat template of InternLM model."""
 
     def __init__(self):
         self.system = ''
@@ -34,6 +47,16 @@ class InternLM:
         self.assistant = '<|Bot|>'
 
     def get_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
         if sequence_start:
             return f'{self.system}\n' \
                    f'{self.user}:{prompt}{self.eoh}\n' \
@@ -44,20 +67,33 @@ class InternLM:
 
     @property
     def stop_words(self):
+        """Return the stop-words' token ids."""
         return [103027, 103028]
 
 
 @MODELS.register_module(name='llama')
 class Llama:
+    """Chat template of LLaMA model."""
 
     def __init__(self):
         pass
 
     def get_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
         return prompt
 
     @property
     def stop_words(self):
+        """Return the stop-words' token ids."""
         return None
 
 

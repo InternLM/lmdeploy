@@ -16,6 +16,13 @@ supported_formats = ['llama', 'hf']
 
 
 def create_workspace(_path: str):
+    """Create a workspace.
+
+    Args:
+        _path (str): the path of the workspace
+    Returns:
+        bool: success or not
+    """
     try:
         if osp.exists(_path):
             shutil.rmtree(_path)
@@ -28,6 +35,13 @@ def create_workspace(_path: str):
 
 
 def destroy_workspace(_path: str):
+    """destroy workspace.
+
+    Args:
+        _path(str): the path of the workspace
+    Returns:
+        bool: success or not
+    """
     try:
         shutil.rmtree(_path)
         print(f'destroy workspace in directory {_path}')
@@ -38,6 +52,13 @@ def destroy_workspace(_path: str):
 
 
 def copy_triton_model_templates(_path: str):
+    """copy triton model templates to the specified path.
+
+    Args:
+        _path (str): the target path
+    Returns:
+        str: the path of the triton models
+    """
     try:
         cur_path = osp.abspath(__file__)
         dir_path = osp.dirname(cur_path)
@@ -55,6 +76,13 @@ def copy_triton_model_templates(_path: str):
 
 
 def tokenizer_info(model_path: str):
+    """Return the vocabulary size, bos token id and eos token id.
+
+    Args:
+        model_path (str): the tokenizer model's path
+    Returns:
+        tuple: vocabulary size, bos token id and eos token id
+    """
     assert os.path.isfile(model_path), model_path
     sp_model = SentencePieceProcessor(model_file=model_path)
     # BOS / EOS token IDs
@@ -72,6 +100,18 @@ def export(model_name: str,
            out_dir: str,
            tp: int,
            size_per_head: int = 128):
+    """Export deploying information to a config file.
+
+    Args:
+        model_name (str): model's name
+        num_layer (int): the number of transformer blocks
+        norm_eps (float): norm epsilon
+        model_params (dict): parameters of a model
+        tokenizer_path (str): the tokenizer model's path
+        out_dir (str): the path of the output directory
+        tp (int): the number of tensor parallelism
+        size_per_head (int): the dimension of each head
+    """
     out_dir = osp.join(out_dir, 'weights')
     os.makedirs(out_dir, exist_ok=True)
 
@@ -163,6 +203,16 @@ def export(model_name: str,
 
 def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                  triton_models_path: str, tp: int):
+    """Deploy a model with huggingface transformers' format.
+
+    Args:
+        model_name (str): the name of the to-be-deployed model
+        model_path (str): the path of the directory where the model weight
+          files are
+        tokenizer_path (str): the path of the tokenizer model path
+        triton_models_path (str): the path of the exported triton models
+        tp (int): the number of tensor parallelism
+    """
     if osp.exists(tokenizer_path):
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
@@ -269,13 +319,18 @@ def permute(x: torch.Tensor):
                       1).transpose(1, 2).reshape(dim, 1)
 
 
-def check_zero(x: torch.Tensor):
-    _sum = x.flatten().sum().item()
-    assert _sum == 0, str(_sum)
-
-
 def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
               triton_models_path: str, tp: int):
+    """Deploy a model with huggingface transformers' format.
+
+    Args:
+        model_name (str): the name of the to-be-deployed model
+        model_path (str): the path of the directory where the model weight
+          files are
+        tokenizer_path (str): the path of the tokenizer model path
+        triton_models_path (str): the path of the exported triton models
+        tp (int): the number of tensor parallelism
+    """
     if tokenizer_path is None:
         tokenizer_path = osp.join(model_path, 'tokenizer.model')
     if osp.exists(tokenizer_path):
@@ -318,9 +373,11 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
         _params.update(_tmp)
 
     def get_tensor(name):
+        """return tensor according its name."""
         return _params[name]
 
     def get_tensor_transposed(name: str):
+        """return a transposed tensor according its name."""
         if name not in _params and name.find('bias'):
             return None
         return _params[name].t()
@@ -407,6 +464,11 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
 
 
 def pack_model_repository(workspace_path: str):
+    """package the model repository.
+
+    Args:
+        workspace_path: the path of workspace
+    """
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
     os.symlink(src=osp.join('../triton_models/interactive'),

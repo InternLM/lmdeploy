@@ -36,6 +36,14 @@ def chat_stream(instruction: str,
                 state_chatbot: Sequence,
                 llama_chatbot: Chatbot,
                 model_name: str = None):
+    """Chat with AI assistant.
+
+    Args:
+        instruction (str): user's prompt
+        state_chatbot (Sequence): the chatting history
+        llama_chatbot (Chatbot): the instance of a chatbot
+        model_name (str): the name of deployed model
+    """
     bot_summarized_response = ''
     model_type = 'turbomind'
     state_chatbot = state_chatbot + [(instruction, None)]
@@ -61,7 +69,7 @@ def chat_stream(instruction: str,
 def reset_all_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
                    llama_chatbot: gr.State, triton_server_addr: str,
                    model_name: str):
-
+    """reset the session."""
     state_chatbot = []
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
     llama_chatbot = Chatbot(triton_server_addr,
@@ -82,6 +90,7 @@ def cancel_func(
     state_chatbot: gr.State,
     llama_chatbot: gr.State,
 ):
+    """cancel the session."""
     session_id = llama_chatbot._session.session_id
     llama_chatbot.cancel(session_id)
 
@@ -95,6 +104,14 @@ def run(triton_server_addr: str,
         model_name: str,
         server_name: str = 'localhost',
         server_port: int = 6006):
+    """chat with AI assistant through web ui.
+
+    Args:
+        triton_server_addr (str): the communication address of inference server
+        model_name (str): the name of the deployed model
+        server_name (str): the ip address of gradio server
+        server_port (int): the port of gradio server
+    """
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         chat_interface = partial(chat_stream, model_name=model_name)
         reset_all = partial(reset_all_func,
