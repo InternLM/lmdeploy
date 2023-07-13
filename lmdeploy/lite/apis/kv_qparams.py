@@ -101,7 +101,8 @@ def main(model: str,
          num_tp: int = 1,
          calib_dataset: str = 'c4',
          calib_samples: int = 128,
-         output_dir: str = './kv_scales'):
+         output_dir: str = './kv_scales',
+         device: str = 'cuda'):
     assert granularity in ['per_tensor'], \
         'Currently, only support per-tensor quantization for the kv cache.'
     assert bits == 8, \
@@ -109,10 +110,8 @@ def main(model: str,
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Currently, only support `c4`, `ptb`, `wikitext2`, or `pileval`.'
 
-    tokenizer = AutoTokenizer.from_pretrained(model,
-                                              use_fast=False,
-                                              trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    model = AutoModel.from_pretrained(model)
     model.config.use_cache = True
 
     print('Loading calibrate dataset ...')
@@ -124,40 +123,16 @@ def main(model: str,
     k_obs_list = list()
     v_obs_list = list()
 
-    if offload:
-        import warnings
-        warnings.warn('You are using the `offload` mode, in which the '
-                      'modules in the `OFFLOAD_MOD_MAP` will be moved to '
-                      'the GPU during forward and kept on the CPU at other '
-                      'times to save GPU memory.')
-        if type(model) not in OFFLOAD_MOD_MAP:
+    with memory_efficient_inference(model, offload, device):
+        for data in tqdm(calib_loader, desc='Calibrating: '):
+            if isinstance(data, torch.Tensor):
+                output = model(data.to(device))
+            else:
+                output = model(data[0].to(device))
+            kv_cache = output.past_key_values
 
-            warnings.warn(f'{type(model)} is not in the `OFFLOAD_MOD_MAP`,'
-                          f'and by default, offloading will be done on '
-                          '`nn.Linear`. You can add more robust modules to '
-                          'the `OFFLOAD_MOD_MAP` for faster speed.')
-            offload_mod = OFFLOAD_MOD_MAP[type(model)]
-        with memory_efficient_inference(model, offload_mod):
-            for data in tqdm(calib_loader, desc='Calibrating: '):
-                if isinstance(data, torch.Tensor):
-                    output = model(data.to('cuda'))
-                else:
-                    output = model(data[0].to('cuda'))
-                kv_cache = output.past_key_values
-                stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
-                                      symmetry, num_tp)
-    else:
-        model.to('cuda')
-        with torch.inference_mode():
-            for data in tqdm(calib_loader, desc='Calibrating: '):
-                if isinstance(data, torch.Tensor):
-                    output = model(data.to('cuda'))
-                else:
-                    output = model(data[0].to('cuda'))
-                kv_cache = output.past_key_values
-
-                stats_past_key_values(kv_cache, k_obs_list, v_obs_list,
-                                      symmetry, num_tp)
+            stats_past_key_values(kv_cache, k_obs_list, v_obs_list, symmetry,
+                                  num_tp)
 
     import numpy as np
     out_dir = Path(output_dir)
