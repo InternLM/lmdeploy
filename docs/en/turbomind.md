@@ -1,8 +1,8 @@
 # Architecture of TurboMind
 
-TurboMind is an inference engine that supports high throughput inference for conversational LLMs. It's based on NVIDIA's [FasterTransformer](https://github.com/NVIDIA/FasterTransformer). Major features of TurboMind include an efficient LLaMa implementation, the persistent batch inference model and an extendable KV cache manager.  
+TurboMind is an inference engine that supports high throughput inference for conversational LLMs. It's based on NVIDIA's [FasterTransformer](https://github.com/NVIDIA/FasterTransformer). Major features of TurboMind include an efficient LLaMa implementation, the persistent batch inference model and an extendable KV cache manager.
 
-## High level overview of TurboMind 
+## High level overview of TurboMind
 
 ```
   +--------------------+
@@ -14,8 +14,8 @@ TurboMind is an inference engine that supports high throughput inference for con
   +--------------------+   fetch   +-------------------+
   |  Persistent Batch  | <-------> |  KV Cache Manager |
   +--------------------+   update  +-------------------+
-             ^ 
-             | 
+             ^
+             |
              v
 +------------------------+
 |  LLaMA implementation  |
@@ -24,7 +24,7 @@ TurboMind is an inference engine that supports high throughput inference for con
 +------------------------+
 ```
 
-## Persistent Batch 
+## Persistent Batch
 
 You may recognize this feature as "continuous batching" in other repos. But during the concurrent development of the feature, we modeled the inference of a conversational LLM as a persistently running batch whose lifetime spans the entire serving process, hence the name "persistent batch". To put it simply
 
@@ -32,7 +32,6 @@ You may recognize this feature as "continuous batching" in other repos. But duri
 - Requests join the batch when there are free slots available. A batch slot is released and can be reused once the generation of the requested tokens is finished.
 - __On cache-hits (see below), history tokens don't need to be decoded in every round of a conversation; generation of response tokens will start instantly.__
 - The batch grows or shrinks automatically to minimize unnecessary computations.
-
 
 ## KV Cache Manager
 
@@ -56,7 +55,7 @@ Our implementation of the LLaMa family models is modified from Gpt-NeoX model in
 
 ## API
 
-TurboMind supports a Python API that enables streaming output and tensor parallel mode. 
+TurboMind supports a Python API that enables streaming output and tensor parallel mode.
 
 The ability to use [tritonserver](https://github.com/triton-inference-server/server) for serving is also inherited from FasterTransformer. However, to support submitting concurrent requests into our persistent batch model, we no longer use sequence batching or dynamic batching as FasterTransformer does. The bookkeeping of request and sequence states are managed by TurboMind instead.
 
