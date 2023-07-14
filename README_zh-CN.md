@@ -4,7 +4,7 @@
 [English](README.md) | 简体中文
 
 </div>
-
+<br>
 <div align="center">
   <a href="https://discord.gg/xa29JuW87d" style="text-decoration:none;">
     <img src="https://user-images.githubusercontent.com/25839884/218347213-c080267f-cbb6-443e-8532-8e1ed9a58ea9.png" width="3%" alt="" /></a>
