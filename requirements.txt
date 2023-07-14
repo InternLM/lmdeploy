@@ -7,6 +7,6 @@ setuptools
 protobuf
 gradio
 sentencepiece
-deepspeed
-transformers<4.30.0
+deepspeed # this is gonna be large
+transformers==4.30.2
 tritonclient[all]
