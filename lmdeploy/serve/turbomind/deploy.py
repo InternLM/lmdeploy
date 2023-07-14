@@ -12,6 +12,8 @@ import safetensors
 import torch
 from sentencepiece import SentencePieceProcessor
 
+from lmdeploy.model import MODELS
+
 supported_formats = ['llama', 'hf']
 
 
@@ -494,6 +496,9 @@ def main(model_name: str,
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism
     """
+    assert model_name in MODELS.module_dict.keys(), \
+        f"'{model_name}' is not supported. " \
+        f'The supported models are: {MODELS.module_dict.keys()}'
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
@@ -522,8 +527,11 @@ def main(model_name: str,
     # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
     with open(osp.join(triton_models_path, 'interactive/config.pbtxt'),
               'a') as f:
-        param = 'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
-            'string_value: ' + f'"{tp}"\n' + '  }\n}\n'
+        param = \
+            'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
+            'string_value: ' + f'"{tp}"\n' + '  }\n}\n' + \
+            'parameters {\n  key: "model_name"\n  value: {\n    ' \
+            'string_value: ' + f'"{model_name}"\n' + '  }\n}\n'
         f.write(param)
     if not res:
         print(f'deploy model "{model_name}" via turbomind failed')
