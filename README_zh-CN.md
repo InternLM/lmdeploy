@@ -63,6 +63,7 @@ conda create -n lmdeploy python=3.10
 conda activate lmdeploy
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
+pip install -r requirements.txt
 pip install -e .
 ```
 

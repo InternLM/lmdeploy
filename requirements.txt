@@ -4,5 +4,9 @@ numpy
 pybind11
 safetensors
 setuptools
+protobuf
+gradio
+sentencepiece
+deepspeed
 transformers<4.30.0
-tritonclient==2.33.0
+tritonclient[all]
