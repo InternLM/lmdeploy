@@ -10,7 +10,7 @@
     <img src="https://user-images.githubusercontent.com/25839884/218347213-c080267f-cbb6-443e-8532-8e1ed9a58ea9.png" width="3%" alt="" /></a>
   <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
   <a href="https://r.vansin.top/?r=internwx" style="text-decoration:none;">
-    <img src="https://github.com/InternLM/lmdeploy/assets/25839884/8c025d49-6463-4bd0-a144-c86eec51b837" width="3%" alt="" /></a>
+    <img src="https://cdn.vansin.top/internlm/wechat.png" width="3%" alt="" /></a>
 </div>
 
 ## 简介
