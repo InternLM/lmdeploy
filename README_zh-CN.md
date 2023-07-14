@@ -4,14 +4,10 @@
 [English](README.md) | 简体中文
 
 </div>
-<br>
-<div align="center">
-  <a href="https://discord.gg/xa29JuW87d" style="text-decoration:none;">
-    <img src="https://user-images.githubusercontent.com/25839884/218347213-c080267f-cbb6-443e-8532-8e1ed9a58ea9.png" width="3%" alt="" /></a>
-  <img src="https://user-images.githubusercontent.com/25839884/218346358-56cc8e2f-a2b8-487f-9088-32480cceabcf.png" width="3%" alt="" />
-  <a href="https://r.vansin.top/?r=internwx" style="text-decoration:none;">
-    <img src="https://cdn.vansin.top/internlm/wechat.png" width="3%" alt="" /></a>
-</div>
+
+<p align="center">
+    👋 join us on <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
+</p>
 
 ## 简介
 
