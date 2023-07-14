@@ -1,8 +1,8 @@
 # Architecture of TurboMind
 
-TurboMind is an inference engine that supports high throughput inference for conversational LLMs. It's based on NVIDIA's [FasterTransformer](https://github.com/NVIDIA/FasterTransformer). Major features of TurboMind include an efficient LLaMa implementation, the persistent batch inference model and an extendable KV cache manager.  
+TurboMind is an inference engine that supports high throughput inference for conversational LLMs. It's based on NVIDIA's [FasterTransformer](https://github.com/NVIDIA/FasterTransformer). Major features of TurboMind include an efficient LLaMa implementation, the persistent batch inference model and an extendable KV cache manager.
 
-## High level overview of TurboMind 
+## High level overview of TurboMind
 
 ```
   +--------------------+
@@ -14,8 +14,8 @@ TurboMind is an inference engine that supports high throughput inference for con
   +--------------------+   fetch   +-------------------+
   |  Persistent Batch  | <-------> |  KV Cache Manager |
   +--------------------+   update  +-------------------+
-             ^ 
-             | 
+             ^
+             |
              v
 +------------------------+
 |  LLaMA implementation  |
@@ -24,7 +24,7 @@ TurboMind is an inference engine that supports high throughput inference for con
 +------------------------+
 ```
 
-## Persistent Batch 
+## Persistent Batch
 
 You may recognize this feature as "continuous batching" in other repos. But during the concurrent development of the feature, we modeled the inference of a conversational LLM as a persistently running batch whose lifetime spans the entire serving process, hence the name "persistent batch". To put it simply
 
@@ -33,10 +33,9 @@ You may recognize this feature as "continuous batching" in other repos. But duri
 - __On cache-hits (see below), history tokens don't need to be decoded in every round of a conversation; generation of response tokens will start instantly.__
 - The batch grows or shrinks automatically to minimize unnecessary computations.
 
-
 ## KV Cache Manager
 
-The [KV cache manager](/src/turbomind/models/llama/LlamaCacheManager.h) of TurboMind is a memory-pool-liked object that also implements LRU policy so that it can be viewed as a form of __cache of KV caches__. It works in the following way
+The [KV cache manager](https://github.com/InternLM/lmdeploy/blob/main/src/turbomind/models/llama/LlamaCacheManager.h) of TurboMind is a memory-pool-liked object that also implements LRU policy so that it can be viewed as a form of __cache of KV caches__. It works in the following way
 
 - All device memory required for KV cache is allocated by the manager. A fixed number of slots is pre-configured to match the memory size of the system. Each slot corresponds to the memory required by the KV cache of a single sequence. Allocation chunk-size can be configure to implement pre-allocate/on-demand style allocation policy (or something in-between).
 - When space for the KV cache of a new sequence is requested but no free slots left in the pool, the least recently used sequence is evicted from the cache and its device memory is directly reused by the new sequence. However, this is not the end of the story.
@@ -56,7 +55,7 @@ Our implementation of the LLaMa family models is modified from Gpt-NeoX model in
 
 ## API
 
-TurboMind supports a Python API that enables streaming output and tensor parallel mode. 
+TurboMind supports a Python API that enables streaming output and tensor parallel mode.
 
 The ability to use [tritonserver](https://github.com/triton-inference-server/server) for serving is also inherited from FasterTransformer. However, to support submitting concurrent requests into our persistent batch model, we no longer use sequence batching or dynamic batching as FasterTransformer does. The bookkeeping of request and sequence states are managed by TurboMind instead.
 
@@ -68,4 +67,4 @@ Apart of the features described above, there are still many minor differences th
 
 ### Supporting Huggingface models
 
-For historical reasons, TurboMind's weight layout is based on [the original LLaMa implementation](https://github.com/facebookresearch/llama) (differ only by a transpose). The implementation in huggingface transformers uses a [different layout](https://github.com/huggingface/transformers/blob/45025d92f815675e483f32812caa28cce3a960e7/src/transformers/models/llama/convert_llama_weights_to_hf.py#L123C76-L123C76) for `W_q` and `W_k` which is handled in [deploy.py](/lmdeploy/serve/turbomind/deploy.py#L362).
+For historical reasons, TurboMind's weight layout is based on [the original LLaMa implementation](https://github.com/facebookresearch/llama) (differ only by a transpose). The implementation in huggingface transformers uses a [different layout](https://github.com/huggingface/transformers/blob/45025d92f815675e483f32812caa28cce3a960e7/src/transformers/models/llama/convert_llama_weights_to_hf.py#L123C76-L123C76) for `W_q` and `W_k` which is handled in [deploy.py](https://github.com/InternLM/lmdeploy/blob/ff4648a1d09e5aec74cf70efef35bfaeeac552e0/lmdeploy/serve/turbomind/deploy.py#L398).
