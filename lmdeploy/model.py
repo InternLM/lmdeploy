@@ -99,6 +99,8 @@ class Llama:
 
 @MODELS.register_module(name='puyu')
 class Puyu:
+    """Chat template of puyu model.This is only for internal usage in Shanghai
+    AI Laboratory."""
 
     def __init__(self):
         self.system = """meta instruction
