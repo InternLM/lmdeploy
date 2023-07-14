@@ -263,6 +263,16 @@ class Chatbot:
         """reset session."""
         self._session = None
 
+    @property
+    def session(self):
+        """get session."""
+        return self._session
+
+    @session.setter
+    def session(self, value):
+        """set session."""
+        self._session = value
+
     def _get_bos(self):
         """return bos token id."""
         token_ids, _ = self.preprocess('<BOS>')
