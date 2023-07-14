@@ -64,15 +64,6 @@ class Chatbot:
         tritonserver_addr (str): communicating address '<ip>:<port>' of
             triton inference server
         model_name (str): name of the to-be-deployed mode
-        session_len (int): the maximum context length of the model
-        top_p (float): If set to float < 1, only the smallest set of most
-            probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-        top_k (int): The number of the highest probability vocabulary tokens to
-            keep for top-k-filtering
-        temperature (float): to modulate the next token probability
-        repetition_penalty (float): The parameter for repetition penalty.
-            1.0 means no penalty
         log_level (int): the level of the log
         display (bool): display the generated text on consolo or not
         profile_generation (bool): profile token generation or not
@@ -81,11 +72,6 @@ class Chatbot:
     def __init__(self,
                  tritonserver_addr: str,
                  model_name: str,
-                 session_len: int = 2048,
-                 top_p: float = 0.8,
-                 top_k: int = None,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
@@ -108,11 +94,11 @@ class Chatbot:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
         self.cfg = mmengine.Config(
-            dict(session_len=session_len,
-                 top_p=top_p,
-                 top_k=top_k,
-                 temperature=temperature,
-                 repetition_penalty=repetition_penalty,
+            dict(session_len=self.model.session_len,
+                 top_p=self.model.top_p,
+                 top_k=self.model.top_k,
+                 temperature=self.model.temperature,
+                 repetition_penalty=self.model.repetition_penalty,
                  stop_words=stop_words,
                  bad_words=bad_words))
         self.log_level = log_level
@@ -243,6 +229,7 @@ class Chatbot:
             return StatusCode.TRITON_SESSION_CLOSED
 
         prev_session = self._session
+        status, res = None, None
         for status, res, _ in self._stream_infer(self._session,
                                                  prompt='',
                                                  request_output_len=0,
