@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "tests/unittests/gtest_utils.h"
 #include "src/turbomind/kernels/gen_relative_pos_bias.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include "src/turbomind/utils/Tensor.h"
+#include "tests/unittests/gtest_utils.h"
 
 #include <curand.h>
 #include <sstream>
@@ -42,17 +42,18 @@ struct AttentionKernelTestParam {
     size_t rotary_embedding_dim = 0;
     bool   neox_rotary_style    = false;
 
-    float  q_scaling = 1.0f;
+    float q_scaling = 1.0f;
 };
 
 namespace utils {
 
-#define CHECK_CURAND(cmd) do {                                                      \
-    curandStatus_t err = cmd;                                                       \
-    if (err != CURAND_STATUS_SUCCESS) {                                             \
-        throw std::runtime_error(                                                   \
-            fmtstr("[FT][ERROR] curand runtime error: %d", err)); \
-    }} while(0)                                                                     \
+#define CHECK_CURAND(cmd)                                                                                              \
+    do {                                                                                                               \
+        curandStatus_t err = cmd;                                                                                      \
+        if (err != CURAND_STATUS_SUCCESS) {                                                                            \
+            throw std::runtime_error(fmtstr("[TM][ERROR] curand runtime error: %d", err));                             \
+        }                                                                                                              \
+    } while (0)
 
 __global__ void convert_and_copy(half* dst, const float* src, const size_t size)
 {
@@ -177,7 +178,7 @@ void computeQkSoftmax(T*           attn_score,
             for (size_t ki = 0; ki < k_length; ++ki) {
                 size_t qk_idx = qi * k_length + ki;
                 if (int(mask[qk_idx]) > 0) {  // mask = 0 or 1.
-                    float val = (float)safe_add_bias(::math::mul(qk_scale, qk[qk_idx]), head_pos_bias, qk_idx);
+                    float val          = (float)safe_add_bias(::math::mul(qk_scale, qk[qk_idx]), head_pos_bias, qk_idx);
                     attn_score[qk_idx] = static_cast<T>(expf(val - maxval) / (sum + EPSILON));
                 }
                 else {
@@ -188,12 +189,12 @@ void computeQkSoftmax(T*           attn_score,
 
         // Move the data pointers to the next.
         attn_score += q_length * k_length;
-        qk         += q_length * k_length;
+        qk += q_length * k_length;
     }
 }
 
 template<typename T>
-class AttentionKernelTest : public FtTestBase {
+class AttentionKernelTest: public FtTestBase {
 
 private:
     using FtTestBase::stream;
@@ -252,10 +253,11 @@ public:
         FtTestBase::TearDown();
     }
 
-    void runTestMaskedSoftmax(AttentionKernelTestParam param, bool is_benchmark = false) {
+    void runTestMaskedSoftmax(AttentionKernelTestParam param, bool is_benchmark = false)
+    {
         DataType dtype = getTensorType<T>();
 
-        std::vector<size_t> qk_shape {param.batch_size, param.head_num, param.q_length, param.k_length};
+        std::vector<size_t> qk_shape{param.batch_size, param.head_num, param.q_length, param.k_length};
 
         bool use_fp32_qk = param.use_fp32_qk_buf && dtype != TYPE_FP32;
 
@@ -279,27 +281,27 @@ public:
 
         if (param.use_fp32_qk_buf && dtype != TYPE_FP32) {
             MaskedSoftmaxParam<T, float> softmax_param;
-            softmax_param.attention_score    = qk.getPtr<T>();
-            softmax_param.qk                 = qk_fp32.getPtr<float>();
-            softmax_param.attention_mask     = attn_mask.getPtr<T>();
-            softmax_param.batch_size         = param.batch_size;
-            softmax_param.num_heads          = param.head_num;
-            softmax_param.q_length           = param.q_length;
-            softmax_param.k_length           = param.k_length;
-            softmax_param.qk_scale           = scale;
+            softmax_param.attention_score = qk.getPtr<T>();
+            softmax_param.qk              = qk_fp32.getPtr<float>();
+            softmax_param.attention_mask  = attn_mask.getPtr<T>();
+            softmax_param.batch_size      = param.batch_size;
+            softmax_param.num_heads       = param.head_num;
+            softmax_param.q_length        = param.q_length;
+            softmax_param.k_length        = param.k_length;
+            softmax_param.qk_scale        = scale;
             invokeMaskedSoftmax(softmax_param, stream);
             sync_check_cuda_error();
         }
         else {
             MaskedSoftmaxParam<T, T> softmax_param;
-            softmax_param.attention_score    = qk.getPtr<T>();
-            softmax_param.qk                 = qk.getPtr<T>();
-            softmax_param.attention_mask     = attn_mask.getPtr<T>();
-            softmax_param.batch_size         = param.batch_size;
-            softmax_param.num_heads          = param.head_num;
-            softmax_param.q_length           = param.q_length;
-            softmax_param.k_length           = param.k_length;
-            softmax_param.qk_scale           = scale;
+            softmax_param.attention_score = qk.getPtr<T>();
+            softmax_param.qk              = qk.getPtr<T>();
+            softmax_param.attention_mask  = attn_mask.getPtr<T>();
+            softmax_param.batch_size      = param.batch_size;
+            softmax_param.num_heads       = param.head_num;
+            softmax_param.q_length        = param.q_length;
+            softmax_param.k_length        = param.k_length;
+            softmax_param.qk_scale        = scale;
             invokeMaskedSoftmax(softmax_param, stream);
             sync_check_cuda_error();
         }
@@ -332,10 +334,11 @@ public:
         }
     }
 
-    void runTestAlibiMaskedSoftmax(AttentionKernelTestParam param, bool is_benchmark = false) {
+    void runTestAlibiMaskedSoftmax(AttentionKernelTestParam param, bool is_benchmark = false)
+    {
         DataType dtype = getTensorType<T>();
 
-        std::vector<size_t> qk_shape {param.batch_size, param.head_num, param.q_length, param.k_length};
+        std::vector<size_t> qk_shape{param.batch_size, param.head_num, param.q_length, param.k_length};
 
         bool use_fp32_qk = param.use_fp32_qk_buf && dtype != TYPE_FP32;
 
@@ -355,16 +358,17 @@ public:
         sync_check_cuda_error();
 
         Tensor h_alibi_slopes = createTensor(MEMORY_CPU, dtype, {param.head_num});
-        Tensor h_alibi_bias   = is_benchmark ? Tensor() :
-            createTensor(MEMORY_CPU, dtype, {param.head_num, param.q_length, param.k_length});
+        Tensor h_alibi_bias =
+            is_benchmark ? Tensor() : createTensor(MEMORY_CPU, dtype, {param.head_num, param.q_length, param.k_length});
         // The nearest power of 2 equal to / smaller than num_heads followed by HF's implementation.
-        T* alibi_slope_ptr = h_alibi_slopes.getPtr<T>();
-        int num_heads_pow2 = utils::pow2_rounddown(param.head_num);
+        T*  alibi_slope_ptr = h_alibi_slopes.getPtr<T>();
+        int num_heads_pow2  = utils::pow2_rounddown(param.head_num);
         for (size_t h = 0; h < param.head_num; ++h) {
             // The slope of linear bias of the attention head
             if (h < num_heads_pow2) {
                 alibi_slope_ptr[h] = static_cast<T>(powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2) - 3.f)), h + 1));
-            } else {
+            }
+            else {
                 alibi_slope_ptr[h] = static_cast<T>(
                     powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2 << 1) - 3.f)), (h - num_heads_pow2) * 2 + 1));
             }
@@ -372,7 +376,7 @@ public:
                 T* alibi_bias_ptr = h_alibi_bias.getPtr<T>();
                 for (size_t qi = 0; qi < param.q_length; ++qi) {
                     for (size_t ki = 0; ki < param.k_length; ++ki) {
-                        size_t hqk_idx = (h * param.q_length + qi) * param.k_length + ki;
+                        size_t hqk_idx          = (h * param.q_length + qi) * param.k_length + ki;
                         alibi_bias_ptr[hqk_idx] = ::math::mul(alibi_slope_ptr[h], T(0.0f + ki - qi));
                     }
                 }
@@ -448,87 +452,106 @@ public:
 
 TYPED_TEST_SUITE(AttentionKernelTest, SupportTypes);
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_NoPrompt) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_NoPrompt)
+{
     this->runTestMaskedSoftmax({1, 12, 12, 1, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_NoPrompt2) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_NoPrompt2)
+{
     // q_length is not multiple of 4.
     this->runTestMaskedSoftmax({1, 11, 11, 4, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_HasPrompt) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_HasPrompt)
+{
     this->runTestMaskedSoftmax({1, 12, 24, 2, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_HasPrompt2) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_HasPrompt2)
+{
     this->runTestMaskedSoftmax({1, 11, 24, 2, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence1024) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence1024)
+{
     this->runTestMaskedSoftmax({1, 12, 1024, 2, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence2048) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence2048)
+{
     this->runTestMaskedSoftmax({1, 12, 2048, 2, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence3072) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence3072)
+{
     this->runTestMaskedSoftmax({1, 12, 3072, 2, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence4096) {
+TYPED_TEST(AttentionKernelTest, MaskedSoftmax_LongSequence4096)
+{
     this->runTestMaskedSoftmax({1, 12, 4096, 2, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence1024) {
+TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence1024)
+{
     // Assume the bloom 176B model with 8 TP.
     this->runTestMaskedSoftmax({8, 1024, 1024, 14, 128, false, 0, false, true}, true);
 }
 
-TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence2048) {
+TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence2048)
+{
     // Assume the bloom 176B model with 8 TP.
     this->runTestMaskedSoftmax({8, 2048, 2048, 14, 128, false, 0, false, true}, true);
 }
 
-TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence4096) {
+TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence4096)
+{
     // Assume the bloom 176B model with 8 TP.
     this->runTestMaskedSoftmax({8, 4096, 4096, 14, 128, false, 0, false, true}, true);
 }
 
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence1) {
+TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence1)
+{
     this->runTestAlibiMaskedSoftmax({1, 12, 12, 4, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence2) {
+TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence2)
+{
     // q_length is not multiple of 4.
     this->runTestAlibiMaskedSoftmax({1, 11, 11, 4, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence_HasPrompt1) {
+TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence_HasPrompt1)
+{
     this->runTestAlibiMaskedSoftmax({1, 12, 20, 4, 32, false, 0, false});
 }
 
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence_HasPrompt2) {
+TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence_HasPrompt2)
+{
     // q_length is not multiple of 4.
     this->runTestAlibiMaskedSoftmax({1, 11, 20, 4, 32, false, 0, false});
 }
 
 // Tests for long sentence generation. Assume the bloom 176B model with 8 TP.
 
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence1024) {
+TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence1024)
+{
     this->runTestAlibiMaskedSoftmax({8, 1024, 1024, 14, 128, false, 0, false, true}, true);
 }
 
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence2048) {
+TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence2048)
+{
     this->runTestAlibiMaskedSoftmax({8, 2048, 2048, 14, 128, false, 0, false, true}, true);
 }
 
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence3072) {
+TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence3072)
+{
     this->runTestAlibiMaskedSoftmax({8, 3072, 3072, 14, 128, false, 0, false, true}, true);
 }
 
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence4096) {
+TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence4096)
+{
     this->runTestAlibiMaskedSoftmax({4, 4096, 4096, 14, 128, false, 0, false, true}, true);
 }
 

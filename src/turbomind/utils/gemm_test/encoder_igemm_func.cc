@@ -83,7 +83,7 @@ int printPerfStructure(int m, int n, int k, const customMatmulPerf_t& perf, FILE
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages                     = 0;
+    stages = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -149,7 +149,7 @@ int printBatchPerfStructure(
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages                     = 0;
+    stages = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -352,7 +352,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -369,7 +369,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -689,7 +689,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -711,7 +711,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -1252,7 +1252,7 @@ int generate_encoder_igemm_config(
             cudaDeviceSynchronize();
             cudaError_t result = cudaGetLastError();
             if (result) {
-                throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: "));
+                throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: "));
             }
 
             float exec_time = 99999.0f;

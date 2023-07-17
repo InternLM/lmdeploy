@@ -38,7 +38,7 @@ void print_to_file(const T* result, const int size, const char* file, cudaStream
         delete[] tmp;
     }
     else {
-        throw std::runtime_error(std::string("[FT][ERROR] Cannot open file: ") + file + "\n");
+        throw std::runtime_error(std::string("[TM][ERROR] Cannot open file: ") + file + "\n");
     }
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
@@ -81,7 +81,7 @@ void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string na
         }
         max_val = max_val > abs(float(h_tmp[i])) ? max_val : abs(float(h_tmp[i]));
     }
-    printf("[INFO][FT] %20s size: %u, abs mean: %f, abs sum: %f, abs max: %f, find inf: %s",
+    printf("[TM][INFO] %20s size: %u, abs mean: %f, abs sum: %f, abs max: %f, find inf: %s",
            name.c_str(),
            size,
            sum / size,

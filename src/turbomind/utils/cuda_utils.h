@@ -119,7 +119,7 @@ template<typename T>
 void check(T result, char const* const func, const char* const file, int const line)
 {
     if (result) {
-        throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
+        throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
                                  + file + ":" + std::to_string(line) + " \n");
     }
 }
@@ -137,7 +137,7 @@ inline void syncAndCheck(const char* const file, int const line)
             cudaDeviceSynchronize();
             cudaError_t result = cudaGetLastError();
             if (result) {
-                throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
+                throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
                                          + " " + file + ":" + std::to_string(line) + " \n");
             }
             TM_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
@@ -148,7 +148,7 @@ inline void syncAndCheck(const char* const file, int const line)
     cudaDeviceSynchronize();
     cudaError_t result = cudaGetLastError();
     if (result) {
-        throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
+        throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
                                  + file + ":" + std::to_string(line) + " \n");
     }
 #endif
@@ -194,12 +194,12 @@ void check_abs_mean_val(const T* result, const int size);
 
 #define PRINT_FUNC_NAME_()                                                                                             \
     do {                                                                                                               \
-        std::cout << "[FT][CALL] " << __FUNCTION__ << " " << std::endl;                                                \
+        std::cout << "[TM][CALL] " << __FUNCTION__ << " " << std::endl;                                                \
     } while (0)
 
 [[noreturn]] inline void throwRuntimeError(const char* const file, int const line, std::string const& info = "")
 {
-    throw std::runtime_error(std::string("[FT][ERROR] ") + info + " Assertion fail: " + file + ":"
+    throw std::runtime_error(std::string("[TM][ERROR] ") + info + " Assertion fail: " + file + ":"
                              + std::to_string(line) + " \n");
 }
 
@@ -226,7 +226,7 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
     {                                                                                                                  \
         cusparseStatus_t status = (func);                                                                              \
         if (status != CUSPARSE_STATUS_SUCCESS) {                                                                       \
-            throw std::runtime_error(std::string("[FT][ERROR] CUSPARSE API failed at line ")                           \
+            throw std::runtime_error(std::string("[TM][ERROR] CUSPARSE API failed at line ")                           \
                                      + std::to_string(__LINE__) + " in file " + __FILE__ + ": "                        \
                                      + cusparseGetErrorString(status) + " " + std::to_string(status));                 \
         }                                                                                                              \
