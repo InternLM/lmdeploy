@@ -1,12 +1,12 @@
+deepspeed # this is gonna be large
 fire
+gradio
 mmengine
 numpy
+protobuf
 pybind11
 safetensors
-setuptools
-protobuf
-gradio
 sentencepiece
-deepspeed # this is gonna be large
+setuptools
 transformers==4.30.2
 tritonclient[all]
