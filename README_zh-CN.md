@@ -97,7 +97,7 @@ python3 -m lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 
 也可以通过 WebUI 方式来对话：
 
-```
+```shell
 python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 

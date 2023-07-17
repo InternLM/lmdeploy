@@ -98,7 +98,7 @@ python3 -m lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 
 or webui,
 
-```
+```shell
 python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
