@@ -18,11 +18,12 @@ class Tokenizer:
             model_folder = osp.split(model_file)[0]
         else:
             model_folder = model_file
+            model_file = osp.join(model_folder, 'tokenizer.model')
         tokenizer_config_file = osp.join(model_folder, 'tokenizer_config.json')
 
         model_file_exists = osp.exists(model_file)
         config_exists = osp.exists(tokenizer_config_file)
-        use_hf_model = not config_exists or not model_file_exists
+        use_hf_model = config_exists or not model_file_exists
 
         self.use_hf_model = use_hf_model
         if not self.use_hf_model:
@@ -37,7 +38,8 @@ class Tokenizer:
             if not osp.exists(backend_tokenizer_file) and model_file_exists:
                 print('WARNING: Can not find tokenizer.json. '
                       'It may take long time to initialize the tokenizer.')
-            self.model = AutoTokenizer.from_pretrained(model_folder)
+            self.model = AutoTokenizer.from_pretrained(model_folder,
+                                                       trust_remote_code=True)
             self.vocab_size = self.model.vocab_size
             self.bos_token_id = self.model.bos_token_id
             self.eos_token_id = self.model.eos_token_id
@@ -82,9 +84,11 @@ class Tokenizer:
             str: text of decoding tokens
         """
         if not self.use_hf_model:
+            if isinstance(t, torch.Tensor):
+                t = t.tolist()
             return self.model.Decode(t)
         else:
-            skip_special_tokens = False
+            skip_special_tokens = True
             return self.model.decode(t,
                                      skip_special_tokens=skip_special_tokens)
 

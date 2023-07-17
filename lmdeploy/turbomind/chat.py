@@ -4,10 +4,10 @@ import os.path as osp
 import random
 
 import fire
-from transformers import AutoTokenizer
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
+from lmdeploy.turbomind.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -40,8 +40,7 @@ def main(model_name, model_path, session_id: int = 1):
     """
     model = MODELS.get(model_name)()
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path,
-                                              trust_remote_code=True)
+    tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = tm.TurboMind(model_path,
                             eos_id=tokenizer.eos_token_id,
                             stop_words=model.stop_words)
@@ -57,7 +56,7 @@ def main(model_name, model_path, session_id: int = 1):
             exit(0)
         elif prompt == 'end':
             prompt = model.get_prompt('', nth_round == 1)
-            input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            input_ids = tokenizer.encode(prompt)
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=[input_ids],
                                                   request_output_len=512,
@@ -74,7 +73,7 @@ def main(model_name, model_path, session_id: int = 1):
                       ' Please end the session.')
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            input_ids = tokenizer.encode(prompt)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             for outputs in generator.stream_infer(
@@ -94,8 +93,7 @@ def main(model_name, model_path, session_id: int = 1):
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]
                 # decode res
-                response = tokenizer.decode(
-                    res, skip_special_tokens=True)[response_size:]
+                response = tokenizer.decode(res)[response_size:]
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
                 response_size += len(response)
