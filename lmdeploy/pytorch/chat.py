@@ -20,9 +20,9 @@ try:
     _is_transformers_available = True
 except ImportError:
     _is_transformers_available = False
-
-from lmdeploy.pytorch.accel import LoadNoInit
-from lmdeploy.pytorch.utils import get_utils
+else:
+    from .accel import LoadNoInit
+    from .utils import get_utils
 
 
 def input_prompt():
