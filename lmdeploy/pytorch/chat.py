@@ -17,12 +17,12 @@ try:
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
                               GenerationConfig)
 
-    from .accel import LoadNoInit
-    from .utils import get_utils
-
     _is_transformers_available = True
 except ImportError:
     _is_transformers_available = False
+else:
+    from .accel import LoadNoInit
+    from .utils import get_utils
 
 
 def input_prompt():
