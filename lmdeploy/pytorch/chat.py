@@ -73,7 +73,7 @@ def init_model(
     model = model.cuda(local_rank)
 
     if not _is_deepspeed_available:
-        warnings.warn('deepspeed is not installed, ',
+        warnings.warn('deepspeed is not installed, '
                       'use plain huggingface model.')
     else:
         model = deepspeed.init_inference(
