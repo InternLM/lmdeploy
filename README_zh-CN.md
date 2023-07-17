@@ -92,13 +92,13 @@ bash workspace/service_docker_up.sh
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-python3 lmdeploy.serve.client {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.serve.client {server_ip_addresss}:33337 internlm
 ```
 
 也可以通过 WebUI 方式来对话：
 
 ```
-python3 lmdeploy.app {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
