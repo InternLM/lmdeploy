@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
-from typing import Sequence, Union
+from typing import Sequence
 
 import torch
-from torch.nn.utils.rnn import pad_sequence
 
 
 class SentencePieceTokenizer:
@@ -186,79 +185,3 @@ class Tokenizer:
             str: text of decoding tokens
         """
         return self.model.decode(t)
-
-
-class Preprocessor:
-    """Tokenize prompts.
-
-    Args:
-        tokenizer (Tokenizer): an instance of tokenizer
-    """
-
-    def __init__(self, tokenizer: Tokenizer):
-        self.tokenizer = tokenizer
-        self.bos_token_id = tokenizer.bos_token_id
-        self.eos_token_id = tokenizer.eos_token_id
-
-    def __call__(self, *args, **kwargs):
-        return self.infer(*args, **kwargs)
-
-    def infer(self, prompts: Union[str, Sequence[str]]) -> tuple:
-        """Tokenize the input prompts.
-
-        Args:
-            prompts(str | Sequence[str]): user's prompt, or a batch prompts
-
-        Returns:
-            Tuple(torch.Tensor, torch.Tensor): prompt's token
-            ids, ids' length and requested output length
-        """
-        if isinstance(prompts, str):
-            _ = [[prompts]]
-        elif isinstance(prompts, Sequence):
-            _ = [[prompt] for prompt in prompts]
-        else:
-            assert 0, f'str or Sequence[str] prompts are expected but got ' \
-                      f'{type(prompts)}'
-
-        start_ids = [
-            torch.IntTensor(self.tokenizer.encode(prompt))
-            for prompt in prompts
-        ]
-        start_lengths = torch.IntTensor([[len(ids)] for ids in start_ids])
-        start_ids = pad_sequence(start_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_token_id)
-        return start_ids, start_lengths
-
-
-class Postprocessor:
-    """De-tokenize token ids.
-
-    Args:
-        tokenizer (Tokenizer): an instance of tokenizer
-    """
-
-    def __init__(self, tokenizer: Tokenizer):
-        self.tokenizer = tokenizer
-        self.bos_token_id = tokenizer.bos_token_id
-        self.eos_token_id = tokenizer.eos_token_id
-
-    def __call__(self, *args, **kwargs):
-        return self.infer(*args, **kwargs)
-
-    def infer(self, output_ids: torch.Tensor, seqlen: torch.Tensor):
-        """De-tokenize tokens for text.
-
-        Args:
-            output_ids(torch.Tensor): tokens' id
-            seqlen(torch.Tensor): sequence length
-
-        Returns:
-            str: decoded tokens
-        """
-        outputs = []
-        for tokens, _len in zip(output_ids, seqlen):
-            output = self.tokenizer.decode(tokens[:_len])
-            outputs.append(output)
-        return outputs
