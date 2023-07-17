@@ -60,7 +60,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-7b \
   --delta-path lmsys/vicuna-7b-delta-v1.1
 
-python3 -m lmdeploy/serve/turbomind/deploy.py vicuna-7B /path/to/vicuna-7b hf
+python3 -m lmdeploy.serve.turbomind.deploy vicuna-7B /path/to/vicuna-7b hf
 bash workspace/service_docker_up.sh
 ```
 
@@ -76,7 +76,7 @@ python3 -m fastchat.model.apply_delta \
   --target-model-path /path/to/vicuna-13b \
   --delta-path lmsys/vicuna-13b-delta-v1.1
 
-python3 -m lmdeploy/serve/turbomind/deploy.py vicuna-13B /path/to/vicuna-13b hf
+python3 -m lmdeploy.serve.turbomind.deploy vicuna-13B /path/to/vicuna-13b hf
 bash workspace/service_docker_up.sh
 ```
 
