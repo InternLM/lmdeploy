@@ -58,8 +58,7 @@ class InternLM:
             str: the concatenated prompt
         """
         if sequence_start:
-            return f'{self.system}\n' \
-                   f'{self.user}:{prompt}{self.eoh}\n' \
+            return f'<bos>{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
@@ -95,6 +94,35 @@ class Llama:
     def stop_words(self):
         """Return the stop-words' token ids."""
         return None
+
+
+@MODELS.register_module(name='puyu')
+class Puyu:
+    """Chat template of puyu model.This is only for internal usage in Shanghai
+    AI Laboratory."""
+
+    def __init__(self):
+        self.system = """meta instruction
+You are an AI assistant whose name is InternLM (书生·浦语).
+- 书生·浦语 is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
+- 书生·浦语 can understand and communicate fluently in the language chosen by the user such as English and 中文.
+conversation"""  # noqa: E501
+        self.user = '<|Human|>'
+        self.eoh = 'െ'
+        self.assistant = '<|Assistant|>'
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return f'<bos>{self.system}\n' \
+                   f'{self.user}:{prompt}{self.eoh}\n' \
+                   f'{self.assistant}:'
+        else:
+            return f'\n{self.user}:{prompt}{self.eoh}\n{self.assistant}:'
+
+    @property
+    def stop_words(self):
+        """Return the stop-words' token ids."""
+        return [45623]
 
 
 def main(model_name: str = 'test'):
