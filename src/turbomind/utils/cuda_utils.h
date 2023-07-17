@@ -46,7 +46,8 @@ half4;
 
 /* **************************** type definition ***************************** */
 
-enum CublasDataType {
+enum CublasDataType
+{
     FLOAT_DATATYPE    = 0,
     HALF_DATATYPE     = 1,
     BFLOAT16_DATATYPE = 2,
@@ -54,7 +55,8 @@ enum CublasDataType {
     FP8_DATATYPE      = 4
 };
 
-enum FtCudaDataType {
+enum FtCudaDataType
+{
     FP32 = 0,
     FP16 = 1,
     BF16 = 2,
@@ -62,7 +64,8 @@ enum FtCudaDataType {
     FP8  = 4
 };
 
-enum class OperationType {
+enum class OperationType
+{
     FP32,
     FP16,
     BF16,
