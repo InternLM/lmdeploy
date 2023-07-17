@@ -118,10 +118,18 @@ class TurboMind:
         torch.cuda.synchronize()
 
         # create weight
-        for device_id in range(self.gpu_count):
+        def _create_weight(device_id):
             with cuda_ctx(device_id):
                 rank = self.node_id * self.gpu_count + device_id
                 model.create_shared_weights(device_id, rank)
+
+        threads = []
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_create_weight, args=(device_id, ))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
 
         self.stop_words = _stop_words(stop_words)
 
