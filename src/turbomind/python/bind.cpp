@@ -1,6 +1,7 @@
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <cuda_runtime.h>
 #include <memory>
 #include <pybind11/functional.h>
@@ -18,6 +19,23 @@ PYBIND11_MAKE_OPAQUE(TensorVector);
 using TensorMap = std::unordered_map<std::string, triton::Tensor>;
 PYBIND11_MAKE_OPAQUE(TensorMap);
 static const char kDlTensorCapsuleName[] = "dltensor";
+
+void mpi_initialize()
+{
+    static int    argc        = 1;
+    static char   proc_name[] = "turbomind";
+    static char*  arg         = (char*)proc_name;
+    static char** argv        = &arg;
+
+    if (!ft::mpi::isInitialized())
+        ft::mpi::initialize(&argc, &argv);
+}
+
+void mpi_finalize()
+{
+    if (ft::mpi::isInitialized())
+        ft::mpi::finalize();
+}
 
 template<typename T>
 std::shared_ptr<T> make_shared_nodel(T data)
@@ -212,6 +230,10 @@ std::shared_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* t
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    // mpi
+    m.def("mpi_initialize", &mpi_initialize);
+    m.def("mpi_is_initialized", &ft::mpi::isInitialized);
+    m.def("mpi_finalize", &mpi_finalize);
 
     // nccl param
     py::class_<ft::NcclParam>(m, "NcclParam")

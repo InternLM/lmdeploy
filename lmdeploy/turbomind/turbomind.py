@@ -9,7 +9,6 @@ from typing import Iterable, List
 
 import numpy as np
 import torch
-from mpi4py import MPI
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
@@ -18,6 +17,18 @@ import lmdeploy
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
+
+
+class _MPIEnv:
+
+    def __init__(self):
+        _tm.mpi_initialize()
+
+    def __del__(self):
+        _tm.mpi_finalize()
+
+
+_mpi_env = _MPIEnv()
 
 
 def _stop_words(stop_words: List[int]):
@@ -81,10 +92,9 @@ class TurboMind:
                  stop_words: List[int] = None):
         self.eos_id = eos_id
 
-        # mpi
-        mpi_comm = MPI.COMM_WORLD
-        node_id = mpi_comm.Get_rank()
-        node_num = mpi_comm.Get_size()
+        # TODO: support mpi
+        node_id = 0
+        node_num = 1
 
         # read meta from model path
         self.gpu_count = 1

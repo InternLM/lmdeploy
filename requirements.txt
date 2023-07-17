@@ -1,6 +1,5 @@
 fire
 mmengine
-mpi4py
 numpy
 pybind11
 safetensors
