@@ -47,7 +47,7 @@ Logger::Logger()
         }
         else {
             fprintf(stderr,
-                    "[FT][WARNING] Invalid logger level TM_LOG_LEVEL=%s. "
+                    "[TM][WARNING] Invalid logger level TM_LOG_LEVEL=%s. "
                     "Ignore the environment variable and use a default "
                     "logging level.\n",
                     level_name);
