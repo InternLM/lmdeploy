@@ -1,9 +1,7 @@
-deepspeed # this is gonna be large
 fire
 gradio
 mmengine
 numpy
-protobuf
 pybind11
 safetensors
 sentencepiece

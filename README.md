@@ -108,6 +108,10 @@ python3 lmdeploy.app {server_ip_addresss}:33337 internlm
 For the deployment of other supported models, such as LLaMA, vicuna, you can find the guide from [here](docs/en/serving.md)
 
 ### Inference with PyTorch
+You have to install deepspeed first before running with PyTorch.
+```
+pip install deepspeed
+```
 
 #### Single GPU
 
