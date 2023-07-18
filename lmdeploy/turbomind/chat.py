@@ -29,7 +29,10 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def main(model_name, model_path, session_id: int = 1):
+def main(model_name,
+         model_path,
+         session_id: int = 1,
+         repetition_penalty: float = 1.0):
     """An example to perform model inference through the command line
     interface.
 
@@ -88,7 +91,7 @@ def main(model_name, model_path, session_id: int = 1):
                     top_k=40,
                     top_p=0.8,
                     temperature=0.8,
-                    repetition_penalty=1.0,
+                    repetition_penalty=repetition_penalty,
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]
