@@ -47,7 +47,7 @@ def destroy_workspace(_path: str):
         print(f'destroy workspace in directory {_path}')
         return True
     except Exception as e:
-        print(f'create workspace in {_path} failed: {e}')
+        print(f'destroy workspace in {_path} failed: {e}')
         return False
 
 
