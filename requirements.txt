@@ -6,5 +6,6 @@ pybind11
 safetensors
 sentencepiece
 setuptools
-transformers==4.30.2
+torch
+transformers
 tritonclient[all]
