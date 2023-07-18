@@ -81,7 +81,8 @@ class HuggingFaceTokenizer:
                                                    trust_remote_code=True)
         # save tokenizer.json to reuse
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
-            self.model.backend_tokenizer.save(backend_tokenizer_file)
+            if hasattr(self.model, 'backend_tokenizer'):
+                self.model.backend_tokenizer.save(backend_tokenizer_file)
 
     @property
     def vocab_size(self):
