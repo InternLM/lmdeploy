@@ -108,6 +108,12 @@ For the deployment of other supported models, such as LLaMA, vicuna, you can fin
 
 ### Inference with PyTorch
 
+You have to install deepspeed first before running with PyTorch.
+
+```
+pip install deepspeed
+```
+
 #### Single GPU
 
 ```shell

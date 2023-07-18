@@ -107,6 +107,12 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 
 ### 基于 PyTorch 的推理
 
+你必须确保环境中有安装 deepspeed：
+
+```
+pip install deepspeed
+```
+
 #### 单个 GPU
 
 ```shell

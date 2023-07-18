@@ -106,7 +106,6 @@ if __name__ == '__main__':
           packages=find_packages(
               exclude=('lmdeploy/serve/turbomind/triton_models', )),
           include_package_data=True,
-          setup_requires=parse_requirements('requirements.txt'),
           install_requires=parse_requirements('requirements.txt'),
           classifiers=[
               'Programming Language :: Python :: 3.8',

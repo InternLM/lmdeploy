@@ -1,8 +1,11 @@
 fire
+gradio
 mmengine
 numpy
 pybind11
 safetensors
+sentencepiece
 setuptools
-transformers<4.30.0
-tritonclient==2.33.0
+torch
+transformers
+tritonclient[all]
