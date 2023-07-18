@@ -283,7 +283,7 @@ export(PACKAGE TritonTurboMindBackend)
 # limitations under the License.
 
 add_library(TransformerTritonBackend SHARED transformer_triton_backend.cpp)
-target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils mpi_utils)
+target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils)
 install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 add_subdirectory(llama)

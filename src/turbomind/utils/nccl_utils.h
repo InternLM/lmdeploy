@@ -18,11 +18,9 @@
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/utils/mpi_utils.h"
 
 #include <cuda_runtime.h>
 #ifdef BUILD_MULTI_GPU
-#include <mpi.h>
 #include <nccl.h>
 #endif
 #include <stdio.h>
@@ -117,11 +115,6 @@ void ftNcclGroupEnd();
 void ftNcclGetUniqueId(NcclUid& uid);
 void ftNcclCommInitRank(NcclParam& param, const int rank, const int world_size, const NcclUid uid);
 void ftNcclParamDestroy(NcclParam& param);
-
-void ftNcclInitialize(NcclParam& tensor_para,
-                      NcclParam& pipeline_para,
-                      const int  tensor_para_size,
-                      const int  pipeline_para_size);
 
 int ftNcclNextGroupId();
 int ftNcclGroupCount();

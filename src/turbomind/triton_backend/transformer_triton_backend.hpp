@@ -29,7 +29,6 @@
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/instance_comm.h"
-#include "src/turbomind/utils/mpi_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
 namespace ft = turbomind;
