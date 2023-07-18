@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
 import sys
+from configparser import ConfigParser
+from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
 from typing import Iterable, List
@@ -53,47 +55,80 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
+@contextmanager
+def cuda_ctx(device_id):
+    old_device = torch.cuda.current_device()
+    torch.cuda.set_device(device_id)
+    yield
+    torch.cuda.set_device(old_device)
+
+
 class TurboMind:
     """LMDeploy's inference engine.
 
     Args:
         model_path (str): the path of turbomind's model
         data_type (str): the data type
-        session_len (int): the max length of a session
         eos_id (int): eos token id
         stop_words (List[int]): token ids of stop-words
-        device_id (int): the id of a gpu card
-        node_id (int): the id of a node
-        device_num (int): the number of gpu cards
-        node_num (int): the number of node
     """
 
     def __init__(self,
                  model_path: str,
                  data_type: str = 'fp16',
-                 session_len: int = 2048,
                  eos_id: int = 2,
-                 stop_words: List[int] = None,
-                 device_id: int = 0,
-                 node_id: int = 0,
-                 device_num: int = 1,
-                 node_num: int = 1):
+                 stop_words: List[int] = None):
         self.eos_id = eos_id
 
-        # create model instance
+        # TODO: support mpi
+        node_id = 0
+        node_num = 1
+
+        # read meta from model path
+        self.gpu_count = 1
+        self.session_len = 2048
+        ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
+        with open(ini_path, 'r') as f:
+            parser = ConfigParser()
+            parser.read_file(f)
+            section_name = ''
+            if 'turbomind' in parser:
+                section_name = 'turbomind'
+            elif 'llama' in parser:
+                section_name = 'llama'
+
+            if len(section_name) > 0:
+                self.gpu_count = parser.getint(section_name,
+                                               'tensor_para_size')
+                self.session_len = parser.getint(section_name, 'session_len')
+
+        # params
         self.node_id = node_id
         self.node_num = node_num
-        self.gpu_count = device_num
-        self.device_id = device_id
         self.world_size = self.node_num * self.gpu_count
-        self.rank = self.node_id * self.gpu_count + self.device_id
-        self.session_len = session_len
 
+        # create model
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model = _tm.AbstractTransformerModel.create_llama_model(
             weight_dir, tensor_para_size=self.gpu_count, data_type=data_type)
-        model.create_shared_weights(self.device_id, self.rank)
         self.model = model
+        self.nccl_params = model.create_nccl_params(self.node_id)
+        torch.cuda.synchronize()
+
+        # create weight
+        def _create_weight(device_id):
+            with cuda_ctx(device_id):
+                rank = self.node_id * self.gpu_count + device_id
+                model.create_shared_weights(device_id, rank)
+
+        threads = []
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_create_weight, args=(device_id, ))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+
         self.stop_words = _stop_words(stop_words)
 
     def create_instance(self, cuda_stream_id=0):
@@ -117,40 +152,57 @@ class TurboMindInstance:
 
     def __init__(self, tm_model, cuda_stream_id=0):
         self.tm_model = tm_model
+        self.cuda_stream_id = cuda_stream_id
 
-        self.device_id = tm_model.device_id
-        self.rank = tm_model.rank
+        self.node_id = tm_model.node_id
+        self.gpu_count = tm_model.gpu_count
+
         self.stop_words = tm_model.stop_words
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
-        self.cuda_stream_id = cuda_stream_id
 
-        # create instance
-        model = tm_model.model
-        nccl_params = model.create_nccl_params(tm_model.node_id)
-        custom_comms = model.create_custom_comms(tm_model.world_size)
-        instance_comm = model.create_instance_comm(tm_model.gpu_count)
+        self.nccl_params = tm_model.nccl_params
+        self.instance_comm = tm_model.model.create_instance_comm(
+            self.gpu_count)
 
-        model_inst = model.create_model_instance(self.device_id, self.rank,
-                                                 self.cuda_stream_id,
-                                                 nccl_params, custom_comms[0])
-        # model_inst.register_callback(self._forward_callback)
-        self.model_inst = model_inst
-        self.instance_comm = instance_comm
+        # create model instances
+        model_insts = [None] * self.gpu_count
+        threads = []
+        for device_id in range(self.gpu_count):
+            t = Thread(target=self._create_model_instance,
+                       args=(device_id, model_insts))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+
+        self.model_insts = model_insts
         self.que = Queue()
-        self.thread = None
+        self.threads = [None] * self.gpu_count
+
+    def _create_model_instance(self, device_id, model_insts):
+        with cuda_ctx(device_id):
+            rank = self.node_id * self.gpu_count + device_id
+            model_inst = self.tm_model.model.create_model_instance(
+                device_id, rank, self.cuda_stream_id, self.nccl_params)
+            model_insts[device_id] = model_inst
 
     def _forward_callback(self, result, ctx):
         self.que.put((False, result))
 
     def _forward_thread(self, inputs):
 
-        def _func():
-            output = self.model_inst.forward(inputs, self.instance_comm)
-            self.que.put((True, output))
+        def _func(device_id, enque_output):
+            with cuda_ctx(device_id):
+                output = self.model_insts[device_id].forward(
+                    inputs, self.instance_comm)
+                if enque_output:
+                    self.que.put((True, output))
 
-        self.thread = Thread(target=_func)
-        self.thread.start()
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_func, args=(device_id, device_id == 0))
+            t.start()
+            self.threads[device_id] = t
 
     def stream_infer(self,
                      session_id,
@@ -190,7 +242,7 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
         """
         if stream_output:
-            self.model_inst.register_callback(self._forward_callback)
+            self.model_insts[0].register_callback(self._forward_callback)
 
         if len(input_ids) == 0:
             input_ids = []
@@ -281,10 +333,11 @@ class TurboMindInstance:
                    for output, l in zip(output_ids, sequence_length)]
 
             if finish:
+                for t in self.threads:
+                    t.join()
                 while self.que.qsize() > 0:
                     self.que.get()
-                self.thread.join()
                 break
 
         if stream_output:
-            self.model_inst.unregister_callback()
+            self.model_insts[0].unregister_callback()

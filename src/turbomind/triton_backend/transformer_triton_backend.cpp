@@ -39,9 +39,6 @@ AbstractTransformerModel::createNcclParams(const int node_id, const int device_i
                 ft::ftNcclGetUniqueId(nccl_ids[i]);
             }
         }
-        for (size_t i = 0; i < nccl_ids.size(); i++) {
-            ft::mpi::bcast(&nccl_ids[i], sizeof(nccl_ids[i]), ft::mpi::MPI_TYPE_BYTE, 0, ft::mpi::COMM_WORLD);
-        }
     }
 
     std::vector<ft::NcclParam> tensor_para_params(local_comm_size);

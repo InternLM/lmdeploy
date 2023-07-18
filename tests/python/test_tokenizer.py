@@ -1,17 +1,14 @@
-from lmdeploy.turbomind.tokenizer import Postprocessor, Preprocessor, Tokenizer
+from lmdeploy.turbomind.tokenizer import Tokenizer
 
 
 def main():
     tokenizer = Tokenizer('huggyllama/llama-7b')
-    preprocessor = Preprocessor(tokenizer)
-    postprocessor = Postprocessor(tokenizer)
 
     prompts = ['cest la vie', '上帝已死']
-    tokens = preprocessor(prompts)
-    print(tokens)
-
-    decode_prompts = postprocessor(*tokens)
-    print(decode_prompts)
+    for prompt in prompts:
+        tokens = tokenizer.encode(prompt)
+        output = tokenizer.decode(tokens)
+        print(output)
 
 
 if __name__ == '__main__':

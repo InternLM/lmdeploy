@@ -64,7 +64,7 @@ add_library(nccl_utils STATIC nccl_utils.cc)
 set_property(TARGET nccl_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nccl_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 if (BUILD_MULTI_GPU)
-    target_link_libraries(nccl_utils PUBLIC ${NCCL_LIBRARIES} mpi_utils logger)
+    target_link_libraries(nccl_utils PUBLIC ${NCCL_LIBRARIES} logger)
 endif()
 
 add_library(cublasINT8MMWrapper STATIC cublasINT8MMWrapper.cc)
