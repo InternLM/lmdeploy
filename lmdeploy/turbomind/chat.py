@@ -88,7 +88,7 @@ def main(model_name, model_path, session_id: int = 1):
                     top_k=40,
                     top_p=0.8,
                     temperature=0.8,
-                    repetition_penalty=1.05,
+                    repetition_penalty=1.0,
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]
