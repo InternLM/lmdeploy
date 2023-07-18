@@ -19,18 +19,6 @@ sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
 
-class _MPIEnv:
-
-    def __init__(self):
-        _tm.mpi_initialize()
-
-    def __del__(self):
-        _tm.mpi_finalize()
-
-
-_mpi_env = _MPIEnv()
-
-
 def _stop_words(stop_words: List[int]):
     """return list of stop-words to numpy.ndarray."""
     if stop_words is None:
