@@ -1,0 +1,45 @@
+name: publish-docker
+
+on:
+  push:
+    paths-ignore:
+      - ".github/**"
+      - "docs/**"
+      - "resources/**"
+      - "benchmark/**"
+      - "tests/**"
+      - "**/*.md"
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+
+jobs:
+  publish_docker_image:
+    runs-on: [self-hosted, linux-3090]
+    environment: 'prod'
+    env:
+      TAG_PREFIX: "openmmlab/lmdeploy"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Get lmdeploy version
+        if: startsWith(github.ref, 'refs/tags/') == false
+        run: |
+          echo "TAG=$TAG_PREFIX:latest"  >> $GITHUB_ENV
+      - name: Get lmdeploy tag
+        if: startsWith(github.ref, 'refs/tags/') == true
+        run: |
+          export LMDEPLOY_VERSION=$(python3 -c "import sys; sys.path.append('lmdeploy');from version import __version__;print(__version__)")
+          echo $LMDEPLOY_VERSION
+          echo "TAG=${TAG_PREFIX}:v${LMDEPLOY_VERSION}"  >> $GITHUB_ENV
+      - name: Build Docker image
+        continue-on-error: true
+        run: |
+          echo $TAG
+          docker build docker/ -t ${TAG}
+      - name: Push Docker image
+        continue-on-error: true
+        run: |
+          echo $TAG
+          docker push $TAG
