@@ -17,6 +17,11 @@ from lmdeploy.model import MODELS
 supported_formats = ['llama', 'hf']
 
 
+def get_package_root_path():
+    import importlib.resources as pkg_resources
+    return pkg_resources.path('lmdeploy', '')
+
+
 def create_workspace(_path: str):
     """Create a workspace.
 
@@ -216,6 +221,9 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
     if osp.exists(tokenizer_path):
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
+        with get_package_root_path() as root_path:
+            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+                        osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
         return False
@@ -341,6 +349,9 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 json_path = osp.join(model_path, _file)
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
+        with get_package_root_path() as root_path:
+            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+                        osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
         exit(-1)
