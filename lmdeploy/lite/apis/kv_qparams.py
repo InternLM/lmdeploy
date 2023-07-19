@@ -5,7 +5,7 @@ from typing import List, Tuple
 import fire
 import torch
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama.modeling_llama import (LlamaDecoderLayer,
                                                       LlamaForCausalLM)
 
@@ -112,8 +112,8 @@ def main(model: str,
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-    model = AutoModel.from_pretrained(model, trust_remote_code=True)
-    model.use_cache = True
+    model = AutoModelForCausalLM.from_pretrained(model, trust_remote_code=True)
+    model.config.use_cache = True
 
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,
