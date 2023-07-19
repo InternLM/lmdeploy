@@ -109,8 +109,8 @@ def main(model: str,
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Currently, only support `c4`, `ptb`, `wikitext2`, or `pileval`.'
 
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    model = AutoModel.from_pretrained(model)
+    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model, trust_remote_code=True)
     model.use_cache = True
 
     print('Loading calibrate dataset ...')
