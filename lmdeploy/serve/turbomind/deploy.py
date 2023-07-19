@@ -163,6 +163,7 @@ def export(model_name: str,
             save_bin(param_data, param_name)
 
     # export config and save it to {out_dir}/config.ini
+    model = MODELS.get(model_name)
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     assert _vocab_size >= vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
@@ -182,7 +183,7 @@ def export(model_name: str,
         # parameters for turbomind
         max_batch_size=32,
         max_context_token_num=4,
-        session_len=2056,
+        session_len=model.session_len + 8,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=1,
