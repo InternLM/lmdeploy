@@ -168,7 +168,7 @@ def export(model_name: str,
             save_bin(param_data, param_name)
 
     # export config and save it to {out_dir}/config.ini
-    model = MODELS.get(model_name)
+    model = MODELS.get(model_name)()
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     assert _vocab_size >= vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
@@ -492,7 +492,7 @@ def pack_model_repository(workspace_path: str):
 
 def main(model_name: str,
          model_path: str,
-         model_format: str,
+         model_format: str = 'hf',
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1):

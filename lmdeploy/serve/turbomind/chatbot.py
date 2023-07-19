@@ -71,19 +71,18 @@ class Chatbot:
 
     def __init__(self,
                  tritonserver_addr: str,
-                 model_name: str,
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False,
                  profile_serving: bool = False):
-        assert model_name in MODELS.module_dict.keys(), \
-            f"'{model_name}' is not supported. " \
+        self.tritonserver_addr = tritonserver_addr
+        self.model_name = self._get_model_name()
+        assert self.model_name in MODELS.module_dict.keys(), \
+            f"'{self.model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'
-        self.model_name = model_name
         self.model = MODELS.get(self.model_name)()
         self._session = None
-        self.tritonserver_addr = tritonserver_addr
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
         self.bos_id = self._get_bos()
@@ -259,6 +258,14 @@ class Chatbot:
     def session(self, value):
         """set session."""
         self._session = value
+
+    def _get_model_name(self):
+        with grpcclient.InferenceServerClient(
+                self.tritonserver_addr) as client:
+            model_config = client.get_model_config(model_name='turbomind',
+                                                   as_json=True)
+            return model_config['config']['parameters']['model_name'][
+                'string_value']
 
     def _get_bos(self):
         """return bos token id."""

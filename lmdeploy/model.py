@@ -155,9 +155,10 @@ def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
-    model = MODELS.get('vicuna--1')()
+    model = MODELS.get(model_name)()
     prompt = model.get_prompt(prompt='hi')
     print(prompt)
+    print(f'session_len: {model.session_len}')
 
 
 if __name__ == '__main__':
