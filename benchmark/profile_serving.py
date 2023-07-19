@@ -169,9 +169,9 @@ def main(tritonserver_addr: str,
         session_id, _stats = res_que.get()
         print(f'\n{"-" * 50}\n'
               f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
-        stats.append(_stats)
+        stats.append(np.array(_stats))
 
-    stats = np.array(stats).reshape(-1, 3)
+    stats = np.concatenate(stats).reshape(-1, 3)
 
     first_token_latency_min = np.min(stats[:, 0], axis=0)
     first_token_latency_max = np.max(stats[:, 0], axis=0)
