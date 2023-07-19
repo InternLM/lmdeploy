@@ -13,7 +13,7 @@ ______________________________________________________________________
 
 ## News
 
-\[2023/07\] InternLM support tensor-parallel on both serving and python API.
+\[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
 
 ______________________________________________________________________
 
