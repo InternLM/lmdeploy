@@ -134,12 +134,9 @@ def export(model_name: str,
             attn_bias = True
         copy = False
         if key in ['w1', 'w3', 'w_qkv']:
-            if ext in ['bias']:
-                copy = True
-            else:
-                split_dim = -1
-                if key == 'w1':
-                    inter_size = param_data.shape[-1]
+            split_dim = -1
+            if key == 'w1':
+                inter_size = param_data.shape[-1]
         elif key in ['w2', 'wo']:
             if ext in ['scales', 'zeros', 'bias']:
                 copy = True

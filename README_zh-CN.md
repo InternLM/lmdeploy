@@ -9,6 +9,14 @@
     👋 join us on <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
 </p>
 
+______________________________________________________________________
+
+## 更新
+
+\[2023/07\] TurboMind 支持 InternLM 的 Tensor Parallel 推理
+
+______________________________________________________________________
+
 ## 简介
 
 LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发，是涵盖了 LLM 任务的全套轻量化、部署和服务解决方案。

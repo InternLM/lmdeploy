@@ -215,7 +215,7 @@ class TurboMindInstance:
                      top_p=0.8,
                      top_k=40,
                      temperature=0.8,
-                     repetition_penalty=1.05,
+                     repetition_penalty=1.0,
                      ignore_eos=False,
                      random_seed=None,
                      stream_output=False):
