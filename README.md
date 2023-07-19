@@ -9,6 +9,14 @@ English | [简体中文](README_zh-CN.md)
     👋 join us on <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
 </p>
 
+______________________________________________________________________
+
+## News
+
+\[2023/07\] InternLM support tensor-parallel on both serving and python API.
+
+______________________________________________________________________
+
 ## Introduction
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
