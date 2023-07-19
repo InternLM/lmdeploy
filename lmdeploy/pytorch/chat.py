@@ -76,6 +76,8 @@ def init_model(
     if not _is_deepspeed_available:
         warnings.warn('deepspeed is not installed, '
                       'use plain huggingface model.')
+
+        model = model.cuda(local_rank)
     else:
         config = dict(
             tensor_parallel=dict(tp_size=world_size),  # Number of GPU
