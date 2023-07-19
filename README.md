@@ -11,10 +11,10 @@ English | [简体中文](README_zh-CN.md)
 
 ______________________________________________________________________
 
-## News🎉
+## News 🎉
 
-\[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
-\[2023/07\] TurboMind supports llama2 7b/13b.
+- \[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
+- \[2023/07\] TurboMind supports llama2 7b/13b.
 
 ______________________________________________________________________
 
