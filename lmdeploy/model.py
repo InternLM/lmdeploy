@@ -58,7 +58,7 @@ class InternLM:
             str: the concatenated prompt
         """
         if sequence_start:
-            return f'<bos>{self.user}:{prompt}{self.eoh}\n' \
+            return f'<BOS>{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
@@ -113,7 +113,7 @@ conversation"""  # noqa: E501
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
-            return f'<bos>{self.system}\n' \
+            return f'<BOS>{self.system}\n' \
                    f'{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
