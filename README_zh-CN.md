@@ -124,9 +124,7 @@ pip install deepspeed
 #### 单个 GPU
 
 ```shell
-python3 -m lmdeploy.pytorch.chat \
-    internlm \
-    $NAME_OR_PATH_TO_HF_MODEL\
+python3 -m lmdeploy.pytorch.chat $NAME_OR_PATH_TO_HF_MODEL\
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \
@@ -137,7 +135,6 @@ python3 -m lmdeploy.pytorch.chat \
 
 ```shell
 deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
-    internlm \
     $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
     --temperture 0.8 \

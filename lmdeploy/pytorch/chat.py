@@ -34,7 +34,6 @@ def input_prompt():
 
 
 def init_model(
-    model_name: str,
     model_path: str,
     tokenizer_path: str,
     use_fast_tokenizer=True,
@@ -45,8 +44,6 @@ def init_model(
     """Initialize model and tokenizer from given path.
 
     Args:
-        model_name (str): the name of the model, such as
-            internlm, llama and etc.
         model_path (str): Path to model.
         tokenizer_path (str): Path to tokenizer.
         use_fast_tokenizer (bool): Whether to use fast tokenizer.
@@ -88,9 +85,11 @@ def init_model(
             max_out_tokens=max_new_tokens,
             # Maximum number of tokens to generate
         )
-        if model_name == 'internlm':
-            # For internlm model not supported by DeepSpeed,
-            # set replace_with_kernel_inject=False to use AutoTP
+        # For internlm model not supported by DeepSpeed,
+        # set replace_with_kernel_inject=False to use AutoTP.
+        # It's a hotfix before the progress is merged
+        # https://github.com/InternLM/lmdeploy/issues/136
+        if 'InternLM' in model.__class__.__name__:
             config.update({'replace_with_kernel_inject': False})
 
         model = deepspeed.init_inference(
@@ -102,7 +101,6 @@ def init_model(
 
 
 def main(
-    model_name: str,
     model_path: str,
     tokenizer_path: str = None,
     max_new_tokens: int = 64,
@@ -114,8 +112,6 @@ def main(
     """Start chat session with given model.
 
     Args:
-        model_name (str): the name of the model, such as
-            internlm, llama and etc.
         model_path (str): Path to model.
         tokenizer_path (str): Path to tokenizer.
         max_new_tokens (int): Maximum number of tokens to generate.
@@ -134,7 +130,6 @@ def main(
         tokenizer_path = model_path
 
     tokenizer, model = init_model(
-        model_name,
         model_path,
         tokenizer_path,
         use_fast_tokenizer=use_fast_tokenizer,
