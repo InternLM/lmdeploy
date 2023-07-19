@@ -86,7 +86,18 @@ def init_model(
         # It's a hotfix before the progress is merged
         # https://github.com/InternLM/lmdeploy/issues/136
         if 'InternLM' in model.__class__.__name__:
-            config.update({'replace_with_kernel_inject': False})
+            try:
+                # Use customized deepspeed supporting internlm
+                from deepspeed.module_inject.containers.internlm import \
+                    InternLMLayerPolicy
+            except ImportError:
+                # use stock deepseed
+                config.update({'replace_with_kernel_inject': False})
+            else:
+                for module in model.modules():
+                    if module.__class__.__name__ == 'InternLMDecoderLayer':
+                        InternLMLayerPolicy._orig_layer_class = module.__class__  # noqa: E501
+                        break
 
         model = deepspeed.init_inference(
             model=model,  # Transformers models
