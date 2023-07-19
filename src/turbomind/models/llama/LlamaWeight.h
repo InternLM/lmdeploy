@@ -28,7 +28,9 @@ namespace turbomind {
 template<typename T>
 struct LlamaWeight {
     LlamaWeight() = default;
-    LlamaWeight(size_t     hidden_units,
+    LlamaWeight(size_t     head_num,
+                size_t     kv_head_num,
+                size_t     size_per_head,
                 size_t     inter_size,
                 size_t     vocab_size,
                 size_t     num_layer,
@@ -40,7 +42,7 @@ struct LlamaWeight {
 
     ~LlamaWeight();
 
-    LlamaWeight(const LlamaWeight& other) = delete;
+    LlamaWeight(const LlamaWeight& other)            = delete;
     LlamaWeight& operator=(const LlamaWeight& other) = delete;
 
     void loadModel(std::string dir_path);

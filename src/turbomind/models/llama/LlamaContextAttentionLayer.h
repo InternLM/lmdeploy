@@ -35,6 +35,7 @@ public:
     void allocateBuffer(size_t batch_size, size_t num_token, size_t max_q_len, size_t max_kv_len);
 
     LlamaContextAttentionLayer(size_t           head_num,
+                               size_t           kv_head_num,
                                size_t           size_per_head,
                                size_t           rotary_embedding_dim,
                                bool             neox_rotary_style,
@@ -49,7 +50,8 @@ public:
         size_per_head_(size_per_head),
         hidden_units_(head_num * size_per_head),
         local_head_num_(head_num / tensor_para.world_size_),
-        local_hidden_units_(hidden_units_ / tensor_para.world_size_),
+        local_kv_head_num_(kv_head_num / tensor_para.world_size_),
+        head_n_rep_(head_num / kv_head_num),
         rotary_embedding_dim_(rotary_embedding_dim),
         neox_rotary_style_(neox_rotary_style),
         tensor_para_(tensor_para),
@@ -61,6 +63,7 @@ public:
         use_fmha_(use_fmha),
         quant_policy_(quant_policy)
     {
+        FT_CHECK(head_num % kv_head_num == 0);
     }
 
     void forward(TensorMap* output_tensors, const TensorMap* input_tensors, const LlamaAttentionWeight<T>* weights);
@@ -93,8 +96,9 @@ private:
     const size_t head_num_;
     const size_t size_per_head_;
     const size_t hidden_units_;
+    const size_t local_kv_head_num_;
     const size_t local_head_num_;
-    const size_t local_hidden_units_;
+    const size_t head_n_rep_;
     const size_t rotary_embedding_dim_;
     const bool   is_free_buffer_after_forward_;
 

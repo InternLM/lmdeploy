@@ -35,7 +35,7 @@ protected:
     void allocateBuffer() override;  // deprecated
     void allocateBuffer(size_t batch_size);
     void freeBuffer() override;
-    void initialize(int quant_policy);
+    void initialize(size_t kv_head_num, int quant_policy);
 
     size_t head_num_;
     size_t size_per_head_;
@@ -70,6 +70,7 @@ protected:
 
 public:
     LlamaDecoder(size_t           head_num,
+                 size_t           kv_head_num,
                  size_t           size_per_head,
                  size_t           inter_size,
                  size_t           num_layer,
@@ -80,9 +81,9 @@ public:
                  cublasMMWrapper* cublas_wrapper,
                  IAllocator*      allocator,
                  bool             is_free_buffer_after_forward,
-                 int              quant_policy),
+                 int              quant_policy);
 
-        ~LlamaDecoder() override;
+    ~LlamaDecoder() override;
 
     virtual void forward(std::unordered_map<std::string, Tensor>*        output_tensors,
                          const std::unordered_map<std::string, Tensor>*  input_tensors,

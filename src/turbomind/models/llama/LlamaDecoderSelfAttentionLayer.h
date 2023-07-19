@@ -34,6 +34,7 @@ public:
     void allocateBuffer(size_t batch_size, int key_len, int max_memory_len);
 
     LlamaDecoderSelfAttentionLayer(size_t           head_num,
+                                   size_t           kv_head_num,
                                    size_t           size_per_head,
                                    size_t           rotary_embedding_dim,
                                    bool             neox_rotary_style,
@@ -44,9 +45,11 @@ public:
                                    bool             is_free_buffer_after_forward,
                                    int              quant_policy):
         head_num_(head_num),
+        kv_head_num_(kv_head_num),
         size_per_head_(size_per_head),
         hidden_units_(head_num * size_per_head),
         local_head_num_(head_num / tensor_para.world_size_),
+        local_kv_head_num_(kv_head_num_ / tensor_para.world_size_),
         local_hidden_units_(hidden_units_ / tensor_para.world_size_),
         rotary_embedding_dim_(rotary_embedding_dim),
         neox_rotary_style_(neox_rotary_style),
@@ -68,9 +71,11 @@ public:
 
 private:
     const size_t head_num_;
+    const size_t kv_head_num_;
     const size_t size_per_head_;
     const size_t hidden_units_;
     const size_t local_head_num_;
+    const size_t local_kv_head_num_;
     const size_t local_hidden_units_;
     const size_t rotary_embedding_dim_;
     const bool   is_free_buffer_after_forward_;

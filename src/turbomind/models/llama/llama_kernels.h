@@ -62,6 +62,7 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                             int          max_seq_len,
                             int          size_per_head,
                             int          head_num,
+                            int          head_n_rep,
                             cudaStream_t stream,
                             int          quant_policy,
                             const float* kv_scale);

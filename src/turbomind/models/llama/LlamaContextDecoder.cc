@@ -62,11 +62,12 @@ void LlamaContextDecoder<T>::freeBuffer()
 }
 
 template<typename T>
-void LlamaContextDecoder<T>::initialize(bool use_fmha, int quant_policy)
+void LlamaContextDecoder<T>::initialize(size_t kv_head_num, bool use_fmha, int quant_policy)
 {
     h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
 
     context_attention_layer_ = new LlamaContextAttentionLayer<T>(head_num_,
+                                                                 kv_head_num,
                                                                  size_per_head_,
                                                                  rotary_embedding_dim_,
                                                                  false,  // neox_rotary_style
@@ -124,6 +125,7 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
 
 template<typename T>
 LlamaContextDecoder<T>::LlamaContextDecoder(size_t           head_num,
+                                            size_t           kv_head_num,
                                             size_t           size_per_head,
                                             size_t           inter_size,
                                             size_t           num_layer,
@@ -147,7 +149,7 @@ LlamaContextDecoder<T>::LlamaContextDecoder(size_t           head_num,
     tensor_para_(tensor_para),
     data_type_(getTensorType<T>())
 {
-    initialize(use_fmha, quant_policy);
+    initialize(kv_head_num, use_fmha, quant_policy);
 }
 
 template<typename T>

@@ -20,6 +20,7 @@
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
@@ -1336,6 +1337,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                                                    const int  batch_size,
                                                    const int  seq_len,
                                                    const int  head_num,
+                                                   const int  kv_head_num,
                                                    const int  size_per_head,
                                                    const int  rotary_embedding_dim,
                                                    const bool neox_rotary_style)
@@ -1396,7 +1398,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
 
     const int prefix_prompt_length = PREFIX_PROMPT ? param.d_prefix_prompt_lengths[batch_idx] : 0;
     const int hidden_idx           = head_idx * size_per_head + tidx * vec_size;
-    const int n                    = head_num * size_per_head;
+    // const int n                    = head_num * size_per_head;
 
     // the [0..seq_len) indices really handle KV [max_pp_len..seq_len+max_pp_len)
     // and Q [0..seq_len)
@@ -1405,33 +1407,48 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
 
     // NOTE: q has seq len excluding prefix prompt
     // src QKV: [batch, time, 3, head, hidden]
-    const int src_q_idx = token_idx * 3 * n + hidden_idx;
-    const int src_k_idx = token_idx * 3 * n + hidden_idx + n;
-    const int src_v_idx = token_idx * 3 * n + hidden_idx + 2 * n;
+    // const int src_q_idx = token_idx * 3 * n + hidden_idx;
+    // const int src_k_idx = token_idx * 3 * n + hidden_idx + n;
+    // const int src_v_idx = token_idx * 3 * n + hidden_idx + 2 * n;
+
+    const int q_kv_head_num = head_num + 2 * kv_head_num;
+
+    const int k_offset = head_num * size_per_head;
+    const int v_offset = k_offset + kv_head_num * size_per_head;
+
+    // src QKV: [batch, time, q_kv_head_num, hidden]
+    const int src_q_idx = token_idx * q_kv_head_num * size_per_head + hidden_idx;
+    const int src_k_idx = token_idx * q_kv_head_num * size_per_head + hidden_idx + k_offset;
+    const int src_v_idx = token_idx * q_kv_head_num * size_per_head + hidden_idx + v_offset;
 
     Vec_t q, k, v;
     Vec_t q_bias, k_bias, v_bias;
+
+    // load Q and apply bias
     if (!is_masked) {
         q = *reinterpret_cast<const Vec_t*>(&QKV[src_q_idx]);
-        k = *reinterpret_cast<const Vec_t*>(&QKV[src_k_idx]);
-        v = *reinterpret_cast<const Vec_t*>(&QKV[src_v_idx]);
-
         if (qkv_bias) {
             q_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx]);
-            k_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + n]);
-            v_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + 2 * n]);
+            q      = mmha::add(q, q_bias);
         }
     }
 
-    if (qkv_bias) {
-        q = mmha::add(q, q_bias);
-        k = mmha::add(k, k_bias);
-        v = mmha::add(v, v_bias);
+    // load KV and apply bias
+    if (!is_masked && head_idx < kv_head_num) {
+        k = *reinterpret_cast<const Vec_t*>(&QKV[src_k_idx]);
+        v = *reinterpret_cast<const Vec_t*>(&QKV[src_v_idx]);
+        if (qkv_bias) {
+            k_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + k_offset]);
+            v_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + v_offset]);
+            k      = mmha::add(k, k_bias);
+            v      = mmha::add(v, v_bias);
+        }
     }
 
     const int t_offset = history_length ? history_length[batch_idx] : 0;
 
     if (!neox_rotary_style) {
+        // TODO: unused computation on k if GQA is used
         mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, dst_kv_seq_idx + t_offset);
     }
     else {
@@ -1472,23 +1489,28 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
             k = *reinterpret_cast<Vec_t*>(k_smem + half_idx * smem_pitch + intra_half_idx);
         }
     }
+
     if (!is_masked && !q_buf) {  // also skip modifying QKV if q/k/v_buf are present
         *reinterpret_cast<Vec_t*>(&QKV[src_q_idx]) = q;
-        *reinterpret_cast<Vec_t*>(&QKV[src_k_idx]) = k;
-        *reinterpret_cast<Vec_t*>(&QKV[src_v_idx]) = v;
+        if (head_idx < kv_head_num) {
+            *reinterpret_cast<Vec_t*>(&QKV[src_k_idx]) = k;
+            *reinterpret_cast<Vec_t*>(&QKV[src_v_idx]) = v;
+        }
     }
 
     const int dest_q_idx = batch_idx * size_per_head * seq_len * head_num + head_idx * size_per_head * seq_len
                            + seq_idx * size_per_head + tidx * vec_size;
 
-    const int dest_kv_idx = batch_idx * size_per_head * total_seq_len * head_num
+    const int dest_kv_idx = batch_idx * size_per_head * total_seq_len * kv_head_num
                             + head_idx * size_per_head * total_seq_len + dst_kv_seq_idx * size_per_head
                             + tidx * vec_size;
 
     if (!is_masked) {
-        *reinterpret_cast<Vec_t*>(&q_buf[dest_q_idx])  = q;
-        *reinterpret_cast<Vec_t*>(&k_buf[dest_kv_idx]) = k;
-        *reinterpret_cast<Vec_t*>(&v_buf[dest_kv_idx]) = v;
+        *reinterpret_cast<Vec_t*>(&q_buf[dest_q_idx]) = q;
+        if (head_idx < kv_head_num) {
+            *reinterpret_cast<Vec_t*>(&k_buf[dest_kv_idx]) = k;
+            *reinterpret_cast<Vec_t*>(&v_buf[dest_kv_idx]) = v;
+        }
     }
 }
 
@@ -1504,6 +1526,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                                                                                              batch_size,               \
                                                                                              seq_len,                  \
                                                                                              head_num,                 \
+                                                                                             kv_head_num,              \
                                                                                              size_per_head,            \
                                                                                              rotary_embedding_dim,     \
                                                                                              neox_rotary_style);
@@ -1521,6 +1544,7 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        seq_len,
                                     const int                        token_num,
                                     const int                        head_num,
+                                    const int                        kv_head_num,
                                     const int                        size_per_head,
                                     const int                        rotary_embedding_dim,
                                     const int                        neox_rotary_style,
@@ -1528,42 +1552,19 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        int8_mode,
                                     cudaStream_t                     stream)
 {
-    // [bs, seq_len, 3, head, Dh]
-    if (rotary_embedding_dim == 0 && param.max_prefix_prompt_length == 0) {
-        const int m = token_num;
-        const int n = head_num * size_per_head;
-        dim3      block(384);
-        dim3      grid((int)(ceil(1.0 * m * n / 384)));
-        add_fusedQKV_bias_transpose_kernel<<<grid, block, 0, stream>>>(q_buf,
-                                                                       k_buf,
-                                                                       v_buf,
-                                                                       QKV,
-                                                                       qkv_bias,
-                                                                       padding_offset,
-                                                                       batch_size,
-                                                                       seq_len,
-                                                                       token_num,
-                                                                       head_num,
-                                                                       size_per_head,
-                                                                       scale,
-                                                                       int8_mode);
+    TM_LOG_ERROR("invokeAddFusedQKVBiasTranspose");
+    FT_CHECK(rotary_embedding_dim);
+    FT_CHECK_WITH_INFO(int8_mode != 2, "w8a8 not yet implemented with prefix prompt");  // TODO(mseznec)
+    // To implement rotary embeddings, each thread processes two QKV elems:
+    dim3   block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
+    dim3   grid(token_num + batch_size * param.max_prefix_prompt_length, head_num);
+    size_t smem_size = neox_rotary_style ? 2 * rotary_embedding_dim * sizeof(T) : 0;
+    // NOTE: add offset for rotary embedding
+    if (param.max_prefix_prompt_length == 0) {
+        FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, false);
     }
     else {
-        FT_CHECK_WITH_INFO(int8_mode != 2, "w8a8 not yet implemented with prefix prompt");  // TODO(mseznec)
-        // To implement rotary embeddings, each thread processes two QKV elems:
-        dim3   block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
-        dim3   grid(token_num + batch_size * param.max_prefix_prompt_length, head_num);
-        size_t smem_size = neox_rotary_style ? 2 * rotary_embedding_dim * sizeof(T) : 0;
-        // NOTE: add offset for rotary embedding
-        //  add_fusedQKV_bias_transpose_kernel<<<grid, block, 0, stream>>>(
-        //      q_buf, k_buf, v_buf, param, QKV, qkv_bias, batch_size, seq_len, head_num, size_per_head,
-        //      rotary_embedding_dim);
-        if (param.max_prefix_prompt_length == 0) {
-            FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, false);
-        }
-        else {
-            FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, true);
-        }
+        FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, true);
     }
 }
 
@@ -1580,6 +1581,7 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                                  const int                        seq_len,                             \
                                                  const int                        token_num,                           \
                                                  const int                        head_num,                            \
+                                                 const int                        kv_head_num,                         \
                                                  const int                        size_per_head,                       \
                                                  const int                        rotary_embedding_dim,                \
                                                  const int                        neox_rotary_style,                   \

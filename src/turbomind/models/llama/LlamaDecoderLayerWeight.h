@@ -28,14 +28,16 @@ template<typename T>
 struct LlamaDecoderLayerWeight {
 public:
     LlamaDecoderLayerWeight() = delete;
-    LlamaDecoderLayerWeight(size_t     hidden_units,
+    LlamaDecoderLayerWeight(size_t     head_num,
+                            size_t     kv_head_num,
+                            size_t     size_per_head,
                             size_t     inter_size,
                             WeightType weight_type,
                             bool       attn_bias,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other) = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other)            = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
@@ -46,6 +48,9 @@ public:
     LlamaFfnWeight<T>       ffn_weights{};
 
 private:
+    size_t     head_num_;
+    size_t     kv_head_num_;
+    size_t     size_per_head_;
     size_t     hidden_units_;
     size_t     inter_size_;
     WeightType weight_type_;

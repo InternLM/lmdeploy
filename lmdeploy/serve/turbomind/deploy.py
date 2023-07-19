@@ -133,10 +133,12 @@ def export(model_name: str,
         if key == 'w_qkv' and ext == 'bias':
             attn_bias = True
         copy = False
-        if key in ['w1', 'w3', 'w_qkv']:
+        if key in ['w1', 'w3']:
             split_dim = -1
             if key == 'w1':
                 inter_size = param_data.shape[-1]
+        elif key == 'w_qkv':
+            split_dim = 1
         elif key in ['w2', 'wo']:
             if ext in ['scales', 'zeros', 'bias']:
                 copy = True
@@ -316,6 +318,16 @@ def permute(x: torch.Tensor):
                       1).transpose(1, 2).reshape(dim, 1)
 
 
+def merge_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+              kv_head_num: int, dim: int):
+
+    def reshape(x):
+        return x.view(x.size(0), kv_head_num, -1) if dim == 2 else x.view(
+            kv_head_num, -1)
+
+    return torch.cat((reshape(q), reshape(k), reshape(v)), dim=-1)
+
+
 def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
               triton_models_path: str, tp: int):
     """Deploy a model with huggingface transformers' format.
@@ -349,6 +361,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            if 'num_key_value_heads' in model_arg:
+                kv_head_num = model_arg['num_key_value_heads']
+            else:
+                kv_head_num = model_arg['num_attention_heads']
     except Exception as e:
         print(f'get "num_hidden_layers" and "rms_norm_eps" from '
               f'{params_path} failed: {e}')
@@ -416,11 +432,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 q = permute(q)
                 k = permute(k)
                 if suffix == _qweight:  # weight, qweight
-                    # insert a dimension for splitting heads later
-                    qkv = torch.stack((q, k, v), dim=1)
+                    qkv = merge_qkv(q, k, v, kv_head_num, dim=2)
+                    print(suffix, qkv.shape)
                 else:  # scales, zeros, bias
-                    qkv = torch.stack((q.squeeze(), k.squeeze(), v.squeeze()),
-                                      dim=0).squeeze(dim=-1)
+                    qkv = merge_qkv(q, k, v, kv_head_num, dim=1)
                     print(suffix, qkv.shape)
                 for k, v in [('w_qkv', qkv), ('wo', o)]:
                     model_params[f'layers.{i}.attention.{k}.{suffix}'] = v
