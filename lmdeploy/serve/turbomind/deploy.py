@@ -488,8 +488,8 @@ def main(model_name: str,
         model_name (str): the name of the to-be-deployed model, such as
             llama-7b, llama-13b, vicuna-7b and etc
         model_path (str): the directory path of the model
-        model_format (str): the format of the model, llama or hf. 
-            'llama' stands for META's llama format, and 
+        model_format (str): the format of the model, llama or hf.
+            'llama' stands for META's llama format, and
             'hf' means huggingface format.
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
