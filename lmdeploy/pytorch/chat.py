@@ -34,18 +34,23 @@ def input_prompt():
 
 
 def init_model(
+    model_name: str,
     model_path: str,
     tokenizer_path: str,
     use_fast_tokenizer=True,
+    max_new_tokens=64,
     local_rank=0,
     world_size=1,
 ):
     """Initialize model and tokenizer from given path.
 
     Args:
+        model_name (str): the name of the model, such as
+            internlm, llama and etc.
         model_path (str): Path to model.
         tokenizer_path (str): Path to tokenizer.
         use_fast_tokenizer (bool): Whether to use fast tokenizer.
+        max_new_tokens (int): Maximum number of tokens to generate.
         local_rank (int): Local rank of current process.
         world_size (int): World size of current process.
 
@@ -70,25 +75,34 @@ def init_model(
         model = AutoModelForCausalLM.from_pretrained(model_path,
                                                      torch_dtype=torch.float16,
                                                      trust_remote_code=True)
-    model = model.cuda(local_rank)
 
     if not _is_deepspeed_available:
         warnings.warn('deepspeed is not installed, '
                       'use plain huggingface model.')
     else:
-        model = deepspeed.init_inference(
-            model=model,  # Transformers models
-            mp_size=world_size,  # Number of GPU
+        config = dict(
+            tensor_parallel=dict(tp_size=world_size),  # Number of GPU
             dtype=torch.float16,  # dtype of the weights (fp16)
             replace_with_kernel_inject=True,
             # replace the model with the kernel injector
-            max_out_tokens=2048,
+            max_out_tokens=max_new_tokens,
+            # Maximum number of tokens to generate
+        )
+        if model_name == 'internlm':
+            # For internlm model not supported by DeepSpeed,
+            # set replace_with_kernel_inject=False to use AutoTP
+            config.update({'replace_with_kernel_inject': False})
+
+        model = deepspeed.init_inference(
+            model=model,  # Transformers models
+            config=config,
         )
 
     return tokenizer, model
 
 
 def main(
+    model_name: str,
     model_path: str,
     tokenizer_path: str = None,
     max_new_tokens: int = 64,
@@ -100,6 +114,8 @@ def main(
     """Start chat session with given model.
 
     Args:
+        model_name (str): the name of the model, such as
+            internlm, llama and etc.
         model_path (str): Path to model.
         tokenizer_path (str): Path to tokenizer.
         max_new_tokens (int): Maximum number of tokens to generate.
@@ -118,9 +134,11 @@ def main(
         tokenizer_path = model_path
 
     tokenizer, model = init_model(
+        model_name,
         model_path,
         tokenizer_path,
         use_fast_tokenizer=use_fast_tokenizer,
+        max_new_tokens=max_new_tokens,
         local_rank=local_rank,
         world_size=world_size,
     )
