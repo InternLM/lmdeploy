@@ -161,7 +161,7 @@ class Llama2:
                    f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
                    f'{prompt} {self.e_inst} '
 
-        return f'<BOS>{self.b_inst} {prompt} {self.e_inst} '
+        return f'{self.b_inst} {prompt} {self.e_inst} '
 
     @property
     def stop_words(self):
