@@ -12,6 +12,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
+from lmdeploy.model import MODELS
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -70,14 +71,12 @@ class TurboMind:
         model_path (str): the path of turbomind's model
         data_type (str): the data type
         eos_id (int): eos token id
-        stop_words (List[int]): token ids of stop-words
     """
 
     def __init__(self,
                  model_path: str,
                  data_type: str = 'fp16',
-                 eos_id: int = 2,
-                 stop_words: List[int] = None):
+                 eos_id: int = 2):
         self.eos_id = eos_id
 
         # TODO: support mpi
@@ -101,6 +100,9 @@ class TurboMind:
                 self.gpu_count = parser.getint(section_name,
                                                'tensor_para_size')
                 self.session_len = parser.getint(section_name, 'session_len')
+            self.model_name = parser.get(section_name, 'model_name')
+        self.model = MODELS.get(self.model_name)()
+        stop_words = self.model.stop_words
 
         # params
         self.node_id = node_id
