@@ -131,8 +131,12 @@ def main(dataset: str,
     elapsed_time = engine.process_request(requests, concurrency)
     total_num_tokens = sum(prompt_len + output_len
                            for _, prompt_len, output_len in requests)
-    print(f'Throughput: {len(requests) / elapsed_time:.2f} requests/s, '
-          f'{total_num_tokens / elapsed_time:.2f} tokens/s')
+    total_num_out_tokens = sum(output_len for _, _, output_len in requests)
+    print(
+        f'Throughput requests: {len(requests) / elapsed_time:.2f} requests/s')
+    print(f'Throughput tokens: {total_num_tokens / elapsed_time:.2f} tokens/s')
+    print('Throughput tokens(output only):'
+          f'{total_num_out_tokens / elapsed_time:.2f} tokens/s')
 
 
 if __name__ == '__main__':
