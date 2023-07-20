@@ -1552,7 +1552,6 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        int8_mode,
                                     cudaStream_t                     stream)
 {
-    TM_LOG_ERROR("invokeAddFusedQKVBiasTranspose");
     FT_CHECK(rotary_embedding_dim);
     FT_CHECK_WITH_INFO(int8_mode != 2, "w8a8 not yet implemented with prefix prompt");  // TODO(mseznec)
     // To implement rotary embeddings, each thread processes two QKV elems:

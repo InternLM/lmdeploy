@@ -318,7 +318,6 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_c
                                                               int          quant,
                                                               const float* kv_scale)
 {
-    TM_LOG_ERROR("[LlamaContextAttentionLayer] head_n_rep=%d", (int)head_n_rep_);
     // key_cache [B, kvH, S[:t+s], D/x, x] -> [B, qH, t+s, D]
     // val_cache [B, kvH, S[:t+s], D/x, x] -> [B, qH, t+s, D]
     invokeTransposeKVCache(k_cache_buf_,
