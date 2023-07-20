@@ -14,6 +14,7 @@ ARG COMMIT_ID=main
 RUN git clone --depth=1 https://github.com/InternLM/lmdeploy.git &&\
     cd lmdeploy &&\
     git checkout ${COMMIT_ID} &&\
+    python3 -m pip install -r requirements.txt &&\
     mkdir -p build && cd build &&\
     cmake .. \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -28,7 +29,6 @@ RUN git clone --depth=1 https://github.com/InternLM/lmdeploy.git &&\
     make -j$(nproc) && make install &&\
     cd .. &&\
     python3 -m pip install . &&\
-    python3 -m pip install -r requirements.txt &&\
     rm -rf build
 
 ENV LD_LIBRARY_PATH=/opt/tritonserver/lib:$LD_LIBRARY_PATH
