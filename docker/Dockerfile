@@ -5,14 +5,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-RUN python3 -m pip install sentencepiece cmake "transformers<4.30.0" protobuf==3.20.3 pybind11 mmengine
+RUN python3 -m pip install cmake protobuf==3.20.3
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
+ARG COMMIT_ID=main
+
 RUN git clone --depth=1 https://github.com/InternLM/lmdeploy.git &&\
     cd lmdeploy &&\
-    export commit_id=$(git log --format="%H" -n 1) &&\
-    echo "commit id = $commit_id" &&\
+    git checkout ${COMMIT_ID} &&\
     mkdir -p build && cd build &&\
     cmake .. \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \

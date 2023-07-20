@@ -23,6 +23,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+      - name: Get lmdeploy commit id
+        run: |
+          export commit_id=$(git log --format="%H" -n 1)
+          echo "commit id = $commit_id"
+          echo "COMMIT_ID=$commit_id" >> $GITHUB_ENV
       - name: Get lmdeploy version
         if: startsWith(github.ref, 'refs/tags/') == false
         run: |
@@ -32,12 +37,12 @@ jobs:
         run: |
           export LMDEPLOY_VERSION=$(python3 -c "import sys; sys.path.append('lmdeploy');from version import __version__;print(__version__)")
           echo $LMDEPLOY_VERSION
-          echo "TAG=${TAG_PREFIX}:v${LMDEPLOY_VERSION}"  >> $GITHUB_ENV
+          echo "TAG=${TAG_PREFIX}:v${LMDEPLOY_VERSION}" >> $GITHUB_ENV
       - name: Build Docker image
         continue-on-error: true
         run: |
           echo $TAG
-          docker build docker/ -t ${TAG}
+          docker build docker/ -t ${TAG} --build-arg COMMIT_ID=${COMMIT_ID}
       - name: Push Docker image
         continue-on-error: true
         run: |
