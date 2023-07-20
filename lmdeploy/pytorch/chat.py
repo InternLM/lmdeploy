@@ -91,7 +91,7 @@ def init_model(
                 from deepspeed.module_inject.containers.internlm import \
                     InternLMLayerPolicy
             except ImportError:
-                # use stock deepseed
+                # use stock deepspeed
                 config.update({'replace_with_kernel_inject': False})
             else:
                 for module in model.modules():
