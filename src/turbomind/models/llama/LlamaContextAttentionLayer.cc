@@ -58,9 +58,10 @@ void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
         }
     }
     else {
+        // kv heads are repeated for unfused attention
         k_cache_buf_ = (T*)allocator_->reMalloc(
-            k_cache_buf_, 2 * sizeof(T) * batch_size * local_kv_head_num_ * max_k_len * size_per_head_, true);
-        v_cache_buf_ = k_cache_buf_ + batch_size * local_kv_head_num_ * max_k_len * size_per_head_;
+            k_cache_buf_, 2 * sizeof(T) * batch_size * local_head_num_ * max_k_len * size_per_head_, true);
+        v_cache_buf_ = k_cache_buf_ + batch_size * local_head_num_ * max_k_len * size_per_head_;
 
         qk_buf_ =
             (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * max_q_len * max_k_len, true);
