@@ -88,6 +88,7 @@ def init_model(
         if 'InternLM' in model.__class__.__name__:
             try:
                 # Use customized deepspeed supporting internlm
+                # https://github.com/wangruohui/DeepSpeed/tree/support_internlm_0.10.0 (commit cdef2ce)  # noqa: E501
                 from deepspeed.module_inject.containers.internlm import \
                     InternLMLayerPolicy
             except ImportError:
