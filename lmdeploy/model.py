@@ -157,7 +157,7 @@ class Llama2:
             str: the concatenated prompt
         """
         if sequence_start:
-            return f'{self.b_inst} ' \
+            return f'"{self.b_inst} ' \
                    f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
                    f'{prompt} {self.e_inst} '
 
