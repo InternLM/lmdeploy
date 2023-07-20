@@ -92,7 +92,7 @@ class InternLMStreamer(DecodeOutputStreamer):
         tok = self.tokenizer.decode(value)
         if res := self.hex_regex.match(tok):
             tok = chr(int(res.group(1), 16))
-        if tok == '</s>' or tok == '<eoa>':
+        if tok == '</s>' or tok == '<eoa>' or tok == '\r':
             tok = '\n'
 
         return tok

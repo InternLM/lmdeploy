@@ -151,6 +151,46 @@ class Baichuan7B(BaseModel):
         self.repetition_penalty = 1.1
 
 
+@MODELS.register_module(name='llama2')
+class Llama2(BaseModel):
+    """Chat template of LLaMA2 model."""
+
+    def __init__(self):
+
+        B_INST, E_INST = '[INST]', '[/INST]'
+        B_SYS, E_SYS = '<<SYS>>\n', '\n<</SYS>>\n\n'
+
+        DEFAULT_SYSTEM_PROMPT = """\
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""  # noqa: E501
+
+        self.b_inst = B_INST
+        self.e_inst = E_INST
+        self.b_sys = B_SYS
+        self.e_sys = E_SYS
+        self.default_sys_prompt = DEFAULT_SYSTEM_PROMPT
+        self.session_len = 4096
+
+    def get_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        if sequence_start:
+            return f'<BOS>{self.b_inst} ' \
+                   f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
+                   f'{prompt} {self.e_inst} '
+
+        return f'{self.b_inst} {prompt} {self.e_inst} '
+
+
 def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
