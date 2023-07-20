@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-RUN python3 -m pip install cmake protobuf==3.20.3
+RUN python3 -m pip install cmake
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
