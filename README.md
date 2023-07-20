@@ -75,7 +75,7 @@ git clone https://huggingface.co/internlm/internlm-chat-7b /path/to/internlm-cha
 GIT_LFS_SKIP_SMUDGE=1
 
 # 2. Convert InternLM model to turbomind's format, which will be in "./workspace" by default
-python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-chat-7b hf
+python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
 
 ```
 
@@ -83,11 +83,11 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-chat-7b
 
 ```shell
 docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
-    python3 -m lmdeploy.turbomind.chat internlm /workspace
+    python3 -m lmdeploy.turbomind.chat /workspace
 ```
 
 ```{note}
-When inferring with FP16 precision, the InternLM-7B model requires at least 22.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
+When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
 ```
 
 #### Serving
@@ -101,7 +101,7 @@ bash workspace/service_docker_up.sh
 Then, you can communicate with the inference server by command line,
 
 ```shell
-python3 -m lmdeploy.serve.client {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
 ```
 
 or webui,
