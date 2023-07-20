@@ -139,7 +139,7 @@ def export(model_name: str,
             if key == 'w1':
                 inter_size = param_data.shape[-1]
         elif key == 'w_qkv':
-            split_dim = 1
+            split_dim = -2
         elif key in ['w2', 'wo']:
             if ext in ['scales', 'zeros', 'bias']:
                 copy = True
