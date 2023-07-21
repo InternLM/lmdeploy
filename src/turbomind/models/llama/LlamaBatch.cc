@@ -264,8 +264,11 @@ void LlamaBatch<T>::freeBuffer()
         allocator_->free((void**)&logits_buf_);
         allocator_->free((void**)&local_logits_buf_);
 
-        if (context_local_logits_buf_) {
-            allocator_->free((void**)&context_local_logits_buf_);
+        if (local_context_logits_buf_) {
+            allocator_->free((void**)&local_context_logits_buf_);
+        }
+        if (context_logits_buf_) {
+            allocator_->free((void**)&context_logits_buf_);
         }
 
         allocator_->free((void**)&token_ids_buf_);
@@ -876,22 +879,48 @@ void LlamaBatch<T>::outputContextLogits(T*                      context_decoder_
                                         const std::vector<int>& indices,
                                         const std::vector<int>& lengths)
 {
-    for (int k = 0; k < indices.size(); ++k) {
-        auto& request   = requests_[indices[k]];
-        auto  num_token = lengths[k];
-        auto  logits    = request->outputs[rank_].getPtr<float>("logits", nullptr);
-        if (logits) {
-            const auto tp = llama_->tensor_para_.world_size_;
-            if (tp > 1 && context_local_logits_buf_ == nullptr) {
-                FT_CHECK(llama_->vocab_size_ % tp == 0);
-                const auto local_vocab_size = llama_->vocab_size_ / tp;
-                NcclGuard  guard(llama_->tensor_para_, stream_, true);
-                context_local_logits_buf_ =
-                    (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
+    std::vector<float*> output_logits;
+    int                 num_token = 0;
+    {
+        bool is_return_logits = false;
+        for (int k = 0; k < indices.size(); ++k) {
+            auto& request = requests_[indices[k]];
+            output_logits.push_back(request->outputs[rank_].getPtr<float>("logits", nullptr));
+            num_token += lengths[k];
+            if (output_logits.back()) {
+                is_return_logits = true;
             }
-            llama_->postDecodeEmbedding(logits, context_local_logits_buf_, context_decoder_output, num_token);
         }
-        context_decoder_output += num_token * llama_->hidden_units_;
+        if (!is_return_logits) {
+            return;
+        }
+    }
+
+    if (context_logits_buf_ == nullptr) {
+        NcclGuard guard(llama_->tensor_para_, stream_, true);
+        context_logits_buf_ = (float*)allocator_->malloc(sizeof(float) * llama_->vocab_size_ * max_context_token_num_);
+        const auto tp       = llama_->tensor_para_.world_size_;
+        if (tp > 1) {
+            FT_CHECK(llama_->vocab_size_ % tp == 0);
+            const auto local_vocab_size = llama_->vocab_size_ / tp;
+            local_context_logits_buf_ =
+                (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
+        }
+    }
+
+    llama_->postDecodeEmbedding(context_logits_buf_, local_context_logits_buf_, context_decoder_output, num_token);
+
+    auto logits = context_logits_buf_;
+
+    for (int k = 0; k < indices.size(); ++k) {
+        if (output_logits[k]) {
+            check_cuda_error(cudaMemcpyAsync(output_logits[k],
+                                             logits,
+                                             sizeof(float) * llama_->vocab_size_ * lengths[k],
+                                             cudaMemcpyDefault,
+                                             stream_));
+        }
+        logits += llama_->vocab_size_ * lengths[k];
     }
 }
 

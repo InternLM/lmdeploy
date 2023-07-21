@@ -96,7 +96,8 @@ private:
 
     float* logits_buf_{};        // combined logits
     float* local_logits_buf_{};  // tensor parallel local logits
-    float* context_local_logits_buf_{};
+    float* context_logits_buf_{};
+    float* local_context_logits_buf_{};
 
     // used by dynamic decoder
     int*      token_ids_buf_{};   // all token IDs in [S, B], indexed using `step`
