@@ -5,12 +5,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-RUN python3 -m pip install sentencepiece cmake transformers<4.30.0 protobuf==3.20.3 pybind11 mmengine
+RUN python3 -m pip install cmake
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
+ARG COMMIT_ID=main
+
 RUN git clone --depth=1 https://github.com/InternLM/lmdeploy.git &&\
     cd lmdeploy &&\
+    git checkout ${COMMIT_ID} &&\
+    python3 -m pip install -r requirements.txt &&\
     mkdir -p build && cd build &&\
     cmake .. \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -25,7 +29,6 @@ RUN git clone --depth=1 https://github.com/InternLM/lmdeploy.git &&\
     make -j$(nproc) && make install &&\
     cd .. &&\
     python3 -m pip install . &&\
-    python3 -m pip install -r requirements.txt &&\
     rm -rf build
 
 ENV LD_LIBRARY_PATH=/opt/tritonserver/lib:$LD_LIBRARY_PATH
