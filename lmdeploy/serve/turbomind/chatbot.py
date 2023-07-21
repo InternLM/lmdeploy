@@ -547,7 +547,6 @@ class Chatbot:
             except Exception as e:
                 logger.error(f'catch exception: {e}')
 
-        session.response = session.response[len(session.prompt):]
         # put session back to queue so that `_stream_infer` can update it in
         # `self.sessions`
         while not res_queue.empty():

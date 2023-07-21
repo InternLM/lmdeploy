@@ -156,7 +156,7 @@ class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
     def __init__(self):
-
+        super().__init__()
         B_INST, E_INST = '[INST]', '[/INST]'
         B_SYS, E_SYS = '<<SYS>>\n', '\n<</SYS>>\n\n'
 
