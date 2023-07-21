@@ -354,7 +354,8 @@ class TurboMindInstance:
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
 
-        # append an extra token since input_len-1 tokens will be decoded by context decoder
+        # append an extra token since input_len-1 tokens will be
+        # decoded by context decoder
         for inputs in input_ids:
             inputs.append(0)
 
