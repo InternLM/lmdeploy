@@ -23,6 +23,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include <string>
 // #include <glog/logging.h>
@@ -56,6 +57,7 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                                       const int    inference_batch_size,
                                                       const int    beam_width,
                                                       const int    head_num,
+                                                      const int    kv_head_num,
                                                       const int    size_per_head,
                                                       const int    rotary_embedding_dim,
                                                       const int    memory_max_len,
@@ -81,11 +83,11 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     // Prepare the parameters.
     Masked_multihead_attention_params<DataType> params;
     memset(&params, 0, sizeof(params));
-    int hidden_units = head_num * size_per_head;
+    // int hidden_units = head_num * size_per_head;
     if (qkv_bias != nullptr) {
         params.q_bias = reinterpret_cast<const DataType*>(qkv_bias);
-        params.k_bias = reinterpret_cast<const DataType*>(qkv_bias) + hidden_units;
-        params.v_bias = reinterpret_cast<const DataType*>(qkv_bias) + 2 * hidden_units;
+        params.k_bias = reinterpret_cast<const DataType*>(qkv_bias) + head_num * size_per_head;
+        params.v_bias = reinterpret_cast<const DataType*>(qkv_bias) + (head_num + kv_head_num) * size_per_head;
     }
     else {
         params.q_bias = nullptr;
@@ -97,12 +99,15 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.out = reinterpret_cast<DataType*>(context_buf);
 
     // Set the input buffers.
+    // [B, nH + kvH, D]
     params.q = reinterpret_cast<const DataType*>(qkv_buf);
-    params.k = reinterpret_cast<const DataType*>(qkv_buf) + hidden_units;
-    params.v = reinterpret_cast<const DataType*>(qkv_buf) + 2 * hidden_units;
+    params.k = reinterpret_cast<const DataType*>(qkv_buf) + head_num * size_per_head;
+    params.v = reinterpret_cast<const DataType*>(qkv_buf) + (head_num + kv_head_num) * size_per_head;
 
-    params.stride   = 3 * hidden_units;
+    params.stride   = (head_num + 2 * kv_head_num) * size_per_head;
     params.finished = const_cast<bool*>(finished);
+
+    FT_CHECK(k_cache_per_sample && v_cache_per_sample);
 
     params.k_cache                    = reinterpret_cast<DataType*>(key_cache);
     params.v_cache                    = reinterpret_cast<DataType*>(value_cache);
@@ -118,8 +123,10 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.max_prefix_prompt_length   = max_prefix_prompt_length;
     params.length_per_sample          = sequence_lengths;  // max_input_length + current output length
     // timestep adding max_prefix_prompt_length for shared memory size calculation and rotary embedding computation
-    params.timestep             = step + max_prefix_prompt_length - 1;
-    params.num_heads            = head_num;
+    params.timestep     = step + max_prefix_prompt_length - 1;
+    params.num_heads    = head_num;
+    params.num_kv_heads = kv_head_num;
+
     params.hidden_size_per_head = size_per_head;
     params.rotary_embedding_dim = rotary_embedding_dim;
     // Note: keep norm factor (sqrt(K_dim)) when adopting megatron T5 structure (may adjust)
@@ -158,8 +165,11 @@ template<typename T>
 void LlamaDecoderSelfAttentionLayer<T>::allocateBuffer(size_t batch_size, int key_len, int max_memory_len)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    qkv_buf_ =
-        reinterpret_cast<T*>(allocator_->reMalloc(qkv_buf_, sizeof(T) * batch_size * 3 * local_hidden_units_, false));
+
+    const size_t local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
+
+    qkv_buf_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(qkv_buf_, sizeof(T) * batch_size * local_q_kv_head_num * size_per_head_, false));
     context_buf_ =
         reinterpret_cast<T*>(allocator_->reMalloc(context_buf_, sizeof(T) * batch_size * local_hidden_units_, false));
 
@@ -197,7 +207,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
      *
      * output tensors:
      *    \param attention_output [batch_size, hidden_units],
-     *    \param key_cache [batch, local_head_num, size_per_head / x, memory_max_len, x]
+     *    \param key_cache [batch, local_head_num, memory_max_len, size_per_head]
      *    \param value_cache [batch, local_head_num, memory_max_len, size_per_head]
      */
 
@@ -228,7 +238,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
     POP_RANGE;
 
-    const auto kv_cache_layer_offset = layer_id * local_head_num_ * max_seq_len * size_per_head_;
+    const auto kv_cache_layer_offset = layer_id * local_kv_head_num_ * max_seq_len * size_per_head_;
     const int  memory_len            = max_seq_len;
 
     fusedQKV_masked_attention_dispatch<T>(
@@ -248,6 +258,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         batch_size,
         beam_width,
         local_head_num_,
+        local_kv_head_num_,
         size_per_head_,
         rotary_embedding_dim_,
         memory_len,

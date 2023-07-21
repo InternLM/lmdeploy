@@ -677,7 +677,7 @@ inline __device__ float4 hmma_fp32(const uint2& a, uint32_t b)
                  "    {%7, %7, %7, %7}; \n"
 
                  : "=f"(c.x), "=f"(c.y), "=f"(c.z), "=f"(c.w)
-                 : "r"(a.x) "r"(a.y), "r"(b), "f"(zero));
+                 : "r"(a.x), "r"(a.y), "r"(b), "f"(zero));
     return c;
 }
 
@@ -1349,16 +1349,18 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     if (params.finished != nullptr && params.finished[bi] == true) {
         return;
     }
-    // The beam idx
-    const int beami = bi % params.beam_width;
-    // The "beam-aware" batch idx
-    const int bbi = bi / params.beam_width;
+
     // The head.
     const int hi = blockIdx.x;
     // Combine the batch and the head indices.
     const int bhi = bi * params.num_heads + hi;
-    // Combine the "beam-aware" batch idx and the head indices.
-    const int bbhi = bbi * params.beam_width * params.num_heads + hi;
+
+    const int head_n_rep = params.num_heads / params.num_kv_heads;
+
+    const int kvhi = hi / head_n_rep;  // heads in the same group collapse to the same kv head
+
+    const bool group_leader = hi % head_n_rep == 0;  // only group leader writes to kv cache
+
     // The thread in the block.
     const int tidx = threadIdx.x;
 
@@ -1369,8 +1371,6 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     float qk = 0.0F;
 
-    int qkv_base_offset = (params.stride == 0) ? bhi * Dh : bi * params.stride + hi * Dh;
-
     const size_t bi_seq_len_offset = bi * params.memory_max_len;
 
     const int tlength      = params.length_per_sample[bi] + params.max_prefix_prompt_length;
@@ -1380,10 +1380,16 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // First QK_VECS_PER_WARP load Q and K + the bias values for the current timestep.
     const bool is_masked = tidx >= QK_VECS_PER_WARP;
 
+    const int q_base_offset = bi * params.stride + hi * Dh;
+    const int k_base_offset = bi * params.stride + kvhi * Dh;
+
     // The offset in the Q and K buffer also accounts for the batch.
-    int qk_offset = qkv_base_offset + tidx * QK_VEC_SIZE;
+    const int q_offset = q_base_offset + tidx * QK_VEC_SIZE;
+    const int k_offset = k_base_offset + tidx * QK_VEC_SIZE;
+
     // The offset in the bias buffer.
-    int qk_bias_offset = hi * Dh + tidx * QK_VEC_SIZE;
+    const int q_bias_offset = hi * Dh + tidx * QK_VEC_SIZE;
+    const int k_bias_offset = kvhi * Dh + tidx * QK_VEC_SIZE;
 
     // past kv quant param
     const float k_scale = params.attention_k_scale;
@@ -1393,31 +1399,30 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     Qk_vec_k q;
     zero(q);
     if (!is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh)) {
-        q = vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.q[qk_offset]));
+        q = vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.q[q_offset]));
     }
 
     Qk_vec_k k;
     zero(k);
     {
         k = !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) ?
-                vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.k[qk_offset])) :
+                vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.k[k_offset])) :
                 k;
     }
 
     // Trigger the loads from the Q and K bias buffers.
     Qk_vec_k q_bias;
     zero(q_bias);
-    q_bias =
-        (!is_masked && Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) && params.q_bias != nullptr ?
-            vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.q_bias[qk_bias_offset])) :
-            q_bias;
+    q_bias = (!is_masked && Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) && params.q_bias != nullptr ?
+                 vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.q_bias[q_bias_offset])) :
+                 q_bias;
 
     Qk_vec_k k_bias;
     zero(k_bias);
     if (handle_kv) {
         k_bias =
             !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) && params.k_bias != nullptr ?
-                vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.k_bias[qk_bias_offset])) :
+                vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.k_bias[k_bias_offset])) :
                 k_bias;
     }
 
@@ -1454,7 +1459,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         // The position of the thread in that 16B chunk.
         int ci = tidx % QK_VECS_IN_16B * QK_VEC_SIZE;
 
-        if (handle_kv) {
+        if (handle_kv && group_leader) {
             // Trigger the stores to global memory.
             if (Dh == Dh_MAX || co < Dh / QK_ELTS_IN_16B) {
                 if (!params.k_cache_per_sample) {
@@ -1476,12 +1481,12 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                 else {
                     int offset;
                     if (params.k_cache_interleaved) {
-                        offset = params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh
+                        offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh
                                  + co * params.memory_max_len * QK_ELTS_IN_16B + tlength_circ * QK_ELTS_IN_16B + ci;
                     }
                     else {
-                        offset = params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + tlength_circ * Dh
-                                 + co * QK_ELTS_IN_16B + ci;
+                        offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh
+                                 + tlength_circ * Dh + co * QK_ELTS_IN_16B + ci;
                     }
 
                     if (not QUANT_POLICY) {
@@ -1577,7 +1582,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     if (not QUANT_POLICY) {
         k_cache_batch = params.k_cache_per_sample ? (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset
-                                                     + hi * params.memory_max_len * Dh + ki) :
+                                                     + kvhi * params.memory_max_len * Dh + ki) :
                                                     &params.k_cache[bhi * params.memory_max_len * Dh + ki];
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
@@ -1586,7 +1591,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         // convert k_cache_per_sample to int8
         if (params.k_cache_per_sample) {
             int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
-            k_cache_batch_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + ki;
+            k_cache_batch_int8 = ptr + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + ki;
         }
         else {
             int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache);
@@ -1765,7 +1770,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     if (not QUANT_POLICY) {
 
         v_cache = params.v_cache_per_sample ? (params.v_cache_per_sample[bi] + params.kv_cache_per_sample_offset
-                                               + hi * params.memory_max_len * Dh + vi) :
+                                               + kvhi * params.memory_max_len * Dh + vi) :
                                               &params.v_cache[bhi * params.memory_max_len * Dh + vi];
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* v_cache_batch = &params.v_cache[bbhi * params.memory_max_len * Dh + vi];
@@ -1774,7 +1779,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     else if (QUANT_POLICY == 4) {
         if (params.v_cache_per_sample) {
             int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
-            v_cache_int8 = ptr + params.kv_cache_per_sample_offset + hi * params.memory_max_len * Dh + vi;
+            v_cache_int8 = ptr + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + vi;
         }
         else {
             int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache);
@@ -1786,22 +1791,6 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     // The number of values processed per iteration of the loop.
     constexpr int V_PER_ITER = THREADS_PER_BLOCK / THREADS_PER_VALUE;
-
-    // One group of threads computes the product(s) for the current timestep.
-    V_vec_k v_bias;
-    zero(v_bias);
-    // if( vo == params.timestep % V_PER_ITER ) {
-    if (Dh == Dh_MAX || vi < Dh) {
-        if (handle_kv) {
-            if (vo == tlength % V_PER_ITER) {
-                // Trigger the loads from the V bias buffer.
-                if (params.v_bias != nullptr) {
-                    v_bias = vec_conversion<V_vec_k, V_vec_m>(
-                        *reinterpret_cast<const V_vec_m*>(&params.v_bias[hi * Dh + vi]));
-                }
-            }
-        }
-    }
 
     // From previous, before values, step
     // Also make sure the logits are in shared memory.
@@ -1924,14 +1913,18 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         V_vec_k v;
 
         // Trigger the loads from the V buffer.
-        const auto v_offset = qkv_base_offset + vi;
-        v                   = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&params.v[v_offset]));
-        // Trigger the loads from the V bias buffer.
-        // V_vec v_bias = *reinterpret_cast<const V_vec*>(&params.v_bias[hi*Dh + vi]);
+        const auto v_offset = k_base_offset + vi;
 
-        // Compute the V values with bias.
-        if (handle_kv) {
-            v = add(v, v_bias);
+        v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&params.v[v_offset]));
+
+        // Trigger the loads from the V bias buffer.
+        if (params.v_bias != nullptr) {
+            V_vec_k v_bias = *reinterpret_cast<const V_vec_k*>(&params.v_bias[kvhi * Dh + vi]);
+            v              = add(v, v_bias);
+        }
+
+        // Store the V values to cache
+        if (handle_kv && group_leader) {
 
             // Store the values with bias back to global memory in the cache for V.
             //*reinterpret_cast<V_vec_k*>(&v_cache[params.timestep*Dh]) = v;

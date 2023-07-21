@@ -63,26 +63,46 @@ def init_model(
                                               use_fast=use_fast_tokenizer,
                                               trust_remote_code=True)
 
-    if torch.__version__ >= '2':
-        torch.set_default_device(local_rank)
-
     with LoadNoInit():
         model = AutoModelForCausalLM.from_pretrained(model_path,
                                                      torch_dtype=torch.float16,
                                                      trust_remote_code=True)
-    model = model.cuda(local_rank)
 
     if not _is_deepspeed_available:
         warnings.warn('deepspeed is not installed, '
                       'use plain huggingface model.')
+
+        model = model.cuda(local_rank)
     else:
-        model = deepspeed.init_inference(
-            model=model,  # Transformers models
-            mp_size=world_size,  # Number of GPU
+        config = dict(
+            tensor_parallel=dict(tp_size=world_size),  # Number of GPU
             dtype=torch.float16,  # dtype of the weights (fp16)
             replace_with_kernel_inject=True,
             # replace the model with the kernel injector
             max_out_tokens=2048,
+        )
+        # For internlm model not supported by DeepSpeed,
+        # set replace_with_kernel_inject=False to use AutoTP.
+        # It's a hotfix before the progress is merged
+        # https://github.com/InternLM/lmdeploy/issues/136
+        if 'InternLM' in model.__class__.__name__:
+            try:
+                # Use customized deepspeed supporting internlm
+                # https://github.com/wangruohui/DeepSpeed/tree/support_internlm_0.10.0 (commit cdef2ce)  # noqa: E501
+                from deepspeed.module_inject.containers.internlm import \
+                    InternLMLayerPolicy
+            except ImportError:
+                # use stock deepspeed
+                config.update({'replace_with_kernel_inject': False})
+            else:
+                for module in model.modules():
+                    if module.__class__.__name__ == 'InternLMDecoderLayer':
+                        InternLMLayerPolicy._orig_layer_class = module.__class__  # noqa: E501
+                        break
+
+        model = deepspeed.init_inference(
+            model=model,  # Transformers models
+            config=config,
         )
 
     return tokenizer, model

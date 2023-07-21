@@ -488,6 +488,7 @@ __global__ void transpose_value_cache(T*           v_dst,  //
                                       const T**    v_src,
                                       const size_t src_offset,
                                       const int    head_num,
+                                      const int    head_n_rep,
                                       const int    size_per_head,
                                       const int*   seq_length,
                                       const int    max_kv_len,
@@ -511,9 +512,9 @@ __global__ void transpose_value_cache(T*           v_dst,  //
 
     if (v_seq_len_id < seq_len) {
         // [B, H, s, D/x] <- [B, H, S[:s], D/x]
-        const int64_t src_idx = head_id * size_per_head_div_x * max_seq_len +  // H
-                                v_seq_len_id * size_per_head_div_x +           // s
-                                v_head_size_id;                                // D/x
+        const int64_t src_idx = head_id / head_n_rep * size_per_head_div_x * max_seq_len +  // H
+                                v_seq_len_id * size_per_head_div_x +                        // s
+                                v_head_size_id;                                             // D/x
 
         const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +  // B
                                 head_id * size_per_head_div_x * max_kv_len +              // H
@@ -529,6 +530,7 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
                                            const int8_t** v_src,
                                            const size_t   src_offset,
                                            const int      head_num,
+                                           const int      head_n_rep,
                                            const int      size_per_head,
                                            const int*     seq_length,
                                            const int      max_kv_len,
@@ -553,9 +555,9 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
 
     if (v_seq_len_id < seq_len) {
         // [B, H, s, D/x] <- [B, H, S[:s], D/x]
-        const int64_t src_idx = head_id * size_per_head_div_x * max_seq_len +  // H
-                                v_seq_len_id * size_per_head_div_x +           // s
-                                v_head_size_id;                                // D/x
+        const int64_t src_idx = head_id / head_n_rep * size_per_head_div_x * max_seq_len +  // H
+                                v_seq_len_id * size_per_head_div_x +                        // s
+                                v_head_size_id;                                             // D/x
 
         const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +  // B
                                 head_id * size_per_head_div_x * max_kv_len +              // H
@@ -583,6 +585,7 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                             int          max_seq_len,
                             int          size_per_head,
                             int          head_num,
+                            int          head_n_rep,
                             cudaStream_t stream,
                             int          quant,
                             const float* kv_scale)
@@ -597,6 +600,7 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   reinterpret_cast<const int8_t**>(key_cache),
                                                                   src_offset,
                                                                   head_num,
+                                                                  head_n_rep,
                                                                   size_per_head,
                                                                   key_length,
                                                                   max_kv_len,
@@ -607,6 +611,7 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   reinterpret_cast<const int8_t**>(val_cache),
                                                                   src_offset,
                                                                   head_num,
+                                                                  head_n_rep,
                                                                   size_per_head,
                                                                   key_length,
                                                                   max_kv_len,
@@ -614,11 +619,25 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   kv_scale[1]);
     }
     else {
-        transpose_value_cache<<<grid, block_sz, 0, stream>>>(
-            key_cache_trans, key_cache, src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len);
+        transpose_value_cache<<<grid, block_sz, 0, stream>>>(key_cache_trans,
+                                                             key_cache,
+                                                             src_offset,
+                                                             head_num,
+                                                             head_n_rep,
+                                                             size_per_head,
+                                                             key_length,
+                                                             max_kv_len,
+                                                             max_seq_len);
 
-        transpose_value_cache<<<grid, block_sz, 0, stream>>>(
-            val_cache_trans, val_cache, src_offset, head_num, size_per_head, key_length, max_kv_len, max_seq_len);
+        transpose_value_cache<<<grid, block_sz, 0, stream>>>(val_cache_trans,
+                                                             val_cache,
+                                                             src_offset,
+                                                             head_num,
+                                                             head_n_rep,
+                                                             size_per_head,
+                                                             key_length,
+                                                             max_kv_len,
+                                                             max_seq_len);
     }
 }
 
@@ -633,6 +652,7 @@ template void invokeTransposeKVCache(float*,
                                      int,
                                      int,
                                      int,
+                                     int,
                                      cudaStream_t stream,
                                      int,
                                      const float*);
@@ -643,6 +663,7 @@ template void invokeTransposeKVCache(half*,
                                      size_t,
                                      int,
                                      const int*,
+                                     int,
                                      int,
                                      int,
                                      int,

@@ -102,6 +102,7 @@ def tokenizer_info(model_path: str):
 def export(model_name: str,
            num_layer: int,
            norm_eps: float,
+           kv_head_num: int,
            model_params: dict,
            tokenizer_path: str,
            out_dir: str,
@@ -140,10 +141,12 @@ def export(model_name: str,
         if key == 'w_qkv' and ext == 'bias':
             attn_bias = True
         copy = False
-        if key in ['w1', 'w3', 'w_qkv']:
+        if key in ['w1', 'w3']:
             split_dim = -1
             if key == 'w1':
                 inter_size = param_data.shape[-1]
+        elif key == 'w_qkv':
+            split_dim = -2
         elif key in ['w2', 'wo']:
             if ext in ['scales', 'zeros', 'bias']:
                 copy = True
@@ -175,6 +178,7 @@ def export(model_name: str,
     cfg = dict(llama=dict(
         model_name=model_name,
         head_num=head_num,
+        kv_head_num=kv_head_num,
         size_per_head=size_per_head,
         vocab_size=vocab_size,
         num_layer=num_layer,
@@ -192,7 +196,7 @@ def export(model_name: str,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=1,
-        use_context_fmha=1,
+        use_context_fmha=int(kv_head_num == head_num),
         quant_policy=0,
         tensor_para_size=tp))
 
@@ -204,6 +208,15 @@ def export(model_name: str,
     with open(config_path, 'w') as f:
         config.write(f)
     return True
+
+
+def merge_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int,
+              dim: int):
+
+    def reshape(x):
+        return x.view(x.size(0), tp, -1) if dim == 2 else x.view(tp, -1)
+
+    return torch.cat((reshape(q), reshape(k), reshape(v)), dim=-1)
 
 
 def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
@@ -234,6 +247,8 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['n_layers']
             norm_eps = model_arg['norm_eps']
+            head_num = model_arg.get('n_heads', 32)
+            kv_head_num = model_arg.get('n_kv_heads', head_num)
     except Exception as e:
         print(f'get "n_layers" and "norm_eps" from {params_path} failed: {e}')
         return False
@@ -279,7 +294,6 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                 else:  # bias
                     param = get_param(param_name, [size])
                     param.data = param_data
-
             elif i == 0:
                 param = get_param(param_name, param_data.size())
                 param.data = param_data
@@ -302,14 +316,14 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
                 qkv = tuple(map(model_params.pop, _qkv))
             except KeyError:
                 break
-            # concat by output_dims
-            qkv = torch.stack(qkv, dim=qkv[0].dim() - 1)
+            # concat by heads
+            qkv = merge_qkv(*qkv, tp, dim=2 if t == 'weight' else 1)
             print(f'layers.{i}.attention.w_qkv.{t}', qkv.shape)
             model_params[f'layers.{i}.attention.w_qkv.{t}'] = qkv
 
     assert i == 0 or num_layer == i, f'miss matched layers: {num_layer} vs {i}'
 
-    return export(model_name, num_layer, norm_eps, model_params,
+    return export(model_name, num_layer, norm_eps, kv_head_num, model_params,
                   tokenizer_path, triton_models_path, tp)
 
 
@@ -363,6 +377,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            if 'num_key_value_heads' in model_arg:
+                kv_head_num = model_arg['num_key_value_heads']
+            else:
+                kv_head_num = model_arg['num_attention_heads']
     except Exception as e:
         print(f'get "num_hidden_layers" and "rms_norm_eps" from '
               f'{params_path} failed: {e}')
@@ -430,11 +448,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 q = permute(q)
                 k = permute(k)
                 if suffix == _qweight:  # weight, qweight
-                    # insert a dimension for splitting heads later
-                    qkv = torch.stack((q, k, v), dim=1)
+                    qkv = merge_qkv(q, k, v, tp, dim=2)
+                    print(suffix, qkv.shape)
                 else:  # scales, zeros, bias
-                    qkv = torch.stack((q.squeeze(), k.squeeze(), v.squeeze()),
-                                      dim=0).squeeze(dim=-1)
+                    qkv = merge_qkv(q, k, v, tp, dim=1)
                     print(suffix, qkv.shape)
                 for k, v in [('w_qkv', qkv), ('wo', o)]:
                     model_params[f'layers.{i}.attention.{k}.{suffix}'] = v
@@ -470,7 +487,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, num_layer, norm_eps, model_params,
+    return export(model_name, num_layer, norm_eps, kv_head_num, model_params,
                   tokenizer_path, triton_models_path, tp)
 
 

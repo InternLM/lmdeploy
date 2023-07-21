@@ -39,6 +39,7 @@ namespace turbomind {
 
 template<typename T>
 LlamaV2<T>::LlamaV2(size_t                       head_num,
+                    size_t                       kv_head_num,
                     size_t                       size_per_head,
                     size_t                       inter_size,
                     size_t                       num_layer,
@@ -102,8 +103,11 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     else {
         elem_bits = sizeof(T) * 8;
     }
+
+    const size_t local_kv_head_num = kv_head_num / tensor_para.world_size_;
+
     kv_cache_mgr_ = std::make_unique<LlamaCacheManager>(num_layer_,
-                                                        local_head_num_,
+                                                        local_kv_head_num,
                                                         size_per_head_,
                                                         session_len,
                                                         elem_bits,
@@ -111,7 +115,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                                                         cache_chunk_size,
                                                         tensor_para.rank_,
                                                         allocator);
-    initialize(use_context_fmha, quant_policy);
+    initialize(kv_head_num, use_context_fmha, quant_policy);
     start();
 }
 
@@ -126,11 +130,12 @@ LlamaV2<T>::~LlamaV2()
 }
 
 template<typename T>
-void LlamaV2<T>::initialize(bool use_context_fmha, int quant_policy)
+void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     context_decoder_ = new LlamaContextDecoder<T>(head_num_,
+                                                  kv_head_num,
                                                   size_per_head_,
                                                   inter_size_,
                                                   num_layer_,
@@ -145,6 +150,7 @@ void LlamaV2<T>::initialize(bool use_context_fmha, int quant_policy)
                                                   quant_policy);
 
     decoder_ = new LlamaDecoder<T>(head_num_,
+                                   kv_head_num,
                                    size_per_head_,
                                    inter_size_,
                                    num_layer_,

@@ -59,6 +59,11 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
 template<typename T>
 void LlamaTritonModel<T>::handleMissingParams()
 {
+    if (kv_head_num_ == 0) {
+        kv_head_num_ = head_num_;
+        TM_LOG_WARNING("[LlamaTritonModel] `kv_head_num` is not set, default to `head_num` (%d).", (int)kv_head_num_);
+    }
+
     if (!max_batch_size_) {
         max_batch_size_ = 32;
         TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.", (int)max_batch_size_);
@@ -112,6 +117,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 
     model_name_            = reader.Get("llama", "model_name");
     head_num_              = reader.GetInteger("llama", "head_num");
+    kv_head_num_           = reader.GetInteger("llama", "kv_head_num", 0);
     size_per_head_         = reader.GetInteger("llama", "size_per_head");
     inter_size_            = reader.GetInteger("llama", "inter_size");
     num_layer_             = reader.GetInteger("llama", "num_layer");
@@ -211,6 +217,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::FT_CHECK(pipeline_para.world_size_ = pipeline_para_size_);
 
     auto llama = std::make_unique<ft::LlamaV2<T>>(head_num_,
+                                                  kv_head_num_,
                                                   size_per_head_,
                                                   inter_size_,
                                                   num_layer_,
@@ -283,7 +290,9 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
     const int tensor_para_rank   = rank % tensor_para_size_;
     const int pipeline_para_rank = rank / tensor_para_size_;
     ft::FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
-    shared_weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(head_num_ * size_per_head_,
+    shared_weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(head_num_,
+                                                                      kv_head_num_,
+                                                                      size_per_head_,
                                                                       inter_size_,
                                                                       vocab_size_,
                                                                       num_layer_,
@@ -301,16 +310,16 @@ std::string LlamaTritonModel<T>::toString()
 {
     std::stringstream ss;
     ss << "Model: "
-       << "\nhead_num: " << head_num_ << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_
-       << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_ << "\nattn_bias: " << attn_bias_
-       << "\nmax_batch_size: " << max_batch_size_ << "\nmax_context_token_num: " << max_context_token_num_
-       << "\nsession_len: " << session_len_ << "\nstep_length: " << step_length_
-       << "\ncache_max_entry_count: " << cache_max_entry_count_ << "\ncache_chunk_size: " << cache_chunk_size_
-       << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
-       << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
-       << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
-       << "\nprefix_cache_len: " << prefix_cache_len_ << "\nmodel_dir: " << model_dir_
-       << "\nquant_policy: " << quant_policy_ << std::endl;
+       << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
+       << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
+       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << max_batch_size_
+       << "\nmax_context_token_num: " << max_context_token_num_ << "\nsession_len: " << session_len_
+       << "\nstep_length: " << step_length_ << "\ncache_max_entry_count: " << cache_max_entry_count_
+       << "\ncache_chunk_size: " << cache_chunk_size_ << "\nuse_context_fmha: " << use_context_fmha_
+       << "\nstart_id: " << start_id_ << "\ntensor_para_size: " << tensor_para_size_
+       << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
+       << "\nmodel_name: " << model_name_ << "\nprefix_cache_len: " << prefix_cache_len_
+       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << std::endl;
 
     return ss.str();
 }

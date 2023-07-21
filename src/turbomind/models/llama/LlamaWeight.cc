@@ -23,7 +23,9 @@
 namespace turbomind {
 
 template<typename T>
-LlamaWeight<T>::LlamaWeight(size_t     hidden_units,
+LlamaWeight<T>::LlamaWeight(size_t     head_num,
+                            size_t     kv_head_num,
+                            size_t     size_per_head,
                             size_t     inter_size,
                             size_t     vocab_size,
                             size_t     num_layer,
@@ -32,7 +34,7 @@ LlamaWeight<T>::LlamaWeight(size_t     hidden_units,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank,
                             int        prefix_cache_len):
-    hidden_units_(hidden_units),
+    hidden_units_(head_num * size_per_head),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
     num_layer_(num_layer),
@@ -43,8 +45,14 @@ LlamaWeight<T>::LlamaWeight(size_t     hidden_units,
 {
     decoder_layer_weights.reserve(num_layer_);
     for (unsigned l = 0; l < num_layer_; ++l) {
-        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(
-            hidden_units_, inter_size_, weight_type_, attn_bias, tensor_para_size_, tensor_para_rank_));
+        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(head_num,
+                                                                       kv_head_num,
+                                                                       size_per_head,
+                                                                       inter_size_,
+                                                                       weight_type_,
+                                                                       attn_bias,
+                                                                       tensor_para_size_,
+                                                                       tensor_para_rank_));
     }
 
     mallocWeights();
