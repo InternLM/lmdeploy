@@ -127,7 +127,8 @@ def main(model_path: str,
     token_latency_min = np.min(stats[:, 2], axis=0)
     token_latency_max = np.max(stats[:, 2], axis=0)
     token_latency_ave = np.mean(stats[:, 2], axis=0)
-    throughput = np.sum(stats[:, 1], axis=0) / np.sum(stats[:, 2], axis=0)
+    throughput = np.sum(stats[:, 1], axis=0) / np.sum(stats[:, 2],
+                                                      axis=0) * concurrency
     print(f'\n{"-" * 50}\nconcurrency: {concurrency}, input_tokens: '
           f'{input_seqlen}, output_tokens: {output_seqlen}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
