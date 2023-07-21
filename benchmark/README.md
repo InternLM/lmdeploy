@@ -1,6 +1,6 @@
-# Benckmark
+# Benchmark
 
-We provide several profiling tools to benckmark our models.
+We provide several profiling tools to benchmark our models.
 
 ## profiling with dataset
 
@@ -22,7 +22,7 @@ python profile_throughput.py \
 
 ## profile without dataset
 
-`profile_generation.py` perform benckmark with dummy datas.
+`profile_generation.py` perform benchmark with dummy data.
 
 ```bash
 python profile_generation.py \
@@ -33,7 +33,7 @@ python profile_generation.py \
 
 ## profile serving
 
-Tools above profile models with Python API. `profile_serving.py` is used to do benckmark on serving.
+Tools above profile models with Python API. `profile_serving.py` is used to do benchmark on serving.
 
 ```bash
 python profile_serving.py \
