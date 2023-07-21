@@ -132,6 +132,7 @@ struct Multihead_attention_params: public Multihead_attention_params_base<T> {
     T**    v_cache_per_sample         = nullptr;
     size_t kv_cache_per_sample_offset = 0;
     bool   k_cache_interleaved        = true;
+    int    num_kv_heads               = 0;
 };
 
 template<class T>

@@ -25,13 +25,18 @@
 namespace turbomind {
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     hidden_units,
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     head_num,
+                                                    size_t     kv_head_num,
+                                                    size_t     size_per_head,
                                                     size_t     inter_size,
                                                     WeightType weight_type,
                                                     bool       attn_bias,
                                                     size_t     tensor_para_size,
                                                     size_t     tensor_para_rank):
-    hidden_units_(hidden_units),
+    head_num_(head_num),
+    kv_head_num_(kv_head_num),
+    size_per_head_(size_per_head),
+    hidden_units_(head_num * size_per_head),
     inter_size_(inter_size),
     weight_type_(weight_type),
     attn_bias_(attn_bias),
@@ -39,7 +44,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     hidden_units,
     tensor_para_rank_(tensor_para_rank)
 {
     self_attn_weights.qkv.input_dims  = hidden_units_;
-    self_attn_weights.qkv.output_dims = 3 * hidden_units_ / tensor_para_size_;
+    self_attn_weights.qkv.output_dims = (head_num + 2 * kv_head_num) * size_per_head / tensor_para_size_;
     self_attn_weights.qkv.type        = weight_type;
 
     self_attn_weights.output.input_dims  = hidden_units_ / tensor_para_size_;

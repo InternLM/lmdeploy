@@ -28,6 +28,7 @@ namespace turbomind {
 
 template<typename T>
 LlamaDecoder<T>::LlamaDecoder(size_t           head_num,
+                              size_t           kv_head_num,
                               size_t           size_per_head,
                               size_t           inter_size,
                               size_t           num_layer,
@@ -51,7 +52,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t           head_num,
     data_type_(getTensorType<T>())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    initialize(quant_policy);
+    initialize(kv_head_num, quant_policy);
 }
 
 template<typename T>
@@ -63,11 +64,12 @@ LlamaDecoder<T>::~LlamaDecoder()
 }
 
 template<typename T>
-void LlamaDecoder<T>::initialize(int quant_policy)
+void LlamaDecoder<T>::initialize(size_t kv_head_num, int quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     self_attention_layer_ = new LlamaDecoderSelfAttentionLayer<T>(head_num_,
+                                                                  kv_head_num,
                                                                   size_per_head_,
                                                                   rotary_embedding_dim_,
                                                                   false,  // neox_rotary_style

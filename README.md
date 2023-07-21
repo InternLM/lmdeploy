@@ -13,8 +13,9 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/07\] TurboMind supports Llama-2 70B with GQA.
+- \[2023/07\] TurboMind supports Llama-2 7B/13B.
 - \[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
-- \[2023/07\] TurboMind supports llama2 7b/13b.
 
 ______________________________________________________________________
 

@@ -112,6 +112,7 @@ struct PrefixPromptBatchWeightsParam {
     // l * 2 * hidden_units_ / tensor_para_.world_size_
     const size_t prefix_prompt_layer_offset_per_seq = 0;
 };
+
 template<typename T>
 void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     T*                               k_buf,
@@ -125,83 +126,13 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        seq_len,
                                     const int                        token_num,
                                     const int                        head_num,
+                                    const int                        kv_head_num,
                                     const int                        size_per_head,
                                     const int                        rotary_embedding_dim,
                                     const int                        neox_rotary_style,
                                     const float*                     scale,
                                     const int                        int8_mode,
                                     cudaStream_t                     stream);
-template<typename T>
-void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
-                                    T*                               k_buf,
-                                    T*                               v_buf,
-                                    PrefixPromptBatchWeightsParam<T> param,
-                                    T*                               QKV,
-                                    const T*                         qkv_bias,
-                                    const int*                       padding_offset,
-                                    const int                        batch_size,
-                                    const int                        seq_len,
-                                    const int                        token_num,
-                                    const int                        head_num,
-                                    const int                        size_per_head,
-                                    const int                        rotary_embedding_dim,
-                                    const int                        neox_rotary_style,
-                                    const float*                     scale,
-                                    const int                        int8_mode,
-                                    cudaStream_t                     stream)
-{
-    invokeAddFusedQKVBiasTranspose(q_buf,
-                                   k_buf,
-                                   v_buf,
-                                   param,
-                                   QKV,
-                                   qkv_bias,
-                                   padding_offset,
-                                   nullptr,
-                                   batch_size,
-                                   seq_len,
-                                   token_num,
-                                   head_num,
-                                   size_per_head,
-                                   rotary_embedding_dim,
-                                   neox_rotary_style,
-                                   scale,
-                                   int8_mode,
-                                   stream);
-}
-
-template<typename T>
-void invokeAddFusedQKVBiasTranspose(T*           q_buf,
-                                    T*           k_buf,
-                                    T*           v_buf,
-                                    T*           QKV,
-                                    const T*     qkv_bias,
-                                    const int*   padding_offset,
-                                    const int    batch_size,
-                                    const int    seq_len,
-                                    const int    token_num,
-                                    const int    head_num,
-                                    const int    size_per_head,
-                                    cudaStream_t stream)
-{
-    invokeAddFusedQKVBiasTranspose(q_buf,
-                                   k_buf,
-                                   v_buf,
-                                   PrefixPromptBatchWeightsParam<T>{},
-                                   QKV,
-                                   qkv_bias,
-                                   padding_offset,
-                                   batch_size,
-                                   seq_len,
-                                   token_num,
-                                   head_num,
-                                   size_per_head,
-                                   0,
-                                   false,
-                                   (float*)nullptr,
-                                   0,
-                                   stream);
-}
 
 template<typename T>
 void invokeTranspose4d(T*           dst,

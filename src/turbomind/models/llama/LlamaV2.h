@@ -49,6 +49,7 @@ public:
     ~LlamaV2();
 
     LlamaV2(size_t                       head_num,
+            size_t                       kv_head_num,
             size_t                       size_per_head,
             size_t                       inter_size,
             size_t                       num_layer,
@@ -90,7 +91,7 @@ private:
 
     void internalThreadEntry(int device_id);
 
-    void initialize(bool use_context_fmha, int quant_policy);
+    void initialize(size_t kv_head_num, bool use_context_fmha, int quant_policy);
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 

@@ -43,7 +43,7 @@ protected:
     void allocateBuffer(size_t batch_size, size_t num_token, size_t max_q_len, size_t max_kv_len);
     void freeBuffer() override;
 
-    void initialize(bool use_fmha, int quant_policy);
+    void initialize(size_t kv_head_num, bool use_fmha, int quant_policy);
 
     size_t head_num_;
     size_t size_per_head_;
@@ -88,6 +88,7 @@ protected:
 
 public:
     LlamaContextDecoder(size_t           head_num,
+                        size_t           kv_head_num,
                         size_t           size_per_head,
                         size_t           inter_size,
                         size_t           num_layer,
