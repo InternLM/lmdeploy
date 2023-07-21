@@ -296,10 +296,10 @@ class Chatbot:
                                                sequence_end=False):
             if status.value < 0:
                 return status
-                
+
         self._session.histories = histories
         return status
-        
+
     def reset_session(self):
         """reset session."""
         self._session = None
