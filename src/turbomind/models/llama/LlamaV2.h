@@ -86,6 +86,11 @@ public:
 
     void stop(const std::vector<uint64_t>& seq_ids);
 
+    size_t vocab_size() const noexcept
+    {
+        return vocab_size_;
+    }
+
 private:
     friend class Batch;
 
