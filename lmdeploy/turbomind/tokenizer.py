@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os.path as osp
-from typing import Sequence
+from typing import Sequence, Union
 
 import torch
 
@@ -60,6 +60,21 @@ class SentencePieceTokenizer:
         if isinstance(t, torch.Tensor):
             t = t.tolist()
         return self.model.Decode(t)
+
+    def __call__(self, s: Union[str, Sequence[str]]):
+        """Tokenize prompts.
+
+        Args:
+            s (str): prompts
+        Returns:
+            list[int]: token ids
+        """
+        import addict
+        add_bos = False
+        add_eos = False
+
+        input_ids = self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
+        return addict.Addict(input_ids=input_ids)
 
 
 class HuggingFaceTokenizer:
@@ -127,6 +142,17 @@ class HuggingFaceTokenizer:
         skip_special_tokens = True
         return self.model.decode(t, skip_special_tokens=skip_special_tokens)
 
+    def __call__(self, s: Union[str, Sequence[str]]):
+        """Tokenize prompts.
+
+        Args:
+            s (str): prompts
+        Returns:
+            list[int]: token ids
+        """
+        add_special_tokens = False
+        return self.model(s, add_special_tokens=add_special_tokens)
+
 
 class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
@@ -186,3 +212,13 @@ class Tokenizer:
             str: text of decoding tokens
         """
         return self.model.decode(t)
+
+    def __call__(self, s: Union[str, Sequence[str]]):
+        """Tokenize prompts.
+
+        Args:
+            s (str): prompts
+        Returns:
+            list[int]: token ids
+        """
+        return self.model(s)

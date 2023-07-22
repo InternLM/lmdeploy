@@ -136,7 +136,7 @@ def main(model_path: str,
           f'{first_token_latency_ave:.2f}s\ntoken latency(min, max, ave): '
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
-          f'throughput: {throughput} token/s\n{"-" * 50}')
+          f'throughput per threads: {throughput} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':
