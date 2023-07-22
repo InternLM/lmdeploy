@@ -61,7 +61,9 @@ Test Data: ShareGPT_V3_unfiltered_cleaned_split.json from vLLM
 
 TurboMind has achieved 30% higher throughput than vLLM.
 
-![](https://github.com/InternLM/lmdeploy/assets/4560679/032893bb-0300-45fd-84e2-7b590738b1a9)
+<div align="center">
+  <img src="https://github.com/InternLM/lmdeploy/assets/4560679/dbe214b8-8228-4fa6-b854-cda05b4189c7" width="600"/>
+</div>
 
 ## Quick Start
 
