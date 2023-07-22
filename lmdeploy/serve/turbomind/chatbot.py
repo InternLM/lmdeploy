@@ -156,7 +156,7 @@ class Chatbot:
                 break
             else:
                 yield status, res, tokens
-        if status.value >= 0:
+        if status.value == 0:
             self._session.histories = \
                 self._session.histories + self._session.prompt + \
                 self._session.response
@@ -197,11 +197,11 @@ class Chatbot:
                                                request_output_len=0,
                                                sequence_start=False,
                                                sequence_end=True):
-            if status != StatusCode.TRITON_STREAM_END:
-                return status
+            if status.value < 0:
+                break
 
         self.reset_session()
-        return StatusCode.TRITON_STREAM_END
+        return status
 
     def cancel(self, session_id: int, *args, **kwargs):
         """Cancel the session during generating tokens.
@@ -244,7 +244,7 @@ class Chatbot:
         if status == StatusCode.TRITON_STREAM_END:
             logger.info(f'cancel session {session_id} successfully')
             if prev_session.histories:
-                logger.warn(f'TODO: start to recover session {session_id}')
+                logger.warning(f'TODO: start to recover session {session_id}')
         else:
             logger.info(f'cancel session {session_id} failed: {res}')
         return status
@@ -285,7 +285,7 @@ class Chatbot:
                                                sequence_start=True,
                                                sequence_end=False):
             if status.value < 0:
-                return status
+                break
 
         self._session.histories = histories
         return status
@@ -420,16 +420,12 @@ class Chatbot:
                                           request_output_len, sequence_start,
                                           sequence_end, preseq_length, cancel))
         producer.start()
-        for state, res, tokens in self.stream_consumer(self.postprocess, que,
-                                                       session, input_tokens,
-                                                       preseq_length, cancel,
-                                                       logger, self.display,
-                                                       self.profile_generation,
-                                                       self.eos_id):
-            if state.value < 0:
-                yield state, res, 0
-            else:
-                yield state, res, tokens
+        for status, res, n_token in self.stream_consumer(
+                self.postprocess, que, session, input_tokens, preseq_length,
+                cancel, logger, self.display, self.profile_generation,
+                self.eos_id):
+            yield status, res, n_token
+
         producer.join()
         self._session = que.get()
         curseq_length = self._session.sequence_length
