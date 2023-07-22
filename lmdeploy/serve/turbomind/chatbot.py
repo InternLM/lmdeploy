@@ -152,12 +152,16 @@ class Chatbot:
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
-            yield status, res, tokens
             if status.value < 0:
-                return
-        self._session.histories = \
-            self._session.histories + self._session.prompt + \
-            self._session.response
+                break
+            else:
+                yield status, res, tokens
+        if status.value >= 0:
+            self._session.histories = \
+                self._session.histories + self._session.prompt + \
+                self._session.response
+        else:
+            yield status, res, tokens
 
     def end(self, session_id: int, *args, **kwargs):
         """end a session. Triton inference server will release the session's
@@ -496,11 +500,13 @@ class Chatbot:
             tuple: status, text, generated token number
         """
         offset = n_input_token + preseq_length
+        status, res, n_token = None, '', 0
         while True:
             result = res_queue.get()
             if result is None:
-                yield (StatusCode.TRITON_STREAM_END, session.response,
-                       session.sequence_length - offset)
+                status = StatusCode.TRITON_STREAM_END
+                res = session.response
+                n_token = session.sequence_length - offset
                 session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
@@ -508,7 +514,10 @@ class Chatbot:
                              f"{result['errcode']}, {result['errmsg']}, "
                              f'token {session.sequence_length}')
                 session.sequence_length = preseq_length
-                yield result['errcode'], result['errmsg'], 0
+                session.response = ''
+                status = StatusCode.TRITON_SERVER_ERR
+                res = f"{result['errcode']}, {result['errmsg']}"
+                n_token = 0
                 break
             if cancel:
                 continue
@@ -554,3 +563,4 @@ class Chatbot:
         res_queue.put(session)
         if display:
             print('\n')
+        yield status, res, n_token
