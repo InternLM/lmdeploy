@@ -7,7 +7,6 @@ from threading import Thread
 import fire
 import numpy as np
 
-from lmdeploy.model import MODELS
 from lmdeploy.turbomind import Tokenizer, TurboMind
 
 
@@ -74,16 +73,13 @@ def warmup(model, concurrency: int, output_seqlen: int, warmup_round: int = 4):
 
 
 def main(model_path: str,
-         model_name: str,
          concurrency: int = 1,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
          test_round: int = 10):
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
-    model = MODELS.get(model_name)()
-    stop_words = model.stop_words
-    tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
+    tm_model = TurboMind(model_path=model_path)
 
     warmup(tm_model, concurrency, output_seqlen)
 
@@ -137,7 +133,7 @@ def main(model_path: str,
           f'{first_token_latency_ave:.2f}s\ntoken latency(min, max, ave): '
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
-          f'throughput per threads: {throughput} token/s\n{"-" * 50}')
+          f'throughput: {throughput} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':

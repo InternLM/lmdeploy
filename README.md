@@ -54,7 +54,7 @@ The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% highe
 Below are quick steps for installation:
 
 ```shell
-conda create -n lmdeploy python=3.10
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy

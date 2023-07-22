@@ -53,7 +53,7 @@ TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15
 ### 安装
 
 ```shell
-conda create -n lmdeploy python=3.10
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
