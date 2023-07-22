@@ -8,6 +8,10 @@ import torch
 import triton_python_backend_utils as pb_utils
 from torch.nn.utils.rnn import pad_sequence
 
+# This tokenizer is `lmdeploy/turbomind/tokenizer.py`. When an LLM is served
+# by triton inference server, it has to be converted first by running
+# `python lmdeploy/serve/turbomind/deploy.py`. Then
+# `lmdeploy/turbomind/tokenizer.py` will be copied to `tokenizer/tokenizer.py`
 from .tokenizer.tokenizer import Tokenizer
 
 

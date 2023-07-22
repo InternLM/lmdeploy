@@ -101,8 +101,8 @@ class TurboMind:
                                                'tensor_para_size')
                 self.session_len = parser.getint(section_name, 'session_len')
             self.model_name = parser.get(section_name, 'model_name')
-        self.model = MODELS.get(self.model_name)()
-        stop_words = self.model.stop_words
+        model = MODELS.get(self.model_name)()
+        self.stop_words = _stop_words(model.stop_words)
 
         # params
         self.node_id = node_id
@@ -130,8 +130,6 @@ class TurboMind:
             threads.append(t)
         for t in threads:
             t.join()
-
-        self.stop_words = _stop_words(stop_words)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
