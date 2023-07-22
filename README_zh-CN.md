@@ -36,7 +36,9 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 性能
 
-如下图所示，我们对比了 facebookresearch/llama、HuggingFace Transformers、DeepSpeed 在 7B 模型上的token生成的速度。
+**场景一**： 固定的输入、输出token数
+
+测试模型：LLaMA-7B
 
 测试设备：NVIDIA A100(80G)
 
@@ -46,7 +48,21 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
 
-![benchmark](https://user-images.githubusercontent.com/12756472/251422522-e94a3db9-eb16-432a-8d8c-078945e7b99a.png)
+!\[benchmark\](https://user-images.githubusercontent.com/12756472/251422522-e94a3db9-eb16-432a-8d8c-078945e7b99a.png
+
+**场景二**: 使用真实数据，测试请求数的吞吐
+
+测试模型：LLaMA-7B
+
+测试设备：NVIDIA A100(80G)
+
+测试指标：每分钟的请求数
+
+测试数据：vLLM 的 ShareGPT_V3_unfiltered_cleaned_split.json
+
+TurboMind 比 vLLM 大约高 30%
+
+![](https://github.com/InternLM/lmdeploy/assets/4560679/032893bb-0300-45fd-84e2-7b590738b1a9)
 
 ## 快速上手
 
