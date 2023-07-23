@@ -64,15 +64,6 @@ class Chatbot:
         tritonserver_addr (str): communicating address '<ip>:<port>' of
             triton inference server
         model_name (str): name of the to-be-deployed mode
-        session_len (int): the maximum context length of the model
-        top_p (float): If set to float < 1, only the smallest set of most
-            probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-        top_k (int): The number of the highest probability vocabulary tokens to
-            keep for top-k-filtering
-        temperature (float): to modulate the next token probability
-        repetition_penalty (float): The parameter for repetition penalty.
-            1.0 means no penalty
         log_level (int): the level of the log
         display (bool): display the generated text on consolo or not
         profile_generation (bool): profile token generation or not
@@ -80,24 +71,18 @@ class Chatbot:
 
     def __init__(self,
                  tritonserver_addr: str,
-                 model_name: str,
-                 session_len: int = 2048,
-                 top_p: float = 0.8,
-                 top_k: int = None,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False,
                  profile_serving: bool = False):
-        assert model_name in MODELS.module_dict.keys(), \
-            f"'{model_name}' is not supported. " \
+        self.tritonserver_addr = tritonserver_addr
+        self.model_name = self._get_model_name()
+        assert self.model_name in MODELS.module_dict.keys(), \
+            f"'{self.model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'
-        self.model_name = model_name
         self.model = MODELS.get(self.model_name)()
         self._session = None
-        self.tritonserver_addr = tritonserver_addr
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
         self.bos_id = self._get_bos()
@@ -108,11 +93,11 @@ class Chatbot:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
         self.cfg = mmengine.Config(
-            dict(session_len=session_len,
-                 top_p=top_p,
-                 top_k=top_k,
-                 temperature=temperature,
-                 repetition_penalty=repetition_penalty,
+            dict(session_len=self.model.session_len,
+                 top_p=self.model.top_p,
+                 top_k=self.model.top_k,
+                 temperature=self.model.temperature,
+                 repetition_penalty=self.model.repetition_penalty,
                  stop_words=stop_words,
                  bad_words=bad_words))
         self.log_level = log_level
@@ -167,12 +152,16 @@ class Chatbot:
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
-            yield status, res, tokens
             if status.value < 0:
-                return
-        self._session.histories = \
-            self._session.histories + self._session.prompt + \
-            self._session.response
+                break
+            else:
+                yield status, res, tokens
+        if status.value == 0:
+            self._session.histories = \
+                self._session.histories + self._session.prompt + \
+                self._session.response
+        else:
+            yield status, res, tokens
 
     def end(self, session_id: int, *args, **kwargs):
         """end a session. Triton inference server will release the session's
@@ -208,11 +197,11 @@ class Chatbot:
                                                request_output_len=0,
                                                sequence_start=False,
                                                sequence_end=True):
-            if status != StatusCode.TRITON_STREAM_END:
-                return status
+            if status.value < 0:
+                break
 
         self.reset_session()
-        return StatusCode.TRITON_STREAM_END
+        return status
 
     def cancel(self, session_id: int, *args, **kwargs):
         """Cancel the session during generating tokens.
@@ -243,6 +232,7 @@ class Chatbot:
             return StatusCode.TRITON_SESSION_CLOSED
 
         prev_session = self._session
+        status, res = None, None
         for status, res, _ in self._stream_infer(self._session,
                                                  prompt='',
                                                  request_output_len=0,
@@ -254,7 +244,7 @@ class Chatbot:
         if status == StatusCode.TRITON_STREAM_END:
             logger.info(f'cancel session {session_id} successfully')
             if prev_session.histories:
-                logger.warn(f'TODO: start to recover session {session_id}')
+                logger.warning(f'TODO: start to recover session {session_id}')
         else:
             logger.info(f'cancel session {session_id} failed: {res}')
         return status
@@ -295,7 +285,7 @@ class Chatbot:
                                                sequence_start=True,
                                                sequence_end=False):
             if status.value < 0:
-                return status
+                break
 
         self._session.histories = histories
         return status
@@ -313,6 +303,14 @@ class Chatbot:
     def session(self, value):
         """set session."""
         self._session = value
+
+    def _get_model_name(self):
+        with grpcclient.InferenceServerClient(
+                self.tritonserver_addr) as client:
+            model_config = client.get_model_config(model_name='turbomind',
+                                                   as_json=True)
+            return model_config['config']['parameters']['model_name'][
+                'string_value']
 
     def _get_bos(self):
         """return bos token id."""
@@ -422,16 +420,12 @@ class Chatbot:
                                           request_output_len, sequence_start,
                                           sequence_end, preseq_length, cancel))
         producer.start()
-        for state, res, tokens in self.stream_consumer(self.postprocess, que,
-                                                       session, input_tokens,
-                                                       preseq_length, cancel,
-                                                       logger, self.display,
-                                                       self.profile_generation,
-                                                       self.eos_id):
-            if state.value < 0:
-                yield state, res, 0
-            else:
-                yield state, res, tokens
+        for status, res, n_token in self.stream_consumer(
+                self.postprocess, que, session, input_tokens, preseq_length,
+                cancel, logger, self.display, self.profile_generation,
+                self.eos_id):
+            yield status, res, n_token
+
         producer.join()
         self._session = que.get()
         curseq_length = self._session.sequence_length
@@ -543,11 +537,13 @@ class Chatbot:
             tuple: status, text, generated token number
         """
         offset = n_input_token + preseq_length
+        status, res, n_token = None, '', 0
         while True:
             result = res_queue.get()
             if result is None:
-                yield (StatusCode.TRITON_STREAM_END, session.response,
-                       session.sequence_length - offset)
+                status = StatusCode.TRITON_STREAM_END
+                res = session.response
+                n_token = session.sequence_length - offset
                 session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
@@ -555,7 +551,10 @@ class Chatbot:
                              f"{result['errcode']}, {result['errmsg']}, "
                              f'token {session.sequence_length}')
                 session.sequence_length = preseq_length
-                yield result['errcode'], result['errmsg'], 0
+                session.response = ''
+                status = StatusCode.TRITON_SERVER_ERR
+                res = f"{result['errcode']}, {result['errmsg']}"
+                n_token = 0
                 break
             if cancel:
                 continue
@@ -601,3 +600,4 @@ class Chatbot:
         res_queue.put(session)
         if display:
             print('\n')
+        yield status, res, n_token

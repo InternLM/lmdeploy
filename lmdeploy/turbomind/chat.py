@@ -29,29 +29,24 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def main(model_name,
-         model_path,
-         session_id: int = 1,
-         repetition_penalty: float = 1.0):
+def main(model_path, session_id: int = 1, repetition_penalty: float = 1.0):
     """An example to perform model inference through the command line
     interface.
 
     Args:
-        model_name (str): the name of the deployed model
         model_path (str): the path of the deployed model
         session_id (int): the identical id of a session
     """
-    model = MODELS.get(model_name)()
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = tm.TurboMind(model_path,
-                            eos_id=tokenizer.eos_token_id,
-                            stop_words=model.stop_words)
+    tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id)
     generator = tm_model.create_instance()
 
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
+    model_name = tm_model.model_name
+    model = MODELS.get(model_name)()
 
     while True:
         prompt = input_prompt()

@@ -8,7 +8,6 @@ from typing import List, Tuple
 
 import fire
 
-from lmdeploy.model import MODELS
 from lmdeploy.turbomind import Tokenizer, TurboMind
 
 
@@ -55,13 +54,11 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, model_name: str):
+    def __init__(self, model_path: str):
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
-        model = MODELS.get(model_name)()
-        stop_words = model.stop_words
-        tm_model = TurboMind(model_path=model_path, stop_words=stop_words)
+        tm_model = TurboMind(model_path=model_path)
         self.tm_model = tm_model
         self.tokenizer = tokenizer
 
@@ -119,11 +116,10 @@ class Engine:
 
 def main(dataset: str,
          model_path: str,
-         model_name: str,
          concurrency: int = 1,
          num_prompts: int = 1000):
 
-    engine = Engine(model_path, model_name)
+    engine = Engine(model_path)
     tokenizer = engine.tokenizer
 
     requests = sample_requests(dataset, num_prompts, tokenizer)

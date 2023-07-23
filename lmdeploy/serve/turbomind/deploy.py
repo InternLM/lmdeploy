@@ -12,7 +12,14 @@ import safetensors
 import torch
 from sentencepiece import SentencePieceProcessor
 
+from lmdeploy.model import MODELS
+
 supported_formats = ['llama', 'hf']
+
+
+def get_package_root_path():
+    import importlib.resources as pkg_resources
+    return pkg_resources.path('lmdeploy', '')
 
 
 def create_workspace(_path: str):
@@ -164,6 +171,7 @@ def export(model_name: str,
             save_bin(param_data, param_name)
 
     # export config and save it to {out_dir}/config.ini
+    model = MODELS.get(model_name)()
     vocab_size, bos_id, eos_id = tokenizer_info(tokenizer_path)
     assert _vocab_size >= vocab_size, \
         f'different vocab size {_vocab_size} vs {vocab_size}'
@@ -184,7 +192,7 @@ def export(model_name: str,
         # parameters for turbomind
         max_batch_size=32,
         max_context_token_num=4,
-        session_len=2056,
+        session_len=model.session_len + 8,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=1,
@@ -226,6 +234,9 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
     if osp.exists(tokenizer_path):
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
+        with get_package_root_path() as root_path:
+            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+                        osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
         return False
@@ -352,6 +363,9 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 json_path = osp.join(model_path, _file)
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
+        with get_package_root_path() as root_path:
+            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+                        osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
         exit(-1)
@@ -495,7 +509,7 @@ def pack_model_repository(workspace_path: str):
 
 def main(model_name: str,
          model_path: str,
-         model_format: str,
+         model_format: str = 'hf',
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1):
@@ -511,6 +525,9 @@ def main(model_name: str,
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism
     """
+    assert model_name in MODELS.module_dict.keys(), \
+        f"'{model_name}' is not supported. " \
+        f'The supported models are: {MODELS.module_dict.keys()}'
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
@@ -539,8 +556,11 @@ def main(model_name: str,
     # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
     with open(osp.join(triton_models_path, 'interactive/config.pbtxt'),
               'a') as f:
-        param = 'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
-            'string_value: ' + f'"{tp}"\n' + '  }\n}\n'
+        param = \
+            'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
+            'string_value: ' + f'"{tp}"\n' + '  }\n}\n' + \
+            'parameters {\n  key: "model_name"\n  value: {\n    ' \
+            'string_value: ' + f'"{model_name}"\n' + '  }\n}\n'
         f.write(param)
     if not res:
         print(f'deploy model "{model_name}" via turbomind failed')
