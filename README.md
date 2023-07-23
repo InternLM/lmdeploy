@@ -35,35 +35,16 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 ## Performance
 
-**Case I**: output token throughput with fix input token and output token number
-
-Test Model: LLaMA-7B
-
-Target Device: NVIDIA A100(80G)
-
-Metrics: Throughput (token/s)
-
-Test Data: The number of input tokens is 1, and the number of generated tokens is 2048
-
-The throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x
-
-![benchmark](https://user-images.githubusercontent.com/12756472/251422522-e94a3db9-eb16-432a-8d8c-078945e7b99a.png)
+**Case I**: output token throughput with fixed input token and output token number (1, 2048)
 
 **Case II**: request throughput with real conversation data
 
-Test Model: LLaMA-7B
+Test Setting: LLaMA-7B, NVIDIA A100(80G)
 
-Target Device: NVIDIA A100(80G)
+The output token throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x.
+And the request throughput of TurboMind is 30% higher than vLLM.
 
-Metrics: requests/minute
-
-Test Data: ShareGPT_V3_unfiltered_cleaned_split.json from vLLM
-
-TurboMind has achieved 30% higher throughput than vLLM.
-
-<div align="center">
-  <img src="https://github.com/InternLM/lmdeploy/assets/4560679/dbe214b8-8228-4fa6-b854-cda05b4189c7" width="600"/>
-</div>
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/7775c518-608e-4e5b-be73-7645a444e774)
 
 ## Quick Start
 

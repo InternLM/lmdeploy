@@ -36,35 +36,16 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 性能
 
-**场景一**： 固定的输入、输出token数
+**场景一**: 固定的输入、输出token数（1,2048），测试 output token throughput
 
-测试模型：LLaMA-7B
+**场景二**: 使用真实数据，测试 request throughput
 
-测试设备：NVIDIA A100(80G)
+测试配置：LLaMA-7B, NVIDIA A100(80G)
 
-测试指标：吞吐量（token/s)
+TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
+在 request throughput 指标上，TurboMind 的效率比 vLLM 高 30%
 
-测试数据：输入token数为1，生成token数为2048
-
-TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
-
-![benchmark](https://user-images.githubusercontent.com/12756472/251422522-e94a3db9-eb16-432a-8d8c-078945e7b99a.png)
-
-**场景二**: 使用真实数据，测试请求数的吞吐
-
-测试模型：LLaMA-7B
-
-测试设备：NVIDIA A100(80G)
-
-测试指标：每分钟的请求数
-
-测试数据：vLLM 的 ShareGPT_V3_unfiltered_cleaned_split.json
-
-TurboMind 比 vLLM 大约高 30%
-
-<div align="center">
-  <img src="https://github.com/InternLM/lmdeploy/assets/4560679/dbe214b8-8228-4fa6-b854-cda05b4189c7" width="600"/>
-</div>
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/7775c518-608e-4e5b-be73-7645a444e774)
 
 ## 快速上手
 
