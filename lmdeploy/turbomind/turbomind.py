@@ -12,6 +12,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
+from lmdeploy.model import MODELS
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -70,15 +71,13 @@ class TurboMind:
         model_path (str): the path of turbomind's model
         data_type (str): the data type
         eos_id (int): eos token id
-        stop_words (List[int]): token ids of stop-words
-        tp (int):
+        tp (int): tensor parallel
     """
 
     def __init__(self,
                  model_path: str,
                  data_type: str = 'fp16',
                  eos_id: int = 2,
-                 stop_words: List[int] = None,
                  tp: int = torch.cuda.device_count()):
         self.eos_id = eos_id
 
@@ -105,6 +104,9 @@ class TurboMind:
                 if tp_cfg != 1 and tp_cfg != tp:
                     print(f'[INFO] found tp={tp_cfg} in config.ini.')
                     self.gpu_count = tp_cfg
+            self.model_name = parser.get(section_name, 'model_name')
+        model = MODELS.get(self.model_name)()
+        self.stop_words = _stop_words(model.stop_words)
 
         # params
         self.node_id = node_id
@@ -132,8 +134,6 @@ class TurboMind:
             threads.append(t)
         for t in threads:
             t.join()
-
-        self.stop_words = _stop_words(stop_words)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -345,3 +345,52 @@ class TurboMindInstance:
 
         if stream_output:
             self.model_insts[0].unregister_callback()
+
+    def decode(self, input_ids):
+        """Perform context decode on input tokens.
+
+        Args:
+            input_ids (numpy.ndarray): the batch of input token ids
+        """
+
+        if len(input_ids) == 0:
+            input_ids = []
+        if isinstance(input_ids[0], int):
+            input_ids = [input_ids]
+
+        # append an extra token since input_len-1 tokens will be
+        # decoded by context decoder
+        for inputs in input_ids:
+            inputs.append(0)
+
+        batch_size = len(input_ids)
+
+        def _broadcast_np(data, dtype, shape=(batch_size, )):
+            if isinstance(data, Iterable):
+                assert len(data) == batch_size
+                return data
+
+            return np.full(shape, data, dtype=dtype)
+
+        input_ids = [torch.IntTensor(ids) for ids in input_ids]
+        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
+        input_ids = pad_sequence(input_ids,
+                                 batch_first=True,
+                                 padding_value=self.eos_id)
+
+        inputs = dict(input_ids=input_ids,
+                      input_lengths=input_lengths,
+                      request_output_len=_broadcast_np(0, dtype=np.uint32),
+                      is_return_logits=_broadcast_np(1, np.uint32))
+
+        tm_inputs = _np_dict_to_tm_dict(inputs)
+
+        # start forward thread
+        self._forward_thread(tm_inputs)
+
+        _, tm_outputs = self.que.get()
+
+        outputs = _tm_dict_to_torch_dict(tm_outputs)
+        logits = outputs['logits']
+
+        return logits[:, :-1, :]

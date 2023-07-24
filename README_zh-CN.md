@@ -53,7 +53,7 @@ TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15
 ### 安装
 
 ```shell
-conda create -n lmdeploy python=3.10
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
@@ -76,7 +76,7 @@ git clone https://huggingface.co/internlm/internlm-chat-7b /path/to/internlm-cha
 GIT_LFS_SKIP_SMUDGE=1
 
 # 2. 转换为 trubomind 要求的格式。默认存放路径为 ./workspace
-python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-chat-7b hf
+python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
 
 ```
 
@@ -84,11 +84,11 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-7b /path/to/internlm-chat-7b
 
 ```shell
 docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
-    python3 -m lmdeploy.turbomind.chat internlm /workspace
+    python3 -m lmdeploy.turbomind.chat /workspace
 ```
 
 ```{note}
-turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 22.7G。建议使用 3090, V100，A100等型号的显卡
+turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡
 ```
 
 #### 部署推理服务
@@ -102,18 +102,18 @@ bash workspace/service_docker_up.sh
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-python3 -m lmdeploy.serve.client {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
 ```
 
 也可以通过 WebUI 方式来对话：
 
 ```shell
-python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.app {server_ip_addresss}:33337
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
-其他模型的部署方式，比如 LLaMA，vicuna，请参考[这里](docs/zh_cn/serving.md)
+其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
 
 ### 基于 PyTorch 的推理
 

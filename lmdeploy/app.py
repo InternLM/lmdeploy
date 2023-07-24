@@ -101,28 +101,26 @@ def cancel_func(
 
 
 def run(triton_server_addr: str,
-        model_name: str,
         server_name: str = 'localhost',
         server_port: int = 6006):
     """chat with AI assistant through web ui.
 
     Args:
         triton_server_addr (str): the communication address of inference server
-        model_name (str): the name of the deployed model
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
     """
     with gr.Blocks(css=CSS, theme=THEME) as demo:
+        log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
+        _chatbot = Chatbot(triton_server_addr,
+                           log_level=log_level,
+                           display=True)
+        model_name = _chatbot.model_name
         chat_interface = partial(chat_stream, model_name=model_name)
         reset_all = partial(reset_all_func,
                             model_name=model_name,
                             triton_server_addr=triton_server_addr)
-        log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
-        llama_chatbot = gr.State(
-            Chatbot(triton_server_addr,
-                    model_name,
-                    log_level=log_level,
-                    display=True))
+        llama_chatbot = gr.State(_chatbot)
         state_chatbot = gr.State([])
 
         with gr.Column(elem_id='container'):

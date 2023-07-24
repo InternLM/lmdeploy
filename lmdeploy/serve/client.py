@@ -13,7 +13,7 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def main(tritonserver_addr: str, model_name: str, session_id: int = 1):
+def main(tritonserver_addr: str, session_id: int = 1):
     """An example to communicate with inference server through the command line
     interface.
 
@@ -24,10 +24,7 @@ def main(tritonserver_addr: str, model_name: str, session_id: int = 1):
         session_id (int): the identical id of a session
     """
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')
-    chatbot = Chatbot(tritonserver_addr,
-                      model_name,
-                      log_level=log_level,
-                      display=True)
+    chatbot = Chatbot(tritonserver_addr, log_level=log_level, display=True)
     nth_round = 1
     while True:
         prompt = input_prompt()

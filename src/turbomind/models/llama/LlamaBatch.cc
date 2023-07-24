@@ -155,6 +155,8 @@ void LlamaBatch<T>::allocateBuffer(size_t batch_size, size_t session_len)
 
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
+    context_decoder_output_buf_ =
+        (T*)allocator_->reMalloc(context_decoder_output_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
         (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_context_token_num_, false);
 
@@ -242,6 +244,7 @@ void LlamaBatch<T>::freeBuffer()
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&context_decoder_input_buf_);
+        allocator_->free((void**)&context_decoder_output_buf_);
         allocator_->free((void**)&context_decoder_ids_buf_);
 
         allocator_->free((void**)&decoder_input_buf_);
@@ -260,6 +263,13 @@ void LlamaBatch<T>::freeBuffer()
 
         allocator_->free((void**)&logits_buf_);
         allocator_->free((void**)&local_logits_buf_);
+
+        if (local_context_logits_buf_) {
+            allocator_->free((void**)&local_context_logits_buf_);
+        }
+        if (context_logits_buf_) {
+            allocator_->free((void**)&context_logits_buf_);
+        }
 
         allocator_->free((void**)&token_ids_buf_);
 
@@ -774,6 +784,9 @@ void LlamaBatch<T>::contextDecode()
         auto get_input_len   = [this](int index) { return h_input_length_buf_[index] - 1; };
         auto get_context_len = [this](int index) { return h_context_length_buf_[index] - 1; };
 
+        std::vector<int> decode_indices{base};
+        std::vector<int> decode_lengths{get_input_len(base)};
+
         auto token_num       = get_input_len(base);
         auto max_input_len   = get_input_len(base);
         auto max_context_len = get_context_len(base);
@@ -807,7 +820,7 @@ void LlamaBatch<T>::contextDecode()
                                       k_cache_ptr_buf_ + offset,
                                       v_cache_ptr_buf_ + offset,
                                       context_decoder_input_buf_,
-                                      nullptr,
+                                      context_decoder_output_buf_,
                                       context_decoder_ids_buf_,
                                       input_length_buf_ + offset,
                                       history_length_buf_ + offset,
@@ -817,17 +830,29 @@ void LlamaBatch<T>::contextDecode()
                                       max_context_len,
                                       session_len_,
                                       context_decode_batch_size);
+
+                // compute logits of inputs if requested
+                outputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+
                 if (i < batch_size_) {
+                    // initialize next sub-batch
                     token_num       = get_input_len(i);
                     max_input_len   = get_input_len(i);
                     max_context_len = get_context_len(i);
                     offset          = i;
+
+                    decode_indices = {i};
+                    decode_lengths = {get_input_len(i)};
                 }
             }
             else {
+                // add to current sub-batch
                 token_num += get_input_len(i);
                 max_input_len   = std::max(max_input_len, get_input_len(i));
                 max_context_len = std::max(max_context_len, get_context_len(i));
+
+                decode_indices.push_back(i);
+                decode_lengths.push_back(get_input_len(i));
             }
         }
 
@@ -846,6 +871,56 @@ void LlamaBatch<T>::contextDecode()
     }
     else if (rank_ == 0) {
         TM_LOG_INFO("[decodeContext] Context decoding is not needed.");
+    }
+}
+
+template<typename T>
+void LlamaBatch<T>::outputContextLogits(T*                      context_decoder_output,
+                                        const std::vector<int>& indices,
+                                        const std::vector<int>& lengths)
+{
+    std::vector<float*> output_logits;
+    int                 num_token = 0;
+    {
+        bool is_return_logits = false;
+        for (int k = 0; k < indices.size(); ++k) {
+            auto& request = requests_[indices[k]];
+            output_logits.push_back(request->outputs[rank_].getPtr<float>("logits", nullptr));
+            num_token += lengths[k];
+            if (output_logits.back()) {
+                is_return_logits = true;
+            }
+        }
+        if (!is_return_logits) {
+            return;
+        }
+    }
+
+    if (context_logits_buf_ == nullptr) {
+        NcclGuard guard(llama_->tensor_para_, stream_, true);
+        context_logits_buf_ = (float*)allocator_->malloc(sizeof(float) * llama_->vocab_size_ * max_context_token_num_);
+        const auto tp       = llama_->tensor_para_.world_size_;
+        if (tp > 1) {
+            FT_CHECK(llama_->vocab_size_ % tp == 0);
+            const auto local_vocab_size = llama_->vocab_size_ / tp;
+            local_context_logits_buf_ =
+                (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
+        }
+    }
+
+    llama_->postDecodeEmbedding(context_logits_buf_, local_context_logits_buf_, context_decoder_output, num_token);
+
+    auto logits = context_logits_buf_;
+
+    for (int k = 0; k < indices.size(); ++k) {
+        if (output_logits[k]) {
+            check_cuda_error(cudaMemcpyAsync(output_logits[k],
+                                             logits,
+                                             sizeof(float) * llama_->vocab_size_ * lengths[k],
+                                             cudaMemcpyDefault,
+                                             stream_));
+        }
+        logits += llama_->vocab_size_ * lengths[k];
     }
 }
 
