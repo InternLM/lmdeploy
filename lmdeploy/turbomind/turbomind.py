@@ -71,13 +71,15 @@ class TurboMind:
         data_type (str): the data type
         eos_id (int): eos token id
         stop_words (List[int]): token ids of stop-words
+        tp (int):
     """
 
     def __init__(self,
                  model_path: str,
                  data_type: str = 'fp16',
                  eos_id: int = 2,
-                 stop_words: List[int] = None):
+                 stop_words: List[int] = None,
+                 tp: int = torch.cuda.device_count()):
         self.eos_id = eos_id
 
         # TODO: support mpi
@@ -85,7 +87,7 @@ class TurboMind:
         node_num = 1
 
         # read meta from model path
-        self.gpu_count = 1
+        self.gpu_count = tp
         self.session_len = 2048
         ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
         with open(ini_path, 'r') as f:
@@ -98,9 +100,11 @@ class TurboMind:
                 section_name = 'llama'
 
             if len(section_name) > 0:
-                self.gpu_count = parser.getint(section_name,
-                                               'tensor_para_size')
+                tp_cfg = parser.getint(section_name, 'tensor_para_size')
                 self.session_len = parser.getint(section_name, 'session_len')
+                if tp_cfg != 1 and tp_cfg != tp:
+                    print(f'[INFO] found tp={tp_cfg} in config.ini.')
+                    self.gpu_count = tp_cfg
 
         # params
         self.node_id = node_id

@@ -4,6 +4,7 @@ import os.path as osp
 import random
 
 import fire
+import torch
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
@@ -32,7 +33,8 @@ def valid_str(string, coding='utf-8'):
 def main(model_name,
          model_path,
          session_id: int = 1,
-         repetition_penalty: float = 1.0):
+         repetition_penalty: float = 1.0,
+         tp=torch.cuda.device_count()):
     """An example to perform model inference through the command line
     interface.
 
@@ -46,7 +48,8 @@ def main(model_name,
     tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = tm.TurboMind(model_path,
                             eos_id=tokenizer.eos_token_id,
-                            stop_words=model.stop_words)
+                            stop_words=model.stop_words,
+                            tp=tp)
     generator = tm_model.create_instance()
 
     nth_round = 1

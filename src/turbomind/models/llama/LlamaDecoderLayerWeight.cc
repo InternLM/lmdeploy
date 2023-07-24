@@ -21,6 +21,7 @@
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include <filesystem>
 
 namespace turbomind {
 
@@ -99,25 +100,117 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
 }
 
 template<typename T>
-void loadWeights(LlamaDenseWeight<T>& w, std::string prefix, int rank, FtCudaDataType model_file_type)
+void loadWeights(LlamaDenseWeight<T>& w,
+                 std::string          prefix,
+                 int                  rank,
+                 FtCudaDataType       model_file_type,
+                 size_t               tensor_para_size,
+                 int                  slice_dim   = 0,
+                 std::vector<size_t>  slice_shape = std::vector<size_t>())
 {
-    prefix += "." + std::to_string(rank);
-    const auto type = model_file_type;
+    auto       max_prefix = prefix + "." + std::to_string(tensor_para_size - 1);
+    const auto type       = model_file_type;
+
+    bool enable_slice = true;
+    // Disable slice if tensor param rank is 1
+    if (tensor_para_size <= 1) {
+        enable_slice = false;
+    }
+    else {
+        // Disable slice if weight has already been sliced
+        if (std::filesystem::exists(max_prefix + ".weight") || std::filesystem::exists(max_prefix + ".qweight")) {
+            TM_LOG_DEBUG("TP weight exists. Disable runtime TP.");
+            enable_slice = false;
+        }
+    }
+
+    size_t                   dim0      = w.input_dims;
+    size_t                   dim1      = w.output_dims;
+    size_t                   bias_dim0 = 1;
+    std::vector<WeightSlice> weight_slices{};
+    std::vector<WeightSlice> qweight_slices{};
+
+    if (enable_slice) {
+        if (slice_shape.size() == 2) {
+            dim0 = slice_shape[0];
+            dim1 = slice_shape[1];
+
+            // qkv will be viewed as {input_dims*3, output_dims/3} when slicing
+            // bias_dims is used to get the dim of bias when slicing.
+            bias_dim0 = std::max(size_t(dim0 / w.input_dims), size_t(1));
+        }
+
+        // multiple tp size for slice stride
+        if (slice_dim == 0) {
+            dim0 = dim0 * tensor_para_size;
+        }
+        else {
+            dim1 = dim1 * tensor_para_size;
+        }
+
+        prefix += "." + std::to_string(0);
+    }
+    else {
+        prefix += "." + std::to_string(rank);
+    }
 
     if (w.bias) {
-        loadWeightFromBin((T*)w.bias, {w.output_dims}, prefix + ".bias", type);
+        std::vector<WeightSlice> bias_slices{};
+        if (enable_slice) {
+            if (slice_dim == 1) {
+                size_t      stride = dim1 / tensor_para_size;
+                WeightSlice slice0{.start = 0, .end = bias_dim0};
+                WeightSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
+                bias_slices = {slice0, slice1};
+            }
+        }
+        loadWeightFromBin((T*)w.bias, {bias_dim0, dim1}, prefix + ".bias", type, bias_slices);
     }
     const size_t bit_size = getBitSize(w.type);
     if (bit_size >= 16) {  // fp16, fp32
-        loadWeightFromBin((T*)w.kernel, {w.input_dims, w.output_dims}, prefix + ".weight", type);
+        std::vector<WeightSlice> weight_slices{};
+        if (enable_slice) {
+            if (slice_dim == 1) {
+                size_t      stride = dim1 / tensor_para_size;
+                WeightSlice slice0{.start = 0, .end = dim0};
+                WeightSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
+                weight_slices = {slice0, slice1};
+            }
+            else {
+                size_t      stride = dim0 / tensor_para_size;
+                WeightSlice slice0{.start = stride * rank, .end = stride * (rank + 1)};
+                WeightSlice slice1{.start = 0, .end = dim1};
+                weight_slices = {slice0, slice1};
+            }
+        }
+        loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type, weight_slices);
     }
     else {  // int8, int4
         const int factor = sizeof(float) * 8 / bit_size;
-        FT_CHECK(w.input_dims % factor == 0);
-        const auto f32_type = FtCudaDataType::FP32;
-        loadWeightFromBin((float*)w.kernel, {w.input_dims / factor, w.output_dims}, prefix + ".qweight", f32_type);
-        loadWeightFromBin((T*)w.scales, {w.output_dims}, prefix + ".scales", type);
-        loadWeightFromBin((T*)w.zeros, {w.output_dims}, prefix + ".zeros", type);
+        FT_CHECK(dim0 % factor == 0);
+        const auto               f32_type = FtCudaDataType::FP32;
+        std::vector<WeightSlice> weight_slices{};
+        std::vector<WeightSlice> bias_slices{};
+        if (enable_slice) {
+            if (slice_dim == 1) {
+                size_t      stride = dim1 / tensor_para_size;
+                WeightSlice slice0{.start = 0, .end = dim0 / factor};
+                WeightSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
+                weight_slices = {slice0, slice1};
+
+                WeightSlice bias_slice0{.start = 0, .end = bias_dim0};
+                bias_slices = {bias_slice0, slice1};
+            }
+            else {
+                size_t      stride = dim0 / factor / tensor_para_size;
+                WeightSlice slice0{.start = stride * rank, .end = stride * (rank + 1)};
+                WeightSlice slice1{.start = 0, .end = dim1};
+                weight_slices = {slice0, slice1};
+            }
+        }
+        loadWeightFromBin((float*)w.kernel, {dim0 / factor, dim1}, prefix + ".qweight", f32_type, weight_slices);
+        loadWeightFromBin((T*)w.scales, {bias_dim0, dim1}, prefix + ".scales", type, bias_slices);
+        loadWeightFromBin((T*)w.zeros, {bias_dim0, dim1}, prefix + ".zeros", type, bias_slices);
     }
 }
 
@@ -158,11 +251,17 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
         (T*)self_attn_norm_weights, {hidden_units_}, dir_path + ".attention_norm.weight", model_file_type);
     loadWeightFromBin((T*)ffn_norm_weights, {hidden_units_}, dir_path + ".ffn_norm.weight", model_file_type);
 
-    loadWeights(self_attn_weights.qkv, dir_path + ".attention.w_qkv", tensor_para_rank_, type);
-    loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type);
-    loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type);
-    loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type);
-    loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type);
+    loadWeights(self_attn_weights.qkv,
+                dir_path + ".attention.w_qkv",
+                tensor_para_rank_,
+                type,
+                tensor_para_size_,
+                1,
+                {self_attn_weights.qkv.input_dims * 3, self_attn_weights.qkv.output_dims / 3});
+    loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_, 0);
+    loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_, 1);
+    loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_, 1);
+    loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_, 0);
 
     // load kv_cache quant scale
     // if file not exist, get empty vector
