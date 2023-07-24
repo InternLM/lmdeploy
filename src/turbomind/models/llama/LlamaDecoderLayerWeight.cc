@@ -106,7 +106,7 @@ void loadWeights(LlamaDenseWeight<T>& w,
                  FtCudaDataType       model_file_type,
                  size_t               tensor_para_size,
                  int                  slice_dim   = 0,
-                 std::vector<size_t>  slice_shape = std::vector<size_t>())
+                 std::vector<size_t>  slice_shape = {})
 {
     auto       max_prefix = prefix + "." + std::to_string(tensor_para_size - 1);
     const auto type       = model_file_type;
@@ -124,28 +124,21 @@ void loadWeights(LlamaDenseWeight<T>& w,
         }
     }
 
-    size_t                   dim0      = w.input_dims;
-    size_t                   dim1      = w.output_dims;
-    size_t                   bias_dim0 = 1;
-    std::vector<WeightSlice> weight_slices{};
-    std::vector<WeightSlice> qweight_slices{};
-
+    size_t dim0 = w.input_dims;
+    size_t dim1 = w.output_dims;
     if (enable_slice) {
-        if (slice_shape.size() == 2) {
-            dim0 = slice_shape[0];
-            dim1 = slice_shape[1];
-
-            // qkv will be viewed as {input_dims*3, output_dims/3} when slicing
-            // bias_dims is used to get the dim of bias when slicing.
-            bias_dim0 = std::max(size_t(dim0 / w.input_dims), size_t(1));
-        }
-
         // multiple tp size for slice stride
         if (slice_dim == 0) {
             dim0 = dim0 * tensor_para_size;
+            if (slice_shape.size() == 0) {
+                slice_shape = {dim0};
+            }
         }
         else {
             dim1 = dim1 * tensor_para_size;
+            if (slice_shape.size() == 0) {
+                slice_shape = {dim1};
+            }
         }
 
         prefix += "." + std::to_string(0);
@@ -155,63 +148,78 @@ void loadWeights(LlamaDenseWeight<T>& w,
     }
 
     if (w.bias) {
-        std::vector<WeightSlice> bias_slices{};
+        std::vector<ConcateSlice> bias_slices{};
         if (enable_slice) {
             if (slice_dim == 1) {
-                size_t      stride = dim1 / tensor_para_size;
-                WeightSlice slice0{.start = 0, .end = bias_dim0};
-                WeightSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
+                size_t       start = 0;
+                ConcateSlice slice0{.slices = {{0, 1}}};
+                ConcateSlice slice1{.slices = {{}}};
+                for (auto len : slice_shape) {
+                    size_t stride = len / tensor_para_size;
+                    slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
+                    start += len;
+                }
                 bias_slices = {slice0, slice1};
             }
         }
-        loadWeightFromBin((T*)w.bias, {bias_dim0, dim1}, prefix + ".bias", type, bias_slices);
+        loadWeightFromBin((T*)w.bias, {1, dim1}, prefix + ".bias", type, bias_slices);
     }
     const size_t bit_size = getBitSize(w.type);
     if (bit_size >= 16) {  // fp16, fp32
-        std::vector<WeightSlice> weight_slices{};
+        std::vector<ConcateSlice> weight_slices{};
         if (enable_slice) {
             if (slice_dim == 1) {
-                size_t      stride = dim1 / tensor_para_size;
-                WeightSlice slice0{.start = 0, .end = dim0};
-                WeightSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
+                size_t       start = 0;
+                ConcateSlice slice0{.slices = {{0, dim0}}};
+                ConcateSlice slice1{.slices = {{}}};
+                for (auto len : slice_shape) {
+                    size_t stride = len / tensor_para_size;
+                    slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
+                    start += len;
+                }
                 weight_slices = {slice0, slice1};
             }
             else {
-                size_t      stride = dim0 / tensor_para_size;
-                WeightSlice slice0{.start = stride * rank, .end = stride * (rank + 1)};
-                WeightSlice slice1{.start = 0, .end = dim1};
+                size_t       start = 0;
+                ConcateSlice slice0{.slices = {}};
+                ConcateSlice slice1{.slices = {{0, dim1}}};
+                for (auto len : slice_shape) {
+                    size_t stride = len / tensor_para_size;
+                    slice0.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
+                    start += len;
+                }
                 weight_slices = {slice0, slice1};
             }
         }
         loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type, weight_slices);
     }
-    else {  // int8, int4
-        const int factor = sizeof(float) * 8 / bit_size;
-        FT_CHECK(dim0 % factor == 0);
-        const auto               f32_type = FtCudaDataType::FP32;
-        std::vector<WeightSlice> weight_slices{};
-        std::vector<WeightSlice> bias_slices{};
-        if (enable_slice) {
-            if (slice_dim == 1) {
-                size_t      stride = dim1 / tensor_para_size;
-                WeightSlice slice0{.start = 0, .end = dim0 / factor};
-                WeightSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
-                weight_slices = {slice0, slice1};
+    // else {  // int8, int4
+    //     const int factor = sizeof(float) * 8 / bit_size;
+    //     FT_CHECK(dim0 % factor == 0);
+    //     const auto               f32_type = FtCudaDataType::FP32;
+    //     std::vector<ConcateSlice> weight_slices{};
+    //     std::vector<ConcateSlice> bias_slices{};
+    //     if (enable_slice) {
+    //         if (slice_dim == 1) {
+    //             size_t      stride = dim1 / tensor_para_size;
+    //             ConcateSlice slice0{.start = 0, .end = dim0 / factor};
+    //             ConcateSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
+    //             weight_slices = {slice0, slice1};
 
-                WeightSlice bias_slice0{.start = 0, .end = bias_dim0};
-                bias_slices = {bias_slice0, slice1};
-            }
-            else {
-                size_t      stride = dim0 / factor / tensor_para_size;
-                WeightSlice slice0{.start = stride * rank, .end = stride * (rank + 1)};
-                WeightSlice slice1{.start = 0, .end = dim1};
-                weight_slices = {slice0, slice1};
-            }
-        }
-        loadWeightFromBin((float*)w.kernel, {dim0 / factor, dim1}, prefix + ".qweight", f32_type, weight_slices);
-        loadWeightFromBin((T*)w.scales, {bias_dim0, dim1}, prefix + ".scales", type, bias_slices);
-        loadWeightFromBin((T*)w.zeros, {bias_dim0, dim1}, prefix + ".zeros", type, bias_slices);
-    }
+    //             ConcateSlice bias_slice0{.start = 0, .end = bias_dim0};
+    //             bias_slices = {bias_slice0, slice1};
+    //         }
+    //         else {
+    //             size_t      stride = dim0 / factor / tensor_para_size;
+    //             ConcateSlice slice0{.start = stride * rank, .end = stride * (rank + 1)};
+    //             ConcateSlice slice1{.start = 0, .end = dim1};
+    //             weight_slices = {slice0, slice1};
+    //         }
+    //     }
+    //     loadWeightFromBin((float*)w.kernel, {dim0 / factor, dim1}, prefix + ".qweight", f32_type, weight_slices);
+    //     loadWeightFromBin((T*)w.scales, {bias_dim0, dim1}, prefix + ".scales", type, bias_slices);
+    //     loadWeightFromBin((T*)w.zeros, {bias_dim0, dim1}, prefix + ".zeros", type, bias_slices);
+    // }
 }
 
 template<typename T>
@@ -257,7 +265,7 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
                 type,
                 tensor_para_size_,
                 1,
-                {self_attn_weights.qkv.input_dims * 3, self_attn_weights.qkv.output_dims / 3});
+                {head_num_ * size_per_head_, kv_head_num_ * size_per_head_, kv_head_num_ * size_per_head_});
     loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_, 0);
     loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_, 1);
     loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_, 1);

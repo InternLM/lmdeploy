@@ -49,21 +49,20 @@ void cudaAutoCpy(T* tgt, const T* src, const size_t size, cudaStream_t stream = 
 template<typename T>
 void cudaRandomUniform(T* buffer, const size_t size);
 
-struct WeightSlice {
-    size_t start = 0;
-    size_t end   = std::numeric_limits<size_t>::max();
+struct ConcateSlice {
+    std::vector<std::pair<size_t, size_t>> slices;
 };
 
 template<typename T>
-int loadWeightFromBin(T*                       ptr,
-                      std::vector<size_t>      shape,
-                      std::string              filename,
-                      FtCudaDataType           model_file_type = FtCudaDataType::FP32,
-                      std::vector<WeightSlice> slices          = std::vector<WeightSlice>());
+int loadWeightFromBin(T*                        ptr,
+                      std::vector<size_t>       shape,
+                      std::string               filename,
+                      FtCudaDataType            model_file_type = FtCudaDataType::FP32,
+                      std::vector<ConcateSlice> slices          = std::vector<ConcateSlice>());
 
-std::vector<float> loadArrayFromBin(std::vector<size_t>      shape,
-                                    std::string              filename,
-                                    std::vector<WeightSlice> slices = std::vector<WeightSlice>());
+std::vector<float> loadArrayFromBin(std::vector<size_t>       shape,
+                                    std::string               filename,
+                                    std::vector<ConcateSlice> slices = std::vector<ConcateSlice>());
 
 // template<typename T>
 // int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
