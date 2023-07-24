@@ -341,3 +341,52 @@ class TurboMindInstance:
 
         if stream_output:
             self.model_insts[0].unregister_callback()
+
+    def decode(self, input_ids):
+        """Perform context decode on input tokens.
+
+        Args:
+            input_ids (numpy.ndarray): the batch of input token ids
+        """
+
+        if len(input_ids) == 0:
+            input_ids = []
+        if isinstance(input_ids[0], int):
+            input_ids = [input_ids]
+
+        # append an extra token since input_len-1 tokens will be
+        # decoded by context decoder
+        for inputs in input_ids:
+            inputs.append(0)
+
+        batch_size = len(input_ids)
+
+        def _broadcast_np(data, dtype, shape=(batch_size, )):
+            if isinstance(data, Iterable):
+                assert len(data) == batch_size
+                return data
+
+            return np.full(shape, data, dtype=dtype)
+
+        input_ids = [torch.IntTensor(ids) for ids in input_ids]
+        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
+        input_ids = pad_sequence(input_ids,
+                                 batch_first=True,
+                                 padding_value=self.eos_id)
+
+        inputs = dict(input_ids=input_ids,
+                      input_lengths=input_lengths,
+                      request_output_len=_broadcast_np(0, dtype=np.uint32),
+                      is_return_logits=_broadcast_np(1, np.uint32))
+
+        tm_inputs = _np_dict_to_tm_dict(inputs)
+
+        # start forward thread
+        self._forward_thread(tm_inputs)
+
+        _, tm_outputs = self.que.get()
+
+        outputs = _tm_dict_to_torch_dict(tm_outputs)
+        logits = outputs['logits']
+
+        return logits[:, :-1, :]

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaCacheManager.h"
+#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
@@ -53,6 +54,9 @@ public:
 
     void setOutputTensors(int max_gen_step);
 
+    void
+    outputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
+
     explicit LlamaBatch(int max_batch_size, int max_context_token_num, int session_len, LlamaV2<T>* llama);
 
     ~LlamaBatch()
@@ -72,8 +76,8 @@ private:
     // active requests
     std::vector<std::shared_ptr<Request>> requests_;
 
-    T* context_decoder_input_buf_{};  // CTXDEC
-    // T* context_decoder_output_buf_{};  // CTXDEC
+    T*   context_decoder_input_buf_{};   // CTXDEC
+    T*   context_decoder_output_buf_{};  // CTXDEC
     int* context_decoder_ids_buf_{};
 
     T* decoder_input_buf_{};   // CTXDEC, GENERATE
@@ -92,6 +96,8 @@ private:
 
     float* logits_buf_{};        // combined logits
     float* local_logits_buf_{};  // tensor parallel local logits
+    float* context_logits_buf_{};
+    float* local_context_logits_buf_{};
 
     // used by dynamic decoder
     int*      token_ids_buf_{};   // all token IDs in [S, B], indexed using `step`

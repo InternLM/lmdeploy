@@ -66,7 +66,11 @@ private:
     std::unordered_map<std::string, ft::Tensor>
     convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors);
 
-    void allocateBuffer(const size_t request_batch_size, const size_t beam_width, const size_t session_len);
+    void allocateBuffer(const size_t request_batch_size,
+                        const size_t max_input_len,
+                        const size_t beam_width,
+                        const size_t session_len,
+                        const bool   is_return_logits);
     void freeBuffer();
 
     int*   d_input_ids_                = nullptr;
@@ -83,6 +87,7 @@ private:
     int*   d_sequence_lengths_ = nullptr;
     float* d_output_log_probs_ = nullptr;
     float* d_cum_log_probs_    = nullptr;
+    float* d_output_logits_    = nullptr;
 
     uint32_t*          h_total_output_lengths_ = nullptr;
     std::exception_ptr h_exception_            = nullptr;

@@ -55,7 +55,6 @@ protected:
 
     NcclParam tensor_para_;
 
-    T*   attn_ffn_io_{};
     T*   attention_mask_{};
     int* padding_offset_{};
     int* cu_seqlens_{};  // cu for cumulative
@@ -82,6 +81,7 @@ protected:
     };
 
     void forwardSelfAttn(const Session&                                 sess,
+                         T*                                             attn_io,
                          const std::unordered_map<std::string, Tensor>* input_tensors,
                          int                                            layer,
                          bool                                           is_final);
