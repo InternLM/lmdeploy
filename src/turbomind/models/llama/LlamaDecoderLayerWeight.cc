@@ -193,33 +193,43 @@ void loadWeights(LlamaDenseWeight<T>& w,
         }
         loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type, weight_slices);
     }
-    // else {  // int8, int4
-    //     const int factor = sizeof(float) * 8 / bit_size;
-    //     FT_CHECK(dim0 % factor == 0);
-    //     const auto               f32_type = FtCudaDataType::FP32;
-    //     std::vector<ConcateSlice> weight_slices{};
-    //     std::vector<ConcateSlice> bias_slices{};
-    //     if (enable_slice) {
-    //         if (slice_dim == 1) {
-    //             size_t      stride = dim1 / tensor_para_size;
-    //             ConcateSlice slice0{.start = 0, .end = dim0 / factor};
-    //             ConcateSlice slice1{.start = stride * rank, .end = stride * (rank + 1)};
-    //             weight_slices = {slice0, slice1};
+    else {  // int8, int4
+        const int factor = sizeof(float) * 8 / bit_size;
+        FT_CHECK(dim0 % factor == 0);
+        const auto                f32_type = FtCudaDataType::FP32;
+        std::vector<ConcateSlice> weight_slices{};
+        std::vector<ConcateSlice> bias_slices{};
+        if (enable_slice) {
+            if (slice_dim == 1) {
+                size_t       start = 0;
+                ConcateSlice slice0{.slices = {{0, dim0}}};
+                ConcateSlice slice1{.slices = {{}}};
+                for (auto len : slice_shape) {
+                    size_t stride = len / tensor_para_size;
+                    slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
+                    start += len;
+                }
+                weight_slices = {slice0, slice1};
 
-    //             ConcateSlice bias_slice0{.start = 0, .end = bias_dim0};
-    //             bias_slices = {bias_slice0, slice1};
-    //         }
-    //         else {
-    //             size_t      stride = dim0 / factor / tensor_para_size;
-    //             ConcateSlice slice0{.start = stride * rank, .end = stride * (rank + 1)};
-    //             ConcateSlice slice1{.start = 0, .end = dim1};
-    //             weight_slices = {slice0, slice1};
-    //         }
-    //     }
-    //     loadWeightFromBin((float*)w.kernel, {dim0 / factor, dim1}, prefix + ".qweight", f32_type, weight_slices);
-    //     loadWeightFromBin((T*)w.scales, {bias_dim0, dim1}, prefix + ".scales", type, bias_slices);
-    //     loadWeightFromBin((T*)w.zeros, {bias_dim0, dim1}, prefix + ".zeros", type, bias_slices);
-    // }
+                ConcateSlice bias_slice0{.slices = {{0, 1}}};
+                bias_slices = {bias_slice0, slice1};
+            }
+            else {
+                size_t       start = 0;
+                ConcateSlice slice0{.slices = {}};
+                ConcateSlice slice1{.slices = {{0, dim1}}};
+                for (auto len : slice_shape) {
+                    size_t stride = len / factor / tensor_para_size;
+                    slice0.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
+                    start += len;
+                }
+                weight_slices = {slice0, slice1};
+            }
+        }
+        loadWeightFromBin((float*)w.kernel, {dim0 / factor, dim1}, prefix + ".qweight", f32_type, weight_slices);
+        loadWeightFromBin((T*)w.scales, {1, dim1}, prefix + ".scales", type, bias_slices);
+        loadWeightFromBin((T*)w.zeros, {1, dim1}, prefix + ".zeros", type, bias_slices);
+    }
 }
 
 template<typename T>

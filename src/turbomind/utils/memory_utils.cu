@@ -435,14 +435,6 @@ loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename, std::ve
                     }
                 }
             }
-
-            // size_t read_size = (slice1.end - slice1.start) * sizeof(T);
-            // for (size_t dim0_id = slice0.start; dim0_id < slice0.end; ++dim0_id) {
-            //     size_t pos = dim0_id * dim1 + slice1.start;
-            //     in.seekg(pos * sizeof(T));
-            //     in.read(host_ptr, read_size);
-            //     host_ptr += read_size;
-            // }
             in.close();
         }
         return host_array;
