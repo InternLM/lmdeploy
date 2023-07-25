@@ -6,6 +6,59 @@ from transformers import (PreTrainedTokenizerFast, StoppingCriteria,
                           StoppingCriteriaList)
 from transformers.generation.streamers import BaseStreamer
 
+try:
+    # To support command line history
+    import readline
+except ImportError:
+    pass  #readline not available
+
+
+class TerminalIO:
+    """Terminal input and output."""
+
+    end_of_output = '\n'
+
+    def input(self):
+        """Read input from terminal."""
+
+        print('\ndouble enter to end input >>> ', end='')
+        sentinel = ''  # ends when this string is seen
+        return '\n'.join(iter(input, sentinel))
+
+    def output(self, string):
+        print(string, end='', flush=True)
+
+
+class BasicStreamer(BaseStreamer):
+    """Basic streamer for HuggingFace models."""
+
+    def __init__(self,
+                 decode_func,
+                 output_func,
+                 end_of_output='\n',
+                 skip_prompt=True):
+        self.decode = decode_func
+        self.output = output_func
+        self.end_of_output = end_of_output
+        self.skip_prompt = skip_prompt
+        self.gen_len = 0
+
+    def put(self, value):
+        """Callback before forwarding current token id to model."""
+
+        if self.gen_len == 0 and self.skip_prompt:
+            pass
+        else:
+            token = self.decode(value)
+            self.output(token)
+
+        self.gen_len += 1
+
+    def end(self):
+        """Callback at the end of generation."""
+        self.output(self.end_of_output)
+        self.gen_len = 0
+
 
 def get_utils(model):
     """Get utils by model type."""
@@ -133,3 +186,46 @@ class InternLMStoppingCriteria(StoppingCriteria):
 
     def __call__(self, input_ids, *args, **kwargs) -> bool:
         return input_ids[0, -1] in [2, 103028]
+
+
+def test_terminal_io(monkeypatch):
+    import io
+    tio = TerminalIO()
+    inputs = 'hello\n\n'
+    # inputs = 'hello\n\n\x1B[A\n\n'
+    monkeypatch.setattr('sys.stdin', io.StringIO(inputs))
+    string = tio.input()
+    tio.output(string)
+    assert string == 'hello'
+    # string = tio.input()
+    # tio.output(string)
+    # assert string == 'hello'
+
+
+def test_basic_streamer():
+    output = []
+
+    def decode_func(value):
+        return value + 10
+
+    def output_func(value):
+        output.append(value)
+
+    streamer = BasicStreamer(decode_func, output_func)
+    for i in range(10):
+        streamer.put(i)
+        if i == 5:
+            streamer.end()
+    streamer.end()
+
+    assert output == [11, 12, 13, 14, 15, '\n', 17, 18, 19, '\n']
+
+    output.clear()
+    streamer = BasicStreamer(decode_func, output_func, skip_prompt=False)
+    for i in range(10):
+        streamer.put(i)
+        if i == 5:
+            streamer.end()
+    streamer.end()
+
+    assert output == [10, 11, 12, 13, 14, 15, '\n', 16, 17, 18, 19, '\n']
