@@ -187,7 +187,6 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
     if step >= tm_model.session_len:
         print('WARNING: exceed session max length.'
               ' Please end the session.')
-    print('instruction', instruction)
     input_ids = tokenizer.encode(instruction)
     session_id = threading.current_thread().ident
     bot_response = llama_chatbot.stream_infer(session_id, [input_ids],
