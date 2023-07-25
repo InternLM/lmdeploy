@@ -92,7 +92,7 @@ def accel_model(model, accel=None, max_out_tokens=2048, tp_size=1):
 
         if 'InternLM' in model.__class__.__name__:
             try:
-                # Use customized deepspeed supporting internlm
+                # Use customized deepspeed supporting InternLM
                 # https://github.com/wangruohui/DeepSpeed/tree/support_internlm_0.10.0 (commit cdef2ce)  # noqa: E501
                 from deepspeed.module_inject.containers.internlm import InternLMLayerPolicy  # noqa: E501
             except ImportError:
