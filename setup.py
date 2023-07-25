@@ -103,8 +103,7 @@ if __name__ == '__main__':
           long_description_content_type='text/markdown',
           author='OpenMMLab',
           author_email='openmmlab@gmail.com',
-          packages=find_packages(
-              exclude=()),
+          packages=find_packages(exclude=()),
           include_package_data=True,
           install_requires=parse_requirements('requirements.txt'),
           classifiers=[
