@@ -497,6 +497,15 @@ def pack_model_repository(workspace_path: str):
     Args:
         workspace_path: the path of workspace
     """
+    os.symlink(src='../../tokenizer',
+               dst=osp.join(workspace_path, 'triton_models',
+                            'preprocessing', '1', 'tokenizer'))
+    os.symlink(src='../../tokenizer',
+               dst=osp.join(workspace_path, 'triton_models',
+                            'postprocessing', '1', 'tokenizer'))
+    os.symlink(src='../../weights',
+               dst=osp.join(workspace_path, 'triton_models',
+                            'interactive', '1', 'weights'))
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
     os.symlink(src=osp.join('../triton_models/interactive'),

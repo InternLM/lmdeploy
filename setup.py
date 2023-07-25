@@ -104,7 +104,7 @@ if __name__ == '__main__':
           author='OpenMMLab',
           author_email='openmmlab@gmail.com',
           packages=find_packages(
-              exclude=('lmdeploy/serve/turbomind/triton_models', )),
+              exclude=()),
           include_package_data=True,
           install_requires=parse_requirements('requirements.txt'),
           classifiers=[
