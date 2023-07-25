@@ -13,6 +13,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.model import MODELS
+from lmdeploy.turbomind.utils import get_logger
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -69,16 +70,11 @@ class TurboMind:
 
     Args:
         model_path (str): the path of turbomind's model
-        data_type (str): the data type
         eos_id (int): eos token id
         tp (int): tensor parallel
     """
 
-    def __init__(self,
-                 model_path: str,
-                 data_type: str = 'fp16',
-                 eos_id: int = 2,
-                 tp: int = torch.cuda.device_count()):
+    def __init__(self, model_path: str, eos_id: int = 2, tp: int = 1):
         self.eos_id = eos_id
 
         # TODO: support mpi
@@ -88,6 +84,7 @@ class TurboMind:
         # read meta from model path
         self.gpu_count = tp
         self.session_len = 2048
+        data_type = 'fp16'
         ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
         with open(ini_path, 'r') as f:
             parser = ConfigParser()
@@ -102,9 +99,11 @@ class TurboMind:
                 tp_cfg = parser.getint(section_name, 'tensor_para_size')
                 self.session_len = parser.getint(section_name, 'session_len')
                 if tp_cfg != 1 and tp_cfg != tp:
-                    print(f'[INFO] found tp={tp_cfg} in config.ini.')
+                    get_logger('turbomind').info(
+                        f'found tp={tp_cfg} in config.ini.')
                     self.gpu_count = tp_cfg
             self.model_name = parser.get(section_name, 'model_name')
+            data_type = parser.get(section_name, 'weight_type')
         model = MODELS.get(self.model_name)()
         self.stop_words = _stop_words(model.stop_words)
 

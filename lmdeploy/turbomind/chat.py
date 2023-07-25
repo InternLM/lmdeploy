@@ -4,7 +4,6 @@ import os.path as osp
 import random
 
 import fire
-import torch
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
@@ -33,7 +32,7 @@ def valid_str(string, coding='utf-8'):
 def main(model_path,
          session_id: int = 1,
          repetition_penalty: float = 1.0,
-         tp=torch.cuda.device_count()):
+         tp=1):
     """An example to perform model inference through the command line
     interface.
 

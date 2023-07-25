@@ -88,9 +88,11 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
     python3 -m lmdeploy.turbomind.chat /workspace
 ```
 
-```{note}
-When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
-```
+> **Note**
+> When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
+
+> **Note**
+> Tensor parallel can be used to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `deploy` to enable static TP or add `--tp=<num_gpu>` on `chat` to enable runtime TP.
 
 #### Serving
 
@@ -165,6 +167,9 @@ Then adjust `workspace/triton_models/weights/config.ini`
 - `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
 Here is [quantization test results](./docs/zh_cn/quantization.md).
+
+> **Warning**
+> runtime Tesnor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
 
 ## Contributing
 

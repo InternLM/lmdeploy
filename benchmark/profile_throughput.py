@@ -54,11 +54,11 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, tp: int = 1):
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
-        tm_model = TurboMind(model_path=model_path)
+        tm_model = TurboMind(model_path=model_path, tp=tp)
         self.tm_model = tm_model
         self.tokenizer = tokenizer
 
@@ -117,9 +117,10 @@ class Engine:
 def main(dataset: str,
          model_path: str,
          concurrency: int = 1,
-         num_prompts: int = 1000):
+         num_prompts: int = 1000,
+         tp: int = 1):
 
-    engine = Engine(model_path)
+    engine = Engine(model_path, tp=tp)
     tokenizer = engine.tokenizer
 
     requests = sample_requests(dataset, num_prompts, tokenizer)
