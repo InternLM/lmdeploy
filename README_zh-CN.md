@@ -87,7 +87,8 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
 ```
 
 ```{note}
-turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡；显卡关闭 [ECC](https://en.wikipedia.org/wiki/ECC_memory) 可以腾出 10% 显存。
+turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。
+关闭显卡的 ECC 可以腾出 10% 显存。
 ```
 
 #### 部署推理服务
