@@ -20,6 +20,12 @@ def get_version():
     return locals()['__version__']
 
 
+def check_ext_modules():
+    if os.path.exists(os.path.join(pwd, 'lmdeploy', 'lib')):
+        return True
+    return False
+
+
 def parse_requirements(fname='requirements.txt', with_version=True):
     """Parse the package dependencies listed in a file but strips specific
     versioning information.
@@ -107,6 +113,7 @@ if __name__ == '__main__':
               exclude=('lmdeploy/serve/turbomind/triton_models', )),
           include_package_data=True,
           install_requires=parse_requirements('requirements.txt'),
+          has_ext_modules=check_ext_modules,
           classifiers=[
               'Programming Language :: Python :: 3.8',
               'Programming Language :: Python :: 3.9',
