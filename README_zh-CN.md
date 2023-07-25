@@ -116,6 +116,7 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337
 其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
 
 #### 物理机构建 lmdeploy
+
 - 确保物理机环境的 gcc 版本不低于 9，可以通过`gcc --version`确认。
 - 安装编译和运行依赖包：
   ```shell

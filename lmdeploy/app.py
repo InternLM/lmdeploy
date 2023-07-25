@@ -8,9 +8,9 @@ from typing import Sequence
 import fire
 import gradio as gr
 
-from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
+from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.turbomind.chat import valid_str
 from lmdeploy.turbomind.tokenizer import Tokenizer
 
@@ -77,8 +77,10 @@ def reset_all_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
     """reset the session."""
     state_chatbot = []
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
-    llama_chatbot = Chatbot(
-        triton_server_addr, model_name, log_level=log_level, display=True)
+    llama_chatbot = Chatbot(triton_server_addr,
+                            model_name,
+                            log_level=log_level,
+                            display=True)
 
     return (
         llama_chatbot,
@@ -115,14 +117,14 @@ def run_server(triton_server_addr: str,
     """
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
-        _chatbot = Chatbot(
-            triton_server_addr, log_level=log_level, display=True)
+        _chatbot = Chatbot(triton_server_addr,
+                           log_level=log_level,
+                           display=True)
         model_name = _chatbot.model_name
         chat_interface = partial(chat_stream, model_name=model_name)
-        reset_all = partial(
-            reset_all_func,
-            model_name=model_name,
-            triton_server_addr=triton_server_addr)
+        reset_all = partial(reset_all_func,
+                            model_name=model_name,
+                            triton_server_addr=triton_server_addr)
         llama_chatbot = gr.State(_chatbot)
         state_chatbot = gr.State([])
 
@@ -150,23 +152,22 @@ def run_server(triton_server_addr: str,
             [instruction_txtbox],
         )
 
-        cancel_btn.click(
-            cancel_func, [instruction_txtbox, state_chatbot, llama_chatbot],
-            [llama_chatbot, chatbot],
-            cancels=[send_event])
+        cancel_btn.click(cancel_func,
+                         [instruction_txtbox, state_chatbot, llama_chatbot],
+                         [llama_chatbot, chatbot],
+                         cancels=[send_event])
 
         reset_btn.click(
             reset_all, [instruction_txtbox, state_chatbot, llama_chatbot],
             [llama_chatbot, state_chatbot, chatbot, instruction_txtbox],
             cancels=[send_event])
 
-    demo.queue(
-        concurrency_count=4, max_size=100, api_open=True).launch(
-            max_threads=10,
-            share=True,
-            server_port=server_port,
-            server_name=server_name,
-        )
+    demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
+        max_threads=10,
+        share=True,
+        server_port=server_port,
+        server_name=server_name,
+    )
 
 
 def chat_stream_local(instruction: str, state_chatbot: Sequence,
@@ -189,20 +190,19 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
     print('instruction', instruction)
     input_ids = tokenizer.encode(instruction)
     session_id = threading.current_thread().ident
-    bot_response = llama_chatbot.stream_infer(
-        session_id, [input_ids],
-        stream_output=True,
-        request_output_len=512,
-        sequence_start=(nth_round == 1),
-        sequence_end=False,
-        step=step,
-        stop=False,
-        top_k=40,
-        top_p=0.8,
-        temperature=0.8,
-        repetition_penalty=1.0,
-        ignore_eos=False,
-        random_seed=None)
+    bot_response = llama_chatbot.stream_infer(session_id, [input_ids],
+                                              stream_output=True,
+                                              request_output_len=512,
+                                              sequence_start=(nth_round == 1),
+                                              sequence_end=False,
+                                              step=step,
+                                              stop=False,
+                                              top_k=40,
+                                              top_p=0.8,
+                                              temperature=0.8,
+                                              repetition_penalty=1.0,
+                                              ignore_eos=False,
+                                              random_seed=None)
 
     yield (state_chatbot, state_chatbot, step, nth_round,
            f'{bot_summarized_response}'.strip())
@@ -264,17 +264,15 @@ def run_local(model_path: str,
     model = MODELS.get(model_name)()
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
-        log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
         model_name = tm_model.model_name
         state_chatbot = gr.State([])
         nth_round = gr.State(1)
         step = gr.State(0)
-        chat_stream_interface = partial(
-            chat_stream_local,
-            model=model,
-            tm_model=tm_model,
-            tokenizer=tokenizer,
-            llama_chatbot=llama_chatbot)
+        chat_stream_interface = partial(chat_stream_local,
+                                        model=model,
+                                        tm_model=tm_model,
+                                        tokenizer=tokenizer,
+                                        llama_chatbot=llama_chatbot)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -284,7 +282,7 @@ def run_local(model_path: str,
                 placeholder='Please input the instruction',
                 label='Instruction')
             with gr.Row():
-                cancel_btn = gr.Button(value='Cancel')
+                gr.Button(value='Cancel')  # noqa: E501
                 reset_btn = gr.Button(value='Reset')
 
         send_event = instruction_txtbox.submit(
@@ -303,13 +301,12 @@ def run_local(model_path: str,
             [state_chatbot, chatbot, step, nth_round, instruction_txtbox],
             cancels=[send_event])
 
-    demo.queue(
-        concurrency_count=4, max_size=100, api_open=True).launch(
-            max_threads=10,
-            share=True,
-            server_port=server_port,
-            server_name=server_name,
-        )
+    demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
+        max_threads=10,
+        share=True,
+        server_port=server_port,
+        server_name=server_name,
+    )
 
 
 def run(model_path_or_server: str,

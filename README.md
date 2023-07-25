@@ -117,6 +117,7 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
 
 #### Serving with out docker
+
 - make sure local gcc version no less than 9, which can be conformed by `gcc --version`.
 - install packages for compiling and running:
   ```shell
@@ -128,7 +129,7 @@ For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and
   export NCCL_LIBRARIES=/path/to/nccl/build/lib
   ```
 - install rapidjson
-- install openmpi, installing from source is recommanded.
+- install openmpi, installing from source is recommended.
   ```shell
   wget https://download.open-mpi.org/release/open-mpi/v3.1/openmpi-3.1.0.tar.gz
   tar -xzf openmpi-*.tar.gz && cd openmpi-*
@@ -143,10 +144,13 @@ For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and
   ```
 
 Then, you can communicate with the inference server by command line,
+
 ```shell
 python3 -m lmdeploy.turbomind.chat model_path
 ```
+
 or webui,
+
 ```shell
 python3 -m lmdeploy.app model_path
 ```
