@@ -12,7 +12,7 @@ export GROUPID=$(id -g)
 
 cd "$(dirname "$0")"  # move inside the script directory
 mkdir -p "${OUTPUT_DIR}"
-# docker pull ${docker_image}
+docker pull ${DOCKER_IMAGE}
 docker run --rm -it \
     --env PYTHON_VERSION="${PYTHON_VERSION}" \
     --env PLAT_NAME="${PLAT_NAME}" \

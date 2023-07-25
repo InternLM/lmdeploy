@@ -9,7 +9,7 @@ export GROUPID=${GROUPID}
 source /opt/conda/bin/activate
 conda activate $PYTHON_VERSION
 
-git clone -b builder https://github.com/irexyc/lmdeploy.git
+git clone https://github.com/InternLM/lmdeploy
 cd lmdeploy
 mkdir build && cd build
 cmake .. \
