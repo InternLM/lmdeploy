@@ -13,7 +13,6 @@ python profile_hf_generation.py \
     --out_file profile_hf.csv
 ```
 
-
 Example 2: Same test above but accelerated with DeepSpeed inference and more round to test
 
 ```shell
@@ -24,6 +23,21 @@ python profile_hf_generation.py \
     --gen_seqlen 128 \
     --test_round 2 \
     --accel deepspeed \
+    --out_file profile_hf.csv
+```
+
+Example 3: Same test above but do not use streamer to measure time of every token
+        Only only overall time is measured but a little bit faster
+
+```shell
+python profile_hf_generation.py \
+    --model_path $PATH_TO_HF_LLAMA2 \
+    --batch_size 16 \
+    --input_seqlen 128 \
+    --gen_seqlen 128 \
+    --test_round 2 \
+    --accel deepspeed \
+    --no-streamer \
     --out_file profile_hf.csv
 ```
 
@@ -192,7 +206,8 @@ def main(model_path: str,
          test_round: int = 1,
          accel: Optional[str] = None,
          out_file: Optional[str] = 'profile_hf.csv',
-         model_log_name: Optional[str] = None):
+         model_log_name: Optional[str] = None,
+         no_streamer: bool = False):
 
     total_seqlen = input_seqlen + gen_seqlen
 
@@ -225,8 +240,10 @@ def main(model_path: str,
         fake_inputs = torch.randint(10, vocab_size, (batch_size, input_seqlen))
         fake_inputs = fake_inputs.cuda()
 
-        ts = TimingStreamer()
+        ts = TimingStreamer() if not no_streamer else None
+
         torch.cuda.synchronize()
+        start = time.monotonic()
         fake_outputs = model.generate(
             fake_inputs,
             GenerationConfig(max_new_tokens=gen_seqlen,
@@ -235,15 +252,20 @@ def main(model_path: str,
             streamer=ts,
         )
         torch.cuda.synchronize()
+        end = time.monotonic()
         assert fake_outputs.size() == (batch_size,
                                        total_seqlen), fake_outputs.size()
 
         # total_time, first_time, _ = ts.get_times()
-        raw_times = ts.raw_times()  # You may further analyze this
-        total_time = sum(raw_times)
-        first_time = raw_times[0]
-        next_time = avg(raw_times[1:6])
-        last_time = avg(raw_times[-5:])
+        if no_streamer:
+            total_time = (end - start) * 1000
+            first_time = next_time = last_time = 0
+        else:
+            raw_times = ts.raw_times()  # You may further analyze this
+            total_time = sum(raw_times)
+            first_time = raw_times[0]
+            next_time = avg(raw_times[1:6])
+            last_time = avg(raw_times[-5:])
         tt = batch_size * total_seqlen * 1000 / total_time
         tg = batch_size * gen_seqlen * 1000 / total_time
         cprint(f'First token/ms: {first_time:.1f}, '
