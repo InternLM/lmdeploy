@@ -116,6 +116,32 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
 
+#### serving with out docker
+- make sure local gcc version no less than 9, which can be conformed by `gcc --version`.
+- install packages for compiling and running:
+  ```shell
+  pip install -r requirements.txt
+  ```
+- install [nccl](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html), set environment variables:
+  ```shell
+  export NCCL_ROOT_DIR=/path/to/nccl/build
+  export NCCL_LIBRARIES=/path/to/nccl/build/lib
+  ```
+- install rapidjson
+- install openmpi, installing from source is recommanded.
+  ```shell
+  wget https://download.open-mpi.org/release/open-mpi/v3.1/openmpi-3.1.0.tar.gz
+  tar -xzf openmpi-*.tar.gz && cd openmpi-*
+  ./configure --with-cuda
+  make -j$(nproc)
+  make install
+  ```
+- build and install lmdeploy:
+  ```shell
+  mkdir build && cd build
+  sh ../generate.sh
+  ```
+
 ### Inference with PyTorch
 
 You have to install deepspeed first before running with PyTorch.

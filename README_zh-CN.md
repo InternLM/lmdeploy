@@ -91,7 +91,7 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
 turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡
 ```
 
-#### 部署推理服务
+#### 通过容器部署推理服务
 
 使用下面的命令启动推理服务：
 
@@ -114,6 +114,32 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
 其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
+
+#### 物理机构建 lmdeploy
+- 确保物理机环境的 gcc 版本不低于 9，可以通过`gcc --version`确认。
+- 安装编译和运行依赖包：
+  ```shell
+  pip install -r requirements.txt
+  ```
+- 安装 [nccl](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html),设置环境变量
+  ```shell
+  export NCCL_ROOT_DIR=/path/to/nccl/build
+  export NCCL_LIBRARIES=/path/to/nccl/build/lib
+  ```
+- rapidjson 安装
+- openmpi 安装, 推荐从源码安装:
+  ```shell
+  wget https://download.open-mpi.org/release/open-mpi/v3.1/openmpi-3.1.0.tar.gz
+  tar -xzf openmpi-*.tar.gz && cd openmpi-*
+  ./configure --with-cuda
+  make -j$(nproc)
+  make install
+  ```
+- lmdeploy 编译安装:
+  ```shell
+  mkdir build && cd build
+  sh ../generate.sh
+  ```
 
 ### 基于 PyTorch 的推理
 
