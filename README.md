@@ -116,7 +116,7 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
 
-#### serving with out docker
+#### Serving with out docker
 - make sure local gcc version no less than 9, which can be conformed by `gcc --version`.
 - install packages for compiling and running:
   ```shell
@@ -141,6 +141,15 @@ For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and
   mkdir build && cd build
   sh ../generate.sh
   ```
+
+Then, you can communicate with the inference server by command line,
+```shell
+python3 -m lmdeploy.turbomind.chat model_path
+```
+or webui,
+```shell
+python3 -m lmdeploy.app model_path
+```
 
 ### Inference with PyTorch
 

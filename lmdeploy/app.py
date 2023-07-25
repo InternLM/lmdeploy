@@ -103,9 +103,9 @@ def cancel_func(
     )
 
 
-def run(triton_server_addr: str,
-        server_name: str = 'localhost',
-        server_port: int = 6006):
+def run_server(triton_server_addr: str,
+               server_name: str = 'localhost',
+               server_port: int = 6006):
     """chat with AI assistant through web ui.
 
     Args:
@@ -234,8 +234,6 @@ def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
                      step: gr.State, nth_round: gr.State):
     """reset the session."""
     state_chatbot = []
-    log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
-    # llama_chatbot = tm_model.create_instance()
     step = 0
     nth_round = 1
 
@@ -248,13 +246,13 @@ def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
     )
 
 
-def run_local_model(model_path: str,
-                    server_name: str = 'localhost',
-                    server_port: int = 6006):
+def run_local(model_path: str,
+              server_name: str = 'localhost',
+              server_port: int = 6006):
     """chat with AI assistant through web ui.
 
     Args:
-        triton_server_addr (str): the communication address of inference server
+        model_path (str): the path of the deployed model
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
     """
@@ -271,7 +269,8 @@ def run_local_model(model_path: str,
         state_chatbot = gr.State([])
         nth_round = gr.State(1)
         step = gr.State(0)
-        chat_stream_interface = partial(chat_stream_local,
+        chat_stream_interface = partial(
+            chat_stream_local,
             model=model,
             tm_model=tm_model,
             tokenizer=tokenizer,
@@ -313,5 +312,14 @@ def run_local_model(model_path: str,
         )
 
 
+def run(model_path_or_server: str,
+        server_name: str = 'localhost',
+        server_port: int = 6006):
+    if ':' in model_path_or_server:
+        run_server(model_path_or_server, server_name, server_port)
+    else:
+        run_local(model_path_or_server, server_name, server_port)
+
+
 if __name__ == '__main__':
-    fire.Fire(run_local_model)
+    fire.Fire(run)

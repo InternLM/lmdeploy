@@ -141,6 +141,18 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337
   sh ../generate.sh
   ```
 
+你可以通过命令行方式与推理服务进行对话：
+
+```shell
+python3 -m lmdeploy.turbomind.chat model_path
+```
+
+也可以通过 WebUI 方式来对话：
+
+```shell
+python3 -m lmdeploy.app model_path
+```
+
 ### 基于 PyTorch 的推理
 
 你必须确保环境中有安装 deepspeed：
