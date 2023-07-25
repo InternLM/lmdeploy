@@ -18,8 +18,8 @@ supported_formats = ['llama', 'hf']
 
 
 def get_package_root_path():
-    import importlib.resources as pkg_resources
-    return pkg_resources.path('lmdeploy', '')
+    import lmdeploy
+    return Path(lmdeploy.__file__).parent
 
 
 def create_workspace(_path: str):
