@@ -36,9 +36,8 @@ with the following fields.
 4. gen_len: length of sequence length to generate
 5. total_len: gen_len + input_len
 
-In total, the model will take a random input ids of shape
-(batch_size, input_seqlen) and run forward `gen_len` times
-to generate output ids of shape (batch_size, gen_len)
+In total, the model will take a random input ids of shape (batch_size, input_seqlen) and
+run forward `gen_len` times to generate output ids of shape (batch_size, gen_len)
 
 6. first_time: latency to forward the first (batch_size, input_seqlen) ids
     to get `input_seqlen+1`-th batch of output of shape (batch_size, 1)
@@ -49,7 +48,7 @@ to generate output ids of shape (batch_size, gen_len)
 9. total time: total time to generate all tokens
 10. throughput(total): bs * total_len / total_time (same as vllm)
 11. throughput(gen): bs * gen_len / total_time (same as vllm)
-"""
+"""   # noqa: E501
 
 import csv
 import logging
@@ -68,9 +67,9 @@ logger.setLevel(logging.DEBUG)
 info = logger.info
 warning = logger.warning
 debug = logger.debug
-cinfo = lambda x: info('\033[1;32m' + x + '\033[0m')
-cprint = lambda x: print('\033[1;32m' + x + '\033[0m')
-avg = lambda x: sum(x) / len(x)
+cinfo = lambda x: info('\033[1;32m' + x + '\033[0m')  # noqa E731
+cprint = lambda x: print('\033[1;32m' + x + '\033[0m')  # noqa E731
+avg = lambda x: sum(x) / len(x)  # noqa E731
 
 
 class TimingStreamer:
@@ -93,7 +92,7 @@ class TimingStreamer:
                 which means the second event records the time for the first prompt.
 
             GenerationMixin will call `.cpu()` on output token which implies a sync.
-        """
+        """  # noqa: E501
         # self.value += 1
         # self.token_cache.append(value)
         evt = torch.cuda.Event(enable_timing=True)
@@ -102,7 +101,7 @@ class TimingStreamer:
 
     def end(self):
         torch.cuda.synchronize()
-        # self.tokens = torch.hstack([_atleast_2d(v) for v in self.token_cache])
+        # self.tokens = torch.hstack([_atleast_2d(v) for v in self.token_cache])    # noqa: E501
 
     def get_times(self):
         """Maybe deprecated.
@@ -158,7 +157,7 @@ class CSVWRitter:
 
     @property
     def on_master(self):
-        # return not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+        # return not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0  # noqa: E501
         rank = int(os.environ.get('RANK', 0))
         return rank == 0
 
