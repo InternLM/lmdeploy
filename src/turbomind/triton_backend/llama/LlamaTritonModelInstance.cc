@@ -193,7 +193,13 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors = convert_inputs(input_tensors);
 
-    allocateBuffer(request_batch_size, beam_width, instance_->session_len);
+    const size_t max_input_len = input_tensors->at("input_ids").shape[1];
+    const bool   is_return_logits =
+        input_tensors->count("is_return_logits") && *(bool*)input_tensors->at("is_return_logits").data;
+
+    const size_t vocab_size = instance_->llm->vocab_size();
+
+    allocateBuffer(request_batch_size, max_input_len, beam_width, instance_->session_len, is_return_logits);
 
     std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
         {"output_ids",
@@ -219,6 +225,13 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
                                           std::vector<size_t>{request_batch_size, beam_width},
                                           d_cum_log_probs_}});
     }
+
+    if (is_return_logits) {
+        output_tensors.insert(
+            {"logits",
+             {ft::MEMORY_GPU, ft::TYPE_FP32, {request_batch_size, max_input_len, vocab_size}, d_output_logits_}});
+    }
+
     try {
         ft::Request::Callback callback;
 
@@ -253,8 +266,10 @@ LlamaTritonModelInstance<T>::~LlamaTritonModelInstance()
 
 template<typename T>
 void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size,
+                                                 const size_t max_input_len,
                                                  const size_t beam_width,
-                                                 const size_t session_len)
+                                                 const size_t session_len,
+                                                 const bool   is_return_logits)
 {
     d_output_ids_ =
         (int*)(allocator_->reMalloc(d_output_ids_, sizeof(int) * request_batch_size * beam_width * session_len, false));
@@ -264,6 +279,10 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
         d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
     d_cum_log_probs_ =
         (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
+    if (is_return_logits) {
+        d_output_logits_ = (float*)allocator_->reMalloc(
+            d_output_logits_, sizeof(float) * request_batch_size * max_input_len * instance_->llm->vocab_size(), false);
+    }
 }
 
 template<typename T>

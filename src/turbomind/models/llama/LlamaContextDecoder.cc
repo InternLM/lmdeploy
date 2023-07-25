@@ -39,7 +39,6 @@ void LlamaContextDecoder<T>::allocateBuffer(size_t batch_size, size_t num_token,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    attn_ffn_io_    = (T*)allocator_->reMalloc(attn_ffn_io_, sizeof(T) * num_token * hidden_units_, false);
     attention_mask_ = (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * batch_size * max_q_len * max_kv_len, false);
     padding_offset_ = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * max_q_len, false);
     cu_seqlens_     = (int*)allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false);
@@ -52,7 +51,6 @@ void LlamaContextDecoder<T>::freeBuffer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free((void**)&attn_ffn_io_);
         allocator_->free((void**)&padding_offset_);
         allocator_->free((void**)&cu_seqlens_);
         allocator_->free((void**)&attention_mask_);
@@ -91,13 +89,14 @@ void LlamaContextDecoder<T>::initialize(size_t kv_head_num, bool use_fmha, int q
 
 template<typename T>
 void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                                 sess,
+                                             T*                                             attn_io,
                                              const std::unordered_map<std::string, Tensor>* input_tensors,
                                              int                                            layer,
                                              bool                                           is_final)
 {
     // TM_LOG_ERROR(__PRETTY_FUNCTION__);
     TensorMap self_attention_input_tensors{
-        {"input_query", Tensor{MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}},
+        {"input_query", Tensor{MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_io}},
         {"attention_mask",
          {MEMORY_GPU, data_type_, {sess.batch_size, 1, sess.max_query_len, sess.max_key_len}, attention_mask_}},
         {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &layer}},
@@ -113,7 +112,7 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
     auto& v_cache = *sess.v_cache;
 
     TensorMap self_attention_output_tensors{
-        {"hidden_features", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}},
+        {"hidden_features", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_io}},
         {"key_cache", k_cache},
         {"value_cache", v_cache},
     };
@@ -185,7 +184,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
      *   \param max_seq_len [1], int on cpu
      *
      * output tensors:
-     *   \param decoder_output [batch_size, seq_len, hidden_units],
+     *   \param decoder_output [num_token, hidden_units],
      *   \param key_cache [num_layer, batch, local_head_num, size_per_head // x, max_seq_len, x]
      *   \param value_cache [num_layer, batch, local_head_num, max_seq_len, size_per_head]
      *   \param last_token_hidden_units [batch_size, hidden_units]
@@ -204,7 +203,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     sess.context_length = input_tensors->at("context_lengths").getPtr<int>();
 
     T* decoder_input_output = input_tensors->at("decoder_input").getPtr<T>();
-    // T* decoder_output = output_tensors->at("decoder_output").getPtr<T>();
+    T* decoder_output       = output_tensors->at("decoder_output").getPtr<T>();
 
     sess.k_cache = &output_tensors->at("key_cache");
     sess.v_cache = &output_tensors->at("value_cache");
@@ -234,7 +233,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
     /////////////////////////////////////////////
     /// RMSNorm
-    invokeRootMeanSquareNorm(attn_ffn_io_,
+    invokeRootMeanSquareNorm(decoder_output,
                              decoder_input_output,
                              decoder_layer_weights->at(0)->self_attn_norm_weights,
                              rmsnorm_eps_,
@@ -246,10 +245,10 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     for (size_t layer = 0; layer < num_layer_; ++layer) {
         /////////////////////////////////////////////
         /// self-attention
-        forwardSelfAttn(sess, input_tensors, layer, false);
+        forwardSelfAttn(sess, decoder_output, input_tensors, layer, false);
 
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,
-                                          attn_ffn_io_,
+                                          decoder_output,
                                           decoder_layer_weights->at(layer)->self_attn_weights.output.bias,
                                           decoder_layer_weights->at(layer)->ffn_norm_weights,
                                           rmsnorm_eps_,
@@ -260,14 +259,15 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
         ////////////////////////////////////////////
         /// feed-forward network
-        TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}}};
-        TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}}};
+        TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, decoder_output}}};
+        TensorMap ffn_outputs{
+            {"ffn_output", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, decoder_output}}};
         silu_ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &decoder_layer_weights->at(layer)->ffn_weights);
 
         auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
                                                      input_tensors->at("output_norm_weight").getPtr<T>();
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,  //
-                                          attn_ffn_io_,
+                                          decoder_output,
                                           decoder_layer_weights->at(layer)->ffn_weights.output.bias,
                                           scale_weight,
                                           rmsnorm_eps_,
