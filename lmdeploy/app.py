@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import os.path as osp
+import random
 import threading
 from functools import partial
 from typing import Sequence
@@ -181,6 +182,7 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         llama_chatbot (Chatbot): the instance of a chatbot
         model_name (str): the name of deployed model
     """
+    seed = random.getrandbits(64)
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
     instruction = model.get_prompt(instruction, nth_round == 1)
@@ -189,19 +191,20 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
               ' Please end the session.')
     input_ids = tokenizer.encode(instruction)
     session_id = threading.current_thread().ident
-    bot_response = llama_chatbot.stream_infer(session_id, [input_ids],
-                                              stream_output=True,
-                                              request_output_len=512,
-                                              sequence_start=(nth_round == 1),
-                                              sequence_end=False,
-                                              step=step,
-                                              stop=False,
-                                              top_k=40,
-                                              top_p=0.8,
-                                              temperature=0.8,
-                                              repetition_penalty=1.0,
-                                              ignore_eos=False,
-                                              random_seed=None)
+    bot_response = llama_chatbot.stream_infer(
+        session_id, [input_ids],
+        stream_output=True,
+        request_output_len=512,
+        sequence_start=(nth_round == 1),
+        sequence_end=False,
+        step=step,
+        stop=False,
+        top_k=40,
+        top_p=0.8,
+        temperature=0.8,
+        repetition_penalty=1.0,
+        ignore_eos=False,
+        random_seed=seed if nth_round == 1 else None)
 
     yield (state_chatbot, state_chatbot, step, nth_round,
            f'{bot_summarized_response}'.strip())
