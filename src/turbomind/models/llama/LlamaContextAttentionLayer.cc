@@ -208,7 +208,6 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
 
     sync_check_cuda_error();
     if (use_fmha_) {
-        FT_CHECK(local_head_num_ == local_kv_head_num_);
         fusedMultiHeadAttention(k_cache_ptrs,
                                 v_cache_ptrs,
                                 layer_offset,
@@ -285,8 +284,8 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
         .stride_head  = int(size_per_head_),
         .use_seqlens  = true,
     };
-    AttentionOp flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
-
+    size_t                       group_size = size_t(local_head_num_ / local_kv_head_num_);
+    AttentionOp                  flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
     typename AttentionOp::Params attn_params{.attn_out     = qkv_buf_3_,
                                              .query        = q_buf_2_,
                                              .key          = k_cache_buf_,
@@ -295,6 +294,7 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
                                              .out_accum    = qk_buf_float_,
                                              .cu_seqlens_q = cu_seqlens,
                                              .cu_seqlens_k = nullptr,
+                                             .group_size   = group_size,
                                              .layout_q     = layout_q,
                                              .layout_k     = layout_k,
                                              .layout_v     = layout_v,
