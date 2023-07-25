@@ -89,6 +89,7 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
 
 ```{note}
 When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
+Disable GPU ECC can free up 10% memory.
 ```
 
 #### Serving
