@@ -14,7 +14,7 @@ def get_local_rank():
 
     Assume environment variable ``LOCAL_RANK`` is properly set by some launcher.
     See: https://pytorch.org/docs/stable/elastic/run.html#environment-variables
-    """
+    """  # noqa: E501
 
     return int(os.getenv('LOCAL_RANK', '0'))
 
@@ -24,7 +24,7 @@ def get_rank():
 
     Assume environment variable ``RANK`` is properly set by some launcher.
     See: https://pytorch.org/docs/stable/elastic/run.html#environment-variables
-    """
+    """  # noqa: E501
 
     return int(os.getenv('RANK', '0'))
 
@@ -34,9 +34,9 @@ def get_world_size():
 
     Assume environment variable ``WORLD_SIZE`` is properly set by some launcher.
     See: https://pytorch.org/docs/stable/elastic/run.html#environment-variables
-    """
+    """  # noqa: E501
 
-    return int(os.getenv('WORLD_SIZE', '0'))
+    return int(os.getenv('WORLD_SIZE', '1'))
 
 
 def master_only(func):
