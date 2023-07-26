@@ -505,6 +505,8 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'preprocessing'))
     os.symlink(src=osp.join('../triton_models/postprocessing'),
                dst=osp.join(model_repo_dir, 'postprocessing'))
+    os.symlink(src=osp.join('../triton_models/ensemble'),
+               dst=osp.join(model_repo_dir, 'ensemble'))
 
 
 def main(model_name: str,
