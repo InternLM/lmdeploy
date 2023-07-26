@@ -4,10 +4,10 @@
 
 We take the [Chinese-LLaMa-Alpaca 7B](https://github.com/ymcui/Chinese-LLaMA-Alpaca) instruction model as the benchmark target. The benchmark process is as follows:
 
-1. Use the `deploy.py` to convert the model, modify the maximum concurrent amount in `workspace`, and adjust the request amount in `llama_config.ini`;
-2. Compile the `bin/llama_triton_example` and get the graphics usage status of the fp16 version model under different batch_size settings;
-3. Execute the quantization script and get the quantization parameters. Then modify the config file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) be effective;
-4. Re-execute the `bin/llama_triton_example` and get the graphics usage status of the int8 version model under different batch_size settings.
+1. Use the `deploy.py` to convert the model, modify the maximum concurrent amount in `workspace`, and adjust the request amount in `llama_config.ini`
+2. Compile the `bin/llama_triton_example` and get the graphics usage status of the fp16 version model under different batch_size settings
+3. Execute the quantization script and get the quantization parameters. Then modify the config file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) be effective
+4. Re-execute the `bin/llama_triton_example` and get the graphics usage status of the int8 version model under different batch_size settings
 
 Here is the benchmark result between the two versions of the model:
 
@@ -30,10 +30,10 @@ Note that `kCacheKVInt8` and `WeightInt4` can be used simultaneously, and we wil
 
 Here we take the [Chinese-LLaMa-Alpaca 7B](https://github.com/ymcui/Chinese-LLaMA-Alpaca) instruction model as the benchmark target again. The benchmark process is as follows:
 
-1. Convert the model with `deploy.py` and run the docker service;
-2. Test the fp16 version accuracy with `client.py` using the dataset;
-3. Execute the quantization script to get the quantization parameters, and put them into the weights directory. Then modify the configuration file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) option to be effective;
-4. Execute the `client.py` again to get the int8 version precision.
+1. Convert the model with `deploy.py` and run the docker service
+2. Test the fp16 version accuracy with `client.py` using the dataset
+3. Execute the quantization script to get the quantization parameters, and put them into the weights directory. Then modify the configuration file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) option to be effective
+4. Execute the `client.py` again to get the int8 version precision
 
 The following table is the precision result obtained by the `kCacheKVInt8` method after quantizing 128 randomly selected data from the c4 dataset and testing it on the mmlu-social-science dataset, which has a total of 3065 multiple-choice questions:
 
