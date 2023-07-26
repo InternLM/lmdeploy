@@ -36,17 +36,16 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 性能
 
-如下图所示，我们对比了 facebookresearch/llama、HuggingFace Transformers、DeepSpeed 在 7B 模型上的token生成的速度。
+**场景一**: 固定的输入、输出token数（1,2048），测试 output token throughput
 
-测试设备：NVIDIA A100(80G)
+**场景二**: 使用真实数据，测试 request throughput
 
-测试指标：吞吐量（token/s)
+测试配置：LLaMA-7B, NVIDIA A100(80G)
 
-测试数据：输入token数为1，生成token数为2048
+TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
+在 request throughput 指标上，TurboMind 的效率比 vLLM 高 30%
 
-TurboMind 的吞吐量超过 2000 token/s, 整体比 DeepSpeed 提升约 5% - 15%，比 huggingface transformers 提升 2.3 倍
-
-![benchmark](https://user-images.githubusercontent.com/12756472/251422522-e94a3db9-eb16-432a-8d8c-078945e7b99a.png)
+![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/7775c518-608e-4e5b-be73-7645a444e774)
 
 ## 快速上手
 
@@ -88,7 +87,8 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
 ```
 
 ```{note}
-turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡
+turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。
+关闭显卡的 ECC 可以腾出 10% 显存，执行 `sudo nvidia-smi --ecc-config=0` 重启系统生效。
 ```
 
 #### 部署推理服务

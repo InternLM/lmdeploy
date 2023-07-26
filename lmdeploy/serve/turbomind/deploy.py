@@ -18,8 +18,8 @@ supported_formats = ['llama', 'hf']
 
 
 def get_package_root_path():
-    import importlib.resources as pkg_resources
-    return pkg_resources.path('lmdeploy', '')
+    import lmdeploy
+    return Path(lmdeploy.__file__).parent
 
 
 def create_workspace(_path: str):
@@ -196,7 +196,7 @@ def export(model_name: str,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=1,
-        use_context_fmha=int(kv_head_num == head_num),
+        use_context_fmha=1,
         quant_policy=0,
         tensor_para_size=tp))
 
@@ -497,6 +497,15 @@ def pack_model_repository(workspace_path: str):
     Args:
         workspace_path: the path of workspace
     """
+    os.symlink(src='../../tokenizer',
+               dst=osp.join(workspace_path, 'triton_models', 'preprocessing',
+                            '1', 'tokenizer'))
+    os.symlink(src='../../tokenizer',
+               dst=osp.join(workspace_path, 'triton_models', 'postprocessing',
+                            '1', 'tokenizer'))
+    os.symlink(src='../../weights',
+               dst=osp.join(workspace_path, 'triton_models', 'interactive',
+                            '1', 'weights'))
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
     os.symlink(src=osp.join('../triton_models/interactive'),
