@@ -64,12 +64,19 @@ function install_121 {
     ldconfig
 }
 
+if test $# -eq 0
+then
+    echo "doesn't provide cuda version"; exit 1;
+fi
+
 # idiomatic parameter and option handling in sh
 while test $# -gt 0
 do
     case "$1" in
     11.8) install_118
 	        ;;
+    12.1) install_121
+            ;;
 	*) echo "bad argument $1"; exit 1
 	   ;;
     esac
