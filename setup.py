@@ -42,11 +42,12 @@ def parse_requirements(fname='requirements.txt', with_version=True):
     """
     require_fpath = fname
 
-    def parse_nccl_pkg(arg_name_equal):
+    def get_nccl_pkg():
+        arg_name = '--cuda='
         arg_value = None
         for arg in sys.argv[1:]:
-            if arg.startswith(arg_name_equal):
-                arg_value = arg[len(arg_name_equal):]
+            if arg.startswith(arg_name):
+                arg_value = arg[len(arg_name):]
                 sys.argv.remove(arg)
                 break
 
@@ -112,7 +113,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 yield item
 
     packages = list(gen_packages_items())
-    nccl_pkg = parse_nccl_pkg('--cuda=')
+    nccl_pkg = get_nccl_pkg()
     if nccl_pkg is not None:
         packages += [nccl_pkg]
     return packages
