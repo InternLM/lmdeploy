@@ -12,3 +12,6 @@ examples/cpp/llama/*.csv
 *.npy
 *.weight
 *.pyc
+*.csv
+*.png
+*.html
