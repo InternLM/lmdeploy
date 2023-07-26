@@ -16,11 +16,15 @@ from torch.nn import functional as F
 
 @triton.autotune(
     configs=[
+        Config({'BLOCK_M': 16, 'BLOCK_N': 16}, num_stages=1, num_warps=1),
+        Config({'BLOCK_M': 16, 'BLOCK_N': 16}, num_stages=4, num_warps=2),
         Config({'BLOCK_M': 16, 'BLOCK_N': 16}, num_stages=4, num_warps=1),
         Config({'BLOCK_M': 16, 'BLOCK_N': 16}, num_stages=4, num_warps=4),
         Config({'BLOCK_M': 32, 'BLOCK_N': 32}, num_stages=4, num_warps=1),
         Config({'BLOCK_M': 32, 'BLOCK_N': 32}, num_stages=4, num_warps=4),
         Config({'BLOCK_M': 64, 'BLOCK_N': 64}, num_stages=2, num_warps=4),
+        Config({'BLOCK_M': 128, 'BLOCK_N': 128}, num_stages=2, num_warps=8),
+        Config({'BLOCK_M': 128, 'BLOCK_N': 128}, num_stages=2, num_warps=8),
     ],
     key=['BATCH_SIZE','nheads', 'seqlen_q', 'seqlen_kv'],
 )
@@ -191,13 +195,78 @@ attention = _attention.apply
 
 
 
-BATCH, N_HEADS, D_HEAD = 1, 32, 128
-GENERATION = True
-IS_CAUSAL = False
+# -------------- Test --------------------------
+MODE = ['context']
+CAUSUAL = [False]
+BS = [1, 16, 32, 48, 64, 128]
+HEADS = [32, 40, 64, 80]
+# N_CTX = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+N_CTX = [i for i in range(69,80)]
+D_HEAD = [128]
+import itertools 
+SHAPES = list(itertools.product(BS, N_CTX, HEADS, D_HEAD))
+ARGS = list(itertools.product(SHAPES, MODE, CAUSUAL))
+
+def test_flash_attention(shape, causual=True, mode='context', warmup=50, rep=100):
+    bs, m, h, d = shape
+    
+    dtype = torch.float16
+    if mode=='generation':
+        q = torch.randn((bs, 1, h, d), dtype=dtype, device="cuda", requires_grad=False)
+    else:
+        q = torch.randn((bs, m, h, d), dtype=dtype, device="cuda", requires_grad=False)
+    k = torch.randn((bs, m, h, d), dtype=dtype, device="cuda", requires_grad=False)
+    v = torch.randn((bs, m, h, d), dtype=dtype, device="cuda", requires_grad=False)
+
+    q *= 100
+    k *= 100
+    v *= 100
+    sm_scale = 1/(d ** 0.5)
+
+    # triton custom
+    triton_fn = lambda: attention(q, k, v,  causual)
+    
+    # pytorch
+    trans_q = q.transpose(1,2)
+    trans_k = k.transpose(1,2)
+    trans_v = v.transpose(1,2)
+    torch_fn = lambda: F.scaled_dot_product_attention (trans_q, trans_k, trans_v, is_causal=causual)
+    
+    # flash
+    from flash_attn.flash_attn_interface import flash_attn_func
+    flash_att_fn = lambda: flash_attn_func(q, k, v,0.0, sm_scale,causual)
+    
+    # xformers
+    from xformers.ops import memory_efficient_attention
+    from xformers.ops import LowerTriangularMask
+    if causual:
+        xformers_fn = lambda: memory_efficient_attention (q, k, v, LowerTriangularMask() )
+    else:
+        xformers_fn = lambda: memory_efficient_attention (q, k, v)
+    
+    
+    if triton_fn().sum().item() != torch_fn().sum().item():
+        print(f'{shape}, {mode}, {causual}',
+            'Triton :', triton_fn().sum().item(), 
+            'Pytorch :', torch_fn().sum().item(),
+            'Xformers :', xformers_fn().sum().item(),
+            'Flash :', flash_att_fn().sum().item())
+
+
+# for shape, mode, is_causual in ARGS:
+#     test_flash_attention(shape, is_causual, mode)
+    
+    
+
+# ----------------- Benchmark ---------------------
+
+BATCH, N_HEADS, D_HEAD = 32, 32, 128
+GENERATION = False
+IS_CAUSAL = True
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
-    x_vals=[2**i for i in range(4,12)],
+    x_vals=[2**i+1 for i in range(4,12)],
     line_arg='provider',
     line_vals=['triton','pytorch','xformers','flash'] ,
     line_names=['Triton','Pytorch','Xformers','FlashAttention2'] ,
@@ -222,7 +291,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, provider, dtype=torch.float16
         v = torch.randn((BATCH, N_CTX,H,  D_HEAD), dtype=dtype, device="cuda", requires_grad=False)
         
         sm_scale = 1.3
-        fn = lambda: attention(q, k, v, False)
+        fn = lambda: attention(q, k, v, IS_CAUSAL)
         
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         print(_fwd_kernel.best_config)
@@ -237,7 +306,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, provider, dtype=torch.float16
         sm_scale = 1.3
 
         from flash_attn.flash_attn_interface import flash_attn_func
-        fn = lambda: flash_attn_func(q, k, v,0.0, sm_scale,False)
+        fn = lambda: flash_attn_func(q, k, v,0.0, sm_scale,IS_CAUSAL)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         
         return ms
@@ -271,3 +340,7 @@ from pathlib import Path
 save_path = Path('./fused_attention')
 save_path.mkdir(exist_ok=True)
 bench_flash_attention.run(save_path=save_path, print_data=True)
+
+
+
+
