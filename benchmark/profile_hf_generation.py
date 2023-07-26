@@ -217,7 +217,7 @@ def main(model_path: str,
     if model_log_name is None:
         model_log_name = model.__class__.__name__
         if accel is not None:
-            model_log_name += f"-{accel}"
+            model_log_name += f'-{accel}'
 
     if accel is None:
         model = model.cuda()
