@@ -86,10 +86,11 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
     python3 -m lmdeploy.turbomind.chat /workspace
 ```
 
-> **Note**
-> turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡
+> **Note**<br />
+> turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。<br />
+> 关闭显卡的 ECC 可以腾出 10% 显存，执行 `sudo nvidia-smi --ecc-config=0` 重启系统生效。
 
-> **Note**
+> **Note**<br />
 > 使用 Tensor 并发可以利用多张 GPU 进行推理。在 `chat` 时添加参数 `--tp=<num_gpu>` 可以启动运行时 TP。
 
 #### 部署推理服务
@@ -166,7 +167,7 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
 
 这里是[量化测试结果](./docs/zh_cn/quantization.md)。
 
-> **Warning**
+> **Warning**<br />
 > 量化部署不支持运行时 Tensor 并发。如果希望使用 Tensor 并发，需要在 deploy 时配置 tp 参数。
 
 ## 贡献指南
