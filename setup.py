@@ -46,7 +46,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
         arg_value = None
         for arg in sys.argv[1:]:
             if arg.startswith(arg_name_equal):
-                arg_value = arg[len(arg_name_equal) :]
+                arg_value = arg[len(arg_name_equal):]
                 sys.argv.remove(arg)
                 break
 
