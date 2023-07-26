@@ -91,7 +91,7 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
 When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
 ```
 
-#### Serving
+#### Serving with Triton Inference Server
 
 Launch inference server by:
 
@@ -114,45 +114,6 @@ python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
-
-#### Serving with out docker
-
-- make sure local gcc version no less than 9, which can be conformed by `gcc --version`.
-- install packages for compiling and running:
-  ```shell
-  pip install -r requirements.txt
-  ```
-- install [nccl](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html), set environment variables:
-  ```shell
-  export NCCL_ROOT_DIR=/path/to/nccl/build
-  export NCCL_LIBRARIES=/path/to/nccl/build/lib
-  ```
-- install rapidjson
-- install openmpi, installing from source is recommended.
-  ```shell
-  wget https://download.open-mpi.org/release/open-mpi/v3.1/openmpi-3.1.0.tar.gz
-  tar -xzf openmpi-*.tar.gz && cd openmpi-*
-  ./configure --with-cuda
-  make -j$(nproc)
-  make install
-  ```
-- build and install lmdeploy:
-  ```shell
-  mkdir build && cd build
-  sh ../generate.sh
-  ```
-
-Then, you can communicate with the inference server by command line,
-
-```shell
-python3 -m lmdeploy.turbomind.chat model_path
-```
-
-or webui,
-
-```shell
-python3 -m lmdeploy.app model_path
-```
 
 ### Inference with PyTorch
 
