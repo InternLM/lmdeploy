@@ -18,8 +18,8 @@ supported_formats = ['llama', 'hf']
 
 
 def get_package_root_path():
-    import importlib.resources as pkg_resources
-    return pkg_resources.path('lmdeploy', '')
+    import lmdeploy
+    return Path(lmdeploy.__file__).parent
 
 
 def create_workspace(_path: str):
@@ -196,7 +196,7 @@ def export(model_name: str,
         step_length=1,
         cache_max_entry_count=48,
         cache_chunk_size=1,
-        use_context_fmha=int(kv_head_num == head_num),
+        use_context_fmha=1,
         quant_policy=0,
         tensor_para_size=tp))
 

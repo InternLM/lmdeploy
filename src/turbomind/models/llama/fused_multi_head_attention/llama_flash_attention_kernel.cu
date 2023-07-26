@@ -79,6 +79,8 @@ struct LlamaAttentionKernel:
 
         int32_t o_strideM_custom = 0;
 
+        int32_t group_size = 1;
+
         float scale;
 
         CUTLASS_HOST_DEVICE int32_t o_strideM() const
@@ -199,8 +201,8 @@ struct LlamaAttentionKernel:
 
             // Advance to the current batch / head / query_start
             query_ptr += (qq_start + query_start) * q_strideM + head_id * q_strideH;
-            key_ptr += k_start * k_strideM + head_id * k_strideH;
-            value_ptr += k_start * v_strideM + head_id * v_strideH;
+            key_ptr += k_start * k_strideM + int64_t(head_id / group_size) * k_strideH;
+            value_ptr += k_start * v_strideM + int64_t(head_id / group_size) * v_strideH;
             output_ptr += int64_t(qo_start + query_start) * o_strideM() + head_id * o_strideH;
 
             if (output_accum_ptr != nullptr) {
@@ -668,6 +670,7 @@ void invokeFlashAttention_impl(int                                   batch_size,
     auto   layout_k         = attention_params.layout_k;
     auto   layout_v         = attention_params.layout_v;
     auto   layout_o         = attention_params.layout_o;
+    auto   group_size       = attention_params.group_size;
 
     using scalar_t =
         typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
@@ -731,6 +734,8 @@ void invokeFlashAttention_impl(int                                   batch_size,
 
         params.num_batches = batch_size;
         params.num_heads   = head_num;
+
+        params.group_size = int32_t(group_size);
     }
 
     Attention::check_supported(params);

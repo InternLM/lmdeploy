@@ -99,6 +99,7 @@ public:
         float*          out_accum    = nullptr;
         int*            cu_seqlens_q = nullptr;
         int*            cu_seqlens_k = nullptr;
+        size_t          group_size   = 1;
         AttentionLayout layout_q;
         AttentionLayout layout_k;
         AttentionLayout layout_v;
