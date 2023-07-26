@@ -91,7 +91,7 @@ docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy
 > When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
 
 > **Note**
-> Tensor parallel can be used to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `deploy` to enable static TP or add `--tp=<num_gpu>` on `chat` to enable runtime TP.
+> Tensor parallel is available to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `chat` to enable runtime TP.
 
 #### Serving
 
