@@ -1,9 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import torch
+import logging
+import time
+import warnings
 from typing import Optional
 
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from .dist import get_local_rank
+
+try:
+    import deepspeed
+except ImportError:
+    deepspeed = None
+
+logger = logging.getLogger(__name__)
 
 
 class LoadWoInit:
@@ -55,6 +66,8 @@ def init_model(model_path: str,
         If using depodaca/llama-xb-hf, use_fast_tokenizer should be False.
     """
 
+    start = time.monotonic()
+
     if not tokenizer_path:
         tokenizer_path = model_path
 
@@ -67,34 +80,45 @@ def init_model(model_path: str,
                                                      torch_dtype=torch.float16,
                                                      trust_remote_code=True)
 
+    print(f'model loaded in {time.monotonic() - start:.1f} seconds')
+    logger.info(f'Model loaded from {model_path}')
+    logger.debug(model)
+
     return model, tokenizer
 
 
-def accel_model(model, accel=None, max_out_tokens=2048, tp_size=1):
+def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
     """Accelerate model with given accelerator."""
+
+    if accel.lower() == 'deepspeed' and deepspeed is None:
+        warnings.warn('deepspeed is not installed, '
+                      'use plain huggingface model.')
+        accel = None
+
+    logger.info(f'Accelerated model with {accel}')
 
     if accel is None:
         # No accelerator, just to cuda
         # assume single gpu single process
         # user is responsible to assign the gpu id via CUDA_VISIBLE_DEVICES # noqa: E501
-        model = model.cuda()
+        model = model.cuda(get_local_rank())
 
-    elif accel.lower() == 'deepspeed':
+    if accel.lower() == 'deepspeed':
         # Use deepspeed inference inject fast kernel and/or tensor parallel
-        import deepspeed
 
         config = dict(
             tensor_parallel=dict(tp_size=tp_size),  # Use world size in general
             dtype=torch.float16,
             replace_with_kernel_inject=True,
-            max_out_tokens=max_out_tokens,
+            max_out_tokens=max_alloc,
         )
 
         if 'InternLM' in model.__class__.__name__:
             try:
                 # Use customized deepspeed supporting InternLM
                 # https://github.com/wangruohui/DeepSpeed/tree/support_internlm_0.10.0 (commit cdef2ce)  # noqa: E501
-                from deepspeed.module_inject.containers.internlm import InternLMLayerPolicy  # noqa: E501
+                from deepspeed.module_inject.containers.internlm import \
+                    InternLMLayerPolicy  # noqa: E501
             except ImportError:
                 # InternLM is not officially supported by DeepSpeed
                 # Set replace_with_kernel_inject=False to use AutoTP
@@ -107,21 +131,28 @@ def accel_model(model, accel=None, max_out_tokens=2048, tp_size=1):
                         InternLMLayerPolicy._orig_layer_class = module.__class__  # noqa: E501
                         break
 
+        logger.debug(f'Using deepspeed config {config}')
+
         model = deepspeed.init_inference(
             model=model,  # Transformers models
             config=config,
         )
 
+        # for k, v in model.named_parameters():
+        #     logger.debug(f"{k}: v.device")
+    else:
+        raise ValueError(f'Unsupported accelerator {accel}.')
+
+    logger.debug(model)
+
     return model
 
 
 def test_init_model():
-    cprint = lambda x: print(f"\033[92m{x}\033[0m")
+    cprint = lambda x: print(f'\033[92m{x}\033[0m')
 
     # Test llama2-7b
-    for model_path in [
-            "llama2/huggingface/llama-2-7b", "llama2/huggingface/llama-2-7b"
-    ]:
+    for model_path in ['llama2/huggingface/llama-2-7b', 'internlm-7b']:
         model, tokenizer = init_model(model_path)
         assert tokenizer.is_fast
         # cprint("llama2 on CPU")
@@ -129,9 +160,9 @@ def test_init_model():
         # cprint("llama2 on GPU")
         # print(model)
         # cprint("llama2 with kernel injection")
-        model2 = accel_model(model, accel="deepspeed")
-        assert "DeepSpeedSelfAttention" in repr(model2)
-        assert "DeepSpeedMLP" in repr(model2)
+        model2 = accel_model(model, accel='deepspeed')
+        assert 'DeepSpeedSelfAttention' in repr(model2)
+        assert 'DeepSpeedMLP' in repr(model2)
         # print(model)
-        model = accel_model(model, accel="deepspeed")
+        # model = accel_model(model, accel="deepspeed")
         # print(model)
