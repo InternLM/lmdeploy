@@ -42,6 +42,20 @@ def parse_requirements(fname='requirements.txt', with_version=True):
     """
     require_fpath = fname
 
+    def parse_nccl_pkg(arg_name_equal):
+        arg_value = None
+        for arg in sys.argv[1:]:
+            if arg.startswith(arg_name_equal):
+                arg_value = arg[len(arg_name_equal) :]
+                sys.argv.remove(arg)
+                break
+
+        if arg_value == '11':
+            return 'nvidia-nccl-cu11'
+        elif arg_value == '12':
+            return 'nvidia-nccl-cu12'
+        return None
+
     def parse_line(line):
         """Parse information from a line in a requirements text file."""
         if line.startswith('-r '):
@@ -98,6 +112,9 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 yield item
 
     packages = list(gen_packages_items())
+    nccl_pkg = parse_nccl_pkg('--cuda=')
+    if nccl_pkg is not None:
+        packages += [nccl_pkg]
     return packages
 
 
