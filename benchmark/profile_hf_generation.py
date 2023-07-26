@@ -44,7 +44,7 @@ python profile_hf_generation.py \
 Result will be saved in `profile_hf.csv`, which is a comma-separated file
 with the following fields.
 
-1. model: name of model, specified with --model_log_name
+1. model: name of model, specified with --model_log_name or otherwise f"{model.__class__.__name__}-{accel}"
 2. batch_size: as name
 3. input_seqlen: as name
 4. gen_len: length of sequence length to generate
@@ -216,6 +216,8 @@ def main(model_path: str,
     vocab_size = model.config.vocab_size
     if model_log_name is None:
         model_log_name = model.__class__.__name__
+        if accel is not None:
+            model_log_name += f"-{accel}"
 
     if accel is None:
         model = model.cuda()
