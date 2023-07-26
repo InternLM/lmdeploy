@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class BasicAdapter:
+    hex_regex = re.compile(r'^<0x([0-9ABCDEF]+)>$')
 
     def __init__(self, tokenizer: PreTrainedTokenizer):
         self.tokenizer = tokenizer
-        self.hex_regex = re.compile(r'^<0x([0-9ABCDEF]+)>$')
         if isinstance(tokenizer, PreTrainedTokenizerFast):
             self.decode = self._decode_fast
         else:
@@ -30,6 +30,7 @@ class BasicAdapter:
             add_special_tokens=add_special_tokens,
             return_tensors='pt',
         )
+        logger.debug(f'Encode {prompt} to {input_ids}')
         return input_ids
 
     def _decode_fallback(self, value):
@@ -53,10 +54,15 @@ class BasicAdapter:
             space = ''
         if res := self.hex_regex.match(tok):
             tok = chr(int(res.group(1), 16))
-        if tok == '</s>':
+        if tok == '</s>' or tok == '\r':
             tok = '\n'
 
         tok = space + tok
+
         logger.debug(f'Decode {value} to {repr(tok)}')
 
         return tok
+
+    @property
+    def stopping_criteria(self):
+        return None
