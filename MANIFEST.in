@@ -3,3 +3,5 @@ include lmdeploy/lib/*.so
 include lmdeploy/lib/*.so*
 include lmdeploy/lib/*.dll
 include lmdeploy/lib/*.pyd
+include lmdeploy/serve/turbomind/service_docker_up.sh
+recursive-include lmdeploy/serve/turbomind/triton_models *
