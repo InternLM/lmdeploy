@@ -27,7 +27,7 @@ python profile_hf_generation.py \
 ```
 
 Example 3: Same test above but do not use streamer to measure time of every token
-        Only only overall time is measured but a little bit faster
+        Only overall time is measured, a little bit faster than streaming mode
 
 ```shell
 python profile_hf_generation.py \
