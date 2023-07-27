@@ -19,4 +19,4 @@ target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_14)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
         BUILD_RPATH "\$ORIGIN"
-        INSTALL_RPATH "\$ORIGIN")
+        INSTALL_RPATH "\$ORIGIN;../../nvidia/nccl/lib/")
