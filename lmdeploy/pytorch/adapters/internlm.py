@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import logging
 import re
 
-import logging
-from transformers import PreTrainedTokenizerFast, StoppingCriteria, StoppingCriteriaList
+from transformers import (PreTrainedTokenizerFast, StoppingCriteria,
+                          StoppingCriteriaList)
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,9 @@ class InternLMStoppingCriteria(StoppingCriteria):
 
 class InternLMAdapter:
     hex_regex = re.compile(r'^<0x([0-9ABCDEF]+)>$')
+    # id of '<|User|>:'
+    B_USER_ID = torch.tensor([[1, 333, 352, 1621, 352, 27232]])
+    E_USER_ID = torch.tensor([[103027, 13, 333, 352, 23845, 352, 27232]])
 
     def __init__(self, tokenizer: PreTrainedTokenizerFast):
         self.tokenizer = tokenizer
@@ -37,10 +42,13 @@ class InternLMAdapter:
         so we will decorate input_ids with <|User|>:{prompt}<eoh>\n<|Bot|>:
         """
         input_ids = self.tokenizer.encode(
-            f'<|User|>:{prompt}<eoh>\n<|Bot|>:',
+            prompt,
             add_special_tokens=False,
             return_tensors='pt',
         )
+        # This is f'<|User|>:{prompt}<eoh>\n<|Bot|>:'
+        # but force \n to 13 instead of 364
+        input_ids = torch.cat([self.B_USER_ID, input_ids, self.E_USER_ID])
         return input_ids
 
     def decode(self, value):
