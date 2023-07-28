@@ -15,7 +15,7 @@ class BaseAdapter:
 
     Note:
         Adapters coordinate with the session manager to prepare input_ids.
-        The full sequence fed to the modes is as follows:
+        The full sequence fed to the model is as follows:
 
             ```
             adapter.start_ids
