@@ -1,28 +1,33 @@
 name: "ensemble"
 platform: "ensemble"
 max_batch_size: 1
-
 input [
   {
-    name: "INPUT_0"
-    data_type: TYPE_STRING
+    name: "input_ids"
+    data_type: TYPE_UINT32
     dims: [ -1 ]
+    # allow_ragged_batch: true
   },
   {
-    name: "INPUT_1"
+    name: "input_lengths"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+  },
+  {
+    name: "request_output_len"
     data_type: TYPE_UINT32
     dims: [ -1 ]
   },
   {
-    name: "INPUT_2"
-    data_type: TYPE_STRING
-    dims: [ -1 ]
+    name: "stop_words_list"
+    data_type: TYPE_INT32
+    dims: [ 2, -1 ]
     optional: true
   },
   {
-    name: "INPUT_3"
-    data_type: TYPE_STRING
-    dims: [ -1 ]
+    name: "bad_words_list"
+    data_type: TYPE_INT32
+    dims: [ 2, -1 ]
     optional: true
   },
   {
@@ -160,81 +165,36 @@ output [
     dims: [ -1, -1 ]
   },
   {
-    name: "cum_log_probs"
-    data_type: TYPE_FP32
+    name: "sequence_length"
+    data_type: TYPE_UINT32
     dims: [ -1 ]
-  },
-  {
-    name: "output_log_probs"
-    data_type: TYPE_FP32
-    dims: [ -1, -1 ]
   }
 ]
 
 ensemble_scheduling {
   step [
     {
-      model_name: "preprocessing"
-      model_version: -1
-      input_map {
-        key: "QUERY"
-        value: "INPUT_0"
-      }
-      input_map {
-        key: "REQUEST_OUTPUT_LEN"
-        value: "INPUT_1"
-      }
-      input_map {
-        key: "BAD_WORDS_DICT"
-        value: "INPUT_2"
-      }
-      input_map {
-        key: "STOP_WORDS_DICT"
-        value: "INPUT_3"
-      }
-      output_map {
-        key: "INPUT_ID"
-        value: "_INPUT_ID"
-      }
-      output_map {
-        key: "BAD_WORDS_IDS"
-        value: "_BAD_WORDS_IDS"
-      }
-      output_map {
-        key: "STOP_WORDS_IDS"
-        value: "_STOP_WORDS_IDS"
-      }
-      output_map {
-        key: "REQUEST_INPUT_LEN"
-        value: "_REQUEST_INPUT_LEN"
-      }
-      output_map {
-        key: "REQUEST_OUTPUT_LEN"
-        value: "_REQUEST_OUTPUT_LEN"
-      }
-    },
-    {
       model_name: "turbomind"
       model_version: -1
       input_map {
         key: "input_ids"
-        value: "_INPUT_ID"
+        value: "input_ids"
       }
       input_map {
         key: "input_lengths"
-        value: "_REQUEST_INPUT_LEN"
+        value: "input_lengths"
       }
       input_map {
         key: "request_output_len"
-        value: "_REQUEST_OUTPUT_LEN"
+        value: "request_output_len"
       }
       input_map {
           key: "stop_words_list"
-          value: "_STOP_WORDS_IDS"
+          value: "stop_words_list"
       }
       input_map {
           key: "bad_words_list"
-          value: "_BAD_WORDS_IDS"
+          value: "bad_words_list"
       }
       input_map {
         key: "prompt_learning_task_name_ids"
@@ -327,14 +287,6 @@ ensemble_scheduling {
       output_map {
         key: "sequence_length"
         value: "sequence_length"
-      }
-      output_map {
-        key: "cum_log_probs"
-        value: "cum_log_probs"
-      }
-      output_map {
-        key: "output_log_probs"
-        value: "output_log_probs"
       }
     },
     {

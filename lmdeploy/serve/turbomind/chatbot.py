@@ -93,13 +93,14 @@ class Chatbot:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
         self.cfg = mmengine.Config(
-            dict(session_len=self.model.session_len,
-                 top_p=self.model.top_p,
-                 top_k=self.model.top_k,
-                 temperature=self.model.temperature,
-                 repetition_penalty=self.model.repetition_penalty,
-                 stop_words=stop_words,
-                 bad_words=bad_words))
+            dict(
+                session_len=self.model.session_len,
+                top_p=self.model.top_p,
+                top_k=self.model.top_k,
+                temperature=self.model.temperature,
+                repetition_penalty=self.model.repetition_penalty,
+                stop_words=stop_words,
+                bad_words=bad_words))
         self.log_level = log_level
         self.display = display
         self.profile_generation = profile_generation
@@ -192,11 +193,12 @@ class Chatbot:
             return StatusCode.TRITON_SESSION_CLOSED
 
         self._session.status = 0
-        for status, _, _ in self._stream_infer(self._session,
-                                               prompt='',
-                                               request_output_len=0,
-                                               sequence_start=False,
-                                               sequence_end=True):
+        for status, _, _ in self._stream_infer(
+                self._session,
+                prompt='',
+                request_output_len=0,
+                sequence_start=False,
+                sequence_end=True):
             if status.value < 0:
                 break
 
@@ -233,12 +235,13 @@ class Chatbot:
 
         prev_session = self._session
         status, res = None, None
-        for status, res, _ in self._stream_infer(self._session,
-                                                 prompt='',
-                                                 request_output_len=0,
-                                                 sequence_start=False,
-                                                 sequence_end=False,
-                                                 cancel=True):
+        for status, res, _ in self._stream_infer(
+                self._session,
+                prompt='',
+                request_output_len=0,
+                sequence_start=False,
+                sequence_end=False,
+                cancel=True):
             if status.value < 0:
                 break
         if status == StatusCode.TRITON_STREAM_END:
@@ -279,11 +282,12 @@ class Chatbot:
         self._session.status = 1
         self._session.sequence_length = 0
         histories = self._session.histories
-        for status, _, _ in self._stream_infer(self._session,
-                                               prompt=histories,
-                                               request_output_len=0,
-                                               sequence_start=True,
-                                               sequence_end=False):
+        for status, _, _ in self._stream_infer(
+                self._session,
+                prompt=histories,
+                request_output_len=0,
+                sequence_start=True,
+                sequence_end=False):
             if status.value < 0:
                 break
 
@@ -307,8 +311,8 @@ class Chatbot:
     def _get_model_name(self):
         with grpcclient.InferenceServerClient(
                 self.tritonserver_addr) as client:
-            model_config = client.get_model_config(model_name='turbomind',
-                                                   as_json=True)
+            model_config = client.get_model_config(
+                model_name='turbomind', as_json=True)
             return model_config['config']['parameters']['model_name'][
                 'string_value']
 
@@ -414,16 +418,15 @@ class Chatbot:
         session.status = StatusCode.TRITON_SESSION_READY
 
         que = queue.Queue()
-        producer = threading.Thread(target=self._stream_producer,
-                                    args=(self.tritonserver_addr, session, que,
-                                          self.cfg, input_ids, input_lengths,
-                                          request_output_len, sequence_start,
-                                          sequence_end, preseq_length, cancel))
+        producer = threading.Thread(
+            target=self._stream_producer,
+            args=(self.tritonserver_addr, session, que, self.cfg, input_ids,
+                  input_lengths, request_output_len, sequence_start,
+                  sequence_end, preseq_length, cancel))
         producer.start()
         for status, res, n_token in self.stream_consumer(
-                self.postprocess, que, session, input_tokens, preseq_length,
-                cancel, logger, self.display, self.profile_generation,
-                self.eos_id):
+                que, session, input_tokens, preseq_length, cancel, logger,
+                self.display, self.profile_generation, '<EOS>', '<BOS>'):
             yield status, res, n_token
 
         producer.join()
@@ -506,23 +509,21 @@ class Chatbot:
                         random_seed * np.ones((1, 1), dtype=np.uint64))
                 ]
             client.start_stream(callback)
-            client.async_stream_infer('turbomind',
-                                      inputs,
-                                      sequence_id=session.session_id,
-                                      request_id=session.request_id,
-                                      sequence_start=sequence_start,
-                                      sequence_end=sequence_end)
+            client.async_stream_infer(
+                'ensemble',
+                inputs,
+                sequence_id=session.session_id,
+                request_id=session.request_id,
+                sequence_start=sequence_start,
+                sequence_end=sequence_end)
         que.put(None)
 
     @staticmethod
-    def stream_consumer(postprocess, res_queue, session, n_input_token,
-                        preseq_length, cancel, logger, display,
-                        profile_generation, eos_id):
+    def stream_consumer(res_queue, session, n_input_token, preseq_length,
+                        cancel, logger, display, profile_generation, eos, bos):
         """Consume the response from the triton inference server.
 
         Args:
-            postprocess (callable): postprocess function for
-                the generated tokens
             res_queue (multiprocessing.Queue): response queue
             session (Session): an instance of a session
             n_input_token (int): token number of input prompt
@@ -531,7 +532,8 @@ class Chatbot:
             logger (util.Logger):
             display (bool): display the text in the consolo interface or not
             profile_generation (bool): indicator for profiling token generation
-            eos_id (int): eos token id
+            eos (str): end of the string
+            bos (str): begin of the string
 
         Yields:
             tuple: status, text, generated token number
@@ -563,16 +565,15 @@ class Chatbot:
                 google.protobuf.json_format.Parse(json.dumps(result), message)
                 result = grpcclient.InferResult(message)
                 sequence_length = result.as_numpy('sequence_length')
-                output_ids = result.as_numpy('output_ids')
+                output_ids = result.as_numpy('OUTPUT_0')
 
                 session.sequence_length = sequence_length.squeeze()
                 sequence_length = sequence_length - offset
-                last_token_id = output_ids[-1][-1][session.sequence_length - 1]
-                if last_token_id == eos_id:
+                last_char = output_ids[-1][-5:].decode()  # if ends with <eos>
+                if last_char == eos:
                     session.sequence_length = session.sequence_length - 1
                     sequence_length = sequence_length - 1
 
-                output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
                 sequence_length = sequence_length.reshape(
                     (1, sequence_length.shape[-1]))
 
@@ -581,9 +582,9 @@ class Chatbot:
                            'postprocessing is ignored during profiling '
                            'token generation', sequence_length.squeeze())
                     continue
-                output_str = postprocess(output_ids[:, :, offset:],
-                                         sequence_length)
-                text = output_str[0].decode()
+                output_str = output_ids[0][len(session.histories) +
+                                           len(session.prompt) - len(bos):]
+                text = output_str.decode()
                 if display:
                     new_text = text[len(session.response):]
                     print(new_text, end='', flush=True)
