@@ -564,7 +564,8 @@ class Chatbot:
 
                 session.sequence_length = sequence_length.squeeze()
                 sequence_length = sequence_length - offset
-                last_char = output_ids[-1][-5:].decode()  # if ends with <eos>
+                last_char = output_ids[-1][-5:].decode(
+                    'utf-8', errors='ignore')  # if ends with <eos>
                 if last_char == eos:
                     session.sequence_length = session.sequence_length - 1
                     sequence_length = sequence_length - 1
@@ -577,9 +578,9 @@ class Chatbot:
                            'postprocessing is ignored during profiling '
                            'token generation', sequence_length.squeeze())
                     continue
-                output_str = output_ids[0][len(session.histories) +
-                                           len(session.prompt) - len(bos):]
-                text = output_str.decode()
+                text = output_ids[0].decode('utf-8', errors='ignore')
+                text = text[len(session.histories) + len(session.prompt) -
+                            len(bos):]
                 if display:
                     new_text = text[len(session.response):]
                     print(new_text, end='', flush=True)
