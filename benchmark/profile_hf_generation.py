@@ -60,8 +60,8 @@ run forward `gen_len` times to generate output ids of shape (batch_size, gen_len
 8. last_time: average latency of the last samples (averaged of 5 sample),
     this measure latency when context length is long
 9. total time: total time to generate all tokens
-10. throughput(total): bs * total_len / total_time (same as vllm)
-11. throughput(gen): bs * gen_len / total_time (same as vllm)
+10. throughput(total): bs * total_len / total_time (same measure as vllm)
+11. throughput(gen): bs * gen_len / total_time
 """   # noqa: E501
 
 import csv
