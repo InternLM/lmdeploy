@@ -52,9 +52,13 @@ class BasicSessionManagerWithHistory:
         return input_ids
 
     def add_to_history(self, output):
-        """Save history output ids."""
+        """Save history output ids.
 
-        # output returned by generator contains both input and output
+        Note:
+            Output returned by HuggingFace generator contains both input
+            and output ids.
+        """
+
         if isinstance(output, GenerateOutput):
             self.history_ids = output.sequences
         elif isinstance(output, torch.Tensor):
