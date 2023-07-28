@@ -2,9 +2,11 @@
 import logging
 import re
 
+import torch
 from transformers import (PreTrainedTokenizerFast, StoppingCriteria,
                           StoppingCriteriaList)
-import torch
+
+from .base import BaseAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +18,10 @@ class InternLMStoppingCriteria(StoppingCriteria):
         return input_ids[0, -1] in [2, 103028]
 
 
-class InternLMAdapter:
-    hex_regex = re.compile(r'^<0x([0-9ABCDEF]+)>$')
-    # id of '<|User|>:'
-    B_USER_ID = torch.tensor([[1, 333, 352, 1621, 352, 27232]])
-    E_USER_ID = torch.tensor([[103027, 13, 333, 352, 23845, 352, 27232]])
+class InternLMAdapter(BaseAdapter):
+    """Adapter for InternLM.
 
-    def __init__(self, tokenizer: PreTrainedTokenizerFast):
-        self.tokenizer = tokenizer
-
-    def encode_and_decorate(self, prompt):
-        r"""Encode prompt and decorate with template.
-
-        InternLM use the following template:
+    InternLM use the following template and \n should be 13.
 
         <bos> (no actual newline here, just for better readability)
         <|User|>:{prompt}<eoh>\n
@@ -37,9 +30,27 @@ class InternLMAdapter:
         <|Bot|>:{model_output}<eoa>\n
         ...
         <eos>
+    """
 
-        Note: we leave <bos> or chat history to session manager to add,
-        so we will decorate input_ids with <|User|>:{prompt}<eoh>\n<|Bot|>:
+    hex_regex = re.compile(r'^<0x([0-9ABCDEF]+)>$')
+    # ids of '<|User|>:'
+    B_USER_ID = torch.tensor([[333, 352, 1621, 352, 27232]])
+    # ids of '<eoh>\n<|Bot|>:'
+    E_USER_ID = torch.tensor([[103027, 13, 333, 352, 23845, 352, 27232]])
+    # ids of '<bos>'
+    start_ids = [1]
+    # ids of '\n'
+    sep_ids = [13]
+
+    def __init__(self, tokenizer: PreTrainedTokenizerFast):
+        self.tokenizer = tokenizer
+
+    def encode_and_decorate(self, prompt):
+        r"""Encode prompt and decorate with template.
+
+        Note:
+            we leave <bos> and chat history for session manager to add,
+        so we will decorate input_ids to '<|User|>:{prompt}<eoh>\n<|Bot|>:'
         """
         input_ids = self.tokenizer.encode(
             prompt,
@@ -48,7 +59,8 @@ class InternLMAdapter:
         )
         # This is f'<|User|>:{prompt}<eoh>\n<|Bot|>:'
         # but force \n to 13 instead of 364
-        input_ids = torch.cat([self.B_USER_ID, input_ids, self.E_USER_ID])
+        input_ids = torch.cat([self.B_USER_ID, input_ids, self.E_USER_ID],
+                              dim=1)
         return input_ids
 
     def decode(self, value):

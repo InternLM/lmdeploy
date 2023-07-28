@@ -65,6 +65,23 @@ from .utils import BasicStreamer, TerminalIO, control
 logger = logging.getLogger(__name__)
 
 
+def set_logging(log_file, debug: bool):
+    torch.set_printoptions(linewidth=120)
+    level = logging.DEBUG if debug else logging.INFO
+    log_file = log_file or 'chat.log'
+    if r := get_rank() != 0:
+        log_file = log_file + f'.{r}'
+    logging.basicConfig(level=level,
+                        format=('%(filename)s: '
+                                '%(levelname)s: '
+                                '%(funcName)s(): '
+                                '%(lineno)d:\t'
+                                '%(message)s'),
+                        filename=log_file,
+                        filemode='w')
+    print(f'Worker {get_rank()} logging to {log_file}')
+
+
 def main(
     model_path: str,
     tokenizer_path: Optional[str] = None,
@@ -76,9 +93,11 @@ def main(
     use_fast_tokenizer: bool = True,
     max_alloc: int = 2048,
     max_history: int = None,
-    log_level: str = 'INFO',
+    log_file: Optional[str] = None,
+    debug: bool = True,
+    adapter: Optional[str] = None,
 ):
-    """Start chat session with given model.
+    """Chat with model through terminal.
 
     Args:
         model_path (str): Path to model.
@@ -90,7 +109,7 @@ def main(
         seed (int): Random seed.
         use_fast_tokenizer (bool): Whether to use fast tokenizer.
     """
-    logger.setLevel(log_level)
+    set_logging(log_file, debug)
 
     # workers should sync in sampling
     torch.manual_seed(seed)
@@ -107,6 +126,9 @@ def main(
         tokenizer_path,
         use_fast_tokenizer=use_fast_tokenizer,
     )
+
+    # Init adapter based on model and tokenizer
+    adapter = init_adapter(model, tokenizer, adapter)
 
     # Accelerate model
     model: PreTrainedModel = accel_model(model,
@@ -130,11 +152,10 @@ def main(
         top_p=top_p,
     )
 
-    adapter = init_adapter(model, tokenizer)
-    sm = BasicSessionManagerWithHistory(
-        max_seq_len=max_alloc if max_history is None else max_history,
-        bos_id=tokenizer.bos_token_id)
-    # sm = BasicSessionManager()
+    # Session manager handling history
+    sm = BasicSessionManagerWithHistory(max_history=max_history or max_alloc,
+                                        start_ids=adapter.start_ids,
+                                        sep_ids=adapter.sep_ids)
     io = TerminalIO()
     streamer = BasicStreamer(adapter.decode, io.output)
 
@@ -159,8 +180,11 @@ def main(
 
         # Generate
         input_ids = input_ids.cuda(local_rank)
-        # return tensor including input and generated output
-        output = model.generate(input_ids, gen_config, streamer=streamer)
+        # returned tensor including input and generated output
+        output = model.generate(input_ids,
+                                gen_config,
+                                streamer=streamer,
+                                stopping_criteria=adapter.stopping_criteria)
         logger.info(f'Output:\n{output}')
 
         # Save output into session manager and maybe trim some history
@@ -168,9 +192,6 @@ def main(
 
 
 def cli():
-    # log to file
-    logging.basicConfig(filename=f'chat-{get_rank()}.log', filemode='w')
-    torch.set_printoptions(linewidth=120)
     fire.Fire(main)
 
 

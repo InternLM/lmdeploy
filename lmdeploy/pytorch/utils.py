@@ -25,10 +25,16 @@ class TerminalIO:
 
         print('\ndouble enter to end input >>> ', end='')
         sentinel = ''  # ends when this string is seen
-        return '\n'.join(iter(input, sentinel))
+        try:
+            return '\n'.join(iter(input, sentinel))
+        except EOFError:
+            print('Detect EOF, exit')
+            exit()
 
     @master_only
     def output(self, string):
+        """Output to terminal with flush."""
+
         print(string, end='', flush=True)
 
 

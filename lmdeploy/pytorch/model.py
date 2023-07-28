@@ -98,7 +98,7 @@ def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
     logger.info(f'Accelerated model with {accel}')
 
     if accel is None:
-        # No accelerator, just to cuda
+        # No acceleration, just to cuda
         # assume single gpu single process
         # user is responsible to assign the gpu id via CUDA_VISIBLE_DEVICES # noqa: E501
         model = model.cuda(get_local_rank())
@@ -131,7 +131,7 @@ def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
                         InternLMLayerPolicy._orig_layer_class = module.__class__  # noqa: E501
                         break
 
-        logger.debug(f'Using deepspeed config {config}')
+        logger.debug(f'Using deepspeed config\n{config}')
 
         model = deepspeed.init_inference(
             model=model,  # Transformers models
@@ -149,17 +149,18 @@ def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
 
 
 def test_init_model():
-    cprint = lambda x: print(f'\033[92m{x}\033[0m')
+    cprint = lambda x: print(f'\033[92m{x}\033[0m')  # noqa: E731
 
     # Test llama2-7b
     for model_path in ['llama2/huggingface/llama-2-7b', 'internlm-7b']:
         model, tokenizer = init_model(model_path)
         assert tokenizer.is_fast
-        # cprint("llama2 on CPU")
+        cprint('llama2 on CPU')
+        print(model)
         model1 = accel_model(model)
-        # cprint("llama2 on GPU")
-        # print(model)
-        # cprint("llama2 with kernel injection")
+        cprint('llama2 on GPU')
+        print(model1)
+        cprint('llama2 with kernel injection')
         model2 = accel_model(model, accel='deepspeed')
         assert 'DeepSpeedSelfAttention' in repr(model2)
         assert 'DeepSpeedMLP' in repr(model2)
