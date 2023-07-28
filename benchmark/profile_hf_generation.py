@@ -142,7 +142,7 @@ class TimingStreamer:
         return r
 
 
-class CSVWRitter:
+class CSVWritter:
 
     def __init__(
         self,
@@ -228,7 +228,7 @@ def main(model_path: str,
         raise NotImplementedError(f'accel {accel} not supported.')
 
     # log to file
-    csvwritter = CSVWRitter(out_file)
+    csvwritter = CSVWritter(out_file)
 
     cprint('Benchmarking {} '
            f'with batch_size={batch_size}, input_seqlen={input_seqlen}, '
