@@ -55,9 +55,7 @@ Below are quick steps for installation:
 ```shell
 conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-pip install -e .
+pip install lmdeploy
 ```
 
 ### Deploy InternLM
@@ -83,8 +81,7 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 #### Inference by TurboMind
 
 ```shell
-docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
-    python3 -m lmdeploy.turbomind.chat /workspace
+python -m lmdeploy.turbomind.chat ./workspace
 ```
 
 ```{note}
@@ -109,7 +106,7 @@ python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
 or webui,
 
 ```shell
-python3 -m lmdeploy.app {server_ip_addresss}:33337 internlm
+python3 -m lmdeploy.app {server_ip_addresss}:33337
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
