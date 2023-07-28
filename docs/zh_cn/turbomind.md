@@ -1,6 +1,6 @@
 # TurboMind
 
-TurboMind 是一个基于英伟达公司的 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) 构建的支持对话式 LLMs 的高吞吐量的推理引擎。 TurboMind 的主要功能包括一个高效简洁的 LLaMa 实现、推理模型的 batch 持久化技术以及一个可扩展的 KV 缓存管理器。
+TurboMind 是一个基于英伟达公司的 [FasterTransformer](https://github.com/NVIDIA/FasterTransformer) 构建的支持对话式 LLMs 的高吞吐量的推理引擎。 TurboMind 的主要功能包括一个高效简洁的 LLaMa 实现、推理的 persistent batch 技术以及一个可扩展的 KV 缓存管理器。
 
 ## TurboMind 工作结构
 
@@ -12,7 +12,7 @@ TurboMind 是一个基于英伟达公司的 [FasterTransformer](https://github.c
     请 求  |    | 流式回调
           v    |
   +--------------------+    获取   +-------------------+
-  |    Batch 持久化     | <-------> |  KV Cache 管理器 |
+  |  Persistent Batch  | <-------> |  KV Cache 管理器 |
   +--------------------+    更新   +-------------------+
              ^
              |
@@ -24,11 +24,11 @@ TurboMind 是一个基于英伟达公司的 [FasterTransformer](https://github.c
 +------------------------+
 ```
 
-## Batch 持久化
+## Persistent Batch
 
-你也许在别的项目 repo 中看到这项机制的另一个名字： `continuous batching` 。在开发这个功能时，我们把对话式大模型的推理建模为一个在持久化的 batch 上，这个 batch 的生命周期会持续在整个 serving 过程中，因此我们将其命名为 `persistent batch` 。简单来说是这样实现的：
+你也许在别的项目中看到这项机制的另一个名字： `continuous batching` 。在开发这个功能时，我们将对话式 LLM 的推理建模为一个持续运行的 batch ，其生命周期跨越整个服务过程，故将其命名为 `persistent batch` 。简单来说是这样实现的：
 
-- Batch 持久化功能会预先准备好 N 个 batch slots。
+- 该功能会预先准备好 N 个 batch slots。
 - 当有新的请求来并且有空闲的 slots 可用时该请求就会加入到 batch 中。当请求对应的 tokens 都生成完毕后对应的 batch slot 就会立刻被释放并且可以直接复用。
 - **当判断为 `cache-hits`（本文后续会说明）时，历史 tokens 就不需要在一段对话的每一轮中都被解码，对应的回复的 tokens 就自动开始生成**。
 - 整个 batch 会自动扩缩容来避免不必要的计算。
@@ -49,7 +49,7 @@ TurboMind 的 [KV 缓存管理器](https://github.com/InternLM/lmdeploy/blob/mai
 
 - 支持多轮对话中的快速文本解码。我们用基于 [cutlass](https://github.com/NVIDIA/cutlass) 的 FMHA 实现替代了文本解码器中的注意力机制实现，从而支持了 Q/K 长度不匹配的情况。
 - 我们在文本 FMHA 和生成式 FMHA 中都加入了间接缓冲指针来支持 batch 中 KV 缓存不连续的问题。
-- 为了支持 batch 持久化的并发推理，我们设计了新的同步机制来协调在张量并型模式下的 worker 线程。
+- 为了支持 persistent batch 的并发推理，我们设计了新的同步机制来协调在张量并型模式下的 worker 线程。
 - 为了最大限度提高吞吐量，我们完成了 INT8 KV 缓存的实现从而提高了最大批处理的规模。这在实际生产使用场景中是很有效的，因为相比于权重或其他的激活函数， KV 缓存会消耗更多的内存和内存带宽。
 - 我很还解决了在单个进程中以 TP 模式（张量并行）运行多个模型实例时 NCCL 挂起的问题。NCCL APIs 现在会被 host 端的同步 barriers 监控。
 
@@ -57,7 +57,7 @@ TurboMind 的 [KV 缓存管理器](https://github.com/InternLM/lmdeploy/blob/mai
 
 TurboMind 的 Python API 支持流式结果返回和张量并行模式。
 
-同时 TurboMind 也继承了 FasterTransformer 的能够使用 [tritonserver](https://github.com/triton-inference-server/server) 推理的能力。但为了支持对 batch 持久化的模型进行并发请求，我们没有像 FasterTransformer 一样使用序列化 batching 或者动态 batching 的方法，而是用 TurboMind 管理所有请求的 bookkeeping 以及序列状态。
+同时 TurboMind 也继承了 FasterTransformer 的能够使用 [tritonserver](https://github.com/triton-inference-server/server) 推理的能力。但为了支持对 persistent batch 的模型进行并发请求，我们没有像 FasterTransformer 一样使用序列化 batching 或者动态 batching ，而是用 TurboMind 管理所有请求的 bookkeeping 以及序列状态。
 
 ## TurboMind 和 FasterTransformer 的区别
 
