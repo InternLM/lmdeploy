@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Chat through command line.
 
-this submodule allow user to chat with language model through command line,
-and optionally accelerate model using backend like deepspeed.
+This submodule allow user to chat with language model through command line,
+and optionally accelerate model using backends like deepspeed.
 
 Example 1: Chat with default setting
 
@@ -26,6 +26,10 @@ python -m lmdeploy.pytorch.chat \
     --accel deepspeed
 ```
 
+Note: to use deepspeed, you need to install deepspeed,
+    and if hope to accelerate InternLM, you need a customized version
+    https://github.com/wangruohui/DeepSpeed/tree/support_internlm_0.10.0
+
 Example 4: Tensor parallel the model on 2 GPUs
 
 ```
@@ -34,11 +38,12 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     --accel deepspeed \
 ```
 
-This module also allow the following control commands to change behaviors.
+This module also allow the following control commands to change
+generation behaviors during chat.
 
-- `exit`: exit chat by terminalting the program
+- `exit`: terminate and exit chat
 - `config set key=value`: change generation config `key` to `value`,
-    e.g. config temperature=0 disable sampling for flollowing chats
+    e.g. config temperature=0 disable sampling for following chats
 - `clear`: clear chat history
 """
 
