@@ -71,13 +71,16 @@ class Chatbot:
 
     def __init__(self,
                  tritonserver_addr: str,
+                 model_name: str = '',
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False,
                  profile_serving: bool = False):
         self.tritonserver_addr = tritonserver_addr
-        self.model_name = self._get_model_name()
+        self.model_name = model_name
+        if self.model_name == '':
+            self.model_name = self._get_model_name()
         assert self.model_name in MODELS.module_dict.keys(), \
             f"'{self.model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'

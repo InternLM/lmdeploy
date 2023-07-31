@@ -6,7 +6,7 @@
 </div>
 
 <p align="center">
-    👋 join us on <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
+    👋 join us on <a href="https://twitter.com/intern_lm" target="_blank">Twitter</a>, <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
 </p>
 
 ______________________________________________________________________
@@ -54,9 +54,7 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 ```shell
 conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-pip install -e .
+pip install lmdeploy
 ```
 
 ### 部署 InternLM
@@ -82,8 +80,7 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 #### 使用 turbomind 推理
 
 ```shell
-docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
-    python3 -m lmdeploy.turbomind.chat /workspace
+python3 -m lmdeploy.turbomind.chat ./workspace
 ```
 
 ```{note}

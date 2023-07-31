@@ -1,0 +1,49 @@
+# syntax = docker/dockerfile:experimental
+FROM quay.io/pypa/manylinux2014_x86_64 as base
+ARG DEVTOOLSET_VERSION=9
+ARG BASE_CUDA_VERSION=11.8
+
+ENV LC_ALL en_US.UTF-8
+ENV LANG en_US.UTF-8
+ENV LANGUAGE en_US.UTF-8
+
+# gcc/g++
+RUN yum install -y \
+    devtoolset-${DEVTOOLSET_VERSION}-gcc \
+    devtoolset-${DEVTOOLSET_VERSION}-gcc-c++ \
+    devtoolset-${DEVTOOLSET_VERSION}-gcc-gfortran \
+    devtoolset-${DEVTOOLSET_VERSION}-binutils
+ENV PATH=/opt/rh/devtoolset-${DEVTOOLSET_VERSION}/root/usr/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/rh/devtoolset-${DEVTOOLSET_VERSION}/root/usr/lib64:/opt/rh/devtoolset-${DEVTOOLSET_VERSION}/root/usr/lib:$LD_LIBRARY_PATH
+
+RUN yum install -y wget rapidjson-devel glog-devel
+
+FROM base as cuda
+ADD manywheel/scripts/install_cuda.sh install_cuda.sh
+RUN bash ./install_cuda.sh ${BASE_CUDA_VERSION} && rm install_cuda.sh
+
+FROM base as conda
+ADD manywheel/scripts/install_conda.sh install_conda.sh
+RUN bash ./install_conda.sh && rm install_conda.sh
+RUN
+RUN /opt/conda/bin/conda create -n py38 python=3.8 -yq && \
+    /opt/conda/envs/py38/bin/pip install pybind11 && \
+    /opt/conda/bin/conda create -n py39 python=3.9 -yq && \
+    /opt/conda/envs/py39/bin/pip install pybind11 && \
+    /opt/conda/bin/conda create -n py310 python=3.10 -yq && \
+    /opt/conda/envs/py310/bin/pip install pybind11 && \
+    /opt/conda/bin/conda create -n py311 python=3.11 -yq && \
+    /opt/conda/envs/py311/bin/pip install pybind11
+
+FROM base as mpi
+ADD manywheel/scripts/install_openmpi.sh install_openmpi.sh
+RUN bash ./install_openmpi.sh && rm install_openmpi.sh
+
+FROM base as cuda_final
+COPY --from=cuda            /usr/local/cuda-${BASE_CUDA_VERSION}  /usr/local/cuda-${BASE_CUDA_VERSION}
+RUN ln -sf /usr/local/cuda-${BASE_CUDA_VERSION} /usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:$PATH
+COPY --from=conda           /opt/conda                            /opt/conda
+RUN /opt/conda/bin/conda init bash
+COPY --from=mpi             /usr/local/mpi                        /usr/local/mpi
+ENV PATH=/usr/local/mpi/bin:$PATH
