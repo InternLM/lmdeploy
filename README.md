@@ -84,10 +84,13 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 python -m lmdeploy.turbomind.chat ./workspace
 ```
 
-```{note}
-When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
-Disable GPU ECC can free up 10% memory, try `sudo nvidia-smi --ecc-config=0` and reboot system.
-```
+> **Note**<br />
+> When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. <br />
+> It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
+> Disable GPU ECC can free up 10% memory, try `sudo nvidia-smi --ecc-config=0` and reboot system.
+
+> **Note**<br />
+> Tensor parallel is available to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `chat` to enable runtime TP.
 
 #### Serving
 
@@ -162,6 +165,9 @@ Then adjust `workspace/triton_models/weights/config.ini`
 - `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
 Here is [quantization test results](./docs/en/quantization.md).
+
+> **Warning**<br />
+> runtime Tesnor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
 
 ## Contributing
 

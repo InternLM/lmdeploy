@@ -52,7 +52,7 @@ def stream_callback(que, result, error):
 
 def get_logger(log_file=None, log_level=logging.INFO):
     """Return the logger."""
-    from .utils import get_logger
+    from lmdeploy.turbomind.utils import get_logger
     logger = get_logger('service.ft', log_file=log_file, log_level=log_level)
     return logger
 
