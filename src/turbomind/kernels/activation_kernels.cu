@@ -324,6 +324,4 @@ INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, half, half);
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif
 
-
-
 }  // namespace turbomind
