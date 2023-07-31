@@ -19,7 +19,6 @@
 #include <string>
 #include <unordered_map>
 
-#include "src/turbomind/kernels/beam_search_topk_kernels.h"
 #include "src/turbomind/layers/BaseLayer.h"
 #include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
@@ -34,8 +33,6 @@ protected:
     void initialize();
     bool hasDiffRuntimeArgs(TensorMap* input_tensors);
 
-    DynamicDecodeBaseLayer* online_beamsearch_decode_;
-    DynamicDecodeBaseLayer* beamsearch_decode_;
     DynamicDecodeBaseLayer* topk_decode_;
     DynamicDecodeBaseLayer* topp_decode_;
 

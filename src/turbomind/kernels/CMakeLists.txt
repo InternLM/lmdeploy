@@ -26,11 +26,6 @@ add_library(activation_kernels STATIC activation_kernels.cu)
 set_property(TARGET activation_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET activation_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
-add_library(gen_relative_pos_bias STATIC gen_relative_pos_bias.cu)
-set_property(TARGET gen_relative_pos_bias PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET gen_relative_pos_bias PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(gen_relative_pos_bias PUBLIC activation_kernels)
-
 add_library(logprob_kernels STATIC logprob_kernels.cu)
 set_property(TARGET logprob_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET logprob_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -51,10 +46,6 @@ add_library(decoder_masked_multihead_attention STATIC ${decoder_masked_multihead
 set_property(TARGET decoder_masked_multihead_attention PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET decoder_masked_multihead_attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
-add_library(online_softmax_beamsearch_kernels STATIC online_softmax_beamsearch_kernels.cu)
-set_property(TARGET online_softmax_beamsearch_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET online_softmax_beamsearch_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-
 add_library(decoding_kernels STATIC decoding_kernels.cu)
 set_property(TARGET decoding_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET decoding_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -62,15 +53,6 @@ set_property(TARGET decoding_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(gpt_kernels STATIC gpt_kernels.cu)
 set_property(TARGET gpt_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET gpt_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-
-add_library(beam_search_penalty_kernels STATIC beam_search_penalty_kernels.cu)
-set_property(TARGET beam_search_penalty_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET beam_search_penalty_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(beam_search_penalty_kernels PRIVATE cuda_utils)
-
-add_library(beam_search_topk_kernels STATIC beam_search_topk_kernels.cu)
-set_property(TARGET beam_search_topk_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET beam_search_topk_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_library(sampling_topk_kernels STATIC sampling_topk_kernels.cu)
 set_property(TARGET sampling_topk_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)

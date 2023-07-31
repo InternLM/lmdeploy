@@ -15,7 +15,6 @@
  */
 
 #pragma once
-#include "src/turbomind/kernels/gen_relative_pos_bias.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -47,68 +46,11 @@ inline void invokeGetPaddingOffset(size_t*      h_pinned_token_num,
 }
 
 template<typename T>
-void invokeBuildEncoderAttentionMask(
-    T* attention_mask, const int* sequence_lengths, const int batch_size, const int max_seq_len, cudaStream_t stream);
-
-void invokeGetTrtPaddingOffset(int*         trt_mha_padding_offset,
-                               const int*   sequence_length,
-                               const int    request_batch_size,
-                               cudaStream_t stream);
-
-void invokeGetTrtPaddingOffset(int*         trt_mha_padding_offset,
-                               const int*   sequence_length,
-                               const int    request_batch_size,
-                               const int    request_seq_len,
-                               cudaStream_t stream);
-
-template<typename T>
 void invokeRebuildPadding(
     T* dst, const T* src, const int* padding_offset, const int token_num, const int hidden_dim, cudaStream_t stream);
 
 template<typename T>
 void invokeRemovePadding(
     T* dst, const T* src, const int* padding_offset, const int token_num, const int hidden_dim, cudaStream_t stream);
-
-template<typename T>
-void invokeBuildRelativeAttentionBias(T*                          relative_attention_bias,
-                                      const T*                    relative_attention_bias_table,
-                                      const int                   head_num,
-                                      const int                   seq_len,
-                                      const int                   num_bucket,
-                                      const bool                  is_bidirectional,
-                                      const int                   max_distance,
-                                      const PositionEmbeddingType position_embedding_type,
-                                      cudaStream_t                stream);
-
-template<typename T_OUT, typename T_IN>
-struct getLastTokenDequantizeParam {
-    T_OUT* const       output;
-    T_IN const* const  input;
-    float const* const input_scale;
-
-    const int    batch_size;
-    const int    max_seq_len;
-    const int    d_model;
-    cudaStream_t stream;
-};
-
-template<typename T_OUT, typename T_IN>
-void invokeGetLastTokenDequantize(getLastTokenDequantizeParam<T_OUT, T_IN> param);
-
-#ifdef ENABLE_FP8
-template<typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
-struct QuantizeMatrixRebuildPaddingParam {
-    T_OUT*       dst;
-    const T_IN*  src;
-    const int*   padding_offset;
-    const int    token_num;
-    const int    d_model;
-    const float* scale;
-    cudaStream_t stream;
-};
-
-template<typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
-void invokeQuantizeMatrixRebuildPadding(QuantizeMatrixRebuildPaddingParam<T_OUT, T_IN, quantize_mode> param);
-#endif  // ENABLE_FP8
 
 }  // namespace turbomind
