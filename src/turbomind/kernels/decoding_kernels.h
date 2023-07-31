@@ -22,17 +22,6 @@
 
 namespace turbomind {
 
-template<typename T>
-void invokeDecodingInitialize(bool*        finished,
-                              int*         sequence_length,
-                              int*         word_ids,
-                              T*           cum_log_probs,
-                              const int*   sentence_ids,
-                              const int    batch_size,
-                              const int    beam_width,
-                              const int    max_input_length,
-                              cudaStream_t stream);
-
 // get token from all_ids at step, then lookup from the embedding table
 // by the token
 template<typename T>
@@ -99,72 +88,7 @@ void invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
                                   const int    vocab_size_padded,
                                   cudaStream_t stream);
 
-void invokeGatherTree(int*         beams,
-                      int*         max_sequence_lengths,
-                      const int    max_time,
-                      const int    batch_size,
-                      const int    beam_width,
-                      const int*   step_ids,
-                      const int*   parent_ids,
-                      const int*   end_tokens,
-                      cudaStream_t stream);
-
-void invokeGatherTree(int*         beams,
-                      int*         max_sequence_lengths,
-                      const int    max_time,
-                      const int    batch_size,
-                      const int    beam_width,
-                      const int*   step_ids,
-                      const int*   parent_ids,
-                      const int*   end_tokens,
-                      const int    max_input_length,
-                      cudaStream_t stream);
-
-struct gatherTreeParam {
-    int*       beams                          = nullptr;
-    int*       max_sequence_lengths           = nullptr;
-    int        max_sequence_length_final_step = 0;
-    const int* input_lengths                  = nullptr;
-    // response input lengths (used to slice the ids during postprocessing)
-    int*       response_input_lengths     = nullptr;
-    int        max_time                   = 0;
-    int        batch_size                 = 0;
-    int        beam_width                 = 0;
-    const int* step_ids                   = nullptr;
-    const int* parent_ids                 = nullptr;
-    const int* end_tokens                 = nullptr;
-    int        max_input_length           = 0;
-    const int* prefix_soft_prompt_lengths = nullptr;
-    // p_prompt_tuning prompt leangths, used to remove prompts during post-processing
-    const int* p_prompt_tuning_prompt_lengths  = nullptr;
-    int        max_input_without_prompt_length = 0;
-    // prefix soft prompt
-    int          max_prefix_soft_prompt_length = 0;
-    int*         output_ids                    = nullptr;
-    cudaStream_t stream;
-};
-
-void invokeGatherTree(gatherTreeParam param);
-
-void invokeMinusUnfinishedSeqlen(int* sequence_lengths, const bool* finished, const int token_num, cudaStream_t stream);
-void invokePlusUnfinishedSeqlen(int* sequence_lengths, const bool* finished, const int token_num, cudaStream_t stream);
-
 template<typename T>
 void invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream);
-
-void invokeFinalize(int*         output_ids,
-                    int*         sequence_lengths,
-                    float*       cum_log_probs,
-                    float*       output_log_probs,
-                    const int*   topk_output_ids,
-                    const int*   topk_sequence_lengths,
-                    const float* scores,
-                    const float* topk_cum_log_probs,
-                    const float* topk_log_probs,
-                    const int*   num_beams,
-                    const int    beam_width,
-                    const int    max_seq_len,
-                    const int    batch_size,
-                    cudaStream_t stream);
 
 }  // namespace turbomind

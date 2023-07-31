@@ -17,11 +17,9 @@
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/kernels/ban_bad_words.h"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
-#include "src/turbomind/layers/beam_search_layers/BaseBeamSearchLayer.h"
-#include "src/turbomind/layers/beam_search_layers/BeamSearchLayer.h"
-#include "src/turbomind/layers/beam_search_layers/OnlineBeamSearchLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -45,37 +43,6 @@ template<typename T>
 void DynamicDecodeLayer<T>::initialize()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    online_beamsearch_decode_ = new OnlineBeamSearchLayer<T>(0,  // max_batch_size, deprecated
-                                                             0,  // local_head_num, deprecated
-                                                             0,  // size_per_head, deprecated
-                                                             0,  // beam_width, deprecated
-                                                             vocab_size_,
-                                                             vocab_size_padded_,
-                                                             0,     // end_id, deprecated
-                                                             0.0f,  // beam_search_diversity_rate_, deprecated
-                                                             1.0f,  // temperature_, deprecated
-                                                             0.0f,  // len_penalty_, deprecated
-                                                             1.0f,  // repetition_penalty_, deprecated
-                                                             stream_,
-                                                             cublas_wrapper_,
-                                                             allocator_,
-                                                             is_free_buffer_after_forward_);
-
-    beamsearch_decode_ = new BeamSearchLayer<T>(0,  // max_batch_size, deprecated
-                                                0,  // local_head_num, deprecated
-                                                0,  // size_per_head, deprecated
-                                                0,  // beam_width, deprecated
-                                                vocab_size_,
-                                                vocab_size_padded_,
-                                                0,     // end_id, deprecated
-                                                0.0f,  // beam_search_diversity_rate_, deprecated
-                                                1.0f,  // temperature_, deprecated
-                                                0.0f,  // len_penalty_, deprecated
-                                                1.0f,  // repetition_penalty_, deprecated
-                                                stream_,
-                                                cublas_wrapper_,
-                                                allocator_,
-                                                is_free_buffer_after_forward_);
 
     topk_decode_ = new TopKSamplingLayer<T>(0,
                                             vocab_size_,
@@ -131,8 +98,6 @@ template<typename T>
 DynamicDecodeLayer<T>::~DynamicDecodeLayer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    delete online_beamsearch_decode_;
-    delete beamsearch_decode_;
     delete topk_decode_;
     delete topp_decode_;
     freeBuffer();
@@ -284,105 +249,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
 
     // dynamic decode GPT
     if (beam_width > 1) {
-        // Because we still not support batch beam search now, so we need to compute one by one if there are different
-        // runtime arguments.
-        const size_t dynamic_decode_batch_size      = has_diff_runtime_args_ ? 1 : local_batch_size;
-        const int    dynamic_decode_total_iteration = local_batch_size / dynamic_decode_batch_size;
-
-        for (uint dynamic_ite = ite * dynamic_decode_total_iteration;
-             dynamic_ite < (ite + 1) * dynamic_decode_total_iteration;
-             ++dynamic_ite) {
-            const int dynamic_id_offset                      = dynamic_ite * dynamic_decode_batch_size * beam_width;
-            const int dynamic_decode_vocab_size_units_offset = dynamic_id_offset * vocab_size_padded_;
-
-            // common inputs
-            Tensor logits = input_tensors->at("logits");
-            Tensor end_id = input_tensors->at("end_id");
-
-            TensorMap dynamic_decode_input_tensors(
-                {{"logits",
-                  Tensor{logits.where,
-                         logits.type,
-                         {dynamic_decode_batch_size, logits.shape[1], logits.shape[2]},
-                         logits.getPtrWithOffset(dynamic_decode_vocab_size_units_offset)}},
-                 {"step", input_tensors->at("step")},
-                 {"max_input_length", input_tensors->at("max_input_length")},
-                 {"end_id",
-                  Tensor{end_id.where,
-                         end_id.type,
-                         {dynamic_decode_batch_size},
-                         end_id.getPtrWithOffset(dynamic_ite * dynamic_decode_batch_size)}},
-                 {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &dynamic_ite}}});
-
-            if (input_tensors->isExist("embedding_bias")) {
-                dynamic_decode_input_tensors.insert({"embedding_bias", input_tensors->at("embedding_bias")});
-            }
-            if (input_tensors->isExist("input_lengths")) {
-                Tensor input_lengths = input_tensors->at("input_lengths");
-                dynamic_decode_input_tensors.insert(
-                    {"input_lengths",
-                     input_lengths.slice({dynamic_decode_batch_size, input_lengths.shape[1]}, dynamic_id_offset)});
-            }
-            for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
-                if (t->first.find("random_seed") == std::string::npos) {
-                    dynamic_decode_input_tensors.insert(*t);
-                }
-            }
-
-            // common outputs
-            TensorMap dynamic_decode_output_tensors({{"output_ids", output_tensors->at("output_ids")}});
-            if (output_tensors->isExist("sequence_length")) {
-                Tensor sequence_length = output_tensors->at("sequence_length");
-                dynamic_decode_output_tensors.insert({"sequence_length",
-                                                      Tensor{sequence_length.where,
-                                                             sequence_length.type,
-                                                             {dynamic_decode_batch_size * beam_width},
-                                                             sequence_length.getPtrWithOffset(dynamic_id_offset)}});
-            }
-            if (output_tensors->isExist("finished")) {
-                Tensor finished = output_tensors->at("finished");
-                dynamic_decode_output_tensors.insert({"finished",
-                                                      Tensor{finished.where,
-                                                             finished.type,
-                                                             {dynamic_decode_batch_size * beam_width},
-                                                             finished.getPtrWithOffset(dynamic_id_offset)}});
-            }
-            if (output_tensors->isExist("cum_log_probs")) {
-                Tensor cum_log_probs = output_tensors->at("cum_log_probs");
-                dynamic_decode_output_tensors.insert({"cum_log_probs",
-                                                      Tensor{cum_log_probs.where,
-                                                             cum_log_probs.type,
-                                                             {dynamic_decode_batch_size * beam_width},
-                                                             cum_log_probs.getPtrWithOffset(dynamic_id_offset)}});
-            }
-            if (output_tensors->isExist("beam_hyps")) {
-                dynamic_decode_output_tensors.insert("beam_hyps", output_tensors->at("beam_hyps"));
-            }
-
-            if (output_tensors->isExist("output_log_probs")) {
-                dynamic_decode_output_tensors.insert({"output_log_probs", output_tensors->at("output_log_probs")});
-            }
-
-            dynamic_decode_input_tensors.insert({"src_cache_indirection", input_tensors->at("src_cache_indirection")});
-
-            dynamic_decode_output_tensors.insert({"parent_ids", output_tensors->at("parent_ids")});
-            dynamic_decode_output_tensors.insert(
-                {"tgt_cache_indirection", output_tensors->at("tgt_cache_indirection")});
-
-            FT_CHECK_WITH_INFO(dynamic_decode_output_tensors.isExist("cum_log_probs"),
-                               "cum_log_probs should be provided in beam search.");
-
-            if (true || beam_width < 16
-                || (output_tensors->isExist("beam_hyps")
-                    && input_tensors->getVal<float>("beam_search_diversity_rate", 0.0f) != 0.0f)) {
-                // only online_beamsearch_decode_ support beam_search_diversity_rate when beam_hyps is used
-                online_beamsearch_decode_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-            }
-            else {
-                FT_CHECK(false);  // deprecate this module
-                beamsearch_decode_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-            }
-        }  // end of dynamic_ite
+        FT_CHECK_WITH_INFO(0, "Beam-search is not supported.");
     }
     else {  // beam_width=1
         // In sampling, we have supported batch sampling. So, we always compute all sentences once.

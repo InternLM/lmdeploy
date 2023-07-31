@@ -14,13 +14,10 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-add_subdirectory(beam_search_layers)
 add_subdirectory(sampling_layers)
 
 add_library(DynamicDecodeLayer STATIC DynamicDecodeLayer.cc)
 set_property(TARGET DynamicDecodeLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DynamicDecodeLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(DynamicDecodeLayer PUBLIC -lcudart
-                        TopKSamplingLayer TopPSamplingLayer
-                        OnlineBeamSearchLayer BeamSearchLayer ban_bad_words stop_criteria
-                        gpt_kernels tensor nvtx_utils)
+target_link_libraries(DynamicDecodeLayer PUBLIC -lcudart TopKSamplingLayer 
+        TopPSamplingLayer ban_bad_words stop_criteria gpt_kernels tensor nvtx_utils)
