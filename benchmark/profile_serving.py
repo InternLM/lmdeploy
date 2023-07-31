@@ -169,7 +169,7 @@ def main(tritonserver_addr: str,
     first_token_latency_max = np.max(stats[:, 0], axis=0)
     first_token_latency_ave = np.mean(stats[:, 0], axis=0)
     throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
-    print(f'\n{"-" * 50}\ncocurrency: {concurrency}\n'
+    print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
           f'first_token latency(min, max, ave): '
           f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
