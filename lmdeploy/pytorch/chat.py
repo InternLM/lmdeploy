@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Chat through command line.
 
-This submodule allow user to chat with language model through command line,
+This submodule allows user to chat with language model through command line,
 and optionally accelerate model using backends like deepspeed.
 
 Example 1: Chat with default setting
@@ -58,14 +58,13 @@ from transformers import GenerationConfig, PreTrainedModel
 from .adapters import init_adapter
 from .dist import get_local_rank, get_rank, get_world_size
 from .model import accel_model, init_model
-from .session import BasicSessionManager  # noqa: F401
 from .session import BasicSessionManagerWithHistory
 from .utils import BasicStreamer, TerminalIO, control
 
 logger = logging.getLogger(__name__)
 
 
-def set_logging(log_file, debug: bool):
+def set_logging(log_file: str, debug: bool):
     torch.set_printoptions(linewidth=120)
     level = logging.DEBUG if debug else logging.INFO
     log_file = log_file or 'chat.log'

@@ -9,11 +9,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .dist import get_local_rank
 
-try:
-    import deepspeed
-except ImportError:
-    deepspeed = None
-
 logger = logging.getLogger(__name__)
 
 
@@ -78,22 +73,21 @@ def init_model(model_path: str,
                                                      torch_dtype=torch.float16,
                                                      trust_remote_code=True)
 
-    print(f'model loaded in {time.monotonic() - start:.1f} seconds')
+    logger.info(f'Model loaded in {time.monotonic() - start:.1f} seconds')
     logger.info(f'Model loaded from {model_path}')
     logger.debug(model)
 
     return model, tokenizer
 
 
-def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
-    """Accelerate model with given accelerator."""
+def accel_model(model, accel: Optional[str] = None, max_alloc=2048, tp_size=1):
+    """Accelerate model with given accelerator.
 
-    if accel == 'deepspeed' and deepspeed is None:
-        warnings.warn('deepspeed is not installed, '
-                      'use plain huggingface model.')
-        accel = None
+    Note:
+        Currently we support only deepspeed or just no acceleration.
+    """
 
-    logger.info(f'Accelerated model with {accel}')
+    logger.info(f'Accelerate model with {accel}')
 
     if accel is None:
         # No acceleration, just to cuda
@@ -103,6 +97,13 @@ def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
 
     elif accel.lower() == 'deepspeed':
         # Use deepspeed inference inject fast kernel and/or tensor parallel
+
+        try:
+            import deepspeed
+        except ImportError as e:
+            raise ImportError('--accel=deepspeed is specified but '
+                              'deepspeed is not installed.\n'
+                              'Install with `pip install deepspeed`.') from e
 
         config = dict(
             tensor_parallel=dict(tp_size=tp_size),  # Use world size in general
@@ -121,6 +122,13 @@ def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
                 # InternLM is not officially supported by DeepSpeed
                 # Set replace_with_kernel_inject=False to use AutoTP
                 config.update({'replace_with_kernel_inject': False})
+                warnings.warn(
+                    '\033[0;93m'
+                    'Current installation of deepspeed does not '
+                    'support InternLM. Disable kernel injection. '
+                    'To support InternLM, install customized deepspeed with '
+                    '`pip install git+https://github.com/wangruohui/DeepSpeed@support_internlm_0.10.0`'  # noqa: E501
+                    '\033[0m')
             else:
                 for module in model.modules():
                     # Since remote code is dynamically located,
