@@ -49,7 +49,3 @@ class SimpleTest(unittest.TestCase):
         self.assertTrue(torch.allclose(in22, torch.tensor([6, 66, 666])))
         self.assertFalse(torch.allclose(in3.cpu(), torch.tensor([6, 6, 666])))
         self.assertTrue(torch.allclose(in3.cpu(), torch.tensor([6, 66, 666])))
-
-
-if __name__ == '__main__':
-    unittest.main()
