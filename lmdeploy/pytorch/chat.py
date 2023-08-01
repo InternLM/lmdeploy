@@ -10,12 +10,12 @@ Example 1: Chat with default setting
 python -m lmdeploy.pytorch.chat $PATH_TO_HF_MODEL
 ```
 
-Example 2: Disable sampling and chat history
+Example 2: Disable sampling
 
 ```python
 python -m lmdeploy.pytorch.chat \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
-    --temperature 0 --max-histroy 0
+    --temperature 0
 ```
 
 Example 3: Accelerate with deepspeed inference
@@ -92,9 +92,9 @@ def main(
     seed: int = 0,
     use_fast_tokenizer: bool = True,
     max_alloc: int = 2048,
-    max_history: int = None,
+    max_session_len: int = None,
     log_file: Optional[str] = None,
-    debug: bool = True,
+    debug: bool = False,
     adapter: Optional[str] = None,
 ):
     """Chat with model through terminal.
@@ -112,7 +112,8 @@ def main(
             Generally, user should choose to use fast tokenizers.
             But if using fast raise some error, try to force using a slow one.
         max_alloc (int): Maximum memory to allocate (for deepspeed).
-        max_history (int): Maximum history, in number of tokens, to keep.
+        max_session_len (int): Maximum number of tokens allowed for all chat sessions.
+            This include both history and current session.
         log_file (str): Path to log file.
         debug (bool): Whether to enable debug mode.
         adapter (str): Force to use an adapter.
@@ -165,7 +166,8 @@ def main(
     )
 
     # Session manager handling history
-    sm = BasicSessionManagerWithHistory(max_history=max_history or max_alloc,
+    max_session_len = max_alloc if max_session_len is None else max_session_len
+    sm = BasicSessionManagerWithHistory(max_session_len=max_session_len,
                                         start_ids=adapter.start_ids,
                                         sep_ids=adapter.sep_ids)
     io = TerminalIO()
