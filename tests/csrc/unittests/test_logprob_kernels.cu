@@ -12,7 +12,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
-#include "tests/unittests/gtest_utils.h"
+#include "gtest_utils.h"
 
 using namespace turbomind;
 

@@ -31,9 +31,7 @@
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
-
-// #include "tests/unittests/unittest_utils.h"
-#include "tests/unittests/gtest_utils.h"
+#include "gtest_utils.h"
 
 using namespace turbomind;
 

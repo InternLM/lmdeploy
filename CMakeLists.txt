@@ -285,7 +285,7 @@ add_subdirectory(src)
 add_subdirectory(examples)
 
 if(BUILD_TEST)
-    add_subdirectory(tests)
+    add_subdirectory(tests/csrc)
 endif()
 
 # # Mesaure the compile time
