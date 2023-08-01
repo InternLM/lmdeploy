@@ -84,16 +84,22 @@ class TritonPythonModel:
                 request, 'TOKENS_BATCH').as_numpy()
             sequence_length = pb_utils.get_input_tensor_by_name(
                 request, 'sequence_length').as_numpy()
+            offsets = pb_utils.get_input_tensor_by_name(request,
+                                                        'offset').as_numpy()
 
             # Postprocessing output data.
             outputs = self._postprocessing(tokens_batch.tolist(),
-                                           sequence_length)
+                                           sequence_length, offsets.tolist())
 
             # Create output tensors. You need pb_utils.Tensor
             # objects to create pb_utils.InferenceResponse.
             output_tensor = pb_utils.Tensor(
                 'OUTPUT',
                 np.array(outputs).astype(self.output_dtype))
+            last_token = pb_utils.Tensor(
+                'LAST_TOKEN',
+                np.array(tokens_batch)[-1, -1, sequence_length - 1].astype(
+                    self.output_dtype))
 
             # Create InferenceResponse. You can set an error here in case
             # there was a problem with handling this inference request.
@@ -103,7 +109,7 @@ class TritonPythonModel:
             # pb_utils.InferenceResponse(
             #    output_tensors=..., TritonError("An error occurred"))
             inference_response = pb_utils.InferenceResponse(
-                output_tensors=[output_tensor])
+                output_tensors=[output_tensor, last_token])
             responses.append(inference_response)
 
         # You should return a list of pb_utils.InferenceResponse. Length
@@ -118,12 +124,15 @@ class TritonPythonModel:
         """
         print('Cleaning up...')
 
-    def _postprocessing(self, tokens_batch, sequence_length):
+    def _postprocessing(self, tokens_batch, sequence_length, offsets):
         """decode token ids into texts."""
         outputs = []
-        for beam_tokens, beam_len in zip(tokens_batch, sequence_length):
-            for tokens, _len in zip(beam_tokens, beam_len):
-                output = self.tokenizer.decode(tokens[:_len])
+        for beam_tokens, beam_len, beam_offset in zip(tokens_batch,
+                                                      sequence_length,
+                                                      offsets):
+            for tokens, _len, _offset in zip(beam_tokens, beam_len,
+                                             beam_offset):
+                output = self.tokenizer.decode(tokens[_offset:_len])
                 output = output.encode('utf8')
                 outputs.append(output)
         return outputs

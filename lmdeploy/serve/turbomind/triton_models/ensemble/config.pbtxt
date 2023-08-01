@@ -168,6 +168,11 @@ output [
     name: "sequence_length"
     data_type: TYPE_UINT32
     dims: [ -1 ]
+  },
+  {
+    name: "LAST_TOKEN"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
   }
 ]
 
@@ -288,6 +293,10 @@ ensemble_scheduling {
         key: "sequence_length"
         value: "sequence_length"
       }
+      output_map {
+        key: "offset"
+        value: "_offset"
+      }
     },
     {
       model_name: "postprocessing"
@@ -300,9 +309,17 @@ ensemble_scheduling {
         key: "sequence_length"
         value: "sequence_length"
       }
+      input_map {
+        key: "offset"
+        value: "_offset"
+      }
       output_map {
         key: "OUTPUT"
         value: "OUTPUT_0"
+      }
+      output_map {
+        key: "LAST_TOKEN"
+        value: "LAST_TOKEN"
       }
     }
 ]

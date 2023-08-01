@@ -231,6 +231,11 @@ output [
     dims: [ -1 ]
   },
   {
+    name: "offset"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+  },
+  {
     name: "cum_log_probs"
     data_type: TYPE_FP32
     dims: [ -1 ]
@@ -265,5 +270,17 @@ parameters {
   key: "enable_custom_all_reduce"
   value: {
     string_value: "0"
+  }
+}
+parameters {
+  key: "tensor_para_size"
+  value: {
+    string_value: "1"
+  }
+}
+parameters {
+  key: "model_name"
+  value: {
+    string_value: "internlm-chat-7b"
   }
 }
