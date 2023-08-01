@@ -42,7 +42,7 @@ target_compile_features(unittest PRIVATE cxx_std_14)
 target_link_libraries(  # Libs for test_attention_kernels
   unittest PUBLIC
     -lcudart -lcurand
-    gen_relative_pos_bias gpt_kernels gtest memory_utils tensor unfused_attention_kernels cuda_utils logger)
+    gpt_kernels gtest memory_utils tensor unfused_attention_kernels cuda_utils logger)
 target_link_libraries(  # Libs for test_logprob_kernels
   unittest PUBLIC
     -lcudart
@@ -50,7 +50,7 @@ target_link_libraries(  # Libs for test_logprob_kernels
 target_link_libraries(  # Libs for test_penalty_kernels
   unittest PUBLIC
     -lcublas -lcublasLt -lcudart
-    sampling_penalty_kernels beam_search_penalty_kernels memory_utils cuda_utils logger)
+    sampling_penalty_kernels memory_utils cuda_utils logger)
 target_link_libraries(  # Libs for test_sampling_kernel
   unittest PUBLIC
     -lcudart
@@ -70,11 +70,6 @@ target_link_libraries(test_gemm PUBLIC -lcublas -lcudart -lcurand gemm cublasMMW
 add_executable(test_gpt_kernels test_gpt_kernels.cu)
 target_link_libraries(test_gpt_kernels PUBLIC
                       gpt_kernels memory_utils tensor cuda_utils logger)
-
-add_executable(test_activation test_activation.cu)
-target_link_libraries(test_activation PUBLIC
-                    -lcublas -lcublasLt -lcudart
-                    activation_kernels memory_utils cuda_utils logger)
 
 add_executable(test_context_attention_layer test_context_attention_layer.cu)
 target_link_libraries(test_context_attention_layer PUBLIC

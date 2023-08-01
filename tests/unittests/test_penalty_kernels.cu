@@ -27,7 +27,6 @@
 #include <cublasLt.h>
 #include <cuda_runtime.h>
 
-#include "src/turbomind/kernels/beam_search_penalty_kernels.h"
 #include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
