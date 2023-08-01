@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-from transformers.generation.utils import GenerateOutput
+from transformers.generation.utils import ModelOutput
 
 
 class BasicSessionManager:
@@ -59,7 +59,7 @@ class BasicSessionManagerWithHistory:
             and output ids.
         """
 
-        if isinstance(output, GenerateOutput):
+        if isinstance(output, ModelOutput):
             self.history_ids = output.sequences
         elif isinstance(output, torch.Tensor):
             self.history_ids = output
