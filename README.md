@@ -141,7 +141,7 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     --seed 0
 ```
 
-You have to install deepspeed first to use this feature.
+You need to install deepspeed first to use this feature.
 
 ```
 pip install deepspeed
