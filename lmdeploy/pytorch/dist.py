@@ -82,12 +82,14 @@ def master_only_and_broadcast_tensor(func):
     """
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, size, dtype, **kwargs):
         if is_initialized():
             if get_rank() == 0:
                 result = func(*args, **kwargs)
             else:
-                result = torch.tensor([0]).cuda()
+                result = torch.empty(size=size,
+                                     dtype=dtype,
+                                     device=get_local_rank())
             broadcast(result, src=0)
             print(f'rank {get_rank()} received {result}')
         else:
@@ -105,14 +107,19 @@ class SimpleTest(unittest.TestCase):
         return 'master only or none'
 
     @master_only_and_broadcast_general
-    def fake_input2(self):
-        print(f'Evaluate fake input 2 (str) on {get_rank()}')
+    def fake_input21(self):
+        print(f'Evaluate fake input 21 (str) on {get_rank()}')
         return 'master only and_broadcast'
 
     @master_only_and_broadcast_general
-    def fake_input3(self):
-        print(f'Evaluate fake input 3 (cpu tensor) on {get_rank()}')
+    def fake_input22(self):
+        print(f'Evaluate fake input 22 (cpu tensor) on {get_rank()}')
         return torch.tensor([6, 66, 666])
+
+    @master_only_and_broadcast_tensor
+    def fake_input3(self):
+        print(f'Evaluate fake input 3 (gpu tensor) on {get_rank()}')
+        return torch.tensor([6, 66, 666]).cuda()
 
     def test(self):
         torch.distributed.init_process_group(backend='nccl')
@@ -121,16 +128,19 @@ class SimpleTest(unittest.TestCase):
         torch.cuda.set_device(rank)
 
         in1 = self.fake_input()
-        in2 = self.fake_input2()
-        in3 = self.fake_input3()
+        in21 = self.fake_input21()
+        in22 = self.fake_input22()
+        in3 = self.fake_input3(dtype=torch.long, size=(1, 3))
 
         if rank == 0:
             self.assertEqual(in1, 'master only or none')
         else:
             self.assertEqual(in1, None)
 
-        self.assertEqual(in2, 'master only and_broadcast')
-        self.assertTrue(torch.allclose(in3, torch.tensor([6, 66, 666])))
+        self.assertEqual(in21, 'master only and_broadcast')
+        self.assertTrue(torch.allclose(in22, torch.tensor([6, 66, 666])))
+        self.assertFalse(torch.allclose(in3.cpu(), torch.tensor([6, 6, 666])))
+        self.assertTrue(torch.allclose(in3.cpu(), torch.tensor([6, 66, 666])))
 
 
 if __name__ == '__main__':
