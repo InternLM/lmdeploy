@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import logging
+
 from transformers.generation.streamers import BaseStreamer
 
 from .dist import get_rank, master_only, master_only_and_broadcast_general
@@ -8,8 +10,6 @@ try:
     import readline  # To support command line history # noqa: F401
 except ImportError:  # readline not available
     pass
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -100,46 +100,3 @@ def control(prompt, gen_config, sm):
                 'illegal instruction, treated as normal conversation. ')
 
     return False
-
-
-def test_terminal_io(monkeypatch):
-    import io
-    tio = TerminalIO()
-    inputs = 'hello\n\n'
-    # inputs = 'hello\n\n\x1B[A\n\n'
-    monkeypatch.setattr('sys.stdin', io.StringIO(inputs))
-    string = tio.input()
-    tio.output(string)
-    assert string == 'hello'
-    # string = tio.input()
-    # tio.output(string)
-    # assert string == 'hello'
-
-
-def test_basic_streamer():
-    output = []
-
-    def decode_func(value):
-        return value + 10
-
-    def output_func(value):
-        output.append(value)
-
-    streamer = BasicStreamer(decode_func, output_func)
-    for i in range(10):
-        streamer.put(i)
-        if i == 5:
-            streamer.end()
-    streamer.end()
-
-    assert output == [11, 12, 13, 14, 15, '\n', 17, 18, 19, '\n']
-
-    output.clear()
-    streamer = BasicStreamer(decode_func, output_func, skip_prompt=False)
-    for i in range(10):
-        streamer.put(i)
-        if i == 5:
-            streamer.end()
-    streamer.end()
-
-    assert output == [10, 11, 12, 13, 14, 15, '\n', 16, 17, 18, 19, '\n']
