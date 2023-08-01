@@ -205,7 +205,12 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
          ft::Tensor{ft::MEMORY_GPU,
                     ft::TYPE_UINT32,
                     std::vector<size_t>{request_batch_size, beam_width},
-                    d_sequence_lengths_}}};
+                    d_sequence_lengths_}},
+        {"offset",
+         ft::Tensor{ft::MEMORY_GPU,
+                    ft::TYPE_UINT32,
+                    std::vector<size_t>{request_batch_size, beam_width},
+                    d_offsets_}}};
 
     if (input_tensors->count("is_return_log_probs") && *((bool*)input_tensors->at("is_return_log_probs").data)) {
         output_tensors.insert({"output_log_probs",
@@ -260,6 +265,8 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
         (int*)(allocator_->reMalloc(d_output_ids_, sizeof(int) * request_batch_size * beam_width * session_len, false));
     d_sequence_lengths_ =
         (int*)(allocator_->reMalloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width, false));
+    d_offsets_ =
+        (int*)(allocator_->reMalloc(d_offsets_, sizeof(int) * request_batch_size * beam_width, false));
     d_output_log_probs_ = (float*)(allocator_->reMalloc(
         d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
     d_cum_log_probs_ =
@@ -271,6 +278,7 @@ void LlamaTritonModelInstance<T>::freeBuffer()
 {
     allocator_->free((void**)(&d_output_ids_));
     allocator_->free((void**)(&d_sequence_lengths_));
+    allocator_->free((void**)(&d_offsets_));
     allocator_->free((void**)(&d_output_log_probs_));
     allocator_->free((void**)(&d_cum_log_probs_));
 }

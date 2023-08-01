@@ -133,9 +133,11 @@ void LlamaBatch<T>::handleStopRequests(const std::vector<std::shared_ptr<Request
         if (ec == 0) {
             auto& output_ids      = r->outputs[rank_].at("output_ids");
             auto& sequence_length = r->outputs[rank_].at("sequence_length");
+            auto& offset = r->outputs[rank_].at("offset");
             check_cuda_error(
                 cudaMemsetAsync(output_ids.getPtr<int>(), 0, sizeof(int) * output_ids.shape.at(2), stream_));
             check_cuda_error(cudaMemsetAsync(sequence_length.getPtr<int>(), 0, sizeof(int), stream_));
+            check_cuda_error(cudaMemsetAsync(offset.getPtr<int>(), 0, sizeof(int), stream_));
             check_cuda_error(cudaStreamSynchronize(stream_));
         }
         if (rank_ == 0) {
@@ -955,6 +957,8 @@ void LlamaBatch<T>::setOutputTensors(int max_gen_step)
         if (requests_[i]) {
             auto& output_ids      = requests_[i]->outputs[rank_].at("output_ids");
             auto& sequence_length = requests_[i]->outputs[rank_].at("sequence_length");
+            auto& offset = requests_[i]->outputs[rank_].at("offset");
+            h_input_length_buf_[i] += max_context_len_;
             check_cuda_error(cudaMemcpyAsync(output_ids.getPtr<int>(),
                                              output_ids_buf_ + i * session_len_,
                                              sizeof(int) * output_ids.shape.at(2),
@@ -962,9 +966,12 @@ void LlamaBatch<T>::setOutputTensors(int max_gen_step)
                                              stream_));
             check_cuda_error(cudaMemcpyAsync(
                 sequence_length.getPtr<int>(), sequence_lengths_ + i, sizeof(int), cudaMemcpyDefault, stream_));
+            check_cuda_error(cudaMemcpyAsync(
+                offset.getPtr<int>(), h_input_length_buf_ + i, sizeof(int), cudaMemcpyDefault, stream_));
             if (max_gen_step > max_context_len_) {  // +1 for newly generated token
                 invokePlusScalar(sequence_length.getPtr<int>(), 1, 1, stream_);
             }
+            h_input_length_buf_[i] -= max_context_len_;
         }
     }
 }

@@ -81,6 +81,7 @@ private:
 
     int*   d_output_ids_       = nullptr;
     int*   d_sequence_lengths_ = nullptr;
+    int*   d_offsets_ = nullptr;
     float* d_output_log_probs_ = nullptr;
     float* d_cum_log_probs_    = nullptr;
 
