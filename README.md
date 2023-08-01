@@ -167,7 +167,7 @@ Then adjust `workspace/triton_models/weights/config.ini`
 Here is [quantization test results](./docs/en/quantization.md).
 
 > **Warning**<br />
-> runtime Tesnor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
+> runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
 
 ## Contributing
 
