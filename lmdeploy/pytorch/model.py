@@ -57,8 +57,6 @@ def init_model(model_path: str,
         model_path (str): Path to model.
         tokenizer_path (str): Path to tokenizer.
         use_fast_tokenizer (bool): Whether to use fast tokenizer.
-        local_rank (int): Local rank of current process.
-        world_size (int): World size of current process.
 
     Note:
         If the model is converted from new version of transformers,

@@ -108,7 +108,19 @@ def main(
         top_p (float): Top p for sampling.
         seed (int): Random seed.
         use_fast_tokenizer (bool): Whether to use fast tokenizer.
-    """
+            This argument is directly pass to transformer's ``AutoTokenizer.from_pretrained``.
+            Generally, user should choose to use fast tokenizers.
+            But if using fast raise some error, try to force using a slow one.
+        max_alloc (int): Maximum memory to allocate (for deepspeed).
+        max_history (int): Maximum history, in number of tokens, to keep.
+        log_file (str): Path to log file.
+        debug (bool): Whether to enable debug mode.
+        adapter (str): Force to use an adapter.
+            Generally user should not use this argument because adapter is selected based
+            on the type of model. Only when it is impossible, e.g. distinguishing llama 1/2
+            based on `LlamaforCausalLM` class, this argument is required.
+            Currently, only "llama1" is acceptable for llama1 models.
+    """  # noqa: E501
     set_logging(log_file, debug)
 
     # workers should sync in sampling

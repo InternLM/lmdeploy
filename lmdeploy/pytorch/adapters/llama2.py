@@ -22,6 +22,9 @@ class Llama2Adapter(BasicAdapterFast):
     Llama2 use the following template and the first user prompt
     should contain a system prompt.
 
+    User can specify the system prompt using a <<SYS>> tag otherwise
+    the default system prompt is prepended to user's input.
+
         <bos>
         [INST]<space>
         <<SYS>>\n
@@ -53,12 +56,8 @@ class Llama2Adapter(BasicAdapterFast):
         self.prev_round = 0
 
     def encode_and_decorate(self, prompt):
-        r"""Encode prompt and decorate with template.
+        r"""Encode prompt and decorate with template."""
 
-        Note:
-            we leave <bos> and chat history for session manager to add,
-        so we will decorate input_ids to '<|User|>:{prompt}<eoh>\n<|Bot|>:'
-        """
         if self.prev_round == 0:
             res = re.search(r'<<SYS>>(.*?)<</SYS>>(.*)', prompt)
             if res:

@@ -31,6 +31,8 @@ def init_adapter(model: nn.Module, tokenizer, adapter=None):
             Adapter = _get_default_adapter(tokenizer)
     elif adapter == 'llama1':
         Adapter = _get_default_adapter(tokenizer)
+    else:
+        raise ValueError(f'Adapter {adapter} is not allowed.')
 
     logger.info(f'Using adapter {Adapter.__name__}')
 
