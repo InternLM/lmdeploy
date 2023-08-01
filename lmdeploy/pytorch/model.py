@@ -90,7 +90,7 @@ def init_model(model_path: str,
 def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
     """Accelerate model with given accelerator."""
 
-    if accel.lower() == 'deepspeed' and deepspeed is None:
+    if accel == 'deepspeed' and deepspeed is None:
         warnings.warn('deepspeed is not installed, '
                       'use plain huggingface model.')
         accel = None
@@ -103,7 +103,7 @@ def accel_model(model, accel=None, max_alloc=2048, tp_size=1):
         # user is responsible to assign the gpu id via CUDA_VISIBLE_DEVICES # noqa: E501
         model = model.cuda(get_local_rank())
 
-    if accel.lower() == 'deepspeed':
+    elif accel.lower() == 'deepspeed':
         # Use deepspeed inference inject fast kernel and/or tensor parallel
 
         config = dict(
