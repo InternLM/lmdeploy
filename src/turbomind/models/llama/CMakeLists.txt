@@ -3,6 +3,7 @@
 cmake_minimum_required(VERSION 3.8)
 
 add_subdirectory(fused_multi_head_attention)
+add_subdirectory(flash_attention2)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -39,7 +40,8 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         nccl_utils
         cuda_utils
         logger
-        llama_fmha)
+        llama_fmha
+        flash_attention2)
 
 add_executable(llama_gemm llama_gemm.cc)
 target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)

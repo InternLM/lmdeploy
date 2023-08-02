@@ -47,7 +47,7 @@ include(FetchContent)
 FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        cc85b64cf676c45f98a17e3a47c0aafcf817f088
+  GIT_TAG        6f47420213f757831fae65c686aa471749fa8d60
 )
 
 set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
@@ -312,6 +312,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:llama_fmha>
+  $<TARGET_OBJECTS:flash_attention2>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
   $<TARGET_OBJECTS:gemm_s4_f16>

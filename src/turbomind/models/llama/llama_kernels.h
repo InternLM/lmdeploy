@@ -78,7 +78,7 @@ void invokeGatherOutput(int*         output_ids,
 
 void invokeMyCopyInt(int* dst, const int* src, size_t count, cudaStream_t st);
 
-template<typename T>
+template<typename T, int version>
 class FlashAttentionOp {
 public:
     struct AttentionLayout {

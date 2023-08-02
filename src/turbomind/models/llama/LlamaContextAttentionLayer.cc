@@ -53,7 +53,9 @@ void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
     v_buf_2_ = k_buf_2_ + local_kv_head_num_ * batch_size * max_q_len * size_per_head_;
 
     if (use_fmha_) {
-        FlashAttentionOp<T> flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
+        static constexpr int FMHA_VERSION = std::is_same<half, typename std::decay<T>::type>::value ? 2 : 1;
+        FlashAttentionOp<T, FMHA_VERSION> flash_attention(
+            batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
         if (flash_attention.get_workspace_size() > 0) {
             qk_buf_float_ = (float*)allocator_->reMalloc(qk_buf_float_, flash_attention.get_workspace_size(), true);
         }
@@ -264,6 +266,7 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
 {
     //////////////////////////////////////////////
     // flash attention
+    // flash attention 2 only support half inputs
     using AttentionOp = FlashAttentionOp<T>;
     using Layout      = typename AttentionOp::AttentionLayout;
     Layout layout_q{
