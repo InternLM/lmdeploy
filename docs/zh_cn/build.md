@@ -34,5 +34,5 @@ python3 -m lmdeploy.turbomind.chat model_path
 也可以通过 WebUI 方式来对话：
 
 ```shell
-python3 -m lmdeploy.app model_path
+python3 -m lmdeploy.webui.app model_path
 ```

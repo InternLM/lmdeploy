@@ -2,7 +2,6 @@
 import os
 import os.path as osp
 import random
-import threading
 from functools import partial
 from typing import Sequence
 
@@ -14,23 +13,8 @@ from lmdeploy.model import MODELS
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.turbomind.chat import valid_str
 from lmdeploy.turbomind.tokenizer import Tokenizer
-
-CSS = """
-#container {
-    width: 95%;
-    margin-left: auto;
-    margin-right: auto;
-}
-
-#chatbot {
-    height: 500px;
-    overflow: auto;
-}
-
-.chat_wrap_space {
-    margin-left: 0.5em
-}
-"""
+from lmdeploy.webui.css import CSS
+from lmdeploy.webui.gradio_patch import Chatbot as grChatbot
 
 THEME = gr.themes.Soft(
     primary_hue=gr.themes.colors.blue,
@@ -38,9 +22,9 @@ THEME = gr.themes.Soft(
     font=[gr.themes.GoogleFont('Inconsolata'), 'Arial', 'sans-serif'])
 
 
-def chat_stream(instruction: str,
-                state_chatbot: Sequence,
+def chat_stream(state_chatbot: Sequence,
                 llama_chatbot: Chatbot,
+                request: gr.Request = gr.Request(),
                 model_name: str = None):
     """Chat with AI assistant.
 
@@ -50,26 +34,20 @@ def chat_stream(instruction: str,
         llama_chatbot (Chatbot): the instance of a chatbot
         model_name (str): the name of deployed model
     """
-    bot_summarized_response = ''
-    model_type = 'turbomind'
-    state_chatbot = state_chatbot + [(instruction, None)]
-    session_id = threading.current_thread().ident
+    instruction = state_chatbot[-1][0]
+    session_id = 1
+    for cookie in request.kwargs['headers']['cookie'].split(';'):
+        if '_gid' in cookie:
+            session_id = int(cookie[-8:])
+
     bot_response = llama_chatbot.stream_infer(
         session_id, instruction, f'{session_id}-{len(state_chatbot)}')
 
-    yield (state_chatbot, state_chatbot, f'{bot_summarized_response}'.strip())
-
     for status, tokens, _ in bot_response:
-        if state_chatbot[-1][-1] is None or model_type != 'fairscale':
-            state_chatbot[-1] = (state_chatbot[-1][0], tokens)
-        else:
-            state_chatbot[-1] = (state_chatbot[-1][0],
-                                 state_chatbot[-1][1] + tokens
-                                 )  # piece by piece
-        yield (state_chatbot, state_chatbot,
-               f'{bot_summarized_response}'.strip())
+        state_chatbot[-1] = (state_chatbot[-1][0], tokens)
+        yield (state_chatbot, state_chatbot, '')
 
-    yield (state_chatbot, state_chatbot, f'{bot_summarized_response}'.strip())
+    return (state_chatbot, state_chatbot, '')
 
 
 def reset_all_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
@@ -106,6 +84,11 @@ def cancel_func(
     )
 
 
+def add_instruction(instruction, state_chatbot):
+    state_chatbot = state_chatbot + [(instruction, None)]
+    return ('', state_chatbot)
+
+
 def run_server(triton_server_addr: str,
                server_name: str = 'localhost',
                server_port: int = 6006):
@@ -126,13 +109,14 @@ def run_server(triton_server_addr: str,
         reset_all = partial(reset_all_func,
                             model_name=model_name,
                             triton_server_addr=triton_server_addr)
-        llama_chatbot = gr.State(_chatbot)
+        llama_chatbot = gr.State(
+            Chatbot(triton_server_addr, log_level=log_level, display=True))
         state_chatbot = gr.State([])
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
+            chatbot = grChatbot(elem_id='chatbot', label=model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
@@ -141,17 +125,10 @@ def run_server(triton_server_addr: str,
                 reset_btn = gr.Button(value='Reset')
 
         send_event = instruction_txtbox.submit(
-            chat_interface,
-            [instruction_txtbox, state_chatbot, llama_chatbot],
-            [state_chatbot, chatbot],
-            batch=False,
-            max_batch_size=1,
-        )
-        instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
-            [],
-            [instruction_txtbox],
-        )
+            add_instruction, [instruction_txtbox, state_chatbot],
+            [instruction_txtbox, state_chatbot]).then(
+                chat_interface, [state_chatbot, llama_chatbot],
+                [state_chatbot, chatbot])
 
         cancel_btn.click(cancel_func,
                          [instruction_txtbox, state_chatbot, llama_chatbot],
@@ -172,8 +149,9 @@ def run_server(triton_server_addr: str,
 
 
 def chat_stream_local(instruction: str, state_chatbot: Sequence,
-                      step: gr.State, nth_round: gr.State, model, tm_model,
-                      tokenizer, llama_chatbot):
+                      step: gr.State, nth_round: gr.State, request: gr.Request,
+                      model, tm_model, tokenizer, llama_chatbot,
+                      request2instance):
     """Chat with AI assistant.
 
     Args:
@@ -182,6 +160,15 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         llama_chatbot (Chatbot): the instance of a chatbot
         model_name (str): the name of deployed model
     """
+    session_id = 1
+    for cookie in request.kwargs['headers']['cookie'].split(';'):
+        if '_gid' in cookie:
+            session_id = int(cookie[-8:])
+    if str(session_id) in request2instance:
+        llama_chatbot = request2instance[str(session_id)]
+    else:
+        llama_chatbot = tm_model.create_instance()
+        request2instance[str(session_id)] = llama_chatbot
     seed = random.getrandbits(64)
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
@@ -190,7 +177,6 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         raise gr.Error('WARNING: exceed session max length.'
                        ' Please end the session.')
     input_ids = tokenizer.encode(instruction)
-    session_id = 1
     bot_response = llama_chatbot.stream_infer(
         session_id, [input_ids],
         stream_output=True,
@@ -262,6 +248,7 @@ def run_local(model_path: str,
     tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id)
     llama_chatbot = tm_model.create_instance()
+    request2instance = dict()
     model_name = tm_model.model_name
     model = MODELS.get(model_name)()
 
@@ -274,12 +261,13 @@ def run_local(model_path: str,
                                         model=model,
                                         tm_model=tm_model,
                                         tokenizer=tokenizer,
-                                        llama_chatbot=llama_chatbot)
+                                        llama_chatbot=llama_chatbot,
+                                        request2instance=request2instance)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
+            chatbot = grChatbot(elem_id='chatbot', label=model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
