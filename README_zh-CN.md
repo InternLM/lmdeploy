@@ -6,7 +6,7 @@
 </div>
 
 <p align="center">
-    👋 join us on <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
+    👋 join us on <a href="https://twitter.com/intern_lm" target="_blank">Twitter</a>, <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
 </p>
 
 ______________________________________________________________________
@@ -50,14 +50,13 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 ## 快速上手
 
 ### 安装
-
+LMDeploy 支持的 python 版本为 3.8~3.11。以下是快速安装的例子：
 ```shell
 conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-pip install -e .
+pip install lmdeploy
 ```
+也可以选择 [源码安装](./docs/zh_cn/build.md).
 
 ### 部署 InternLM
 
@@ -82,12 +81,20 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 #### 使用 turbomind 推理
 
 ```shell
-docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
-    python3 -m lmdeploy.turbomind.chat /workspace
+python3 -m lmdeploy.turbomind.chat ./workspace
 ```
 
-```{note}
-turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡
+> **Note**<br />
+> turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。<br />
+> 关闭显卡的 ECC 可以腾出 10% 显存，执行 `sudo nvidia-smi --ecc-config=0` 重启系统生效。
+
+> **Note**<br />
+> 使用 Tensor 并发可以利用多张 GPU 进行推理。在 `chat` 时添加参数 `--tp=<num_gpu>` 可以启动运行时 TP。
+
+#### 直接用 Gradio 启动 Turbomind 服务
+
+```shell
+python3 -m lmdeploy.webui.app model_path
 ```
 
 #### 通过容器部署推理服务
@@ -163,6 +170,9 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
 - `quant_policy` 设置为 4。此参数默认为 0，表示不开启
 
 这里是[量化测试结果](./docs/zh_cn/quantization.md)。
+
+> **Warning**<br />
+> 量化部署不支持运行时 Tensor 并发。如果希望使用 Tensor 并发，需要在 deploy 时配置 tp 参数。
 
 ## 贡献指南
 

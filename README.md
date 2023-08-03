@@ -6,7 +6,7 @@ English | [简体中文](README_zh-CN.md)
 </div>
 
 <p align="center">
-    👋 join us on <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
+    👋 join us on <a href="https://twitter.com/intern_lm" target="_blank">Twitter</a>, <a href="https://discord.gg/xa29JuW87d" target="_blank">Discord</a> and <a href="https://r.vansin.top/?r=internwx" target="_blank">WeChat</a>
 </p>
 
 ______________________________________________________________________
@@ -50,15 +50,14 @@ And the request throughput of TurboMind is 30% higher than vLLM.
 
 ### Installation
 
-Below are quick steps for installation:
+LMDeploy supports python 3.8~3.11. Below are quick steps for installation:
 
 ```shell
 conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-pip install -e .
+pip install lmdeploy
 ```
+Or, you can install Turbomind [from source](./docs/en/build.md).
 
 ### Deploy InternLM
 
@@ -83,12 +82,21 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 #### Inference by TurboMind
 
 ```shell
-docker run --gpus all --rm -v $(pwd)/workspace:/workspace -it openmmlab/lmdeploy:latest \
-    python3 -m lmdeploy.turbomind.chat /workspace
+python -m lmdeploy.turbomind.chat ./workspace
 ```
 
-```{note}
-When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
+> **Note**<br />
+> When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. <br />
+> It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
+> Disable GPU ECC can free up 10% memory, try `sudo nvidia-smi --ecc-config=0` and reboot system.
+
+> **Note**<br />
+> Tensor parallel is available to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `chat` to enable runtime TP.
+
+#### Serving with gradio
+
+```shell
+python3 -m lmdeploy.webui.app model_path
 ```
 
 #### Serving with Triton Inference Server
@@ -163,7 +171,10 @@ Then adjust `workspace/triton_models/weights/config.ini`
 - `use_context_fmha` changed to 0, means off
 - `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
-Here is [quantization test results](./docs/zh_cn/quantization.md).
+Here is [quantization test results](./docs/en/quantization.md).
+
+> **Warning**<br />
+> runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
 
 ## Contributing
 

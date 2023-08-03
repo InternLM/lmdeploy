@@ -24,15 +24,3 @@
   mkdir build && cd build
   sh ../generate.sh
   ```
-
-Then, you can communicate with the inference server by command line,
-
-```shell
-python3 -m lmdeploy.turbomind.chat model_path
-```
-
-or webui,
-
-```shell
-python3 -m lmdeploy.webui.app model_path
-```

@@ -76,10 +76,11 @@ def main(model_path: str,
          concurrency: int = 1,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
-         test_round: int = 10):
+         test_round: int = 10,
+         tp: int = 1):
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = TurboMind(model_path=model_path)
+    tm_model = TurboMind(model_path=model_path, tp=tp)
 
     warmup(tm_model, concurrency, output_seqlen)
 

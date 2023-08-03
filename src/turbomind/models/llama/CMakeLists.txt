@@ -23,7 +23,6 @@ set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC -lcudart
         cublasMMWrapper
         DynamicDecodeLayer
-        BaseBeamSearchLayer
         activation_kernels
         decoder_masked_multihead_attention
         bert_preprocess_kernels

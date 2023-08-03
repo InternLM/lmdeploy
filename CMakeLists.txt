@@ -285,7 +285,7 @@ add_subdirectory(src)
 add_subdirectory(examples)
 
 if(BUILD_TEST)
-    add_subdirectory(tests)
+    add_subdirectory(tests/csrc)
 endif()
 
 # # Mesaure the compile time
@@ -299,21 +299,16 @@ endif()
 ########################################
 
 add_library(transformer-shared SHARED
-  $<TARGET_OBJECTS:BaseBeamSearchLayer>
   $<TARGET_OBJECTS:BaseSamplingLayer>
-  $<TARGET_OBJECTS:BeamSearchLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:llama_fmha>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
-  $<TARGET_OBJECTS:OnlineBeamSearchLayer>
   $<TARGET_OBJECTS:TopKSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>
   $<TARGET_OBJECTS:activation_kernels>
   $<TARGET_OBJECTS:ban_bad_words>
-  $<TARGET_OBJECTS:beam_search_penalty_kernels>
-  $<TARGET_OBJECTS:beam_search_topk_kernels>
   $<TARGET_OBJECTS:bert_preprocess_kernels>
   $<TARGET_OBJECTS:cublasAlgoMap>
   $<TARGET_OBJECTS:cublasMMWrapper>
@@ -329,7 +324,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:mpi_utils>
   $<TARGET_OBJECTS:nccl_utils>
   $<TARGET_OBJECTS:nvtx_utils>
-  $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
   $<TARGET_OBJECTS:sampling_topk_kernels>
   $<TARGET_OBJECTS:sampling_topp_kernels>

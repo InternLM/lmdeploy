@@ -29,7 +29,10 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def main(model_path, session_id: int = 1, repetition_penalty: float = 1.0):
+def main(model_path,
+         session_id: int = 1,
+         repetition_penalty: float = 1.0,
+         tp=1):
     """An example to perform model inference through the command line
     interface.
 
@@ -39,7 +42,7 @@ def main(model_path, session_id: int = 1, repetition_penalty: float = 1.0):
     """
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id)
+    tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id, tp=tp)
     generator = tm_model.create_instance()
 
     nth_round = 1

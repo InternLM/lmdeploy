@@ -20,6 +20,12 @@ def get_version():
     return locals()['__version__']
 
 
+def check_ext_modules():
+    if os.path.exists(os.path.join(pwd, 'lmdeploy', 'lib')):
+        return True
+    return False
+
+
 def parse_requirements(fname='requirements.txt', with_version=True):
     """Parse the package dependencies listed in a file but strips specific
     versioning information.
@@ -35,6 +41,21 @@ def parse_requirements(fname='requirements.txt', with_version=True):
         python -c "import setup; print(setup.parse_requirements())"
     """
     require_fpath = fname
+
+    def get_nccl_pkg():
+        arg_name = '--cuda='
+        arg_value = None
+        for arg in sys.argv[1:]:
+            if arg.startswith(arg_name):
+                arg_value = arg[len(arg_name):]
+                sys.argv.remove(arg)
+                break
+
+        if arg_value == '11':
+            return 'nvidia-nccl-cu11'
+        elif arg_value == '12':
+            return 'nvidia-nccl-cu12'
+        return None
 
     def parse_line(line):
         """Parse information from a line in a requirements text file."""
@@ -92,6 +113,9 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 yield item
 
     packages = list(gen_packages_items())
+    nccl_pkg = get_nccl_pkg()
+    if nccl_pkg is not None:
+        packages += [nccl_pkg]
     return packages
 
 
@@ -103,14 +127,15 @@ if __name__ == '__main__':
           long_description_content_type='text/markdown',
           author='OpenMMLab',
           author_email='openmmlab@gmail.com',
-          packages=find_packages(
-              exclude=('lmdeploy/serve/turbomind/triton_models', )),
+          packages=find_packages(exclude=()),
           include_package_data=True,
           install_requires=parse_requirements('requirements.txt'),
+          has_ext_modules=check_ext_modules,
           classifiers=[
               'Programming Language :: Python :: 3.8',
               'Programming Language :: Python :: 3.9',
               'Programming Language :: Python :: 3.10',
+              'Programming Language :: Python :: 3.11',
               'Intended Audience :: Developers',
               'Intended Audience :: Education',
               'Intended Audience :: Science/Research',

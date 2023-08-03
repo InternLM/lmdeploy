@@ -1,0 +1,59 @@
+name: publish to pypi
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "lmdeploy/version.py"
+  workflow_dispatch:
+
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        pyver: [py38, py39, py310, py311]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: ${{ matrix.pyver }}
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda11.8
+      OUTPUT_FOLDER: cuda11.8_dist
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}/*
+          retention-days: 1
+
+  publish:
+    runs-on: ubuntu-latest
+    environment: 'prod'
+    needs:
+      - build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+      - name: Display artifacts
+        run: ls artifact/ -lh
+      - name: Set up python3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+      - name: Upload to pypi
+        run: |
+          pip install twine
+          twine upload artifact/* -u __token__ -p ${{ secrets.pypi_password }}

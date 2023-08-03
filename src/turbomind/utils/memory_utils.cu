@@ -301,58 +301,158 @@ template void cudaRandomUniform(__nv_fp8_e4m3* buffer, const size_t size);
 // loads data from binary file. If it succeeds, returns a non-empty vector. If loading fails or
 // the product of the elements in shape is 0, this function will return an empty vector.
 template<typename T>
-std::vector<T> loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename)
+std::vector<T>
+loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename, std::vector<ConcateSlice> slices = {})
 {
     if (shape.size() > 2) {
         printf("[ERROR] shape should have less than two dims \n");
         return std::vector<T>();
     }
+
     size_t dim0 = shape[0], dim1 = 1;
     if (shape.size() == 2) {
         dim1 = shape[1];
     }
-    size_t size = dim0 * dim1;
-    if (size == 0) {
-        TM_LOG_WARNING("shape is zero, skip loading weight from file %s \n", filename.c_str());
-        return std::vector<T>();
+
+    if (slices.size() == 0) {
+        size_t size = dim0 * dim1;
+        if (size == 0) {
+            TM_LOG_WARNING("shape is zero, skip loading weight from file %s \n", filename.c_str());
+            return std::vector<T>();
+        }
+
+        std::vector<T> host_array(size);
+        std::ifstream  in(filename, std::ios::in | std::ios::binary);
+        if (!in.is_open()) {
+            TM_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
+            return std::vector<T>();
+        }
+
+        size_t loaded_data_size = sizeof(T) * size;
+        in.seekg(0, in.end);
+        in.seekg(0, in.beg);
+
+        TM_LOG_DEBUG("Read " + std::to_string(loaded_data_size) + " bytes from " + filename);
+        in.read((char*)host_array.data(), loaded_data_size);
+
+        size_t in_get_size = in.gcount();
+        if (in_get_size != loaded_data_size) {
+            TM_LOG_WARNING("file %s only has %ld, but request %ld, loading model fails! \n",
+                           filename.c_str(),
+                           in_get_size,
+                           loaded_data_size);
+            return std::vector<T>();
+        }
+        in.close();
+        // If we succeed, return an array with values.
+        return host_array;
     }
+    else {
+        // concate all slices on the same dims
 
-    std::vector<T> host_array(size);
-    std::ifstream  in(filename, std::ios::in | std::ios::binary);
-    if (!in.is_open()) {
-        TM_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
-        return std::vector<T>();
+        if (slices.size() != shape.size()) {
+            printf("[ERROR] slices should have same dims as shape \n");
+            return std::vector<T>();
+        }
+
+        // get slices
+        ConcateSlice slice0{.slices = {{0, dim0}}};
+        ConcateSlice slice1{.slices = {{0, dim1}}};
+        if (slices.size() > 0 && slices[0].slices.size() > 0) {
+            slice0 = slices[0];
+        }
+        if (shape.size() == 2 && slices[1].slices.size() > 0) {
+            slice1 = slices[1];
+        }
+
+        size_t w0 = 0;
+        for (auto& s : slice0.slices) {
+            if (s.second > dim0) {
+                s.second = dim0;
+            }
+            if (s.second < s.first) {
+                printf("[ERROR] slice0: end < start \n");
+                return std::vector<T>();
+            }
+            w0 += s.second - s.first;
+        }
+
+        size_t w1 = 0;
+        for (auto& s : slice1.slices) {
+            if (s.second > dim1) {
+                s.second = dim1;
+            }
+            if (s.second < s.first) {
+                printf("[ERROR] slice1: end < start \n");
+                return std::vector<T>();
+            }
+            w1 += s.second - s.first;
+        }
+
+        size_t size             = w0 * w1;
+        size_t loaded_data_size = size * sizeof(T);
+
+        TM_LOG_DEBUG("Read " + std::to_string(loaded_data_size) + " bytes from " + filename + " with slice.");
+        if (size == 0) {
+            TM_LOG_WARNING("shape is zero, skip loading weight from file %s \n", filename.c_str());
+            return std::vector<T>();
+        }
+
+        std::vector<T> host_array(size);
+        std::ifstream  in(filename, std::ios::in | std::ios::binary);
+        if (!in.is_open()) {
+            TM_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
+            return std::vector<T>();
+        }
+
+        char* host_ptr = (char*)host_array.data();
+        if (slice1.slices.size() == 0
+            || (slice1.slices.size() == 1 && slice1.slices[0].second - slice1.slices[0].first == dim1)) {
+            for (auto& s : slice0.slices) {
+                size_t read_size = (s.second - s.first) * dim1 * sizeof(T);
+                size_t pos       = s.first * dim1;
+                in.seekg(pos * sizeof(T));
+                in.read((char*)host_ptr, read_size);
+                host_ptr += read_size;
+            }
+            in.close();
+            return host_array;
+        }
+
+        {
+            for (auto& s0 : slice0.slices) {
+                // loop over outer slice
+                for (size_t line_id = s0.first; line_id < s0.second; ++line_id) {
+                    // loop over lines
+                    size_t pos0 = line_id * dim1;
+                    for (auto& s1 : slice1.slices) {
+                        // loop over inner slice
+                        size_t pos       = pos0 + s1.first;
+                        size_t read_size = (s1.second - s1.first) * sizeof(T);
+                        in.seekg(pos * sizeof(T));
+                        in.read(host_ptr, read_size);
+                        host_ptr += read_size;
+                    }
+                }
+            }
+            in.close();
+        }
+        return host_array;
     }
-
-    size_t loaded_data_size = sizeof(T) * size;
-    in.seekg(0, in.end);
-    in.seekg(0, in.beg);
-
-    TM_LOG_DEBUG("Read " + std::to_string(loaded_data_size) + " bytes from " + filename);
-    in.read((char*)host_array.data(), loaded_data_size);
-
-    size_t in_get_size = in.gcount();
-    if (in_get_size != loaded_data_size) {
-        TM_LOG_WARNING("file %s only has %ld, but request %ld, loading model fails! \n",
-                       filename.c_str(),
-                       in_get_size,
-                       loaded_data_size);
-        return std::vector<T>();
-    }
-    in.close();
-    // If we succeed, return an array with values.
-    return host_array;
 }
 
-std::vector<float> loadArrayFromBin(std::vector<size_t> shape, std::string filename)
+std::vector<float> loadArrayFromBin(std::vector<size_t> shape, std::string filename, std::vector<ConcateSlice> slices)
 {
-    return loadWeightFromBinHelper<float>(shape, filename);
+    return loadWeightFromBinHelper<float>(shape, filename, slices);
 }
 
 template<typename T, typename T_IN>
-int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filename)
+int loadWeightFromBinFunc(T*                        ptr,
+                          std::vector<size_t>       shape,
+                          std::string               filename,
+                          std::vector<ConcateSlice> slices = std::vector<ConcateSlice>())
 {
-    std::vector<T_IN> host_array = loadWeightFromBinHelper<T_IN>(shape, filename);
+    std::vector<T_IN> host_array = loadWeightFromBinHelper<T_IN>(shape, filename, slices);
 
     if (host_array.empty()) {
         return 0;
@@ -371,49 +471,84 @@ int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filenam
     return 0;
 }
 
-template int loadWeightFromBinFunc<float, float>(float* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<half, float>(half* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<float, half>(float* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<half, half>(half* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<int8_t, int8_t>(int8_t* ptr, std::vector<size_t> shape, std::string filename);
+template int loadWeightFromBinFunc<float, float>(float*                    ptr,
+                                                 std::vector<size_t>       shape,
+                                                 std::string               filename,
+                                                 std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<half, float>(half*                     ptr,
+                                                std::vector<size_t>       shape,
+                                                std::string               filename,
+                                                std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<float, half>(float*                    ptr,
+                                                std::vector<size_t>       shape,
+                                                std::string               filename,
+                                                std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<half, half>(half*                     ptr,
+                                               std::vector<size_t>       shape,
+                                               std::string               filename,
+                                               std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<int8_t, int8_t>(int8_t*                   ptr,
+                                                   std::vector<size_t>       shape,
+                                                   std::string               filename,
+                                                   std::vector<ConcateSlice> slices);
 #ifdef ENABLE_BF16
-template int
-loadWeightFromBinFunc<__nv_bfloat16, float>(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename);
-template int
-loadWeightFromBinFunc<__nv_bfloat16, half>(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<float, __nv_bfloat16>(float* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<half, __nv_bfloat16>(half* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<__nv_bfloat16, __nv_bfloat16>(__nv_bfloat16*      ptr,
-                                                                 std::vector<size_t> shape,
-                                                                 std::string         filename);
+template int loadWeightFromBinFunc<__nv_bfloat16, float>(__nv_bfloat16*            ptr,
+                                                         std::vector<size_t>       shape,
+                                                         std::string               filename,
+                                                         std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<__nv_bfloat16, half>(__nv_bfloat16*            ptr,
+                                                        std::vector<size_t>       shape,
+                                                        std::string               filename,
+                                                        std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<float, __nv_bfloat16>(float*                    ptr,
+                                                         std::vector<size_t>       shape,
+                                                         std::string               filename,
+                                                         std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<half, __nv_bfloat16>(half*                     ptr,
+                                                        std::vector<size_t>       shape,
+                                                        std::string               filename,
+                                                        std::vector<ConcateSlice> slices);
+template int loadWeightFromBinFunc<__nv_bfloat16, __nv_bfloat16>(__nv_bfloat16*            ptr,
+                                                                 std::vector<size_t>       shape,
+                                                                 std::string               filename,
+                                                                 std::vector<ConcateSlice> slices);
 #endif  // ENABLE_BF16
-template int loadWeightFromBinFunc<int, int>(int* ptr, std::vector<size_t> shape, std::string filename);
+template int loadWeightFromBinFunc<int, int>(int*                      ptr,
+                                             std::vector<size_t>       shape,
+                                             std::string               filename,
+                                             std::vector<ConcateSlice> slices);
 #ifdef ENABLE_FP8
-template int
-loadWeightFromBinFunc<__nv_fp8_e4m3, float>(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename);
+template int loadWeightFromBinFunc<__nv_fp8_e4m3, float>(__nv_fp8_e4m3*            ptr,
+                                                         std::vector<size_t>       shape,
+                                                         std::string               filename,
+                                                         std::vector<ConcateSlice> slices);
 #endif  // ENABLE_FP8
 
 template<typename T>
-int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type)
+int loadWeightFromBin(T*                        ptr,
+                      std::vector<size_t>       shape,
+                      std::string               filename,
+                      FtCudaDataType            model_file_type,
+                      std::vector<ConcateSlice> slices)
 {
     switch (model_file_type) {
         case FtCudaDataType::FP32:
-            loadWeightFromBinFunc<T, float>(ptr, shape, filename);
+            loadWeightFromBinFunc<T, float>(ptr, shape, filename, slices);
             break;
         case FtCudaDataType::FP16:
-            loadWeightFromBinFunc<T, half>(ptr, shape, filename);
+            loadWeightFromBinFunc<T, half>(ptr, shape, filename, slices);
             break;
         case FtCudaDataType::INT8:
-            loadWeightFromBinFunc<T, int8_t>(ptr, shape, filename);
+            loadWeightFromBinFunc<T, int8_t>(ptr, shape, filename, slices);
             break;
 #ifdef ENABLE_BF16
         case FtCudaDataType::BF16:
-            loadWeightFromBinFunc<T, __nv_bfloat16>(ptr, shape, filename);
+            loadWeightFromBinFunc<T, __nv_bfloat16>(ptr, shape, filename, slices);
             break;
 #endif
 #ifdef ENABLE_FP8
         case FtCudaDataType::FP8:
-            loadWeightFromBinFunc<T, float>(ptr, shape, filename);
+            loadWeightFromBinFunc<T, float>(ptr, shape, filename, slices);
             break;
 #endif
         default:
@@ -424,28 +559,50 @@ int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, F
 }
 
 template<>
-int loadWeightFromBin(int* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type)
+int loadWeightFromBin(int*                      ptr,
+                      std::vector<size_t>       shape,
+                      std::string               filename,
+                      FtCudaDataType            model_file_type,
+                      std::vector<ConcateSlice> slices)
 {
-    loadWeightFromBinFunc<int, int>(ptr, shape, filename);
+    loadWeightFromBinFunc<int, int>(ptr, shape, filename, slices);
     return 0;
 }
 
-template int
-loadWeightFromBin(float* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-template int
-loadWeightFromBin(half* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-template int
-loadWeightFromBin(int8_t* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+template int loadWeightFromBin(float*                    ptr,
+                               std::vector<size_t>       shape,
+                               std::string               filename,
+                               FtCudaDataType            model_file_type,
+                               std::vector<ConcateSlice> slices);
+template int loadWeightFromBin(half*                     ptr,
+                               std::vector<size_t>       shape,
+                               std::string               filename,
+                               FtCudaDataType            model_file_type,
+                               std::vector<ConcateSlice> slices);
+template int loadWeightFromBin(int8_t*                   ptr,
+                               std::vector<size_t>       shape,
+                               std::string               filename,
+                               FtCudaDataType            model_file_type,
+                               std::vector<ConcateSlice> slices);
 #ifdef ENABLE_BF16
-template int
-loadWeightFromBin(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+template int loadWeightFromBin(__nv_bfloat16*            ptr,
+                               std::vector<size_t>       shape,
+                               std::string               filename,
+                               FtCudaDataType            model_file_type,
+                               std::vector<ConcateSlice> slices);
 #endif
 #ifdef ENABLE_FP8
-template int
-loadWeightFromBin(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+template int loadWeightFromBin(__nv_fp8_e4m3*            ptr,
+                               std::vector<size_t>       shape,
+                               std::string               filename,
+                               FtCudaDataType            model_file_type,
+                               std::vector<ConcateSlice> slices);
 #endif
-template int
-loadWeightFromBin(int* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+template int loadWeightFromBin(int*                      ptr,
+                               std::vector<size_t>       shape,
+                               std::string               filename,
+                               FtCudaDataType            model_file_type,
+                               std::vector<ConcateSlice> slices);
 
 template<typename T_IN, typename T_OUT>
 __global__ void cudaD2DcpyConvert(T_OUT* dst, const T_IN* src, const size_t size)
