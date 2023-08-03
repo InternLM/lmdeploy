@@ -32,6 +32,7 @@ def chat_stream(state_chatbot: Sequence,
         instruction (str): user's prompt
         state_chatbot (Sequence): the chatting history
         llama_chatbot (Chatbot): the instance of a chatbot
+        request (gr.Request): the request from a user
         model_name (str): the name of deployed model
     """
     instruction = state_chatbot[-1][0]
