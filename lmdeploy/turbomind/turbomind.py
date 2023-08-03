@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind.utils import get_logger
+from lmdeploy.utils import get_logger
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
