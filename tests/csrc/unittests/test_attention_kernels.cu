@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/kernels/gen_relative_pos_bias.h"
+
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include "tests/unittests/gtest_utils.h"
+#include "gtest_utils.h"
 
 #include <curand.h>
 #include <sstream>
@@ -333,121 +333,6 @@ public:
             EXPECT_TRUE(passed);
         }
     }
-
-    void runTestAlibiMaskedSoftmax(AttentionKernelTestParam param, bool is_benchmark = false)
-    {
-        DataType dtype = getTensorType<T>();
-
-        std::vector<size_t> qk_shape{param.batch_size, param.head_num, param.q_length, param.k_length};
-
-        bool use_fp32_qk = param.use_fp32_qk_buf && dtype != TYPE_FP32;
-
-        Tensor qk           = createTensor(MEMORY_GPU, dtype, qk_shape);
-        Tensor qk_fp32      = use_fp32_qk ? createTensor(MEMORY_GPU, TYPE_FP32, qk_shape) : Tensor();
-        Tensor attn_mask    = randomAttentionMask({param.batch_size, 1, param.q_length, param.k_length});
-        Tensor alibi_slopes = createTensor(MEMORY_GPU, dtype, {param.head_num});
-
-        // Input random initialization
-        if (param.use_fp32_qk_buf && dtype != TYPE_FP32) {
-            utils::normal<float>(curng, qk_fp32);
-        }
-        else {
-            utils::normal<T>(curng, qk);
-        }
-        invokeBuildAlibiSlopes(alibi_slopes.getPtr<T>(), param.head_num, stream);
-        sync_check_cuda_error();
-
-        Tensor h_alibi_slopes = createTensor(MEMORY_CPU, dtype, {param.head_num});
-        Tensor h_alibi_bias =
-            is_benchmark ? Tensor() : createTensor(MEMORY_CPU, dtype, {param.head_num, param.q_length, param.k_length});
-        // The nearest power of 2 equal to / smaller than num_heads followed by HF's implementation.
-        T*  alibi_slope_ptr = h_alibi_slopes.getPtr<T>();
-        int num_heads_pow2  = utils::pow2_rounddown(param.head_num);
-        for (size_t h = 0; h < param.head_num; ++h) {
-            // The slope of linear bias of the attention head
-            if (h < num_heads_pow2) {
-                alibi_slope_ptr[h] = static_cast<T>(powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2) - 3.f)), h + 1));
-            }
-            else {
-                alibi_slope_ptr[h] = static_cast<T>(
-                    powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2 << 1) - 3.f)), (h - num_heads_pow2) * 2 + 1));
-            }
-            if (h_alibi_bias.size() > 0) {
-                T* alibi_bias_ptr = h_alibi_bias.getPtr<T>();
-                for (size_t qi = 0; qi < param.q_length; ++qi) {
-                    for (size_t ki = 0; ki < param.k_length; ++ki) {
-                        size_t hqk_idx          = (h * param.q_length + qi) * param.k_length + ki;
-                        alibi_bias_ptr[hqk_idx] = ::math::mul(alibi_slope_ptr[h], T(0.0f + ki - qi));
-                    }
-                }
-            }
-        }
-        EXPECT_TRUE(
-            checkResult("CheckAlibiSlopes", alibi_slopes.getPtr<T>(), h_alibi_slopes.getPtr<T>(), param.head_num));
-
-        // Clone to host for reference computation if needed.
-        Tensor h_qk        = is_benchmark ? Tensor() : toHost<T>(qk);
-        Tensor h_attn_mask = is_benchmark ? Tensor() : toHost<T>(attn_mask);
-        Tensor h_qk_fp32   = is_benchmark ? Tensor() : toHost<float>(qk_fp32);
-
-        T scale = static_cast<T>(1 / sqrtf(param.size_per_head * 1.0f));
-
-        if (param.use_fp32_qk_buf && dtype != TYPE_FP32) {
-            MaskedSoftmaxParam<T, float> softmax_param;
-            softmax_param.attention_score    = qk.getPtr<T>();
-            softmax_param.qk                 = qk_fp32.getPtr<float>();
-            softmax_param.attention_mask     = attn_mask.getPtr<T>();
-            softmax_param.linear_bias_slopes = alibi_slopes.getPtr<T>();
-            softmax_param.batch_size         = param.batch_size;
-            softmax_param.num_heads          = param.head_num;
-            softmax_param.q_length           = param.q_length;
-            softmax_param.k_length           = param.k_length;
-            softmax_param.qk_scale           = scale;
-            invokeMaskedSoftmax(softmax_param, stream);
-            sync_check_cuda_error();
-        }
-        else {
-            MaskedSoftmaxParam<T, T> softmax_param;
-            softmax_param.attention_score    = qk.getPtr<T>();
-            softmax_param.qk                 = qk.getPtr<T>();
-            softmax_param.attention_mask     = attn_mask.getPtr<T>();
-            softmax_param.linear_bias_slopes = alibi_slopes.getPtr<T>();
-            softmax_param.batch_size         = param.batch_size;
-            softmax_param.num_heads          = param.head_num;
-            softmax_param.q_length           = param.q_length;
-            softmax_param.k_length           = param.k_length;
-            softmax_param.qk_scale           = scale;
-            invokeMaskedSoftmax(softmax_param, stream);
-            sync_check_cuda_error();
-        }
-
-        if (!is_benchmark) {
-            if (use_fp32_qk) {
-                computeQkSoftmax(h_qk.getPtr<T>(),
-                                 h_qk_fp32.getPtr<T>(),
-                                 h_attn_mask.getPtr<T>(),
-                                 h_alibi_bias.getPtr<T>(),
-                                 param.batch_size,
-                                 param.head_num,
-                                 param.q_length,
-                                 param.k_length,
-                                 scale);
-            }
-            else {
-                computeQkSoftmax(h_qk.getPtr<T>(),
-                                 h_qk.getPtr<T>(),
-                                 h_attn_mask.getPtr<T>(),
-                                 h_alibi_bias.getPtr<T>(),
-                                 param.batch_size,
-                                 param.head_num,
-                                 param.q_length,
-                                 param.k_length,
-                                 scale);
-            }
-            bool passed = checkResult("AlibiMaskedSoftmax", qk.getPtr<T>(), h_qk.getPtr<T>(), qk.size());
-            EXPECT_TRUE(passed);
-        }
-    }
 };
 
 TYPED_TEST_SUITE(AttentionKernelTest, SupportTypes);
@@ -509,50 +394,6 @@ TYPED_TEST(AttentionKernelTest, Benchmark_MaskedSoftmax_LongSequence4096)
 {
     // Assume the bloom 176B model with 8 TP.
     this->runTestMaskedSoftmax({8, 4096, 4096, 14, 128, false, 0, false, true}, true);
-}
-
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence1)
-{
-    this->runTestAlibiMaskedSoftmax({1, 12, 12, 4, 32, false, 0, false});
-}
-
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence2)
-{
-    // q_length is not multiple of 4.
-    this->runTestAlibiMaskedSoftmax({1, 11, 11, 4, 32, false, 0, false});
-}
-
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence_HasPrompt1)
-{
-    this->runTestAlibiMaskedSoftmax({1, 12, 20, 4, 32, false, 0, false});
-}
-
-TYPED_TEST(AttentionKernelTest, AlibiMaskedSoftmax_ShortSequence_HasPrompt2)
-{
-    // q_length is not multiple of 4.
-    this->runTestAlibiMaskedSoftmax({1, 11, 20, 4, 32, false, 0, false});
-}
-
-// Tests for long sentence generation. Assume the bloom 176B model with 8 TP.
-
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence1024)
-{
-    this->runTestAlibiMaskedSoftmax({8, 1024, 1024, 14, 128, false, 0, false, true}, true);
-}
-
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence2048)
-{
-    this->runTestAlibiMaskedSoftmax({8, 2048, 2048, 14, 128, false, 0, false, true}, true);
-}
-
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence3072)
-{
-    this->runTestAlibiMaskedSoftmax({8, 3072, 3072, 14, 128, false, 0, false, true}, true);
-}
-
-TYPED_TEST(AttentionKernelTest, Benchmark_AlibiMaskedSoftmax_LongSequence4096)
-{
-    this->runTestAlibiMaskedSoftmax({4, 4096, 4096, 14, 128, false, 0, false, true}, true);
 }
 
 }  // end of namespace

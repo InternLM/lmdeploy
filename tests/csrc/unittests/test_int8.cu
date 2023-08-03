@@ -14,7 +14,7 @@
 #include <iostream>
 #include <random>
 
-#include "tests/unittests/gtest_utils.h"
+#include "gtest_utils.h"
 
 using namespace turbomind;
 

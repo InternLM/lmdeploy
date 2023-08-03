@@ -17,8 +17,7 @@
 #include "src/turbomind/utils/memory_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 
-// #include "tests/unittests/unittest_utils.h"
-#include "tests/unittests/gtest_utils.h"
+#include "gtest_utils.h"
 
 using namespace turbomind;
 

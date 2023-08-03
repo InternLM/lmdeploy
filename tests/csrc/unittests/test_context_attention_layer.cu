@@ -360,6 +360,7 @@ int main(int argc, const char* argv[])
                                              .out_accum    = accum_buf_ptr,
                                              .cu_seqlens_q = cu_seqlens_ptr,
                                              .cu_seqlens_k = nullptr,
+                                             .group_size   = 1,
                                              .layout_q     = layout_q,
                                              .layout_k     = layout_k,
                                              .layout_v     = layout_v,
