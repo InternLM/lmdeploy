@@ -111,7 +111,8 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
 
     int n_block_max = cute::ceil_div(binfo.actual_seqlen_k, kBlockN);
     if (Is_causal) {
-        n_block_max = std::min(n_block_max, cute::ceil_div((m_block + 1) * kBlockM, kBlockN));
+        int seq_diff = max(binfo.actual_seqlen_k - binfo.actual_seqlen_q, int(0));
+        n_block_max  = std::min(n_block_max, cute::ceil_div((m_block + 1) * kBlockM + seq_diff, kBlockN));
     }
 
     // We iterate over the blocks in reverse order. This is because the last block is the only one
@@ -319,11 +320,11 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
             }
         }
         else {
-            // I can't get the stride from idx_row
             flash::apply_mask_causal(scores,
                                      n_block * kBlockN,
                                      binfo.actual_seqlen_k,
-                                     m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+                                     m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4
+                                         + max(binfo.actual_seqlen_k - binfo.actual_seqlen_q, 0),
                                      kNWarps * 16);
         }
 

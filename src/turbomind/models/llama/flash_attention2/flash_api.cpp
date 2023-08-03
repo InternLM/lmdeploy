@@ -146,7 +146,7 @@ public:
         fwd_params.blockmask = reinterpret_cast<void*>(params.mask);
 
         fwd_params.is_bf16   = false;
-        fwd_params.is_causal = false;
+        fwd_params.is_causal = true;
 
         fwd_params.q_enable_seqlen = params.layout_q.use_seqlens;
         fwd_params.o_enable_seqlen = params.layout_o.use_seqlens;
