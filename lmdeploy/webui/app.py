@@ -3,13 +3,13 @@ import os
 import os.path as osp
 import random
 from functools import partial
-from typing import Sequence
+from typing import Dict, Sequence
 
 import fire
 import gradio as gr
 
 from lmdeploy import turbomind as tm
-from lmdeploy.model import MODELS
+from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.turbomind.chat import valid_str
 from lmdeploy.turbomind.tokenizer import Tokenizer
@@ -150,25 +150,28 @@ def run_server(triton_server_addr: str,
 
 def chat_stream_local(instruction: str, state_chatbot: Sequence,
                       step: gr.State, nth_round: gr.State, request: gr.Request,
-                      model, tm_model, tokenizer, llama_chatbot,
-                      request2instance):
+                      model: BaseModel, tm_model: tm.TurboMind,
+                      tokenizer: Tokenizer, request2instance: Dict):
     """Chat with AI assistant.
 
     Args:
         instruction (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        llama_chatbot (Chatbot): the instance of a chatbot
-        model_name (str): the name of deployed model
+        step (gr.State): chat history length
+        nth_round (gr.State): round num
+        request (gr.Request): the request from a user
+        model (BaseModel): a class for prompt processing stuff
+        tm_model (Turbomind): LMDeploy's inference engine
+        tokenizer (Tokenizer): For encoding decoding usage
+        request2instance (Dict): mapping of requests and turbomind instances
     """
     session_id = 1
     for cookie in request.kwargs['headers']['cookie'].split(';'):
         if '_gid' in cookie:
             session_id = int(cookie[-8:])
-    if str(session_id) in request2instance:
-        llama_chatbot = request2instance[str(session_id)]
-    else:
-        llama_chatbot = tm_model.create_instance()
-        request2instance[str(session_id)] = llama_chatbot
+    if str(session_id) not in request2instance:
+        request2instance[str(session_id)] = tm_model.create_instance()
+    llama_chatbot = request2instance[str(session_id)]
     seed = random.getrandbits(64)
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
@@ -219,11 +222,28 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
 
 
 def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
-                     step: gr.State, nth_round: gr.State):
-    """reset the session."""
+                     step: gr.State, nth_round: gr.State, request: gr.Request,
+                     tm_model, request2instance):
+    """reset the session.
+
+    Args:
+        instruction_txtbox (str): user's prompt
+        state_chatbot (Sequence): the chatting history
+        step (gr.State): chat history length
+        nth_round (gr.State): round num
+        request (gr.Request): the request from a user
+        tm_model (Turbomind): LMDeploy's inference engine
+        request2instance (Dict): mapping of requests and turbomind instances
+    """
     state_chatbot = []
     step = 0
     nth_round = 1
+
+    session_id = 1
+    for cookie in request.kwargs['headers']['cookie'].split(';'):
+        if '_gid' in cookie:
+            session_id = int(cookie[-8:])
+    request2instance[str(session_id)] = tm_model.create_instance()
 
     return (
         state_chatbot,
@@ -247,7 +267,6 @@ def run_local(model_path: str,
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id)
-    llama_chatbot = tm_model.create_instance()
     request2instance = dict()
     model_name = tm_model.model_name
     model = MODELS.get(model_name)()
@@ -261,7 +280,9 @@ def run_local(model_path: str,
                                         model=model,
                                         tm_model=tm_model,
                                         tokenizer=tokenizer,
-                                        llama_chatbot=llama_chatbot,
+                                        request2instance=request2instance)
+        reset_local_interface = partial(reset_local_func,
+                                        tm_model=tm_model,
                                         request2instance=request2instance)
 
         with gr.Column(elem_id='container'):
@@ -286,7 +307,7 @@ def run_local(model_path: str,
         )
 
         reset_btn.click(
-            reset_local_func,
+            reset_local_interface,
             [instruction_txtbox, state_chatbot, step, nth_round],
             [state_chatbot, chatbot, step, nth_round, instruction_txtbox],
             cancels=[send_event])
