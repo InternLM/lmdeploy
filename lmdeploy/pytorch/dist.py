@@ -90,7 +90,7 @@ def master_only_and_broadcast_tensor(func):
                                      dtype=dtype,
                                      device=get_local_rank())
             broadcast(result, src=0)
-            print(f'rank {get_rank()} received {result}')
+            # print(f'rank {get_rank()} received {result}')
         else:
             result = func(*args, **kwargs)
         return result
