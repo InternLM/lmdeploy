@@ -2,6 +2,7 @@
 import os
 import os.path as osp
 import random
+import threading
 from functools import partial
 from typing import Dict, Sequence
 
@@ -11,7 +12,6 @@ import gradio as gr
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.serve.gradio.css import CSS
-from lmdeploy.serve.gradio.gradio_patch import Chatbot as grChatbot
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.turbomind.chat import valid_str
 from lmdeploy.turbomind.tokenizer import Tokenizer
@@ -22,10 +22,8 @@ THEME = gr.themes.Soft(
     font=[gr.themes.GoogleFont('Inconsolata'), 'Arial', 'sans-serif'])
 
 
-def chat_stream(state_chatbot: Sequence,
-                llama_chatbot: Chatbot,
-                request: gr.Request = gr.Request(),
-                model_name: str = None):
+def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
+                request: gr.Request):
     """Chat with AI assistant.
 
     Args:
@@ -36,10 +34,11 @@ def chat_stream(state_chatbot: Sequence,
         model_name (str): the name of deployed model
     """
     instruction = state_chatbot[-1][0]
-    session_id = 1
-    for cookie in request.kwargs['headers']['cookie'].split(';'):
-        if '_gid' in cookie:
-            session_id = int(cookie[-8:])
+    session_id = threading.current_thread().ident
+    if request is not None:
+        for cookie in request.kwargs['headers']['cookie'].split(';'):
+            if '_gid' in cookie:
+                session_id = int(cookie[-8:])
 
     bot_response = llama_chatbot.stream_infer(
         session_id, instruction, f'{session_id}-{len(state_chatbot)}')
@@ -106,7 +105,6 @@ def run_server(triton_server_addr: str,
             Chatbot(triton_server_addr, log_level=log_level, display=True))
         state_chatbot = gr.State([])
         model_name = llama_chatbot.value.model_name
-        chat_interface = partial(chat_stream, model_name=model_name)
         reset_all = partial(reset_all_func,
                             model_name=model_name,
                             triton_server_addr=triton_server_addr)
@@ -114,7 +112,7 @@ def run_server(triton_server_addr: str,
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = grChatbot(elem_id='chatbot', label=model_name)
+            chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
@@ -125,7 +123,7 @@ def run_server(triton_server_addr: str,
         send_event = instruction_txtbox.submit(
             add_instruction, [instruction_txtbox, state_chatbot],
             [instruction_txtbox, state_chatbot]).then(
-                chat_interface, [state_chatbot, llama_chatbot],
+                chat_stream, [state_chatbot, llama_chatbot],
                 [state_chatbot, chatbot])
 
         cancel_btn.click(cancel_func,
@@ -148,9 +146,9 @@ def run_server(triton_server_addr: str,
 
 
 def chat_stream_local(instruction: str, state_chatbot: Sequence,
-                      step: gr.State, nth_round: gr.State, request: gr.Request,
-                      model: BaseModel, tm_model: tm.TurboMind,
-                      tokenizer: Tokenizer, request2instance: Dict):
+                      step: gr.State, nth_round: gr.State, model: BaseModel,
+                      tm_model: tm.TurboMind, tokenizer: Tokenizer,
+                      request2instance: Dict, request: gr.Request):
     """Chat with AI assistant.
 
     Args:
@@ -158,16 +156,17 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         state_chatbot (Sequence): the chatting history
         step (gr.State): chat history length
         nth_round (gr.State): round num
-        request (gr.Request): the request from a user
         model (BaseModel): a class for prompt processing stuff
         tm_model (Turbomind): LMDeploy's inference engine
         tokenizer (Tokenizer): For encoding decoding usage
         request2instance (Dict): mapping of requests and turbomind instances
+        request (gr.Request): the request from a user
     """
-    session_id = 1
-    for cookie in request.kwargs['headers']['cookie'].split(';'):
-        if '_gid' in cookie:
-            session_id = int(cookie[-8:])
+    session_id = threading.current_thread().ident
+    if request is not None:
+        for cookie in request.kwargs['headers']['cookie'].split(';'):
+            if '_gid' in cookie:
+                session_id = int(cookie[-8:])
     if str(session_id) not in request2instance:
         request2instance[str(session_id)] = tm_model.create_instance()
     llama_chatbot = request2instance[str(session_id)]
@@ -286,7 +285,7 @@ def run_local(model_path: str,
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = grChatbot(elem_id='chatbot', label=model_name)
+            chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
