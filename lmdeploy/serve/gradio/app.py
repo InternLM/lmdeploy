@@ -205,7 +205,6 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         # decode res
         response = tokenizer.decode(res)[response_size:]
         response = valid_str(response)
-        print(f'{response}', end='', flush=True)
         response_size += len(response)
         if state_chatbot[-1][-1] is None:
             state_chatbot[-1] = (state_chatbot[-1][0], response)
@@ -313,6 +312,7 @@ def run_local(model_path: str,
             [state_chatbot, chatbot, step, nth_round, instruction_txtbox],
             cancels=[send_event])
 
+    print(f'demo is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
         max_threads=10,
         share=True,
@@ -324,6 +324,15 @@ def run_local(model_path: str,
 def run(model_path_or_server: str,
         server_name: str = 'localhost',
         server_port: int = 6006):
+    """chat with AI assistant through web ui.
+
+    Args:
+        model_path_or_server (str): the path of the deployed model or the
+            tritonserver URL. The former is for directly running service with
+            gradio. The latter is for running with tritonserver
+        server_name (str): the ip address of gradio server
+        server_port (int): the port of gradio server
+    """
     if ':' in model_path_or_server:
         run_server(model_path_or_server, server_name, server_port)
     else:
