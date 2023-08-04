@@ -36,9 +36,7 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
     instruction = state_chatbot[-1][0]
     session_id = threading.current_thread().ident
     if request is not None:
-        for cookie in request.kwargs['headers']['cookie'].split(';'):
-            if '_gid' in cookie:
-                session_id = int(cookie[-8:])
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
 
     bot_response = llama_chatbot.stream_infer(
         session_id, instruction, f'{session_id}-{len(state_chatbot)}')
@@ -173,9 +171,7 @@ def chat_stream_local(
     """
     session_id = threading.current_thread().ident
     if request is not None:
-        for cookie in request.kwargs['headers']['cookie'].split(';'):
-            if '_gid' in cookie:
-                session_id = int(cookie[-8:])
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
     if str(session_id) not in InterFace.request2instance:
         InterFace.request2instance[str(
             session_id)] = InterFace.tm_model.create_instance()
@@ -245,9 +241,7 @@ def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
 
     session_id = threading.current_thread().ident
     if request is not None:
-        for cookie in request.kwargs['headers']['cookie'].split(';'):
-            if '_gid' in cookie:
-                session_id = int(cookie[-8:])
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
     InterFace.request2instance[str(
         session_id)] = InterFace.tm_model.create_instance()
 
