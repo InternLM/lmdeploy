@@ -97,7 +97,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 #### 直接用 Gradio 启动 Turbomind 服务
 
 ```shell
-python3 -m lmdeploy.webui.app model_path
+python3 -m lmdeploy.serve.gradio.app model_path
 ```
 
 #### 通过容器部署推理服务
@@ -117,7 +117,7 @@ python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
 也可以通过 WebUI 方式来对话：
 
 ```shell
-python3 -m lmdeploy.webui.app {server_ip_addresss}:33337
+python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)

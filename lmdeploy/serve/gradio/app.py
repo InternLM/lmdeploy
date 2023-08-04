@@ -10,11 +10,11 @@ import gradio as gr
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.serve.gradio.css import CSS
+from lmdeploy.serve.gradio.gradio_patch import Chatbot as grChatbot
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.turbomind.chat import valid_str
 from lmdeploy.turbomind.tokenizer import Tokenizer
-from lmdeploy.webui.css import CSS
-from lmdeploy.webui.gradio_patch import Chatbot as grChatbot
 
 THEME = gr.themes.Soft(
     primary_hue=gr.themes.colors.blue,
