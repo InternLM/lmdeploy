@@ -146,9 +146,9 @@ def run_server(triton_server_addr: str,
 
 
 def chat_stream_local(instruction: str, state_chatbot: Sequence,
-                      step: gr.State, nth_round: gr.State, model: BaseModel,
-                      tm_model: tm.TurboMind, tokenizer: Tokenizer,
-                      request2instance: Dict, request: gr.Request):
+                      step: gr.State, nth_round: gr.State, request: gr.Request,
+                      model: BaseModel, tm_model: tm.TurboMind,
+                      tokenizer: Tokenizer, request2instance: Dict):
     """Chat with AI assistant.
 
     Args:
@@ -220,7 +220,7 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
 
 def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
                      step: gr.State, nth_round: gr.State, request: gr.Request,
-                     tm_model, request2instance):
+                     tm_model: tm.TurboMind, request2instance: Dict):
     """reset the session.
 
     Args:
