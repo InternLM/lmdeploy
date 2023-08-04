@@ -727,11 +727,11 @@ void invokeGatherOutput(int*         output_ids,
 #define VERSION_SWITCH(VERSION, CONST_NAME, ...)                                                                       \
     [&] {                                                                                                              \
         if (VERSION == 2) {                                                                                            \
-            constexpr static bool CONST_NAME = 2;                                                                      \
+            constexpr static int CONST_NAME = 2;                                                                      \
             return __VA_ARGS__();                                                                                      \
         }                                                                                                              \
         else {                                                                                                         \
-            constexpr static bool CONST_NAME = 1;                                                                      \
+            constexpr static int CONST_NAME = 1;                                                                      \
             return __VA_ARGS__();                                                                                      \
         }                                                                                                              \
     }()
