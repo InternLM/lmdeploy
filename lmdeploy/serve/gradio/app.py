@@ -102,17 +102,14 @@ def run_server(triton_server_addr: str,
     """
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         log_level = os.environ.get('SERVICE_LOG_LEVEL', 'INFO')
-        _chatbot = Chatbot(triton_server_addr,
-                           log_level=log_level,
-                           display=True)
-        model_name = _chatbot.model_name
+        llama_chatbot = gr.State(
+            Chatbot(triton_server_addr, log_level=log_level, display=True))
+        state_chatbot = gr.State([])
+        model_name = llama_chatbot.value.model_name
         chat_interface = partial(chat_stream, model_name=model_name)
         reset_all = partial(reset_all_func,
                             model_name=model_name,
                             triton_server_addr=triton_server_addr)
-        llama_chatbot = gr.State(
-            Chatbot(triton_server_addr, log_level=log_level, display=True))
-        state_chatbot = gr.State([])
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -141,6 +138,7 @@ def run_server(triton_server_addr: str,
             [llama_chatbot, state_chatbot, chatbot, instruction_txtbox],
             cancels=[send_event])
 
+    print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
         max_threads=10,
         share=True,
@@ -312,7 +310,7 @@ def run_local(model_path: str,
             [state_chatbot, chatbot, step, nth_round, instruction_txtbox],
             cancels=[send_event])
 
-    print(f'demo is gonna mount on: http://{server_name}:{server_port}')
+    print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
         max_threads=10,
         share=True,
