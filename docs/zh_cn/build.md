@@ -13,7 +13,7 @@
 - rapidjson 安装
 - openmpi 安装, 推荐从源码安装:
   ```shell
-  wget https://download.open-mpi.org/release/open-mpi/v3.1/openmpi-3.1.0.tar.gz
+  wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz
   tar -xzf openmpi-*.tar.gz && cd openmpi-*
   ./configure --with-cuda
   make -j$(nproc)
