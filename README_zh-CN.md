@@ -51,9 +51,9 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 
 ### 安装
 
+使用 pip ( python 3.8+) 安装 LMDeploy，或者[源码安装](./docs/zh_cn/build.md)
+
 ```shell
-conda create -n lmdeploy python=3.10 -y
-conda activate lmdeploy
 pip install lmdeploy
 ```
 
@@ -90,7 +90,15 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 > **Note**<br />
 > 使用 Tensor 并发可以利用多张 GPU 进行推理。在 `chat` 时添加参数 `--tp=<num_gpu>` 可以启动运行时 TP。
 
-#### 部署推理服务
+#### 启动 gradio server
+
+```shell
+python3 -m lmdeploy.serve.gradio.app ./workspace
+```
+
+![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
+
+#### 通过容器部署推理服务
 
 使用下面的命令启动推理服务：
 
@@ -107,10 +115,8 @@ python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
 也可以通过 WebUI 方式来对话：
 
 ```shell
-python3 -m lmdeploy.app {server_ip_addresss}:33337
+python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
 ```
-
-![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
 其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
 

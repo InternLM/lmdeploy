@@ -50,11 +50,9 @@ And the request throughput of TurboMind is 30% higher than vLLM.
 
 ### Installation
 
-Below are quick steps for installation:
+Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
-conda activate lmdeploy
 pip install lmdeploy
 ```
 
@@ -92,7 +90,15 @@ python -m lmdeploy.turbomind.chat ./workspace
 > **Note**<br />
 > Tensor parallel is available to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `chat` to enable runtime TP.
 
-#### Serving
+#### Serving with gradio
+
+```shell
+python3 -m lmdeploy.serve.gradio.app ./workspace
+```
+
+![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
+
+#### Serving with Triton Inference Server
 
 Launch inference server by:
 
@@ -109,10 +115,8 @@ python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
 or webui,
 
 ```shell
-python3 -m lmdeploy.app {server_ip_addresss}:33337
+python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
 ```
-
-![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
 
