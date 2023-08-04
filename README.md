@@ -96,6 +96,8 @@ python -m lmdeploy.turbomind.chat ./workspace
 python3 -m lmdeploy.serve.gradio.app ./workspace
 ```
 
+![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
+
 #### Serving with Triton Inference Server
 
 Launch inference server by:
@@ -115,8 +117,6 @@ or webui,
 ```shell
 python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
 ```
-
-![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
 
