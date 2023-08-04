@@ -66,6 +66,7 @@ template<typename Engine0, typename Layout0, typename Engine1, typename Layout1,
 inline __device__ void
 write_softmax_to_gmem(Tensor<Engine0, Layout0> const& tOrP, Tensor<Engine1, Layout1>& tPgP, TiledCopy gmem_thr_copy_P)
 {
+#if (__CUDA_ARCH__ >= 800)
     // Reshape tOrP from (8, MMA_M, MMA_N) to (8, MMA_M * MMA_N)
     Layout l    = tOrP.layout();
     Tensor tPrP = make_tensor(tOrP.data(), make_layout(get<0>(l), make_layout(get<1>(l), get<2>(l))));
@@ -75,6 +76,10 @@ write_softmax_to_gmem(Tensor<Engine0, Layout0> const& tOrP, Tensor<Engine1, Layo
     for (int mi = 0; mi < size<1>(tPrP); ++mi) {
         copy(gmem_thr_copy_P, tPrP(_, mi), tPgP(_, mi, 0));
     }
+#else
+    // do not support return softmax on device < sm80
+    assert(false);
+#endif
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

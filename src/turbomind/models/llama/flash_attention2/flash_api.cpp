@@ -21,37 +21,15 @@ namespace turbomind {
 static constexpr int FMHA_VERSION = 2;
 
 template<typename T>
-class FlashAttentionOp<T, FMHA_VERSION> {
+class FlashAttentionOpImpl<T, FMHA_VERSION> {
 
 public:
-    struct AttentionLayout {
-        int  stride_batch;
-        int  stride_seq;
-        int  stride_head;
-        bool use_seqlens       = false;
-        int  batch_seqs_offset = 0;
-        T**  batch_seqs        = nullptr;
-    };
-
-    struct Params {
-        T*              attn_out;
-        T*              query;
-        T*              key;
-        T*              val;
-        T*              mask;
-        float*          out_accum    = nullptr;
-        int*            cu_seqlens_q = nullptr;
-        int*            cu_seqlens_k = nullptr;
-        size_t          group_size   = 1;
-        AttentionLayout layout_q;
-        AttentionLayout layout_k;
-        AttentionLayout layout_v;
-        AttentionLayout layout_o;
-    };
+    using AttentionLayout = BaseAttentionLayout<T>;
+    using Params          = BaseAttentionParams<T>;
 
 public:
-    FlashAttentionOp(int batch_size, int head_num, int key_len, int seq_len, int size_per_head);
-    ~FlashAttentionOp();
+    FlashAttentionOpImpl(int batch_size, int head_num, int key_len, int seq_len, int size_per_head);
+    ~FlashAttentionOpImpl();
 
     int get_workspace_size() const;
 
@@ -63,12 +41,12 @@ private:
 };
 
 template<typename T>
-class FlashAttentionOp<T, FMHA_VERSION>::impl {
+class FlashAttentionOpImpl<T, FMHA_VERSION>::impl {
 
 private:
     using scalar_t =
         typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
-    using Params = typename FlashAttentionOp<T, FMHA_VERSION>::Params;
+    using Params = typename FlashAttentionOpImpl<T, FMHA_VERSION>::Params;
 
     int batch_size_;
     int head_num_;
@@ -156,31 +134,31 @@ public:
 };
 
 template<typename T>
-FlashAttentionOp<T, FMHA_VERSION>::FlashAttentionOp(
+FlashAttentionOpImpl<T, FMHA_VERSION>::FlashAttentionOpImpl(
     int batch_size, int head_num, int key_len, int seq_len, int size_per_head):
-    pimpl{std::make_unique<FlashAttentionOp<T, FMHA_VERSION>::impl>(
+    pimpl{std::make_unique<FlashAttentionOpImpl<T, FMHA_VERSION>::impl>(
         batch_size, head_num, key_len, seq_len, size_per_head)}
 {
 }
 
 template<typename T>
-FlashAttentionOp<T, FMHA_VERSION>::~FlashAttentionOp()
+FlashAttentionOpImpl<T, FMHA_VERSION>::~FlashAttentionOpImpl()
 {
 }
 
 template<typename T>
-int FlashAttentionOp<T, FMHA_VERSION>::get_workspace_size() const
+int FlashAttentionOpImpl<T, FMHA_VERSION>::get_workspace_size() const
 {
     return pimpl->get_workspace_size();
 }
 
 template<typename T>
-void FlashAttentionOp<T, FMHA_VERSION>::operator()(Params& params, cudaStream_t st) const
+void FlashAttentionOpImpl<T, FMHA_VERSION>::operator()(Params& params, cudaStream_t st) const
 {
     pimpl->operator()(params, st);
 }
 
-template class FlashAttentionOp<float, FMHA_VERSION>;
-template class FlashAttentionOp<half, FMHA_VERSION>;
+template class FlashAttentionOpImpl<float, FMHA_VERSION>;
+template class FlashAttentionOpImpl<half, FMHA_VERSION>;
 
 }  // namespace turbomind
