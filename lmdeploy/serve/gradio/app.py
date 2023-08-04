@@ -4,13 +4,13 @@ import os.path as osp
 import random
 import threading
 from functools import partial
-from typing import Dict, Sequence
+from typing import Sequence
 
 import fire
 import gradio as gr
 
 from lmdeploy import turbomind as tm
-from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.model import MODELS
 from lmdeploy.serve.gradio.css import CSS
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.turbomind.chat import valid_str
@@ -145,10 +145,23 @@ def run_server(triton_server_addr: str,
     )
 
 
-def chat_stream_local(instruction: str, state_chatbot: Sequence,
-                      step: gr.State, nth_round: gr.State, request: gr.Request,
-                      model: BaseModel, tm_model: tm.TurboMind,
-                      tokenizer: Tokenizer, request2instance: Dict):
+# a IO interface mananing global variables
+class InterFace:
+    tokenizer_model_path = None
+    tokenizer = None
+    tm_model = None
+    request2instance = None
+    model_name = None
+    model = None
+
+
+def chat_stream_local(
+    instruction: str,
+    state_chatbot: Sequence,
+    step: gr.State,
+    nth_round: gr.State,
+    request: gr.Request,
+):
     """Chat with AI assistant.
 
     Args:
@@ -156,10 +169,6 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         state_chatbot (Sequence): the chatting history
         step (gr.State): chat history length
         nth_round (gr.State): round num
-        model (BaseModel): a class for prompt processing stuff
-        tm_model (Turbomind): LMDeploy's inference engine
-        tokenizer (Tokenizer): For encoding decoding usage
-        request2instance (Dict): mapping of requests and turbomind instances
         request (gr.Request): the request from a user
     """
     session_id = threading.current_thread().ident
@@ -167,17 +176,18 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
         for cookie in request.kwargs['headers']['cookie'].split(';'):
             if '_gid' in cookie:
                 session_id = int(cookie[-8:])
-    if str(session_id) not in request2instance:
-        request2instance[str(session_id)] = tm_model.create_instance()
-    llama_chatbot = request2instance[str(session_id)]
+    if str(session_id) not in InterFace.request2instance:
+        InterFace.request2instance[str(
+            session_id)] = InterFace.tm_model.create_instance()
+    llama_chatbot = InterFace.request2instance[str(session_id)]
     seed = random.getrandbits(64)
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
-    instruction = model.get_prompt(instruction, nth_round == 1)
-    if step >= tm_model.session_len:
+    instruction = InterFace.model.get_prompt(instruction, nth_round == 1)
+    if step >= InterFace.tm_model.session_len:
         raise gr.Error('WARNING: exceed session max length.'
                        ' Please end the session.')
-    input_ids = tokenizer.encode(instruction)
+    input_ids = InterFace.tokenizer.encode(instruction)
     bot_response = llama_chatbot.stream_infer(
         session_id, [input_ids],
         stream_output=True,
@@ -200,7 +210,7 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
     for outputs in bot_response:
         res, tokens = outputs[0]
         # decode res
-        response = tokenizer.decode(res)[response_size:]
+        response = InterFace.tokenizer.decode(res)[response_size:]
         response = valid_str(response)
         response_size += len(response)
         if state_chatbot[-1][-1] is None:
@@ -219,8 +229,7 @@ def chat_stream_local(instruction: str, state_chatbot: Sequence,
 
 
 def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
-                     step: gr.State, nth_round: gr.State, request: gr.Request,
-                     tm_model: tm.TurboMind, request2instance: Dict):
+                     step: gr.State, nth_round: gr.State, request: gr.Request):
     """reset the session.
 
     Args:
@@ -229,18 +238,18 @@ def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
         step (gr.State): chat history length
         nth_round (gr.State): round num
         request (gr.Request): the request from a user
-        tm_model (Turbomind): LMDeploy's inference engine
-        request2instance (Dict): mapping of requests and turbomind instances
     """
     state_chatbot = []
     step = 0
     nth_round = 1
 
-    session_id = 1
-    for cookie in request.kwargs['headers']['cookie'].split(';'):
-        if '_gid' in cookie:
-            session_id = int(cookie[-8:])
-    request2instance[str(session_id)] = tm_model.create_instance()
+    session_id = threading.current_thread().ident
+    if request is not None:
+        for cookie in request.kwargs['headers']['cookie'].split(';'):
+            if '_gid' in cookie:
+                session_id = int(cookie[-8:])
+    InterFace.request2instance[str(
+        session_id)] = InterFace.tm_model.create_instance()
 
     return (
         state_chatbot,
@@ -261,31 +270,24 @@ def run_local(model_path: str,
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
     """
-    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id)
-    request2instance = dict()
-    model_name = tm_model.model_name
-    model = MODELS.get(model_name)()
+    InterFace.tokenizer_model_path = osp.join(model_path, 'triton_models',
+                                              'tokenizer')
+    InterFace.tokenizer = Tokenizer(InterFace.tokenizer_model_path)
+    InterFace.tm_model = tm.TurboMind(model_path,
+                                      eos_id=InterFace.tokenizer.eos_token_id)
+    InterFace.request2instance = dict()
+    InterFace.model_name = InterFace.tm_model.model_name
+    InterFace.model = MODELS.get(InterFace.model_name)()
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
-        model_name = tm_model.model_name
         state_chatbot = gr.State([])
         nth_round = gr.State(1)
         step = gr.State(0)
-        chat_stream_interface = partial(chat_stream_local,
-                                        model=model,
-                                        tm_model=tm_model,
-                                        tokenizer=tokenizer,
-                                        request2instance=request2instance)
-        reset_local_interface = partial(reset_local_func,
-                                        tm_model=tm_model,
-                                        request2instance=request2instance)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
+            chatbot = gr.Chatbot(elem_id='chatbot', label=InterFace.model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
@@ -294,7 +296,7 @@ def run_local(model_path: str,
                 reset_btn = gr.Button(value='Reset')
 
         send_event = instruction_txtbox.submit(
-            chat_stream_interface,
+            chat_stream_local,
             [instruction_txtbox, state_chatbot, step, nth_round],
             [state_chatbot, chatbot, step, nth_round])
         instruction_txtbox.submit(
@@ -304,7 +306,7 @@ def run_local(model_path: str,
         )
 
         reset_btn.click(
-            reset_local_interface,
+            reset_local_func,
             [instruction_txtbox, state_chatbot, step, nth_round],
             [state_chatbot, chatbot, step, nth_round, instruction_txtbox],
             cancels=[send_event])
