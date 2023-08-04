@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(flash_attention2)
 
-add_library(${PROJECT_NAME} STATIC 
+add_library(${PROJECT_NAME} STATIC
     flash_api.cpp
     flash_fwd_hdim32_fp16_sm80.cu
     flash_fwd_hdim64_fp16_sm80.cu
