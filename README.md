@@ -50,15 +50,11 @@ And the request throughput of TurboMind is 30% higher than vLLM.
 
 ### Installation
 
-LMDeploy supports python 3.8~3.11. Below are quick steps for installation:
+Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
-conda activate lmdeploy
 pip install lmdeploy
 ```
-
-Or, you can install Turbomind [from source](./docs/en/build.md).
 
 ### Deploy InternLM
 
@@ -97,7 +93,7 @@ python -m lmdeploy.turbomind.chat ./workspace
 #### Serving with gradio
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app model_path
+python3 -m lmdeploy.serve.gradio.app ./workspace
 ```
 
 #### Serving with Triton Inference Server

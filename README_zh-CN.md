@@ -51,15 +51,11 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 
 ### 安装
 
-LMDeploy 支持的 python 版本为 3.8~3.11。以下是快速安装的例子：
+使用 pip ( python 3.8+) 安装 LMDeploy，或者[源码安装](./docs/zh_cn/build.md)
 
 ```shell
-conda create -n lmdeploy python=3.10 -y
-conda activate lmdeploy
 pip install lmdeploy
 ```
-
-也可以选择 [源码安装](./docs/zh_cn/build.md).
 
 ### 部署 InternLM
 
@@ -97,7 +93,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 #### 直接用 Gradio 启动 Turbomind 服务
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app model_path
+python3 -m lmdeploy.serve.gradio.app ./workspace
 ```
 
 #### 通过容器部署推理服务
