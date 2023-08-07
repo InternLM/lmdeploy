@@ -312,7 +312,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
 }
 
 #define CASE_K(K_MIN, K_MAX, BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_)                                           \
-    case K_MIN ... K_MAX:                                                                                              \
+    if (K_MIN <= max_top_k && max_top_k <= K_MAX) {                                                                    \
         topk_stage1<T, BLOCK_SIZE_1_, BLOCKS_PER_BEAM_>                                                                \
             <<<batch_size * BLOCKS_PER_BEAM_, BLOCK_SIZE_1_, 0, stream>>>(log_probs,                                   \
                                                                           temp_log_probs,                              \
@@ -340,7 +340,8 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  end_ids,              \
                                                                                                  vocab_size,           \
                                                                                                  skip_decode);         \
-        break;
+        break;                                                                                                         \
+    }
 
 template<typename T>
 void invokeBatchTopKSampling(void*          workspace,
@@ -385,14 +386,13 @@ void invokeBatchTopKSampling(void*          workspace,
     int* topk_tmp_id_buf  = (int*)(temp_log_probs + temp_log_probs_buf_size);
     T*   topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
 
-    switch (max_top_k) {
+    do {
         CASE_K(1, 16, 128, 128, 8);
         CASE_K(17, 32, 256, 128, 8);
         CASE_K(33, 64, 256, 256, 8);
         CASE_K(65, 1024, 256, 256, 8);
-        default:
-            throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
-    }
+        throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
+    } while (0);
 }
 
 #undef CASE_K
