@@ -122,11 +122,7 @@ For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and
 
 ### Inference with PyTorch
 
-You have to install deepspeed first before running with PyTorch.
-
-```
-pip install deepspeed
-```
+For detailed instructions on Inference pytorch models, see [here](docs/en/pytorch.md).
 
 #### Single GPU
 
@@ -147,6 +143,12 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     --temperture 0.8 \
     --top_p 0.95 \
     --seed 0
+```
+
+You need to install deepspeed first to use this feature.
+
+```
+pip install deepspeed
 ```
 
 ## Quantization
