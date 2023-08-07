@@ -38,13 +38,16 @@ def main(model: str,
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Currently, only support `c4`, `ptb`, `wikitext2`, or `pileval`.'
 
-    tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    hf_config = AutoConfig.from_pretrained(model)
+    tokenizer = AutoTokenizer.from_pretrained(model,
+                                              use_fast=False,
+                                              trust_remote_code=True)
+    hf_config = AutoConfig.from_pretrained(model, trust_remote_code=True)
     checkpoint = hf_config._name_or_path
 
     with init_empty_weights():
         model = AutoModelForCausalLM.from_pretrained(model,
-                                                     torch_dtype=torch.float16)
+                                                     torch_dtype=torch.float16,
+                                                     trust_remote_code=True)
         model.config.use_cache = False
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
