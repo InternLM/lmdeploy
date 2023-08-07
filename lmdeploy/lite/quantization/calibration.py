@@ -67,7 +67,7 @@ class Calibration():
             self.w_qconfig = qconfig
             self._check_smooth_supported()
 
-        self.num_head = model.config.num_key_value_heads
+        self.num_head = self._guess_num_heads(model)
         self.head_dim = model.config.hidden_size // self.num_head
         self.model = model
 
@@ -89,6 +89,14 @@ class Calibration():
         self.device = device
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+
+    def _guess_num_heads(self, model):
+        if hasattr(model.config, 'num_attention_heads'):
+            return model.config.num_attention_heads
+        elif hasattr(model.config, 'num_key_value_heads'):
+            return model.config.num_key_value_heads
+        else:
+            raise KeyError
 
     def _check_smooth_supported(self):
         """Check if the smooth function is supported by inspecting layer
