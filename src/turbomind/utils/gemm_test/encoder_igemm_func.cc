@@ -15,6 +15,7 @@
  */
 
 #include "encoder_igemm_func.h"
+#include "src/turbomind/windows/marco.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -83,7 +84,7 @@ int printPerfStructure(int m, int n, int k, const customMatmulPerf_t& perf, FILE
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages = 0;
+    stages                     = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -149,7 +150,7 @@ int printBatchPerfStructure(
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages = 0;
+    stages                     = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -204,7 +205,7 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
 
 static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
                                       cublasLtMatmulDesc_t        operationDesc,
-                                      const void*                 alpha, /* host or device pointer */
+                                      const void*                 alpha,     /* host or device pointer */
                                       const void*                 A,
                                       cublasLtMatrixLayout_t      Adesc,
                                       const void*                 B,
@@ -352,7 +353,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -369,7 +370,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -526,7 +527,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                                     }  // end if
                                 }      // end for
                             }
-                            else {  // Non-splitK case
+                            else {     // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
                                     status                        = customMatmulRun(ltHandle,
@@ -557,11 +558,11 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                     }      // end k
                 }          // end customOption
 #if (CUDART_VERSION >= 11000)
-            }  // end stagesIdx
+            }              // end stagesIdx
 #endif
-        }  // end tileIdx
+        }                  // end tileIdx
         delete[] tileA;
-    }  // end idx
+    }                      // end idx
     // Sort the results per run duration
     std::sort(perfResults, perfResults + AlgoCount, time_compare);
     // Print timing and perf details
@@ -689,7 +690,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -711,7 +712,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -876,7 +877,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                                     }  // end if
                                 }      // end for
                             }
-                            else {  // Non-splitK case
+                            else {     // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
                                     status                        = customMatmulRun(ltHandle,
@@ -907,11 +908,11 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                     }      // end k
                 }          // end customOption
 #if (CUDART_VERSION >= 11000)
-            }  // end stagesIdx
+            }              // end stagesIdx
 #endif
-        }  // end tileIdx
+        }                  // end tileIdx
         delete[] tileA;
-    }  // end idx
+    }                      // end idx
     // Sort the results per run duration
     std::sort(perfResults, perfResults + AlgoCount, time_compare);
     // Print timing and perf details

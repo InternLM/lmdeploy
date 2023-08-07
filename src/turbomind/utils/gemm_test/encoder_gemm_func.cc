@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/utils/gemm_test/encoder_gemm_func.h"
+#include "src/turbomind/windows/marco.h"
 
 namespace turbomind {
 

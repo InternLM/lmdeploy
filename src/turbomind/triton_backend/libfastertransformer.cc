@@ -36,7 +36,7 @@
 #include <vector>
 
 #pragma GCC diagnostic push
-//#pragma GCC diagnostic ignored "-Wsign-compare"
+// #pragma GCC diagnostic ignored "-Wsign-compare"
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #pragma warning(push, 0)
 #pragma warning(pop)
@@ -60,6 +60,7 @@
 #include "src/turbomind/utils/instance_comm.h"
 #include "src/turbomind/utils/mpi_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 std::exception_ptr ptr[8];
 

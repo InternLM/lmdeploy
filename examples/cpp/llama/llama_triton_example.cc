@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
 
 #include "3rdparty/INIReader.h"
 #include <memory>
@@ -29,6 +30,7 @@
 #include "src/turbomind/utils/nccl_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/word_list.h"
+#include "src/turbomind/windows/marco.h"
 
 namespace ft = turbomind;
 
@@ -427,6 +429,7 @@ int main(int argc, char* argv[])
     const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
     const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
     const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
+
     std::vector<int> seq_lens(batch_size);
     // step 6: check results
     if (node_id == 0) {
@@ -550,7 +553,6 @@ int read_start_ids(size_t            batch_size,
         max_input_len = 0;
         return 0;
     }
-
 
     // Add padding
     for (int i = 0; i < (int)tmp_start_ids.size(); i++) {

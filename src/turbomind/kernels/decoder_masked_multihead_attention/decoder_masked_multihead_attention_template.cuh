@@ -17,6 +17,7 @@
 
 #include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/turbomind/windows/marco.h"
 // #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 // #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
@@ -80,8 +81,7 @@ namespace mmha {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Dh>
-struct Qk_vec_m_ {
-};
+struct Qk_vec_m_ {};
 
 template<>
 struct Qk_vec_m_<float, 32> {
@@ -181,8 +181,7 @@ struct Qk_vec_k_<__nv_fp8_e4m3, 256> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int THREADS_PER_KEY>
-struct K_vec_m_ {
-};
+struct K_vec_m_ {};
 
 template<>
 struct K_vec_m_<float, 4> {
@@ -263,8 +262,7 @@ struct K_vec_k_<__nv_fp8_e4m3, 1> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int V_VEC_SIZE>
-struct V_vec_m_ {
-};
+struct V_vec_m_ {};
 
 template<>
 struct V_vec_m_<float, 1> {
@@ -344,8 +342,7 @@ struct V_vec_k_<__nv_fp8_e4m3, 16> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_FMA
 template<typename T>
-struct Qk_vec_acum_fp32_ {
-};
+struct Qk_vec_acum_fp32_ {};
 
 template<>
 struct Qk_vec_acum_fp32_<float> {
@@ -427,8 +424,7 @@ struct Qk_vec_acum_fp32_<fp8_4_t> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-struct K_vec_acum_fp32_ {
-};
+struct K_vec_acum_fp32_ {};
 
 template<>
 struct K_vec_acum_fp32_<float> {
@@ -490,8 +486,7 @@ struct K_vec_acum_fp32_<fp8_4_t> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_OUT
 template<typename T>
-struct V_vec_acum_fp32_ {
-};
+struct V_vec_acum_fp32_ {};
 
 template<>
 struct V_vec_acum_fp32_<float> {
@@ -1265,14 +1260,14 @@ inline __device__ constexpr uint32_t shfl_mask(int threads)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename T,  // The type of the inputs. Supported types: float and half.
-         int  Dh,     // The hidden dimension per head.
+template<typename T,              // The type of the inputs. Supported types: float and half.
+         int  Dh,                 // The hidden dimension per head.
          int  Dh_MAX,
          int  THREADS_PER_KEY,    // The number of threads per key.
          int  THREADS_PER_VALUE,  // The number of threads per value.
          int  THREADS_PER_BLOCK,  // The number of threads in a threadblock.
          bool HAS_BEAMS,
-         int  QUANT_POLICY>  // quantization method
+         int  QUANT_POLICY>        // quantization method
 __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> params)
 {
 
@@ -1357,7 +1352,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     const int head_n_rep = params.num_heads / params.num_kv_heads;
 
-    const int kvhi = hi / head_n_rep;  // heads in the same group collapse to the same kv head
+    const int kvhi = hi / head_n_rep;                // heads in the same group collapse to the same kv head
 
     const bool group_leader = hi % head_n_rep == 0;  // only group leader writes to kv cache
 
@@ -1840,7 +1835,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 #if defined(MMHA_USE_FP32_ACUM_FOR_LOGITS)
             float logit = logits_smem[ti - first_step];
             out         = fma(logit, cast_to_float(v), out);
-#else  // MMHA_USE_FP32_ACUM_FOR_LOGITS
+#else   // MMHA_USE_FP32_ACUM_FOR_LOGITS
 #ifdef FP8_MHA
             Tk logit;
             if (FP8_MHA_KERNEL) {
@@ -1887,7 +1882,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 #if defined(MMHA_USE_FP32_ACUM_FOR_LOGITS)
             float logit = logits_smem[ti - first_step];
             out         = fma(logit, cast_to_float(v), out);
-#else  // MMHA_USE_FP32_ACUM_FOR_LOGITS
+#else   // MMHA_USE_FP32_ACUM_FOR_LOGITS
 #ifdef FP8_MHA
             Tk logit;
             if (FP8_MHA_KERNEL) {
@@ -1945,8 +1940,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 #if defined(MMHA_USE_FP32_ACUM_FOR_LOGITS)
         // out = fma(logits_smem[params.timestep], cast_to_float(v), out);
         out = fma(logits_smem[tlength - first_step], cast_to_float(v), out);
-#else  // MMHA_USE_FP32_ACUM_FOR_LOGITS
-       // out = fma(logits_smem[params.timestep], v, out);
+#else   // MMHA_USE_FP32_ACUM_FOR_LOGITS
+        // out = fma(logits_smem[params.timestep], v, out);
 #ifdef FP8_MHA
         Tk logit;
         if (FP8_MHA_KERNEL) {

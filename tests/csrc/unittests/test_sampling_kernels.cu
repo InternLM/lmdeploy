@@ -1,12 +1,12 @@
-#include <algorithm>   // std::fill_n
-#include <iostream>    // snprintf
-#include <math.h>      // expf, log
-#include <stdlib.h>    // rand
-#include <string>      // std::string
-#include <vector>      // std::vector
+#include <algorithm>  // std::fill_n
+#include <iostream>   // snprintf
+#include <math.h>     // expf, log
+#include <stdlib.h>   // rand
+#include <string>     // std::string
+#include <vector>     // std::vector
 
-#include <cublas_v2.h>
 #include <cublasLt.h>
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
@@ -18,6 +18,7 @@
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 #include "gtest_utils.h"
 
@@ -68,9 +69,9 @@ void computeProb(T* probs, T* logits, int batch_size, int vocab_size)
             sum += expf(static_cast<float>(logits[bidx * vocab_size + i]) - maxval);
         }
         for (int i = 0; i < vocab_size; ++i) {
-            int idx = bidx * vocab_size + i;
+            int   idx   = bidx * vocab_size + i;
             float logit = static_cast<float>(logits[idx]) - maxval;
-            probs[idx] = static_cast<T>(expf(logit) / (sum + EPSILON));
+            probs[idx]  = static_cast<T>(expf(logit) / (sum + EPSILON));
         }
     }
 }
@@ -96,8 +97,8 @@ void computeLogProb(T* logprobs, T* logits, int batch_size, int vocab_size)
             sum += expf(static_cast<float>(logits[bidx * vocab_size + i]) - maxval);
         }
         for (int i = 0; i < vocab_size; ++i) {
-            int idx = bidx * vocab_size + i;
-            float logit = static_cast<float>(logits[idx]) - maxval;
+            int   idx     = bidx * vocab_size + i;
+            float logit   = static_cast<float>(logits[idx]) - maxval;
             logprobs[idx] = static_cast<T>(logit - logf(sum + EPSILON));
         }
     }
@@ -119,10 +120,10 @@ public:
     }
 
 protected:
-    unsigned long long seed = 0;
-    cudaStream_t stream;
+    unsigned long long              seed = 0;
+    cudaStream_t                    stream;
     Allocator<AllocatorType::CUDA>* allocator;
-    curandState_t* curand_states;
+    curandState_t*                  curand_states;
 };
 
 template<typename T>
@@ -393,8 +394,8 @@ public:
     {
         this->runBatchTest(param, false, false);
         this->runBatchTest(param, false, true);
-        this->runBatchTest(param, true,  false);
-        this->runBatchTest(param, true,  true);
+        this->runBatchTest(param, true, false);
+        this->runBatchTest(param, true, true);
     }
 };
 
@@ -409,7 +410,6 @@ TYPED_TEST(TopKSamplingKernelTest, CorrectnessAncestral)
 {
     this->runTest({6, 4, 1, 4, 1.0f, 1});
 };
-
 
 TYPED_TEST(TopKSamplingKernelTest, CorrectnessLargeK63)
 {
@@ -456,7 +456,6 @@ TYPED_TEST(TopKSamplingKernelTest, BatchCorrectnessTopKTopP)
     this->runBatchTest({8, 4000, 1, 63, 0.3f, 8});
 };
 
-
 template<typename T>
 class TopPSamplingKernelTest: public SamplingKernelTest<T> {
 
@@ -473,7 +472,7 @@ public:
         size_t batch_size = param.batch_size;
         size_t vocab_size = param.vocab_size;
         size_t output_len = param.output_len;
-        size_t seq_len = output_len;
+        size_t seq_len    = output_len;
 
         float top_p = param.top_p;
 
@@ -496,8 +495,8 @@ public:
         struct cudaDeviceProp device_prop;
         cudaGetDeviceProperties(&device_prop, device);
 
-        curandState_t* curand_states = reinterpret_cast<curandState_t*>(
-            allocator->malloc(sizeof(curandState_t) * batch_size, false));
+        curandState_t* curand_states =
+            reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size, false));
         invokeCurandInitialize(curand_states, batch_size, seed, stream);
 
         int* end_ids     = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size));
@@ -515,17 +514,17 @@ public:
         int* end_offsets      = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * (batch_size + 1)));
         int* topp_id_vals_buf = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size * vocab_size));
 
-        size_t workspace_size = 0;
+        size_t workspace_size        = 0;
         size_t cub_temp_storage_size = 0;
         // retrieve the workspace size of the top-p sampling kernel.
         invokeTopPSampling<T>(nullptr,  // workspace
                               workspace_size,
                               cub_temp_storage_size,
-                              nullptr,  // output_ids
-                              nullptr,  // sequence_length
-                              nullptr,  // finished_buffer
-                              nullptr,  // cum_log_probs
-                              nullptr,  // output_log_probs
+                              nullptr,      // output_ids
+                              nullptr,      // sequence_length
+                              nullptr,      // finished_buffer
+                              nullptr,      // cum_log_probs
+                              nullptr,      // output_log_probs
                               (T*)nullptr,  // log_probs
                               topp_id_vals_buf,
                               end_offsets,
@@ -553,12 +552,7 @@ public:
             computeProb(h_probs, h_logits, batch_size, vocab_size);
             cudaH2Dcpy(probs, h_probs, batch_size * vocab_size);
 
-            invokeTopPInitialize(topp_id_vals_buf,
-                                 end_offsets,
-                                 begin_offsets,
-                                 batch_size,
-                                 vocab_size,
-                                 stream);
+            invokeTopPInitialize(topp_id_vals_buf, end_offsets, begin_offsets, batch_size, vocab_size, stream);
 
             invokeTopPSampling<T>(workspace,
                                   workspace_size,
@@ -612,7 +606,7 @@ public:
         size_t batch_size = param.batch_size;
         size_t vocab_size = param.vocab_size;
 
-        float top_p = param.top_p;
+        float  top_p    = param.top_p;
         float* h_top_ps = new float[batch_size];
         // Initialize runtime top k values.
         for (size_t i = 0; i < batch_size; ++i) {
@@ -621,7 +615,7 @@ public:
         float max_top_p = *std::max_element(h_top_ps, h_top_ps + batch_size);
 
         size_t output_len = param.output_len;
-        size_t seq_len = output_len;
+        size_t seq_len    = output_len;
 
         // Logit values in the host of shape (batch_size x vocab_size).
         T* h_logits = new T[batch_size * vocab_size];
@@ -647,8 +641,8 @@ public:
         struct cudaDeviceProp device_prop;
         cudaGetDeviceProperties(&device_prop, device);
 
-        curandState_t* curand_states = reinterpret_cast<curandState_t*>(
-            allocator->malloc(sizeof(curandState_t) * batch_size, false));
+        curandState_t* curand_states =
+            reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size, false));
         invokeCurandInitialize(curand_states, batch_size, seed, stream);
 
         float* top_ps = reinterpret_cast<float*>(allocator->malloc(sizeof(float) * batch_size));
@@ -668,17 +662,17 @@ public:
         int* end_offsets      = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * (batch_size + 1)));
         int* topp_id_vals_buf = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size * vocab_size));
 
-        size_t workspace_size = 0;
+        size_t workspace_size        = 0;
         size_t cub_temp_storage_size = 0;
         // retrieve the workspace size of the top-p sampling kernel.
         invokeBatchTopPSampling<T>(nullptr,  // workspace
                                    workspace_size,
                                    cub_temp_storage_size,
-                                   nullptr,  // output_ids
-                                   nullptr,  // sequence_length
-                                   nullptr,  // finished_buffer
-                                   nullptr,  // cum_log_probs
-                                   nullptr,  // output_log_probs
+                                   nullptr,      // output_ids
+                                   nullptr,      // sequence_length
+                                   nullptr,      // finished_buffer
+                                   nullptr,      // cum_log_probs
+                                   nullptr,      // output_log_probs
                                    (T*)nullptr,  // log_probs
                                    topp_id_vals_buf,
                                    end_offsets,
@@ -709,12 +703,7 @@ public:
             computeProb(h_probs, h_logits, batch_size, vocab_size);
             cudaH2Dcpy(probs, h_probs, batch_size * vocab_size);
 
-            invokeTopPInitialize(topp_id_vals_buf,
-                                 end_offsets,
-                                 begin_offsets,
-                                 batch_size,
-                                 vocab_size,
-                                 stream);
+            invokeTopPInitialize(topp_id_vals_buf, end_offsets, begin_offsets, batch_size, vocab_size, stream);
 
             invokeBatchTopPSampling<T>(workspace,
                                        workspace_size,
@@ -773,8 +762,8 @@ public:
     {
         this->runBatchTest(param, false, false);
         this->runBatchTest(param, false, true);
-        this->runBatchTest(param, true,  false);
-        this->runBatchTest(param, true,  true);
+        this->runBatchTest(param, true, false);
+        this->runBatchTest(param, true, true);
     }
 };
 
@@ -825,30 +814,31 @@ TYPED_TEST(TopPSamplingKernelTest, BatchCorrectnessLargeP2)
     this->runBatchTest({8, 4000, 1, 0, 0.9f, 16});
 };
 
-__global__
-void generateRandomNumber(unsigned int *vals, curandState_t *states, const int batch_size) {
+__global__ void generateRandomNumber(unsigned int* vals, curandState_t* states, const int batch_size)
+{
     int idx = threadIdx.x;
     if (idx < batch_size) {
         vals[idx] = curand(states + idx);
     }
 }
 
-TEST(SamplingKernelTest, CurandBatchInitialize) {
-    size_t batch_size = 127;
+TEST(SamplingKernelTest, CurandBatchInitialize)
+{
+    size_t       batch_size = 127;
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 
     curandState_t* curand_states;
     check_cuda_error(cudaMalloc(&curand_states, sizeof(curandState_t) * batch_size));
     unsigned long long* h_random_seeds = new unsigned long long[batch_size];
-    const size_t period_size = 3;
+    const size_t        period_size    = 3;
     for (size_t i = 0; i < batch_size; ++i) {
         h_random_seeds[i] = i / period_size;
     }
     unsigned long long* d_random_seeds;
     check_cuda_error(cudaMalloc(&d_random_seeds, sizeof(unsigned long long) * batch_size));
-    check_cuda_error(cudaMemcpy(d_random_seeds, h_random_seeds,
-                                sizeof(unsigned long long) * batch_size, cudaMemcpyHostToDevice));
+    check_cuda_error(
+        cudaMemcpy(d_random_seeds, h_random_seeds, sizeof(unsigned long long) * batch_size, cudaMemcpyHostToDevice));
 
     // Initialize curand states.
     invokeCurandBatchInitialize(curand_states, batch_size, d_random_seeds, stream);
@@ -859,8 +849,8 @@ TEST(SamplingKernelTest, CurandBatchInitialize) {
     unsigned int* h_rand_vals = new unsigned int[batch_size];
     check_cuda_error(cudaMalloc(&d_rand_vals, sizeof(unsigned int) * batch_size));
     generateRandomNumber<<<1, batch_size, 0, stream>>>(d_rand_vals, curand_states, batch_size);
-    check_cuda_error(cudaMemcpyAsync(
-        h_rand_vals, d_rand_vals, sizeof(unsigned int) * batch_size, cudaMemcpyDeviceToHost, stream));
+    check_cuda_error(
+        cudaMemcpyAsync(h_rand_vals, d_rand_vals, sizeof(unsigned int) * batch_size, cudaMemcpyDeviceToHost, stream));
     check_cuda_error(cudaStreamSynchronize(stream));
 
     // The same seed produces the same random number.
