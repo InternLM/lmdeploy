@@ -63,7 +63,7 @@ __device__ inline void copy(const void* local, void* data)
     *out         = *in;
 }
 
-static const float HALF_FLT_MAX = 65504.F;
+#define HALF_FLT_MAX 65504.F
 #define FINAL_MASK 0xffffffff
 
 template<typename T>
@@ -115,9 +115,9 @@ __inline__ __device__ T blockReduceMax(T val)
     int                 lane = threadIdx.x & 0x1f;  // in-warp idx
     int                 wid  = threadIdx.x >> 5;    // warp idx
 
-    val = warpReduceMax(val);  // get maxx in each warp
+    val = warpReduceMax(val);                       // get maxx in each warp
 
-    if (lane == 0)  // record in-warp maxx by warp Idx
+    if (lane == 0)                                  // record in-warp maxx by warp Idx
         shared[wid] = val;
 
     __syncthreads();
@@ -138,9 +138,9 @@ __inline__ __device__ T blockAllReduceMax(T val)
     int                 lane = threadIdx.x & 0x1f;  // in-warp idx
     int                 wid  = threadIdx.x >> 5;    // warp idx
 
-    val = warpReduceMax(val);  // get maxx in each warp
+    val = warpReduceMax(val);                       // get maxx in each warp
 
-    if (lane == 0)  // record in-warp maxx by warp Idx
+    if (lane == 0)                                  // record in-warp maxx by warp Idx
         shared[wid] = val;
 
     __syncthreads();
@@ -211,9 +211,9 @@ __inline__ __device__ T blockReduceMaxV2(T* val)
     int                 lane = threadIdx.x & 0x1f;  // in-warp idx
     int                 wid  = threadIdx.x >> 5;    // warp idx
 
-    warpReduceMaxV2<T, NUM>(val);  // get maxx in each warp
+    warpReduceMaxV2<T, NUM>(val);                   // get maxx in each warp
 
-    if (lane == 0)  // record in-warp maxx by warp Idx
+    if (lane == 0)                                  // record in-warp maxx by warp Idx
     {
 #pragma unroll
         for (int i = 0; i < NUM; i++) {
