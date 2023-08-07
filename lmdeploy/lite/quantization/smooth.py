@@ -84,7 +84,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
 
     pre_fc.weight.div_(scales.view(-1, 1))
 
-    if getattr(pre_fc, 'bias', None):
+    if getattr(pre_fc, 'bias', None) is not None:
         pre_fc.bias.div_(scales)
 
     for fc in fcs:

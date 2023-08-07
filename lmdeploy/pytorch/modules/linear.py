@@ -66,7 +66,7 @@ class WeightOnlyQLinear(nn.Module):
             cls: Type['WeightOnlyQLinear'],
             linear: nn.Linear,
             quantizer: TypeVar('Quantizer'),
-            awq_layout: Union[str, bool] = False) -> 'WeightOnlyQLinear':
+            awq_layout: Union[str, bool] = True) -> 'WeightOnlyQLinear':
         """Create a WeightOnlyQLinear object from a PyTorch Linear object.
 
         Args:
@@ -91,10 +91,11 @@ class WeightOnlyQLinear(nn.Module):
 
         in_features = linear.in_features
         out_features = linear.out_features
-        bias = linear.bias
+        bias = False if linear.bias is None else True
 
         qlinear = cls(w_bit, symmetry, group_size, in_features, out_features,
                       bias)
+        qlinear.bias = linear.bias
 
         qparams = quantizer.calculate_qparams(linear.weight)
         i32_w = quantizer.quant(linear.weight, qparams, real=True)
