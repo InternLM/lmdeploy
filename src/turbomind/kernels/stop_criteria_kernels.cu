@@ -95,7 +95,7 @@ void invokeStopWordsCriterion(const int*   output_ids,
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     // Check if we have sampled a word from the stop_words list. If so, stop the sequence.
     dim3 block, grid;
-    block.x = min(((stop_words_len + 32 - 1) / 32) * 32, 256UL);
+    block.x = min((unsigned long)((stop_words_len + 32 - 1) / 32) * 32, 256UL);
     grid.x  = (stop_words_len + block.x - 1) / block.x;
     grid.y  = batch_size * beam_width;
 
