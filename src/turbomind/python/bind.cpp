@@ -345,7 +345,7 @@ PYBIND11_MODULE(_turbomind, m)
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
-                if (data_type == "half" || data_type == "fp16") {
+                if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
                     return std::make_shared<LlamaTritonModel<half>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
                 }
