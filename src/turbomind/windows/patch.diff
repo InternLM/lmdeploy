@@ -1,0 +1,117 @@
+﻿diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 654122f..4aa1cec 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,6 +1,6 @@
+ cmake_minimum_required(VERSION 3.14)
+ 
+-set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${CMAKE_SOURCE_DIR}/cmake")
++set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+ 
+ include (CheckIncludeFile)
+ include (CheckFunctionExists)
+@@ -38,7 +38,7 @@ message(STATUS "Version ........... ${PTHREADS4W_VERSION}")
+ 
+ # Initial include path set. Look in the build directory first, where the
+ # generated config.h resides, before looking in the source directory.
+-include_directories("${CMAKE_BINARY_DIR}/" "${CMAKE_SOURCE_DIR}/")
++include_directories("${CMAKE_CURRENT_BINARY_DIR}/" "${CMAKE_CURRENT_SOURCE_DIR}/")
+ 
+ #################################
+ # Target Arch                   #
+@@ -108,7 +108,7 @@ check_symbol_exists(_beginthreadex process.h HAVE__BEGINTHREADEX)
+ check_symbol_exists(DuplicateHandle windows.h HAVE_DUPLICATEHANDLE)
+ 
+ create_config_h_in()
+-configure_file("${CMAKE_BINARY_DIR}/config.h.in" "${CMAKE_BINARY_DIR}/config.h")
++configure_file("${CMAKE_CURRENT_BINARY_DIR}/config.h.in" "${CMAKE_CURRENT_BINARY_DIR}/config.h")
+ 
+ #################################
+ # Defs                          #
+@@ -133,7 +133,7 @@ endif()
+ 
+ 
+ # Update filename with proper version info
+-configure_file(${CMAKE_SOURCE_DIR}/cmake/version.rc.in ${CMAKE_BINARY_DIR}/version.rc @ONLY)
++configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.rc.in ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
+ 
+ #################################
+ # Libraries                     #
+@@ -143,11 +143,11 @@ function(shared_lib type def)
+     set(targ pthread${type}${PTW32_VER})
+ 
+     if (${type} STREQUAL "VCE")
+-        add_library(${targ} SHARED pthread.cxx ${CMAKE_BINARY_DIR}/version.rc)
++        add_library(${targ} SHARED pthread.cxx ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+         set_target_properties(${targ} PROPERTIES LINKER_LANGUAGE CXX)
+         target_compile_options(${targ} PUBLIC "${VCEFLAGS}")
+     elseif (${CMAKE_C_COMPILER_ID} STREQUAL "GNU")
+-        add_library(${targ} SHARED pthread.cxx ${CMAKE_BINARY_DIR}/version.rc)
++        add_library(${targ} SHARED pthread.cxx ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+ 	target_compile_options(${targ} PRIVATE "-mthreads")
+ 	if (${type} STREQUAL "GCE")
+             set_target_properties(${targ} PROPERTIES LINKER_LANGUAGE CXX)
+@@ -156,7 +156,7 @@ function(shared_lib type def)
+ 	    target_link_options(${targ} PRIVATE "-shared-libgcc")
+ 	endif (${type} STREQUAL "GCE")
+     else ()
+-        add_library(${targ} SHARED pthread.c ${CMAKE_BINARY_DIR}/version.rc)
++        add_library(${targ} SHARED pthread.c ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+     endif (${type} STREQUAL "VCE")
+ 
+     target_compile_definitions(${targ} PRIVATE ${def} ${build_defines} __PTW32_BUILD_INLINED)
+@@ -234,7 +234,7 @@ endif (MSVC)
+ #################################
+ # Install                       #
+ #################################
+-install(FILES _ptw32.h pthread.h sched.h semaphore.h TYPE INCLUDE)
++# install(FILES _ptw32.h pthread.h sched.h semaphore.h TYPE INCLUDE)
+ 
+ #################################
+ # Test                          #
+diff --git a/cmake/config_h_in.cmake b/cmake/config_h_in.cmake
+index 320a352..ea46061 100644
+--- a/cmake/config_h_in.cmake
++++ b/cmake/config_h_in.cmake
+@@ -117,7 +117,7 @@ set(PTHREAD_CONFIG_H "
+ 
+ 
+ function (create_config_h_in)
+-    file(WRITE 
+-        "${CMAKE_BINARY_DIR}/config.h.in"
++    file(WRITE
++        "${CMAKE_CURRENT_BINARY_DIR}/config.h.in"
+         "${PTHREAD_CONFIG_H}")
+ endfunction (create_config_h_in)
+diff --git a/cmake/get_version.cmake b/cmake/get_version.cmake
+index 82e92c7..3cca32b 100644
+--- a/cmake/get_version.cmake
++++ b/cmake/get_version.cmake
+@@ -1,5 +1,5 @@
+ 
+-file(READ ${CMAKE_SOURCE_DIR}/_ptw32.h _PTW32_H_CONTENTS)
++file(READ ${CMAKE_CURRENT_SOURCE_DIR}/_ptw32.h _PTW32_H_CONTENTS)
+ 
+ string(REGEX MATCH "#define  __PTW32_VERSION_MAJOR ([a-zA-Z0-9_]+)" PTW32_VERSION_MAJOR "${_PTW32_H_CONTENTS}")
+ string(REPLACE "#define  __PTW32_VERSION_MAJOR " "" PTW32_VERSION_MAJOR "${PTW32_VERSION_MAJOR}")
+diff --git a/cmake/target_arch.cmake b/cmake/target_arch.cmake
+index 0c96f31..ddd1150 100644
+--- a/cmake/target_arch.cmake
++++ b/cmake/target_arch.cmake
+@@ -23,13 +23,13 @@ set(TARGET_ARCH_DETECT_CODE "
+ 
+ function(get_target_arch out)
+ 
+-    file(WRITE 
+-        "${CMAKE_BINARY_DIR}/target_arch_detect.c"
++    file(WRITE
++        "${CMAKE_CURRENT_BINARY_DIR}/target_arch_detect.c"
+         "${TARGET_ARCH_DETECT_CODE}")
+ 
+     try_run(
+         run_result_unused compile_result_unused
+-        "${CMAKE_BINARY_DIR}" "${CMAKE_BINARY_DIR}/target_arch_detect.c"
++        "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/target_arch_detect.c"
+         COMPILE_OUTPUT_VARIABLE TARGET_ARCH)
+ 
+     # parse compiler output
