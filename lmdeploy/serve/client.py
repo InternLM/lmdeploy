@@ -20,7 +20,6 @@ def main(tritonserver_addr: str, session_id: int = 1):
     Args:
         tritonserver_addr (str): the address in format "ip:port" of
           triton inference server
-        model_name (str): the name of the deployed model
         session_id (int): the identical id of a session
     """
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')

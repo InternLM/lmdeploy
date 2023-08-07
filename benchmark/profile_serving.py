@@ -55,7 +55,7 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
 def warmup(tritonserver_addr: str,
            concurrency: int,
            output_seqlen: int,
-           warmup_round: int = 4):
+           warmup_round: int = 1):
     print('start to warmup ...')
 
     def _infer(_chatbot, session_id):
@@ -87,7 +87,7 @@ def warmup(tritonserver_addr: str,
 
 
 def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
-                 test_round: int, session_len: int):
+                 session_len: int):
     start = time.perf_counter()
     with open(dataset_path) as f:
         dataset = json.load(f)
@@ -119,14 +119,12 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
     if samples > 0:
         filtered_dataset = random.sample(filtered_dataset, samples)
 
-    filtered_dataset *= test_round
-    random.shuffle(filtered_dataset)
     que = mp.Queue()
     for data in filtered_dataset:
         que.put(data)
     print(f'elapsed time for filtering: '
           f'{round(time.perf_counter() - start, 2)} s')
-    return que
+    return que, len(filtered_dataset)
 
 
 def main(tritonserver_addr: str,
@@ -134,11 +132,10 @@ def main(tritonserver_addr: str,
          dataset_path: str,
          concurrency: int = 1,
          session_len: int = 2048,
-         samples: int = 1000,
-         test_round: int = 1):
+         samples: int = 1000):
     warmup(tritonserver_addr, concurrency, session_len - 1)
-    req_que = read_dataset(tokenizer_path, dataset_path, samples, test_round,
-                           session_len)
+    req_que, n_req = read_dataset(tokenizer_path, dataset_path, samples,
+                                  session_len)
     res_que = mp.Queue()
     procs = []
     _start = time.perf_counter()
@@ -168,13 +165,17 @@ def main(tritonserver_addr: str,
     first_token_latency_min = np.min(stats[:, 0], axis=0)
     first_token_latency_max = np.max(stats[:, 0], axis=0)
     first_token_latency_ave = np.mean(stats[:, 0], axis=0)
-    throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
+    token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
+    req_throughput = n_req / elapsed_time
+
     print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
           f'elapsed_time: {elapsed_time:.2f}s\n'
           f'first_token latency(min, max, ave): '
           f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
           f'{first_token_latency_ave:.2f}s\n'
-          f'throughput: {throughput:.2f} token/s\n{"-" * 50}')
+          f'token throughput: {token_throughput:.2f} token/s\n'
+          f'req throughput: {req_throughput} req/s\n'
+          f'{"-" * 50}\n')
 
 
 if __name__ == '__main__':
