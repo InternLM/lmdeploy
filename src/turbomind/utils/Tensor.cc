@@ -22,7 +22,14 @@
 #include "stdlib.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
+#ifdef _MSC_VER
+#define NOMINMAX
+#include "src/turbomind/windows/dirent.h"
+#include <filesystem>
+namespace fs = std::filesystem;
+#else
 #include <dirent.h>
+#endif
 #include <numeric>
 #include <stdlib.h>
 #include <string>
@@ -35,11 +42,7 @@ namespace turbomind {
 
 Tensor::Tensor():
     // a none tensor.
-    where(MEMORY_CPU),
-    type(TYPE_INVALID),
-    shape({}),
-    data(nullptr),
-    offsets({})  // only a record to record offset
+    where(MEMORY_CPU), type(TYPE_INVALID), shape({}), data(nullptr), offsets({})  // only a record to record offset
 {
 }
 
@@ -59,9 +62,9 @@ Tensor::Tensor(const MemoryType          _where,
 
 void Tensor::parseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data)
 {
-    const char magic[] = "\x93"
-                         "NUMPY";
-    char magic_test[sizeof(magic)] = "\0";
+    const char magic[]                   = "\x93"
+                                           "NUMPY";
+    char       magic_test[sizeof(magic)] = "\0";
 
     size_t n_elems = fread((void*)magic_test, sizeof(char), sizeof(magic) - 1, f_ptr);
     if (n_elems != sizeof(magic) - 1 || std::string(magic) != std::string(magic_test)) {
@@ -292,8 +295,8 @@ void Tensor::saveNpy(const std::string& filename) const
         cudaMemcpy(cpu_data, data, tensor_size * Tensor::getTypeSize(type), cudaMemcpyDeviceToHost);
     }
 
-    const char magic[] = "\x93"
-                         "NUMPY";
+    const char    magic[]   = "\x93"
+                              "NUMPY";
     const uint8_t npy_major = 1;
     const uint8_t npy_minor = 0;
 
@@ -447,6 +450,13 @@ TensorMap TensorMap::fromNpyFolder(const std::string& base_folder)
 
 void TensorMap::saveNpy(const std::string& base_folder)
 {
+#ifdef _MSC_VER
+    bool ret = fs::exists(base_folder) | fs::create_directory(base_folder);
+    FT_CHECK_WITH_INFO(ret == true, fmtstr("Could not create folder %s.\n", base_folder.c_str()));
+    for (const auto& item : tensor_map_) {
+        item.second.saveNpy(base_folder + "/" + item.second.whereToString() + "-" + item.first + ".npy");
+    }
+#else
     mode_t mode_0755 = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
     int    ret       = mkdir(base_folder.c_str(), mode_0755);
     FT_CHECK_WITH_INFO(ret == 0 || errno == EEXIST, fmtstr("Could not create folder %s.\n", base_folder.c_str()));
@@ -454,6 +464,7 @@ void TensorMap::saveNpy(const std::string& base_folder)
     for (const auto& item : tensor_map_) {
         item.second.saveNpy(base_folder + "/" + item.second.whereToString() + "-" + item.first + ".npy");
     }
+#endif
 }
 
 }  // namespace turbomind

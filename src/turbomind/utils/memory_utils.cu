@@ -357,8 +357,8 @@ loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename, std::ve
         }
 
         // get slices
-        ConcateSlice slice0{.slices = {{0, dim0}}};
-        ConcateSlice slice1{.slices = {{0, dim1}}};
+        ConcateSlice slice0{{{0, dim0}}};
+        ConcateSlice slice1{{{0, dim1}}};
         if (slices.size() > 0 && slices[0].slices.size() > 0) {
             slice0 = slices[0];
         }

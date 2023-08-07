@@ -14,7 +14,7 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-add_subdirectory(gemm_test)
+# add_subdirectory(gemm_test)
 
 add_library(cuda_utils STATIC cuda_utils.cc)
 set_property(TARGET cuda_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)

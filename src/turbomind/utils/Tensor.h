@@ -25,7 +25,6 @@
 #include "stdlib.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
-#include <dirent.h>
 #include <numeric>
 #include <stdlib.h>
 #include <string>

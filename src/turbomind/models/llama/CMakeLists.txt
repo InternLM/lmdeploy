@@ -4,6 +4,10 @@ cmake_minimum_required(VERSION 3.8)
 
 add_subdirectory(fused_multi_head_attention)
 
+if(MSVC)
+        set(pthread_win32_lib libpthreadVC3)
+endif()
+
 add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
@@ -37,7 +41,8 @@ target_link_libraries(Llama PUBLIC -lcudart
         nccl_utils
         cuda_utils
         logger
-        llama_fmha)
+        llama_fmha
+        ${pthread_win32_lib})
 
 add_executable(llama_gemm llama_gemm.cc)
 target_link_libraries(llama_gemm PUBLIC -lcudart gpt_gemm_func memory_utils cuda_utils logger)
