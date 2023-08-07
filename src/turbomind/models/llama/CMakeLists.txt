@@ -4,6 +4,8 @@ cmake_minimum_required(VERSION 3.8)
 
 add_subdirectory(fused_multi_head_attention)
 
+find_package(CUDAToolkit REQUIRED)
+
 if(MSVC)
         set(pthread_win32_lib libpthreadVC3)
 endif()
@@ -24,7 +26,7 @@ add_library(Llama STATIC
         llama_utils.cu)
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(Llama PUBLIC -lcudart
+target_link_libraries(Llama PUBLIC CUDA::cudart
         gemm_s4_f16
         cublasMMWrapper
         DynamicDecodeLayer
@@ -45,4 +47,4 @@ target_link_libraries(Llama PUBLIC -lcudart
         ${pthread_win32_lib})
 
 add_executable(llama_gemm llama_gemm.cc)
-target_link_libraries(llama_gemm PUBLIC -lcudart gpt_gemm_func memory_utils cuda_utils logger)
+target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)

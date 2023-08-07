@@ -47,7 +47,7 @@ Tensor::Tensor():
 }
 
 Tensor::Tensor(const MemoryType _where, const DataType _type, const std::vector<size_t> _shape, const void* _data):
-    where(_where), type(_type), shape(_shape), data(_data)
+    where(_where), type(_type), shape(_shape), data(const_cast<void*>(_data))
 {
 }
 
@@ -56,7 +56,7 @@ Tensor::Tensor(const MemoryType          _where,
                const std::vector<size_t> _shape,
                const void*               _data,
                const std::vector<size_t> _offset):
-    where(_where), type(_type), shape(_shape), data(_data), offsets(_offset)
+    where(_where), type(_type), shape(_shape), data(const_cast<void*>(_data)), offsets(_offset)
 {
 }
 

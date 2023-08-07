@@ -21,4 +21,4 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(pthread-win32)
-target_include_directories(libpthreadVC3 PRIVATE ${PTHREAD_WIN32_SRC})
+target_include_directories(libpthreadVC3 PUBLIC ${PTHREAD_WIN32_SRC})

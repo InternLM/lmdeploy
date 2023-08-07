@@ -105,11 +105,11 @@ typedef enum memorytype_enum {
 } MemoryType;
 
 struct Tensor {
-    const MemoryType          where;
-    const DataType            type;
-    const std::vector<size_t> shape;
-    const void*               data;  // TODO(bhseuh) modify from const void* to void* const
-    const std::vector<size_t> offsets = std::vector<size_t>{};
+    MemoryType          where;
+    DataType            type;
+    std::vector<size_t> shape;
+    void*               data;  // TODO(bhseuh) modify from const void* to void* const
+    std::vector<size_t> offsets = std::vector<size_t>{};
 
     Tensor();
     Tensor(const MemoryType _where, const DataType _type, const std::vector<size_t> _shape, const void* _data);
