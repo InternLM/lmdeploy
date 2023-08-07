@@ -305,7 +305,7 @@ void generate_swin_gemm_config(
             if (i < 5 && data_type != FLOAT_DATATYPE) {
                 printf("***cublasLt Gemm Testing Begin***\n");
                 // Let try a fixed number of combinations
-                int                ALGO_COMBINATIONS = 5000;
+                const int          ALGO_COMBINATIONS = 5000;
                 customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
                 LtHgemmCustomFind<T, scaleT>(ltHandle,

@@ -328,7 +328,7 @@ void generate_encoder_gemm_config(
         if (i < 3 && data_type != FLOAT_DATATYPE) {
             printf("***cublasLt Gemm Testing Begin***\n");
             // Let try a fixed number of combinations
-            int                ALGO_COMBINATIONS = 5000;
+            const int          ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
             LtHgemmCustomFind<T, scaleT>(ltHandle,
                                          batch_size,

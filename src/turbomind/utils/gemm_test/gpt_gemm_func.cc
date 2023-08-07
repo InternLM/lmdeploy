@@ -451,7 +451,7 @@ void generate_gpt_gemm_config(int   batch_size,
         if ((data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) || data_type == FP8_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int                ALGO_COMBINATIONS = 10000;
+            const int          ALGO_COMBINATIONS = 10000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             // for gpt, computeType & scaleType should be FP32

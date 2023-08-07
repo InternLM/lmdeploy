@@ -24,9 +24,14 @@
 #include <map>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef __linux__
 #include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
+#endif
+#ifdef _MSC_VER
+#include "src/turbomind/windows/gettimeofday.h"
+#endif
+#include <time.h>
 #include <vector>
 
 namespace turbomind {

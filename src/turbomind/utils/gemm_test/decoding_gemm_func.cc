@@ -237,7 +237,7 @@ void generate_decoding_gemm_config(int   batch_size,
         if (data_type != FLOAT_DATATYPE) {
             printf("***cublasLt Gemm Testing Begin***\n");
             // Let try a fixed number of combinations
-            int                ALGO_COMBINATIONS = 5000;
+            const int          ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             LtHgemmCustomFind<T, scaleT>(ltHandle,

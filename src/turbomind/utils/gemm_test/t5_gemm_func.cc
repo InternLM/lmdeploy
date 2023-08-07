@@ -432,7 +432,7 @@ void generate_t5_gemm_config(int   batch_size,
         if (data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 0 && i != 10) {
             printf("***cublasLt Gemm Testing Begin***\n");
             // Let try a fixed number of combinations
-            int                ALGO_COMBINATIONS = 5000;
+            const int          ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             // for t5, computeType & scaleType should be FP32
