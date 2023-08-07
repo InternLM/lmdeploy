@@ -76,7 +76,7 @@ struct IteratorA {
     static constexpr int kWarpThreadC = 32;
     static constexpr int kWarpThreadS = 1;
 
-    // warp shape per acceess
+    // warp shape per access
     static constexpr int kWarpAccessM = kWarpThreadC * kAccessM;  // 32
     static constexpr int kWarpAccessK = kWarpThreadS * kAccessK;  // 1
 
@@ -442,7 +442,7 @@ struct IteratorB {
     static constexpr int kWarpFootprintK = kWarpAccessK * kIterK;
     static constexpr int kWarpFootprintN = kWarpAccessN * kIterN;
 
-    // Elimiate bank-conflicts for 8x4 half2 tiles, watch out for mis-alignment
+    // Eliminate bank-conflicts for 8x4 half2 tiles, watch out for misalignment
     static constexpr int kSmemPadCtaK  = SLICE_K + 8;
     static constexpr int kSizePerTile  = CTA_N * kSmemPadCtaK;
     static constexpr int kSmemByteSize = kElementSize * STAGES * kSizePerTile;

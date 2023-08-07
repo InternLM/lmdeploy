@@ -166,7 +166,7 @@ struct GemmKernel: public IGemmKernel {
             os << "[Q] shared memory: " << Iter::kSmemByteSize << std::endl;
             os << std::endl;
         }
-        os << "Dyanmic shared memory size: " << kSmemByteSize << std::endl;
+        os << "Dynamic shared memory size: " << kSmemByteSize << std::endl;
     }
 };
 
