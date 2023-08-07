@@ -17,6 +17,3 @@ def test_init_model():
         model2 = accel_model(model, accel='deepspeed')
         assert 'DeepSpeedSelfAttention' in repr(model2)
         assert 'DeepSpeedMLP' in repr(model2)
-        # print(model)
-        # model = accel_model(model, accel="deepspeed")
-        # print(model)
