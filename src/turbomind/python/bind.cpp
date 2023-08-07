@@ -404,7 +404,7 @@ PYBIND11_MODULE(_turbomind, m)
         auto src_tensor = GetDLTensor(src);
         auto dst_tensor = GetDLTensor(dst);
 
-        transpose_qk_s4_k_m8_hf(
+        turbomind::transpose_qk_s4_k_m8_hf(
             (uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, size_per_head, nullptr);
     });
 
@@ -427,16 +427,16 @@ PYBIND11_MODULE(_turbomind, m)
 
               //   TM_LOG_ERROR("[convert_s4_k_m8] %d %d %d", m, k, group_size);
 
-              convert_s4_k_m8((uint32_t*)a_dst.data,
-                              (half2*)q_dst.data,
-                              (half*)w.data,
-                              (const uint32_t*)a_src.data,
-                              (const half*)s.data,
-                              (const uint32_t*)qz.data,
-                              m,
-                              k,
-                              group_size,
-                              nullptr);
+              turbomind::convert_s4_k_m8((uint32_t*)a_dst.data,
+                                         (half2*)q_dst.data,
+                                         (half*)w.data,
+                                         (const uint32_t*)a_src.data,
+                                         (const half*)s.data,
+                                         (const uint32_t*)qz.data,
+                                         m,
+                                         k,
+                                         group_size,
+                                         nullptr);
           });
 
     m.def("dequantize_s4", [](py::object src, py::object dst) {
@@ -445,6 +445,6 @@ PYBIND11_MODULE(_turbomind, m)
         auto src_count  = std::accumulate(src_tensor.shape, src_tensor.shape + src_tensor.ndim, size_t{1});
         auto dst_count  = std::accumulate(dst_tensor.shape, dst_tensor.shape + dst_tensor.ndim, size_t{1});
         turbomind::FT_CHECK(src_count * 8 == dst_count);
-        dequantize_s4((uint4*)dst_tensor.data, (uint32_t*)src_tensor.data, src_count, nullptr);
+        turbomind::dequantize_s4((uint4*)dst_tensor.data, (uint32_t*)src_tensor.data, src_count, nullptr);
     });
 }

@@ -5,6 +5,7 @@ import os
 import os.path as osp
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import fire
@@ -12,6 +13,7 @@ import safetensors
 import torch
 from sentencepiece import SentencePieceProcessor
 
+import lmdeploy
 from lmdeploy.model import MODELS
 
 supported_formats = ['llama', 'hf', 'awq']
@@ -555,14 +557,16 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         """return tensor according its name."""
         return _params[name].cuda().contiguous()
 
-    import _turbomind as _tm
+    # import _turbomind as _tm
+    # TODO: find another way import _turbomind
+    lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
+    sys.path.append(osp.join(lmdeploy_dir, 'lib'))
+    import _turbomind as _tm  # noqa: E402
 
     def transpose_qk(x: torch.Tensor):
         assert x.is_contiguous()
-
         y = torch.zeros_like(x)
-        # print(y.shape, y.dtype, y.device)
-        _tm.transpose_qk_s4_k_m8(x, y, x.size(-1) * 8, x.size(0), 128)
+        _tm.transpose_qk_s4_k_m8(x, y, x.size(-1) * 8, x.size(0), group_size)
         return y
 
     def convert_s4(qw: torch.Tensor, qz: torch.Tensor, s: torch.Tensor,
@@ -576,13 +580,6 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         _tm.convert_s4_k_m8(_qw, _sz, _ws, qw, s, qz,
                             qw.size(-1) * 8, qw.size(0), group_size)
         return _qw, _sz
-
-    def save_bin(param: torch.Tensor, name):
-        print(name, param.shape)
-        if param.dtype in [torch.float, torch.bfloat16]:
-            param = param.half()
-        param.contiguous().cpu().numpy().tofile(
-            osp.join('/data/llm-awq/tmp', name))
 
     for i in range(num_layer):
         print(i)
@@ -662,8 +659,16 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, num_layer, norm_eps, kv_head_num, model_params,
-                  tokenizer_path, triton_models_path, tp)
+    return export(model_name,
+                  num_layer,
+                  norm_eps,
+                  kv_head_num,
+                  model_params,
+                  tokenizer_path,
+                  triton_models_path,
+                  tp,
+                  weight_type='int4',
+                  group_size=group_size)
 
 
 def pack_model_repository(workspace_path: str):
