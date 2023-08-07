@@ -154,15 +154,9 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 ### Weight Only 量化
 
 ```
-#   HF_model        DECODER_LAYER          LAYER_NORM
-#   internlm     InternLMDecoderLayer   InternLMRMSNorm
-#   llama 1&2     LlamaDecoderLayer      LlamaRMSNorm
-#    qwen             QWenBlock             RMSNorm
-#   baichuan        DecoderLayer            RMSNorm
+
 python3 -m lmdeploy.lite.apis.calibrate \
   --model $HF_MODEL \
-  --layer_type $DECODER_LAYER \  # Decoder Layer 对应的类名
-  --norm_type $LAYER_NORM \      #  Layer Norm 对应的类名
   --smooth True \                # 使用 AWQ 算法调整模型权重
   --w_bits 4 \                   # 权重量化的 bit 数
   --w_sym True \                 # 权重是否使用对称量化

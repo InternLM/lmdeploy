@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Union
 
 import fire
 import torch
@@ -10,18 +9,29 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from lmdeploy.lite.quantization.calibration import Calibration
 from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders
 
+LAYER_TYPE_MAP = {
+    'InternLMForCausalLM': 'InternLMDecoderLayer',
+    'QWenLMHeadModel': 'QWenBlock',
+    'BaiChuanForCausalLM': 'DecoderLayer',
+    'LlamaForCausalLM': 'LlamaDecoderLayer',
+}
+NORM_TYPE_MAP = {
+    'InternLMForCausalLM': 'InternLMRMSNorm',
+    'QWenLMHeadModel': 'RMSNorm',
+    'BaiChuanForCausalLM': 'RMSNorm',
+    'LlamaForCausalLM': 'LlamaRMSNorm',
+}
+
 
 def main(model: str,
-         layer_type: Union[str, type],
-         norm_type: Union[str, type],
+         calib_dataset: str = 'c4',
+         calib_samples: int = 128,
+         calib_seqlen: int = 2048,
          smooth: bool = True,
          w_bits: int = 4,
          w_sym: bool = False,
          w_granularity: str = 'per_group',
          w_group_size: int = 128,
-         calib_dataset: str = 'c4',
-         calib_samples: int = 128,
-         calib_seqlen: int = 2048,
          work_dir='./work_dir',
          device: str = 'cuda'):
 
@@ -35,8 +45,11 @@ def main(model: str,
     with init_empty_weights():
         model = AutoModelForCausalLM.from_pretrained(model,
                                                      torch_dtype=torch.float16)
+        model.config.use_cache = False
 
-    model.config.use_cache = False
+    layer_type = LAYER_TYPE_MAP[type(model).__name__]
+    norm_type = NORM_TYPE_MAP[type(model).__name__]
+
     decoder_layers = collect_target_modules(model, layer_type)
     device_map = infer_auto_device_map(model,
                                        no_split_module_classes=[layer_type])
