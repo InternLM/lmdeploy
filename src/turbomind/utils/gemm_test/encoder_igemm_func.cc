@@ -16,6 +16,9 @@
 
 #include "encoder_igemm_func.h"
 #include "src/turbomind/windows/marco.h"
+#ifdef _MSC_VER
+#include "src/turbomind/windows/gettimeofday.h"
+#endif
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!

@@ -16,6 +16,9 @@
 
 #include "src/turbomind/utils/gemm_test/gpt_gemm_func.h"
 #include "src/turbomind/windows/marco.h"
+#ifdef _MSC_VER
+#include "src/turbomind/windows/gettimeofday.h"
+#endif
 
 namespace turbomind {
 
