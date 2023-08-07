@@ -408,6 +408,13 @@ PYBIND11_MODULE(_turbomind, m)
             (uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, size_per_head, nullptr);
     });
 
+    m.def("fuse_w1_w3_s4_k_m8", [](py::object src, py::object dst, int m, int k) {
+        auto src_tensor = GetDLTensor(src);
+        auto dst_tensor = GetDLTensor(dst);
+
+        turbomind::fuse_w1_w3_s4_k_m8((uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, nullptr);
+    });
+
     m.def("convert_s4_k_m8",
           [](py::object A_dst,
              py::object Q_dst,
@@ -424,8 +431,6 @@ PYBIND11_MODULE(_turbomind, m)
               auto a_src = GetDLTensor(A_src);
               auto s     = GetDLTensor(scales);
               auto qz    = GetDLTensor(qzeros);
-
-              //   TM_LOG_ERROR("[convert_s4_k_m8] %d %d %d", m, k, group_size);
 
               turbomind::convert_s4_k_m8((uint32_t*)a_dst.data,
                                          (half2*)q_dst.data,

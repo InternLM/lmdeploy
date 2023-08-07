@@ -16,71 +16,92 @@ namespace turbomind {
 
 bool g_dump_kernel_info_once = false;
 
+struct IdentityOp {
+    static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
+    {
+        (uint&)C[n * M + m] = (uint&)data;
+    }
+};
+
+struct SiluActivationOp {
+    static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
+    {
+        auto  u    = __half22float2((half2&)data);
+        float silu = u.x / (1.f + __expf(-u.x));
+        half  val  = __float2half_rn(silu * u.y);
+
+        C[n * (M / 2) + m / 2] = val;
+    }
+};
+
 struct GemmS4F16::Impl {
 
-    template<int GS>
-    void Generate()
+    using Kernels = std::vector<std::unique_ptr<IGemmKernel>>;
+
+    template<int GS, typename Op>
+    void Generate(std::vector<Kernels>& kernels)
     {
-        std::vector<std::unique_ptr<IGemmKernel>> k;
+        Kernels k;
 
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 5, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 4, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 2, GS>{});
+        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 5, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 4, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 2, GS, Op>{});
 
-        k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 5, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 5, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 5, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 3, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 16, 256>, Shape<32, 16, 64>, 3, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 16, 256>, Shape<32, 16, 64>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<128, 8, 512>, Shape<32, 8, 128>, 2, GS>{});
+        k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 5, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 5, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 5, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 16, 256>, Shape<32, 16, 64>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 16, 256>, Shape<32, 16, 64>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 8, 512>, Shape<32, 8, 128>, 2, GS, Op>{});
 
-        k.emplace_back(new GemmKernel<Shape<64, 128, 128>, Shape<32, 128, 32>, 3, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 128, 128>, Shape<32, 128, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 4, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 16, 256>, Shape<32, 16, 32>, 3, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 16, 256>, Shape<32, 16, 32>, 2, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 8, 512>, Shape<32, 8, 128>, 2, GS>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 3, GS>{});
-        k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 2, GS>{});
+        k.emplace_back(new GemmKernel<Shape<64, 128, 128>, Shape<32, 128, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 128, 128>, Shape<32, 128, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 16, 256>, Shape<32, 16, 32>, 3, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<64, 16, 256>, Shape<32, 16, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 8, 512>, Shape<32, 8, 128>, 2, GS, Op>{});
+        // k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 2, GS, Op>{});
 
-        kernels_.push_back(std::move(k));
-        group_sizes_.push_back(GS);
+        kernels.push_back(std::move(k));
+        // group_sizes_.push_back(GS);
     }
 
-    void Measure(half*                C,
-                 const uint*          A,
-                 const half*          B,
-                 const half2*         Q,
-                 int                  m,
-                 int                  n,
-                 int                  k,
-                 int                  group_size,
-                 std::vector<Metric>& metrics,
-                 cudaStream_t         st)
+    void Measure(half*                 C,
+                 const uint*           A,
+                 const half*           B,
+                 const half2*          Q,
+                 int                   m,
+                 int                   n,
+                 int                   k,
+                 int                   group_size,
+                 std::vector<Metric>&  metrics,
+                 cudaStream_t          st,
+                 std::vector<Kernels>& _kernels)
     {
         int gid = -1;
         for (size_t i = 0; i < group_sizes_.size(); ++i) {
@@ -92,7 +113,7 @@ struct GemmS4F16::Impl {
         if (gid < 0) {
             throw std::runtime_error("unsupported group size");
         }
-        const auto& kernels = kernels_[gid];
+        const auto& kernels = _kernels[gid];
         metrics             = std::vector<Metric>(kernels.size());
 
         int best = 0;
@@ -159,10 +180,8 @@ struct GemmS4F16::Impl {
         return a.occupancy > b.occupancy;
     }
 
-    int Estimate(int gid, int m, int n, int k)
+    int Estimate(int m, int n, int k, Kernels& kernels)
     {
-        const auto& kernels = kernels_.at(gid);
-
         int                 best = 0;
         std::vector<Metric> metrics(kernels.size());
         for (size_t i = 0; i < kernels.size(); ++i) {
@@ -185,26 +204,27 @@ struct GemmS4F16::Impl {
         return best;
     }
 
-    void Run(half*        C,
-             const uint*  A,
-             const half*  B,
-             const half2* Q,
-             int          m,
-             int          n,
-             int          k,
-             int          group_size,
-             int          algo_id,
-             cudaStream_t st)
+    void Run(half*                 C,
+             const uint*           A,
+             const half*           B,
+             const half2*          Q,
+             int                   m,
+             int                   n,
+             int                   k,
+             int                   group_size,
+             int                   algo_id,
+             cudaStream_t          st,
+             std::vector<Kernels>& kernels)
     {
         for (size_t i = 0; i < group_sizes_.size(); ++i) {
             if (group_sizes_[i] == group_size) {
                 if (algo_id < 0) {
-                    algo_id = Estimate(i, m, n, k);
+                    algo_id = Estimate(m, n, k, kernels[i]);
                 }
                 if (algo_id < 0) {
                     throw std::runtime_error("no feasible kernel found");
                 }
-                kernels_[i].at(algo_id)->Launch(C, A, B, Q, m, n, k, st);
+                kernels[i].at(algo_id)->Launch(C, A, B, Q, m, n, k, st);
                 return;
             }
         }
@@ -217,7 +237,9 @@ struct GemmS4F16::Impl {
         cudaEventCreate(&ev_end_);
 
         /// TODO: add more group sizes
-        Generate<128>();
+        Generate<128, IdentityOp>(gemm_kernels_);
+        Generate<128, SiluActivationOp>(fused_ffn_kernels_);
+        group_sizes_.push_back(128);
     }
 
     ~Impl()
@@ -226,7 +248,8 @@ struct GemmS4F16::Impl {
         cudaEventDestroy(ev_start_);
     }
 
-    std::vector<std::vector<std::unique_ptr<IGemmKernel>>> kernels_;
+    std::vector<Kernels> gemm_kernels_;
+    std::vector<Kernels> fused_ffn_kernels_;
 
     std::vector<int> group_sizes_;
 
@@ -249,10 +272,21 @@ void GemmS4F16::Measure(half*                C,
                         int                  n,
                         int                  k,
                         int                  group_size,
+                        Type                 type,
                         std::vector<Metric>& metrics,
                         cudaStream_t         st)
 {
-    impl_->Measure(C, A, B, Q, m, n, k, group_size, metrics, st);
+    std::vector<Impl::Kernels>* kernels{};
+
+    switch (type) {
+        case kFusedSiluFfn:
+            kernels = &impl_->fused_ffn_kernels_;
+            break;
+        default:
+            kernels = &impl_->gemm_kernels_;
+    }
+
+    impl_->Measure(C, A, B, Q, m, n, k, group_size, metrics, st, *kernels);
 }
 
 void GemmS4F16::Run(half*        C,
@@ -263,10 +297,21 @@ void GemmS4F16::Run(half*        C,
                     int          n,
                     int          k,
                     int          group_size,
+                    Type         type,
                     int          algo_id,
                     cudaStream_t st)
 {
-    impl_->Run(C, A, B, Q, m, n, k, group_size, algo_id, st);
+    std::vector<Impl::Kernels>* kernels{};
+
+    switch (type) {
+        case kFusedSiluFfn:
+            kernels = &impl_->fused_ffn_kernels_;
+            break;
+        default:
+            kernels = &impl_->gemm_kernels_;
+    }
+
+    impl_->Run(C, A, B, Q, m, n, k, group_size, algo_id, st, *kernels);
 }
 
 }  // namespace turbomind

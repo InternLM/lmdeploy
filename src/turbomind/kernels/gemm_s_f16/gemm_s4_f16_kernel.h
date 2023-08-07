@@ -22,7 +22,7 @@ struct IGemmKernel {
     virtual void Dump(std::ostream& os) = 0;
 };
 
-template<typename CtaShape, typename WarpShape, int Stages, int GroupSize>
+template<typename CtaShape, typename WarpShape, int Stages, int GroupSize, typename OutputOp>
 struct GemmKernel: public IGemmKernel {
 
     static constexpr CtaShape  cta_shape{};
@@ -35,7 +35,8 @@ struct GemmKernel: public IGemmKernel {
                           warp_shape.n(),
                           warp_shape.k(),
                           Stages,
-                          GroupSize>;
+                          GroupSize,
+                          OutputOp>;
 
     decltype(&gemm_s4_f16_nn<GemmType>) kernel_func_;
     std::shared_ptr<cudaDeviceProp>     props_;

@@ -19,6 +19,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.cc
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <filesystem>
@@ -64,6 +65,11 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     head_num,
     ffn_weights.intermediate.output_dims = inter_size_ / tensor_para_size_;
     ffn_weights.intermediate.type        = weight_type;
     ffn_weights.intermediate.group_size  = group_size;
+
+    ffn_weights.fused_gating_intermediate.input_dims  = hidden_units_;
+    ffn_weights.fused_gating_intermediate.output_dims = inter_size_ / tensor_para_size_ * 2;
+    ffn_weights.fused_gating_intermediate.type        = weight_type;
+    ffn_weights.fused_gating_intermediate.group_size  = group_size;
 
     ffn_weights.output.input_dims  = inter_size_ / tensor_para_size_;
     ffn_weights.output.output_dims = hidden_units_;
@@ -221,8 +227,14 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_);
     turbomind::mallocWeights(self_attn_weights.output, attn_bias_);
 
-    turbomind::mallocWeights(ffn_weights.gating, false);
-    turbomind::mallocWeights(ffn_weights.intermediate, false);
+    if (weight_type_ == WeightType::kINT4) {
+        turbomind::mallocWeights(ffn_weights.fused_gating_intermediate, false);
+    }
+    else {
+        turbomind::mallocWeights(ffn_weights.gating, false);
+        turbomind::mallocWeights(ffn_weights.intermediate, false);
+    }
+
     turbomind::mallocWeights(ffn_weights.output, false);
 }
 
@@ -234,8 +246,15 @@ LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight()
 
     freeWeights(self_attn_weights.qkv);
     freeWeights(self_attn_weights.output);
-    freeWeights(ffn_weights.gating);
-    freeWeights(ffn_weights.intermediate);
+
+    if (weight_type_ == WeightType::kINT4) {
+        freeWeights(ffn_weights.fused_gating_intermediate);
+    }
+    else {
+        freeWeights(ffn_weights.gating);
+        freeWeights(ffn_weights.intermediate);
+    }
+
     freeWeights(ffn_weights.output);
 }
 
@@ -256,9 +275,22 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
                 tensor_para_size_,
                 1,
                 {head_num_ * size_per_head_, kv_head_num_ * size_per_head_, kv_head_num_ * size_per_head_});
+
     loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_, 0);
-    loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_, 1);
-    loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_, 1);
+
+    if (weight_type_ == WeightType::kINT4) {
+        loadWeights(ffn_weights.fused_gating_intermediate,
+                    dir_path + ".feed_forward.w13",
+                    tensor_para_rank_,
+                    type,
+                    tensor_para_size_,
+                    1);
+    }
+    else {
+        loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_, 1);
+        loadWeights(
+            ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_, 1);
+    }
     loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_, 0);
 
     // load kv_cache quant scale

@@ -25,6 +25,8 @@ void convert_s4_k_m8(uint32_t*       A_dst,
 
 void transpose_qk_s4_k_m8_hf(uint32_t* dst, const uint32_t* src, int m, int k, int size_per_head, cudaStream_t st = {});
 
+void fuse_w1_w3_s4_k_m8(uint32_t* dst, const uint32_t* src, int m, int k, cudaStream_t st = {});
+
 void dequantize_s4(uint4* dst, const uint32_t* src, size_t count, cudaStream_t st = {});
 
 }  // namespace turbomind

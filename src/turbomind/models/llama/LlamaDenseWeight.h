@@ -73,6 +73,7 @@ struct LlamaFfnWeight {
     LlamaDenseWeight<T> gating;
     LlamaDenseWeight<T> intermediate;
     LlamaDenseWeight<T> output;
+    LlamaDenseWeight<T> fused_gating_intermediate;
 };
 
 }  // namespace turbomind

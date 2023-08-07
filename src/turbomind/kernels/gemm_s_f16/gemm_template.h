@@ -44,7 +44,15 @@ __inline__ __device__ float2 operator+(const float2& a, const float2& b)
 
 }  // namespace ops
 
-template<int CTA_M, int CTA_N, int CTA_K, int WARP_M, int WARP_N, int WARP_K, int STAGES, int GROUP_SIZE>
+template<int CTA_M,
+         int CTA_N,
+         int CTA_K,
+         int WARP_M,
+         int WARP_N,
+         int WARP_K,
+         int STAGES,
+         int GROUP_SIZE,
+         typename OutputOp>
 struct Gemm {
 
     static constexpr int kWarpCountM = CTA_M / WARP_M;
@@ -229,10 +237,10 @@ struct Gemm {
                     // convert to half
                     half2 half_C = __float22half2_rn(frag_C[j * 2 + x]);
                     // transpose 8x8 accum tile
-                    uint tran_C = transpose_m8n8_b16((uint&)half_C);
+                    uint trans_C = transpose_m8n8_b16((uint&)half_C);
                     // store to global memory
                     if (nn < n && mm < m) {
-                        (uint&)C[nn * m + mm] = tran_C;
+                        OutputOp::apply(trans_C, mm, nn, C, m, n);
                     }
                 }
             }

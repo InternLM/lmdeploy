@@ -27,8 +27,8 @@ constexpr int WARP_SIZE = 32;
 #define PRAGMA_NO_UNROLL
 #endif
 
-
-// Modified from NVIDIA FasterTransformer: https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h
+// Modified from NVIDIA FasterTransformer:
+// https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h
 // Modified from llm-awq https://github.com/mit-han-lab/llm-awq/blob/main/awq/kernels/csrc/quantization/dequantize.cuh
 __inline__ __device__ uint4 dequantize_s4_to_fp16x2(uint32_t const& source)
 {

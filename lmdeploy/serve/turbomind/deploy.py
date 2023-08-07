@@ -146,10 +146,14 @@ def export(model_name: str,
         if key == 'w_qkv' and ext == 'bias':
             attn_bias = True
         copy = False
-        if key in ['w1', 'w3']:
+        if key in ['w1', 'w3', 'w13']:
             split_dim = -1
+            # TODO: move parameter extraction outside of the loop
             if key == 'w1':
                 inter_size = max(inter_size, param_data.shape[-1])
+            elif key == 'w13':
+                inter_size = max(inter_size, param_data.shape[-1] // 2)
+
         elif key == 'w_qkv':
             split_dim = -2
         elif key in ['w2', 'wo']:
@@ -550,7 +554,7 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
 
     _params = {}
     for _file in [quant_path]:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
+        _tmp = torch.load(_file, map_location='cpu')
         _params.update(_tmp)
 
     def get_tensor(name):
@@ -563,11 +567,30 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
     sys.path.append(osp.join(lmdeploy_dir, 'lib'))
     import _turbomind as _tm  # noqa: E402
 
-    def transpose_qk(x: torch.Tensor):
-        assert x.is_contiguous()
-        y = torch.zeros_like(x)
-        _tm.transpose_qk_s4_k_m8(x, y, x.size(-1) * 8, x.size(0), group_size)
-        return y
+    def transpose_qk(src: torch.Tensor):
+        assert src.is_contiguous()
+        dst = torch.zeros_like(src)
+        _tm.transpose_qk_s4_k_m8(src, dst,
+                                 src.size(-1) * 8, src.size(0), group_size)
+        return dst
+
+    def fuse_w1_w3(w1_qw: torch.Tensor, w1_qz: torch.Tensor,
+                   w1_s: torch.Tensor, w3_qw: torch.Tensor,
+                   w3_qz: torch.Tensor, w3_s: torch.Tensor):
+
+        def fuse(a: torch.Tensor, b: torch.Tensor):
+            ab = torch.cat((a, b)).contiguous()
+            _ab = torch.zeros_like(ab)
+            _tm.fuse_w1_w3_s4_k_m8(ab, _ab, a.size(-1) * 8, a.size(0))
+            return _ab.view(a.size(0), -1)
+
+        w13_qw = fuse(w1_qw, w3_qw)
+        w13_qz = fuse(w1_qz, w3_qz)
+
+        w13_s = torch.cat((w1_s, w3_s)).view(2, w1_s.size(0), -1)
+        w13_s = w13_s.permute(1, 2, 0).contiguous().view(w1_s.size(0), -1)
+
+        return w13_qw, w13_qz, w13_s
 
     def convert_s4(qw: torch.Tensor, qz: torch.Tensor, s: torch.Tensor,
                    group_size: int):
@@ -622,9 +645,9 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         model_params[f'layers.{i}.attention.wo.scales_zeros'] = o_sz
 
         # ffn weights
-        w1_wq = get_tensor(f'model.layers.{i}.mlp.gate_proj.qweight')
-        w2_wq = get_tensor(f'model.layers.{i}.mlp.down_proj.qweight')
-        w3_wq = get_tensor(f'model.layers.{i}.mlp.up_proj.qweight')
+        w1_qw = get_tensor(f'model.layers.{i}.mlp.gate_proj.qweight')
+        w2_qw = get_tensor(f'model.layers.{i}.mlp.down_proj.qweight')
+        w3_qw = get_tensor(f'model.layers.{i}.mlp.up_proj.qweight')
 
         w1_qz = get_tensor(f'model.layers.{i}.mlp.gate_proj.qzeros')
         w2_qz = get_tensor(f'model.layers.{i}.mlp.down_proj.qzeros')
@@ -634,16 +657,17 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         w2_s = get_tensor(f'model.layers.{i}.mlp.down_proj.scales')
         w3_s = get_tensor(f'model.layers.{i}.mlp.up_proj.scales')
 
-        w1_qw, w1_sz = convert_s4(w1_wq, w1_qz, w1_s, group_size)
-        w2_qw, w2_sz = convert_s4(w2_wq, w2_qz, w2_s, group_size)
-        w3_qw, w3_sz = convert_s4(w3_wq, w3_qz, w3_s, group_size)
+        w13_qw, w13_qz, w13_s = fuse_w1_w3(w1_qw, w1_qz, w1_s, w3_qw, w3_qz,
+                                           w3_s)
 
-        model_params[f'layers.{i}.feed_forward.w1.qweight'] = w1_qw
-        model_params[f'layers.{i}.feed_forward.w1.scales_zeros'] = w1_sz
+        w13_qw, w13_sz = convert_s4(w13_qw, w13_qz, w13_s, group_size)
+        w2_qw, w2_sz = convert_s4(w2_qw, w2_qz, w2_s, group_size)
+
+        model_params[f'layers.{i}.feed_forward.w13.qweight'] = w13_qw
+        model_params[f'layers.{i}.feed_forward.w13.scales_zeros'] = w13_sz
+
         model_params[f'layers.{i}.feed_forward.w2.qweight'] = w2_qw
         model_params[f'layers.{i}.feed_forward.w2.scales_zeros'] = w2_sz
-        model_params[f'layers.{i}.feed_forward.w3.qweight'] = w3_qw
-        model_params[f'layers.{i}.feed_forward.w3.scales_zeros'] = w3_sz
 
         # norm weights
         attn_norm = get_tensor(f'model.layers.{i}.input_layernorm.weight')

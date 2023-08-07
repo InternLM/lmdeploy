@@ -19,6 +19,11 @@ public:
 
     ~GemmS4F16();
 
+    enum Type {
+        kGemm,
+        kFusedSiluFfn
+    };
+
     void Measure(half*                C,
                  const uint*          A,
                  const half*          B,
@@ -27,6 +32,7 @@ public:
                  int                  n,
                  int                  k,
                  int                  group_size,
+                 Type                 type,
                  std::vector<Metric>& metrics,
                  cudaStream_t         st);
 
@@ -38,6 +44,7 @@ public:
              int          n,
              int          k,
              int          group_size,
+             Type         type,
              int          algo_id,
              cudaStream_t st);
 

@@ -120,6 +120,15 @@ void transpose_qk_s4_k_m8_hf(uint32_t* dst, const uint32_t* src, int m, int k, i
     permute_u4<0, 1, 3, 5, 2, 6, 4><<<512, 512, 0, st>>>(dst, src, shape);
 }
 
+// [2, k, m/8] -> [k, m/8, 2]
+void fuse_w1_w3_s4_k_m8(uint32_t* dst, const uint32_t* src, int m, int k, cudaStream_t st)
+{
+    Array<int, 6> shape{2, k, m / 8, 2, 2, 2};
+    //     dequant   transpose   quant
+    // 012345 -> 012453 -> 124530 -> 124053
+    permute_u4<1, 2, 4, 0, 5, 3><<<512, 512, 0, st>>>(dst, src, shape);
+}
+
 __global__ void dequantize_s4_kernel(uint4* dst, const uint* src, size_t count)
 {
     for (int i = threadIdx.x + blockDim.x * blockIdx.x; i < count; i += blockDim.x * gridDim.x) {

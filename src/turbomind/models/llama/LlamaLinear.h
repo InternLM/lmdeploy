@@ -15,19 +15,25 @@ namespace turbomind {
 template<typename T>
 class LlamaLinear {
 public:
+    enum Type {
+        kGemm,
+        kFusedSiluFfn
+    };
+
     LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
     {
     }
 
-    void forward(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight)
+    void
+    forward(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type = kGemm)
     {
         switch (weight.type) {
             case WeightType::kFP16:
             case WeightType::kFP32:
-                forwardFp(output_data, input_data, batch_size, weight);
+                forwardFp(output_data, input_data, batch_size, weight, type);
                 break;
             case WeightType::kINT4:
-                forwardInt4(output_data, input_data, batch_size, weight);
+                forwardInt4(output_data, input_data, batch_size, weight, type);
                 break;
             default:
                 FT_CHECK(0);
@@ -35,8 +41,9 @@ public:
     }
 
 private:
-    void forwardFp(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight)
+    void forwardFp(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
+        FT_CHECK(type == kGemm);
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               weight.output_dims,
@@ -51,11 +58,9 @@ private:
         sync_check_cuda_error();
     }
 
-    void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight)
+    void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
         if constexpr (std::is_same_v<T, half>) {
-            // g_dump_kernel_info_once = true;
-            // TM_LOG_INFO("problem size: %d %d %d", weight.output_dims, batch_size, weight.input_dims);
             gemm_s4_f16_.Run(output_data,
                              (const uint*)weight.kernel,
                              input_data,
@@ -64,6 +69,7 @@ private:
                              batch_size,
                              weight.input_dims,
                              weight.group_size,
+                             type == kFusedSiluFfn ? GemmS4F16::kFusedSiluFfn : GemmS4F16::kGemm,
                              -1,
                              stream_);
             sync_check_cuda_error();
