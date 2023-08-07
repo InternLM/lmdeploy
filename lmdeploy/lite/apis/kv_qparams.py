@@ -111,7 +111,7 @@ def main(model: str,
         'Currently, only support `c4`, `ptb`, `wikitext2`, or `pileval`.'
 
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-    model = AutoModel.from_pretrained(model)
+    model = AutoModelForCausalLM.from_pretrained(model)
     model.config.use_cache = True
 
     print('Loading calibrate dataset ...')
