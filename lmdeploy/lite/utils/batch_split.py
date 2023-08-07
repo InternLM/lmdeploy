@@ -1,24 +1,29 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
-from typing import List, Tuple, Union, Any, Dict
+from typing import Any, Dict, List, Tuple, Union
 
-def split_decoder_layer_inputs(*args: Union[torch.Tensor, Any], **kwargs: Union[torch.Tensor, Any] 
-                               ) -> Tuple[List[List[Any]], List[Dict[str, Any]]]:
-    """
-    This function splits batched decoder layer inputs into individual elements.
+import torch
+
+
+def split_decoder_layer_inputs(
+    *args: Union[torch.Tensor, Any], **kwargs: Union[torch.Tensor, Any]
+) -> Tuple[List[List[Any]], List[Dict[str, Any]]]:
+    """This function splits batched decoder layer inputs into individual
+    elements.
 
     Args:
-        *args (Union[torch.Tensor, Any]): Positional arguments which could be a mix of tensors and other types.
-        **kwargs (Union[torch.Tensor, Any]): Keyword arguments which could be a mix of tensors and other types.
+        *args (Union[torch.Tensor, Any]): Positional arguments which could
+            be a mix of tensors and other types.
+        **kwargs (Union[torch.Tensor, Any]): Keyword arguments which could
+            be a mix of tensors and other types.
 
     Returns:
-        Tuple[List[List[Any]], List[Dict[str, Any]]]: A tuple containing two lists, one for positional arguments,
-                                                      one for keyword arguments. Each list contains individual
-                                                      elements from the batch.
+        Tuple[List[List[Any]], List[Dict[str, Any]]]: A tuple containing two
+            lists, one for positional arguments, one for keyword arguments.
+            Each list contains individual elements from the batch.
     """
 
     if not isinstance(args[0], torch.Tensor):
-        raise ValueError("The first argument must be a Tensor")
+        raise ValueError('The first argument must be a Tensor')
 
     bs = args[0].size(0)
 
@@ -26,39 +31,45 @@ def split_decoder_layer_inputs(*args: Union[torch.Tensor, Any], **kwargs: Union[
     batch_kwargs = []
     for i in range(bs):
         new_args = []
-        # Iterate over each argument. If it's a torch.Tensor and its first dimension equals the batch size,
-        # then get the value corresponding to the current index, else directly add the whole value.
+        # Iterate over each argument. If it's a torch.Tensor and its first
+        # dimension equals the batch size, then get the value corresponding
+        # to the current index, else directly add the whole value.
         for val in args:
             if isinstance(val, torch.Tensor):
                 if val.size(0) != bs:
-                    raise ValueError("All input tensor's first dimension should be equal to the batch size")
-                new_args.append(val[i:i+1])
+                    raise ValueError(
+                        "All input tensor's first dimension should be equal "
+                        'to the batch size')
+                new_args.append(val[i:i + 1])
             else:
                 new_args.append(val)
-        
+
         new_kwargs = {}
         # Execute the same operation for the keyword arguments.
         for name, val in kwargs.items():
-            if isinstance(val, torch.Tensor):  
+            if isinstance(val, torch.Tensor):
                 if val.size(0) != bs:
-                    raise ValueError("All input tensor's first dimension should be equal to the batch size")
-                new_kwargs[name] = val[i:i+1]
+                    raise ValueError(
+                        "All input tensor's first dimension should be equal "
+                        'to the batch size')
+                new_kwargs[name] = val[i:i + 1]
             else:
                 new_kwargs[name] = val
-                
+
         batch_args.append(new_args)
         batch_kwargs.append(new_kwargs)
 
     return batch_args, batch_kwargs
 
 
-def concat_decoder_layer_outputs(batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
-    """
-    This function concatenates individual decoder layer outputs into a batched output.
+def concat_decoder_layer_outputs(
+        batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
+    """This function concatenates individual decoder layer outputs into a
+    batched output.
 
     Args:
-        batch_outputs (List[Tuple[Any]]): A list of tuples, where each tuple represents the output
-                                          from an individual element in the batch.
+        batch_outputs (List[Tuple[Any]]): A list of tuples, where each tuple
+            represents the output from an individual element in the batch.
 
     Returns:
         Tuple[Any]: A tuple representing the batched output.
@@ -67,8 +78,7 @@ def concat_decoder_layer_outputs(batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
     num_returns = len(batch_outputs[0])
 
     def is_past_key_value(data: Any) -> bool:
-        """
-        Check whether data is a past key-value pair.
+        """Check whether data is a past key-value pair.
 
         Args:
             data (Any): The data to check.
@@ -81,7 +91,7 @@ def concat_decoder_layer_outputs(batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
         flag = flag and isinstance(data[0], torch.Tensor)
         flag = flag and isinstance(data[1], torch.Tensor)
         return flag
-    
+
     new_outputs = []
 
     # Iterate over all types of return values.
