@@ -34,6 +34,19 @@ bash workspace/service_docker_up.sh
 
 </details>
 
+<details open>
+<summary><b>7B with INT4 weight only quantization</b></summary>
+
+```shell
+python3 -m lmdeploy.serve.turbomind.deploy llama2 /path/to/llama-2-7b-chat-hf \
+    --model_format awq \
+    --group_size 128 \
+    --quant_path /path/to/awq-quant-weight.pt
+bash workspace/service_docker_up.sh
+```
+
+</details>
+
 ## Serving [LLaMA](https://github.com/facebookresearch/llama)
 
 Weights for the LLaMA models can be obtained from by filling out [this form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform)
