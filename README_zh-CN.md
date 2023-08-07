@@ -162,16 +162,16 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 python3 -m lmdeploy.lite.apis.calibrate \
   --model $HF_MODEL \
   --layer_type $DECODER_LAYER \  # Decoder Layer 对应的类名
-  --norm_type $LAYER_NORM \  #  Layer Norm 对应的类名
-  --smooth True \    # 使用 AWQ 算法调整模型权重
-  --w_bits 4 \
-  --w_sym True \
-  --w_granularity 'per_group' \
-  --w_group_size 128 \
-  --calib_dataset 'c4' \
-  --calib_samples 128 \
-  --calib_seqlen 2048 \
-  --work_dir ./work_dir \   # 保存量化统计参数和量化后权重的文件夹
+  --norm_type $LAYER_NORM \      #  Layer Norm 对应的类名
+  --smooth True \                # 使用 AWQ 算法调整模型权重
+  --w_bits 4 \                   # 权重量化的 bit 数
+  --w_sym True \                 # 权重是否使用对称量化
+  --w_granularity 'per_group' \  # 权重量化参数的统计粒度
+  --w_group_size 128 \           # 权重量化分组统计尺寸
+  --calib_dataset 'c4' \         # 校准数据集，支持 c4, ptb, wikitext2, pileval
+  --calib_samples 128 \          # 校准集的样本数，如果显存不够，可以适当调小
+  --calib_seqlen 2048 \          # 单条的文本长度，如果显存不够，可以适当调小
+  --work_dir ./work_dir \        # 保存量化统计参数和量化后权重的文件夹
 ```
 
 ### KV Cache 量化
