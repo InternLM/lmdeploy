@@ -2,10 +2,13 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm_s_f16/gemm_s4_f16.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
+#include <type_traits>
 
 namespace turbomind {
 
@@ -50,12 +53,30 @@ private:
 
     void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight)
     {
-        FT_CHECK_WITH_INFO(0, "Not implemented");
+        if constexpr (std::is_same_v<T, half>) {
+            // g_dump_kernel_info_once = true;
+            // TM_LOG_INFO("problem size: %d %d %d", weight.output_dims, batch_size, weight.input_dims);
+            gemm_s4_f16_.Run(output_data,
+                             (const uint*)weight.kernel,
+                             input_data,
+                             (const half2*)weight.scales_and_zeros,
+                             weight.output_dims,
+                             batch_size,
+                             weight.input_dims,
+                             weight.group_size,
+                             -1,
+                             stream_);
+            sync_check_cuda_error();
+        }
+        else {
+            FT_CHECK_WITH_INFO(0, "Not implemented");
+        }
     }
 
 private:
     cublasMMWrapper* cublas_wrapper_;
     cudaStream_t     stream_{};
+    GemmS4F16        gemm_s4_f16_;
 };
 
 }  // namespace turbomind

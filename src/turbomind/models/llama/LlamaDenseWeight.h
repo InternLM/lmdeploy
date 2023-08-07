@@ -25,8 +25,7 @@
 
 namespace turbomind {
 
-enum class WeightType : int
-{
+enum class WeightType : int {
     kFP32,
     kFP16,
     kFP8,  // not supported yet
@@ -48,18 +47,18 @@ inline size_t getBitSize(WeightType type)
         case WeightType::kINT4:
             return 4;
     }
+    return 0;
 }
 
 template<typename T>
 struct LlamaDenseWeight {
-
     size_t     input_dims;
     size_t     output_dims;
     void*      kernel;
     WeightType type;
     T*         bias;
-    T*         scales;
-    T*         zeros;
+    T*         scales_and_zeros;
+    int        group_size;
 };
 
 template<typename T>

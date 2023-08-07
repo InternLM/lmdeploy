@@ -21,6 +21,7 @@ add_library(Llama STATIC
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC -lcudart
+        gemm_s4_f16
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
