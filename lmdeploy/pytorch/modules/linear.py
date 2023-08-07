@@ -55,7 +55,7 @@ class WeightOnlyQLinear(nn.Module):
 
         if not symmetry:
             z_inc = in_features // self.group_size
-            z_oc = out_features
+            z_oc = out_features // (32 // self.w_bit)
             zeros = torch.zeros((z_inc, z_oc), dtype=torch.int32)
             self.register_buffer('qzeros', zeros)
         else:
@@ -77,6 +77,8 @@ class WeightOnlyQLinear(nn.Module):
         Returns:
             WeightOnlyQLinear: A WeightOnlyQLinear object.
         """
+        device = linear.weight.device
+
         w_bit = quantizer.bits
         pack_num = 32 // w_bit
         if awq_layout == 'awq':
@@ -98,7 +100,7 @@ class WeightOnlyQLinear(nn.Module):
         i32_w = quantizer.quant(linear.weight, qparams, real=True)
         i32_w = i32_w.t().contiguous()
 
-        pack_int_w = torch.zeros_like(qlinear.qweight).to(linear.weight.device)
+        pack_int_w = torch.zeros_like(qlinear.qweight).to(device)
 
         for col in range(pack_int_w.shape[1]):
             for i in range(pack_num):
@@ -109,9 +111,11 @@ class WeightOnlyQLinear(nn.Module):
         qlinear.scales = qparams.scales.clone().half()
 
         if qparams.zero_points is not None:
-            zeros = qparams.zero_points.to(torch.int32).to(
-                linear.weight.device)
-            pack_int_zeros = torch.zeros_like(qlinear.qzeros)
+            zeros = qparams.zero_points.to(torch.int32).to(device)
+            zeros = zeros.reshape(out_features,
+                                  in_features // group_size).t().contiguous()
+            pack_int_zeros = torch.zeros_like(qlinear.qzeros).to(device)
+
             for col in range(pack_int_zeros.shape[1]):
                 for i in range(pack_num):
                     qzero_col = zeros[:, col * pack_num + pack_order[i]]
