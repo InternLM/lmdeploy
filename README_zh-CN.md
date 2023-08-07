@@ -151,6 +151,30 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 ## 量化部署
 
+### Weight Only 量化
+
+```
+#   HF_model        DECODER_LAYER          LAYER_NORM
+#   internlm     InternLMDecoderLayer   InternLMRMSNorm
+#   llama 1&2     LlamaDecoderLayer      LlamaRMSNorm
+#    qwen             QWenBlock             RMSNorm
+#   baichuan        DecoderLayer            RMSNorm
+python3 -m lmdeploy.lite.apis.calibrate \
+  --model $HF_MODEL \
+  --layer_type $DECODER_LAYER \  # Decoder Layer 对应的类名
+  --norm_type $LAYER_NORM \  #  Layer Norm 对应的类名
+  --smooth True \    # 使用 AWQ 算法调整模型权重
+  --w_bits 4 \
+  --w_sym True \
+  --w_granularity 'per_group' \
+  --w_group_size 128 \
+  --calib_dataset 'c4' \
+  --calib_samples 128 \
+  --calib_seqlen 2048 \
+```
+
+### KV Cache 量化
+
 在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
 首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 `workspace/triton_models/weights` 目录下。
 
