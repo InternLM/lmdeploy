@@ -32,13 +32,17 @@ def valid_str(string, coding='utf-8'):
 def main(model_path,
          session_id: int = 1,
          repetition_penalty: float = 1.0,
-         tp=1):
+         tp=1,
+         stream_output=True):
     """An example to perform model inference through the command line
     interface.
 
     Args:
         model_path (str): the path of the deployed model
         session_id (int): the identical id of a session
+        repetition_penalty (float): parameter to penalize repetition
+        tp (int): GPU number used in tensor parallelism
+        stream_output (bool): indicator for streaming output or not
     """
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
@@ -62,7 +66,8 @@ def main(model_path,
                                                   input_ids=[input_ids],
                                                   request_output_len=512,
                                                   sequence_start=False,
-                                                  sequence_end=True):
+                                                  sequence_end=True,
+                                                  stream_output=stream_output):
                 pass
             nth_round = 1
             step = 0
@@ -80,7 +85,7 @@ def main(model_path,
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
-                    stream_output=True,
+                    stream_output=stream_output,
                     request_output_len=512,
                     sequence_start=(nth_round == 1),
                     sequence_end=False,
