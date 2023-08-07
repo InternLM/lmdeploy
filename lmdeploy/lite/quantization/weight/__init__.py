@@ -1,3 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .quantizer import WeightQuantizer
 from .observer import WeightObserver
+from .quantizer import WeightQuantizer
+
+__all__ = ['WeightObserver', 'WeightQuantizer']
