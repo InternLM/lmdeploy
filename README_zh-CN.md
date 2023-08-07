@@ -171,6 +171,7 @@ python3 -m lmdeploy.lite.apis.calibrate \
   --calib_dataset 'c4' \
   --calib_samples 128 \
   --calib_seqlen 2048 \
+  --work_dir ./work_dir \   # 保存量化统计参数和量化后权重的文件夹
 ```
 
 ### KV Cache 量化
