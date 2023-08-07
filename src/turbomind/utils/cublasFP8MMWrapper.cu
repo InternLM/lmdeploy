@@ -16,6 +16,7 @@
 
 #include "cublasFP8MMWrapper.h"
 #include "cuda_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 namespace turbomind {
 

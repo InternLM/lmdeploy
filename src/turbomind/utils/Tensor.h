@@ -20,6 +20,7 @@
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/string_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 #include "stdlib.h"
 #include <cuda_fp16.h>
@@ -35,8 +36,7 @@
 
 namespace turbomind {
 
-typedef enum datatype_enum
-{
+typedef enum datatype_enum {
     TYPE_INVALID,
     TYPE_BOOL,
     TYPE_UINT8,
@@ -99,8 +99,7 @@ DataType getTensorType()
     }
 }
 
-typedef enum memorytype_enum
-{
+typedef enum memorytype_enum {
     MEMORY_CPU,
     MEMORY_CPU_PINNED,
     MEMORY_GPU

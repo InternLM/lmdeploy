@@ -20,6 +20,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 #include <algorithm>
 

@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/utils/nccl_utils.h"
+#include "src/turbomind/windows/marco.h"
 #include <atomic>
 
 namespace turbomind {

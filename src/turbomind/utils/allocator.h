@@ -20,6 +20,7 @@
 #pragma once
 
 #include "cuda_utils.h"
+#include "src/turbomind/windows/marco.h"
 #include <cuda_runtime.h>
 #include <unordered_map>
 #include <vector>
@@ -49,15 +50,13 @@
 
 namespace turbomind {
 
-enum class AllocatorType
-{
+enum class AllocatorType {
     CUDA,
     TF,
     TH
 };
 
-enum class ReallocType
-{
+enum class ReallocType {
     INCREASE,
     REUSE,
     DECREASE,

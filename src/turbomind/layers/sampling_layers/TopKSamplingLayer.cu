@@ -22,6 +22,7 @@
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 namespace turbomind {
 
@@ -257,7 +258,7 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         curandstate_buf_ + ite * local_batch_size,
         (int)runtime_max_top_k_,  // useless because runtime_top_k_buf_ is never nullptr. Keep for legacy.
         (int*)(runtime_top_k_buf_ + ite * local_batch_size),
-        1.0f,  // useless because runtime_top_p_buf_ is never nullptr. Keep for legacy.
+        1.0f,                     // useless because runtime_top_p_buf_ is never nullptr. Keep for legacy.
         runtime_top_p_buf_ + ite * local_batch_size,
         vocab_size_padded_,
         input_tensors->at("end_id").getPtr<int>(),

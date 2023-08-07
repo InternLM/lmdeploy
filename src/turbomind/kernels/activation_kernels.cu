@@ -18,6 +18,7 @@
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/windows/marco.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
