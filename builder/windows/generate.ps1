@@ -5,6 +5,3 @@ cmake .. -A x64 -T v142,cuda="$env:CUDA_PATH" `
     -DBUILD_MULTI_GPU=OFF `
     -DCMAKE_CUDA_FLAGS="-lineinfo" `
     -DUSE_NVTX=ON
-
-
-

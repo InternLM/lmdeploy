@@ -16,6 +16,7 @@ repos:
     rev: v4.2.0
     hooks:
       - id: trailing-whitespace
+        exclude: "src/turbomind/windows/patch.diff"
       - id: check-yaml
       - id: end-of-file-fixer
       - id: requirements-txt-fixer
@@ -39,6 +40,7 @@ repos:
     hooks:
       - id: codespell
         args: ["--skip=third_party/*,*.ipynb,*.proto"]
+        exclude: "src/turbomind/windows/dirent.h"
 
   - repo: https://github.com/myint/docformatter
     rev: v1.4
