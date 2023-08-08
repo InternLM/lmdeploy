@@ -208,7 +208,7 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
 
 static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
                                       cublasLtMatmulDesc_t        operationDesc,
-                                      const void*                 alpha,     /* host or device pointer */
+                                      const void*                 alpha, /* host or device pointer */
                                       const void*                 A,
                                       cublasLtMatrixLayout_t      Adesc,
                                       const void*                 B,
@@ -530,7 +530,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                                     }  // end if
                                 }      // end for
                             }
-                            else {     // Non-splitK case
+                            else {  // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
                                     status                        = customMatmulRun(ltHandle,
@@ -561,11 +561,11 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                     }      // end k
                 }          // end customOption
 #if (CUDART_VERSION >= 11000)
-            }              // end stagesIdx
+            }  // end stagesIdx
 #endif
-        }                  // end tileIdx
+        }  // end tileIdx
         delete[] tileA;
-    }                      // end idx
+    }  // end idx
     // Sort the results per run duration
     std::sort(perfResults, perfResults + AlgoCount, time_compare);
     // Print timing and perf details
@@ -880,7 +880,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                                     }  // end if
                                 }      // end for
                             }
-                            else {     // Non-splitK case
+                            else {  // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
                                     status                        = customMatmulRun(ltHandle,
@@ -911,11 +911,11 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                     }      // end k
                 }          // end customOption
 #if (CUDART_VERSION >= 11000)
-            }              // end stagesIdx
+            }  // end stagesIdx
 #endif
-        }                  // end tileIdx
+        }  // end tileIdx
         delete[] tileA;
-    }                      // end idx
+    }  // end idx
     // Sort the results per run duration
     std::sort(perfResults, perfResults + AlgoCount, time_compare);
     // Print timing and perf details

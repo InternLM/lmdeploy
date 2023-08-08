@@ -56,14 +56,14 @@ public:
         ElementsPerAccess>;                                               // ElementsPerAccess
 
     using GmemTileIterator =
-        cutlass::transform::threadblock::PredicatedTileIterator<ThreadblockTileShape,                    // Shape
-                                                                scalar_t,                                // Element
-                                                                cutlass::layout::RowMajor,               // Layout
-                                                                0,                                       // AdvanceRank
-                                                                ThreadMap>;                              // ThreadMap
+        cutlass::transform::threadblock::PredicatedTileIterator<ThreadblockTileShape,       // Shape
+                                                                scalar_t,                   // Element
+                                                                cutlass::layout::RowMajor,  // Layout
+                                                                0,                          // AdvanceRank
+                                                                ThreadMap>;                 // ThreadMap
 
-    using SmemTileIterator = cutlass::transform::threadblock::RegularTileIterator<ThreadblockTileShape,  // Shape
-                                                                                  scalar_t,              // Element
+    using SmemTileIterator = cutlass::transform::threadblock::RegularTileIterator<ThreadblockTileShape,       // Shape
+                                                                                  scalar_t,                   // Element
                                                                                   cutlass::layout::RowMajor,  // Layout
                                                                                   0,           // AdvanceRank
                                                                                   ThreadMap>;  // ThreadMap

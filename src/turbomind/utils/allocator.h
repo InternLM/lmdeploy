@@ -50,13 +50,15 @@
 
 namespace turbomind {
 
-enum class AllocatorType {
+enum class AllocatorType
+{
     CUDA,
     TF,
     TH
 };
 
-enum class ReallocType {
+enum class ReallocType
+{
     INCREASE,
     REUSE,
     DECREASE,

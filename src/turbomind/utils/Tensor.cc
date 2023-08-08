@@ -42,7 +42,11 @@ namespace turbomind {
 
 Tensor::Tensor():
     // a none tensor.
-    where(MEMORY_CPU), type(TYPE_INVALID), shape({}), data(nullptr), offsets({})  // only a record to record offset
+    where(MEMORY_CPU),
+    type(TYPE_INVALID),
+    shape({}),
+    data(nullptr),
+    offsets({})  // only a record to record offset
 {
 }
 
@@ -62,9 +66,9 @@ Tensor::Tensor(const MemoryType          _where,
 
 void Tensor::parseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data)
 {
-    const char magic[]                   = "\x93"
-                                           "NUMPY";
-    char       magic_test[sizeof(magic)] = "\0";
+    const char magic[] = "\x93"
+                         "NUMPY";
+    char magic_test[sizeof(magic)] = "\0";
 
     size_t n_elems = fread((void*)magic_test, sizeof(char), sizeof(magic) - 1, f_ptr);
     if (n_elems != sizeof(magic) - 1 || std::string(magic) != std::string(magic_test)) {
@@ -295,8 +299,8 @@ void Tensor::saveNpy(const std::string& filename) const
         cudaMemcpy(cpu_data, data, tensor_size * Tensor::getTypeSize(type), cudaMemcpyDeviceToHost);
     }
 
-    const char    magic[]   = "\x93"
-                              "NUMPY";
+    const char magic[] = "\x93"
+                         "NUMPY";
     const uint8_t npy_major = 1;
     const uint8_t npy_minor = 0;
 

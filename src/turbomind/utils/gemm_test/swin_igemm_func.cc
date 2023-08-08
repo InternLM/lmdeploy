@@ -65,7 +65,7 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
 
 static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
                                       cublasLtMatmulDesc_t        operationDesc,
-                                      const void*                 alpha,     /* host or device pointer */
+                                      const void*                 alpha, /* host or device pointer */
                                       const void*                 A,
                                       cublasLtMatrixLayout_t      Adesc,
                                       const void*                 B,

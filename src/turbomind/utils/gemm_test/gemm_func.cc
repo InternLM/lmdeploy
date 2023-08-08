@@ -156,7 +156,7 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
 
 static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
                                       cublasLtMatmulDesc_t        operationDesc,
-                                      const void*                 alpha,     /* host or device pointer */
+                                      const void*                 alpha, /* host or device pointer */
                                       const void*                 A,
                                       cublasLtMatrixLayout_t      Adesc,
                                       const void*                 B,
@@ -541,7 +541,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                     }  // end if
                                 }      // end for
                             }
-                            else {     // Non-splitK case
+                            else {  // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
                                     cublasLtMatmulHeuristicResult_t heurResult;
@@ -568,11 +568,11 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                     }      // end k
                 }          // end customOption
 #if (CUDART_VERSION >= 11000)
-            }              // end stagesIdx
+            }  // end stagesIdx
 #endif
-        }                  // end tileIdx
+        }  // end tileIdx
         delete[] tileA;
-    }                      // end idx
+    }  // end idx
 
     printf("AlgoCount: %d\n", AlgoCount);
     if (data_type == FP8_DATATYPE) {

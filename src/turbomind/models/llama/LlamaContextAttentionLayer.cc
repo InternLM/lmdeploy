@@ -169,8 +169,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    padding_offset,  // padding_offset,
                                    history_length,  // used for applying rotary embedding
                                    batch_size,
-                                   max_q_len,       // seq_len
-                                   num_token,       // batch_size * seq_len
+                                   max_q_len,  // seq_len
+                                   num_token,  // batch_size * seq_len
                                    local_head_num_,
                                    local_kv_head_num_,
                                    size_per_head_,

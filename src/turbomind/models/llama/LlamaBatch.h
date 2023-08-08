@@ -80,13 +80,13 @@ private:
     T*   context_decoder_output_buf_{};  // CTXDEC
     int* context_decoder_ids_buf_{};
 
-    T* decoder_input_buf_{};      // CTXDEC, GENERATE
-    T* decoder_output_buf_{};     // CTXDEC, GENERATE
+    T* decoder_input_buf_{};   // CTXDEC, GENERATE
+    T* decoder_output_buf_{};  // CTXDEC, GENERATE
 
-    int* input_ids_buf_{};        // input token ids + cache missed token ids, CTXDEC
-    int* input_length_buf_{};     // input + cache missed length, CTXDEC, GENERATE
-    int* history_length_buf_{};   // history length, CTXDEC
-    int* context_length_buf_{};   // history length + input_length, CTXDEC, GENERATE
+    int* input_ids_buf_{};       // input token ids + cache missed token ids, CTXDEC
+    int* input_length_buf_{};    // input + cache missed length, CTXDEC, GENERATE
+    int* history_length_buf_{};  // history length, CTXDEC
+    int* context_length_buf_{};  // history length + input_length, CTXDEC, GENERATE
 
     int* total_padding_count_{};  // GENERATE
     int* sequence_lengths_{};     // current sequence length

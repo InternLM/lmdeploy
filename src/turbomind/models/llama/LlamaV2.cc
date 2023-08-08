@@ -181,7 +181,7 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
     // ! This kernel can't be used in context decoding
     invokeEmbeddingLookupPosEncodingPadCount(embeddings,
                                              weights_->pre_decoder_embedding_table,
-                                             static_cast<T*>(nullptr),    // position encoding
+                                             static_cast<T*>(nullptr),  // position encoding
                                              token_ids_buf,
                                              static_cast<int*>(nullptr),  // padding count, not used w/o pos-code
                                              batch_size,
@@ -312,7 +312,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
     if (tensor_para_.world_size_ == 1) {
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
-                              vocab_size_,    // n
+                              vocab_size_,  // n
                               batch_size,
                               hidden_units_,  // k
                               &alpha,
@@ -336,7 +336,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               CUBLAS_OP_N,
                               local_vocab_size,  // n
                               batch_size,
-                              hidden_units_,     // k
+                              hidden_units_,  // k
                               &alpha,
                               weights_->post_decoder_embedding_kernel
                                   + tensor_para_.rank_ * local_vocab_size * hidden_units_,
