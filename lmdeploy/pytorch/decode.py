@@ -132,6 +132,10 @@ def worker_fn(model_path: str,
 
         outq.put((idx, probs))
 
+    inq.close()
+    outq.close()
+    print(f'Worker {gpu_id} finished.')
+
 
 class Engine:
     """Multi-GPU deciding engine.
@@ -299,10 +303,8 @@ class Engine:
         return all_probs
 
     def __del__(self):
-        print('Exit engines ...')
+        print('Exiting engine ...')
         for _ in self.ps:
             self.inq.put((None, None))
         for p in self.ps:
             p.join(timeout=1)
-        for p in self.ps:
-            p.close()
