@@ -62,3 +62,5 @@ work_dir*/
 *.pth
 *.py~
 *.sh~
+*.pyc
+**/src/pytorch-sphinx-theme/
