@@ -12,22 +12,30 @@ namespace turbomind {
 __inline__ __device__ void
 mma_m16n8k16_row_col(Array<float, 4>& d, const Array<half, 8>& a, const Array<half, 4>& b, Array<float, 4>& c)
 {
+#if TURBOMIND_ARCH_SM80
     uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
     uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
     float const*    C = reinterpret_cast<float const*>(&c);
     float*          D = reinterpret_cast<float*>(&d);
-
     asm("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32  {%0,%1,%2,%3}, "
         "{%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
         : "=f"(D[0]), "=f"(D[1]), "=f"(D[2]), "=f"(D[3])
         : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[0]), "r"(B[1]), "f"(C[0]), "f"(C[1]), "f"(C[2]), "f"(C[3]));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
 }
 
 __inline__ __device__ uint transpose_m8n8_b16(uint a)
 {
+#if TURBOMIND_ARCH_SM75
     uint d;
     asm("movmatrix.sync.aligned.m8n8.trans.b16 %0, %1;\n" : "=r"(d) : "r"(a));
     return d;
+#else
+    assert(TURBOMIND_ARCH_SM75);
+    return 0;
+#endif
 }
 
 namespace ops {

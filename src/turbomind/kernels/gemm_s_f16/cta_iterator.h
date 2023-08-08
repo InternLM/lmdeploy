@@ -10,9 +10,9 @@ namespace turbomind {
 template<typename T>
 __inline__ __device__ void cp_async_cg_A(uint32_t smem_int_ptr, const T* __restrict__ src, bool mask)
 {
+#if TURBOMIND_ARCH_SM80
     constexpr int cp_size = sizeof(T);
     static_assert(cp_size == 16, "cp.async.cg requreis cp_size == 16");
-
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
@@ -21,14 +21,17 @@ __inline__ __device__ void cp_async_cg_A(uint32_t smem_int_ptr, const T* __restr
                  "r"(smem_int_ptr),
                  "l"(src),
                  "n"(cp_size));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
 }
 
 template<typename T>
 __inline__ __device__ void cp_async_cg_B(uint32_t smem_int_ptr, const T* __restrict__ src, bool mask)
 {
+#if TURBOMIND_ARCH_SM80
     constexpr int cp_size = sizeof(T);
     static_assert(cp_size == 16, "cp.async.cg requreis cp_size == 16");
-
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
@@ -37,13 +40,16 @@ __inline__ __device__ void cp_async_cg_B(uint32_t smem_int_ptr, const T* __restr
                  "r"(smem_int_ptr),
                  "l"(src),
                  "n"(cp_size));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
 }
 
 template<typename T>
 __inline__ __device__ void cp_async_ca(uint32_t smem_int_ptr, const T* __restrict__ src, bool mask)
 {
+#if TURBOMIND_ARCH_SM80
     constexpr int cp_size = sizeof(T);
-
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
@@ -52,6 +58,9 @@ __inline__ __device__ void cp_async_ca(uint32_t smem_int_ptr, const T* __restric
                  "r"(smem_int_ptr),
                  "l"(src),
                  "n"(cp_size));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
 }
 
 template<int WARPS, int CTA_M, int CTA_N, int CTA_K, int STAGES, int SLICES>

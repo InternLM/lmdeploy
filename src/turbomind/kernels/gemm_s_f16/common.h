@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <cuda_fp16.h>
 #include <type_traits>
@@ -10,6 +11,18 @@ namespace turbomind {
 
 #ifndef TURBOMIND_S4_DEQUANT_USE_FMA
 #define TURBOMIND_S4_DEQUANT_USE_FMA 0
+#endif
+
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 750))
+#define TURBOMIND_ARCH_SM75 1
+#else
+#define TURBOMIND_ARCH_SM75 0
+#endif
+
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
+#define TURBOMIND_ARCH_SM80 1
+#else
+#define TURBOMIND_ARCH_SM80 0
 #endif
 
 constexpr int WARP_SIZE = 32;
@@ -154,14 +167,22 @@ __inline__ __device__ uint32_t cast_smem_ptr_to_uint(void const* const ptr)
 
 __inline__ __device__ void ldmatrix_m8n8_x4_b16(uint& d0, uint& d1, uint& d2, uint& d3, uint32_t smem_int_ptr)
 {
+#if TURBOMIND_ARCH_SM75
     asm("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
         : "=r"(d0), "=r"(d1), "=r"(d2), "=r"(d3)
         : "r"(smem_int_ptr));
+#else
+    assert(TURBOMIND_ARCH_SM75);
+#endif
 }
 
 __inline__ __device__ void ldmatrix_m8n8_x2_b16(uint& d0, uint& d1, uint32_t smem_int_ptr)
 {
+#if TURBOMIND_ARCH_SM75
     asm("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(d0), "=r"(d1) : "r"(smem_int_ptr));
+#else
+    assert(TURBOMIND_ARCH_SM75);
+#endif
 }
 
 __inline__ __device__ void wait_flag(int* lock, int status, int thread_id)
