@@ -336,35 +336,26 @@ int main(int argc, const char* argv[])
     // compute actual
     using AttentionOp = FlashAttentionOp<scalar_t>;
     using Layout      = typename AttentionOp::AttentionLayout;
-    Layout      layout_q{.stride_batch = num_heads * seq_len * size_per_head,
-                         .stride_seq   = size_per_head,
-                         .stride_head  = seq_len * size_per_head};
-    Layout      layout_k{.stride_batch = num_heads * key_len * size_per_head,
-                         .stride_seq   = size_per_head,
-                         .stride_head  = key_len * size_per_head};
-    Layout      layout_v{.stride_batch = num_heads * key_len * size_per_head,
-                         .stride_seq   = size_per_head,
-                         .stride_head  = key_len * size_per_head};
-    Layout      layout_o{.stride_batch = num_heads * seq_len * size_per_head,
-                         .stride_seq   = num_heads * size_per_head,
-                         .stride_head  = size_per_head,
-                         .use_seqlens  = true};
+    Layout      layout_q{num_heads * seq_len * size_per_head, size_per_head, seq_len * size_per_head};
+    Layout      layout_k{num_heads * key_len * size_per_head, size_per_head, key_len * size_per_head};
+    Layout      layout_v{num_heads * key_len * size_per_head, size_per_head, key_len * size_per_head};
+    Layout      layout_o{num_heads * seq_len * size_per_head, num_heads * size_per_head, size_per_head, true};
     AttentionOp flash_attention(batch_size, num_heads, key_len, seq_len, size_per_head);
     float*      accum_buf_ptr = (float*)allocator.malloc(flash_attention.get_workspace_size(), true);
 
-    typename AttentionOp::Params attn_params{.attn_out     = actual_out_ptr,
-                                             .query        = query_ptr,
-                                             .key          = key_ptr,
-                                             .val          = val_ptr,
-                                             .mask         = mask_ptr,
-                                             .out_accum    = accum_buf_ptr,
-                                             .cu_seqlens_q = cu_seqlens_ptr,
-                                             .cu_seqlens_k = nullptr,
-                                             .group_size   = 1,
-                                             .layout_q     = layout_q,
-                                             .layout_k     = layout_k,
-                                             .layout_v     = layout_v,
-                                             .layout_o     = layout_o};
+    typename AttentionOp::Params attn_params{actual_out_ptr,
+                                             query_ptr,
+                                             key_ptr,
+                                             val_ptr,
+                                             mask_ptr,
+                                             accum_buf_ptr,
+                                             cu_seqlens_ptr,
+                                             nullptr,
+                                             1,
+                                             layout_q,
+                                             layout_k,
+                                             layout_v,
+                                             layout_o};
     flash_attention(attn_params, stream);
     sync_check_cuda_error();
 

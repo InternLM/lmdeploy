@@ -168,6 +168,7 @@ if(BUILD_PYT)
   set(TORCH_CUDA_ARCH_LIST $ENV{TORCH_CUDA_ARCH_LIST})
 endif()
 
+set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 set(CMAKE_C_FLAGS_DEBUG    "${CMAKE_C_FLAGS_DEBUG}    -Wall -O0")
 set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0")
 # set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall  --ptxas-options=-v --resource-usage")
@@ -288,6 +289,15 @@ if(BUILD_TEST)
     add_subdirectory(tests/csrc)
 endif()
 
+# install python api
+if (BUILD_PY_FFI)
+  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+endif ()
+
+if (MSVC)
+  return()
+endif ()
+
 # # Mesaure the compile time
 option(MEASURE_BUILD_TIME "Measure the build time of each module" OFF)
 if (MEASURE_BUILD_TIME)
@@ -386,13 +396,6 @@ install(
   DESTINATION
     ${INSTALL_CONFIGDIR}
 )
-
-# install python api
-if (BUILD_PY_FFI)
-  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-endif ()
-install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-
 
 export(
   EXPORT

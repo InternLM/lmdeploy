@@ -52,11 +52,13 @@ static const unsigned __int64 epoch = 116444736000000000Ui64;
  * elapsed_time().
  */
 
-int gettimeofday(struct timeval* tp, struct timezone* tzp)
+int gettimeofday(void* _tp, void* _tzp)
 {
-    FILETIME       file_time;
-    SYSTEMTIME     system_time;
-    ULARGE_INTEGER ularge;
+    struct timeval*  tp  = (timeval*)_tp;
+    struct timezone* tzp = (timezone*)_tzp;
+    FILETIME         file_time;
+    SYSTEMTIME       system_time;
+    ULARGE_INTEGER   ularge;
 
     GetSystemTime(&system_time);
     SystemTimeToFileTime(&system_time, &file_time);
@@ -69,6 +71,6 @@ int gettimeofday(struct timeval* tp, struct timezone* tzp)
     return 0;
 }
 
-#endif /* _MSC_VER */
-
 }  // namespace turbomind
+
+#endif /* _MSC_VER */

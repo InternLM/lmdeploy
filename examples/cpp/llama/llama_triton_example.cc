@@ -31,6 +31,10 @@
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/word_list.h"
 #include "src/turbomind/windows/marco.h"
+#ifdef _MSC_VER
+#include "src/turbomind/windows/gettimeofday.h"
+using turbomind::gettimeofday;
+#endif
 
 namespace ft = turbomind;
 

@@ -28,6 +28,20 @@ cmake_minimum_required (VERSION 3.18)
 
 project(tritonturbomindbackend LANGUAGES C CXX)
 
+add_library(TransformerTritonBackend STATIC transformer_triton_backend.cpp)
+target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils)
+set_target_properties(TransformerTritonBackend PROPERTIES
+  INSTALL_RPATH "../../nvidia/nccl/lib/"
+)
+install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+add_subdirectory(llama)
+
+# Needn't build triton backend on windows
+if (MSVC)
+  return ()
+endif()
+
 #
 # Options
 #
@@ -281,12 +295,3 @@ export(PACKAGE TritonTurboMindBackend)
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-add_library(TransformerTritonBackend SHARED transformer_triton_backend.cpp)
-target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils)
-set_target_properties(TransformerTritonBackend PROPERTIES
-  INSTALL_RPATH "../../nvidia/nccl/lib/"
-)
-install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_INSTALL_LIBDIR})
-
-add_subdirectory(llama)

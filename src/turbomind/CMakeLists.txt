@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(windows)
 add_subdirectory(utils)
 add_subdirectory(kernels)
 add_subdirectory(layers)
