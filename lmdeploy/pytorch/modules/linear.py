@@ -9,13 +9,13 @@ class WeightOnlyQLinear(nn.Module):
     """This class implements weight only quantization linear.
 
     Args:
-            w_bit (int): number of bits for quantization.
-            symmetry (bool): If true, use symmetric quantization,
-                otherwise use asymmetric quantization.
-            group_size (int): size of the quantization group.
-            in_features (int): size of each input sample.
-            out_features (int): size of each output sample.
-            bias (Tensor, optional): Learnable bias. Defaults to None.
+        w_bit (int): number of bits for quantization.
+        symmetry (bool): If true, use symmetric quantization,
+            otherwise use asymmetric quantization.
+        group_size (int): size of the quantization group.
+        in_features (int): size of each input sample.
+        out_features (int): size of each output sample.
+        bias (Tensor, optional): Learnable bias. Defaults to None.
     """
 
     def __init__(self,
@@ -81,7 +81,7 @@ class WeightOnlyQLinear(nn.Module):
 
         w_bit = quantizer.bits
         pack_num = 32 // w_bit
-        if awq_layout == 'awq':
+        if awq_layout:
             assert w_bit == 4
             pack_order = [0, 2, 4, 6, 1, 3, 5, 7]
         else:
@@ -109,12 +109,11 @@ class WeightOnlyQLinear(nn.Module):
                 pack_int_w[:, col] |= pack_int_w_col << (i * w_bit)
 
         qlinear.qweight = pack_int_w
-        qlinear.scales = qparams.scales.clone().half()
+        qlinear.scales = qparams.scales.squeeze(-1).t().contiguous()
 
         if qparams.zero_points is not None:
             zeros = qparams.zero_points.to(torch.int32).to(device)
-            zeros = zeros.reshape(out_features,
-                                  in_features // group_size).t().contiguous()
+            zeros = zeros.squeeze(-1).t().contiguous()
             pack_int_zeros = torch.zeros_like(qlinear.qzeros).to(device)
 
             for col in range(pack_int_zeros.shape[1]):

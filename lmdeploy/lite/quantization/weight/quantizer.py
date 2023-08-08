@@ -151,6 +151,6 @@ class WeightQuantizer(GlobalAvailMixin):
             fake_qweight = fake_qweight.reshape(out_c, in_c)
 
         if real:
-            return real_qweight.to(torch.uint8)
+            return real_qweight.to(torch.int32)
         else:
             return fake_qweight
