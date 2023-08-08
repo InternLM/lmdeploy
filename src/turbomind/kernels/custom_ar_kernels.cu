@@ -307,7 +307,7 @@ void kernelLaunchConfig(
     size_t elts_per_thread = 16 / data_type_bytes;
     size_t elts_per_warp   = (16 * WARP_SIZE) / data_type_bytes;
     switch (kernel_algo) {
-        case 0: {                                                 // one stage all reduce algo
+        case 0: {  // one stage all reduce algo
             assert(elts % elts_per_warp == 0);
             if (elts < (elts_per_thread * DEFAULT_BLOCK_SIZE)) {  // local reduce
                 threads_per_block = ((elts + elts_per_warp - 1) / elts_per_warp) * WARP_SIZE;

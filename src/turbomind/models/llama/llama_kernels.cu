@@ -230,9 +230,9 @@ __global__ void extend_key_cache(T**          k_dst,
     if (k_seq_len_id < seq_len) {
         // [B, H, s, D/x] -> [H, D/x, S[t:t+s]]
 
-        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +            // H
-                                k_head_size_id * max_seq_len +                           // D/x
-                                t_offset + k_seq_len_id;                                 // s + offset
+        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +  // H
+                                k_head_size_id * max_seq_len +                 // D/x
+                                t_offset + k_seq_len_id;                       // s + offset
 
         const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
                                 head_id * size_per_head_div_x * max_q_len +              // H
@@ -273,9 +273,9 @@ __global__ void extend_value_cache(T**          v_dst,
 
     if (v_seq_len_id < seq_len) {
         // [B, H, s, D/x] -> [H, S[t:t+s], D/x]
-        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +            // H
-                                (v_seq_len_id + t_offset) * size_per_head_div_x +        // s + offset
-                                v_head_size_id;                                          // D/x
+        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +      // H
+                                (v_seq_len_id + t_offset) * size_per_head_div_x +  // s + offset
+                                v_head_size_id;                                    // D/x
 
         const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
                                 head_id * size_per_head_div_x * max_q_len +              // H
@@ -370,9 +370,9 @@ __global__ void extend_value_cache_int8(int8_t**     v_dst,
 
     if (v_seq_len_id < seq_len) {
         // [B, H, s, D/x] -> [H, S[t:t+s], D/x]
-        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +            // H
-                                (v_seq_len_id + t_offset) * size_per_head_div_x +        // s + offset
-                                v_head_size_id;                                          // D/x
+        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +      // H
+                                (v_seq_len_id + t_offset) * size_per_head_div_x +  // s + offset
+                                v_head_size_id;                                    // D/x
 
         const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
                                 head_id * size_per_head_div_x * max_q_len +              // H
@@ -528,10 +528,10 @@ __global__ void transpose_value_cache(T*           v_dst,  //
                                 v_seq_len_id * size_per_head_div_x +                        // s
                                 v_head_size_id;                                             // D/x
 
-        const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +    // B
-                                head_id * size_per_head_div_x * max_kv_len +                // H
-                                v_seq_len_id * size_per_head_div_x +                        // s
-                                v_head_size_id;                                             // D/x
+        const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +  // B
+                                head_id * size_per_head_div_x * max_kv_len +              // H
+                                v_seq_len_id * size_per_head_div_x +                      // s
+                                v_head_size_id;                                           // D/x
 
         val_dst[dst_idx] = val_src[src_idx];
     }
@@ -572,10 +572,10 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
                                 v_seq_len_id * size_per_head_div_x +                        // s
                                 v_head_size_id;                                             // D/x
 
-        const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +    // B
-                                head_id * size_per_head_div_x * max_kv_len +                // H
-                                v_seq_len_id * size_per_head_div_x +                        // s
-                                v_head_size_id;                                             // D/x
+        const int64_t dst_idx = batch_id * head_num * size_per_head_div_x * max_kv_len +  // B
+                                head_id * size_per_head_div_x * max_kv_len +              // H
+                                v_seq_len_id * size_per_head_div_x +                      // s
+                                v_head_size_id;                                           // D/x
 
         // int8x8 -> fp16x8
         const auto from_ptr = reinterpret_cast<const char4*>(val_src + src_idx);

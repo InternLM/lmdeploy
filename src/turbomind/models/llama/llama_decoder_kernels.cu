@@ -12,7 +12,8 @@ namespace cg = cooperative_groups;
 namespace turbomind {
 
 template<typename T>
-struct res_norm_ops_t {};
+struct res_norm_ops_t {
+};
 
 template<typename T>
 struct res_norm_t {

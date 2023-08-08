@@ -592,8 +592,8 @@ struct LlamaAttentionKernel:
             using DefaultOp         = typename MM1::DefaultConfig::EpilogueOutputOp;
             using ElementCompute    = typename DefaultOp::ElementCompute;
             using EpilogueOutputOp  = typename cutlass::epilogue::thread::MemoryEfficientAttentionNormalize<
-                output_t,                                // output
-                output_accum_t,                          // source
+                output_t,        // output
+                output_accum_t,  // source
                 DefaultOp::kCount,
                 typename DefaultOp::ElementAccumulator,  // accum
                 output_accum_t,                          // compute
