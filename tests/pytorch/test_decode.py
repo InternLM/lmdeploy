@@ -57,4 +57,4 @@ def test_compare():
     print(p_single[1])
     print(p_dist[1])
 
-    # assert torch.allclose(p_single, p_dist, rtol=1e-3, atol=1e-3)
+    assert torch.allclose(p_single, p_dist, rtol=1e-3, atol=1e-3)
