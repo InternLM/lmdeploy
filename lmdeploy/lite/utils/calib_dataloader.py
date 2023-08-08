@@ -282,12 +282,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     ], None
 
 
-def get_calib_loaders(name,
-                      tokenizer,
-                      nsamples=128,
-                      seed=0,
-                      seqlen=2048,
-                      model=''):
+def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
     """Get calibration data loaders for a dataset.
 
     Args:

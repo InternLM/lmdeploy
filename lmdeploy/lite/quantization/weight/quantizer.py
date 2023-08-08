@@ -113,7 +113,7 @@ class WeightQuantizer(GlobalAvailMixin):
                 (out_features, in_features).
             qparams (Optional[QParams]): A namedtuple containing 'scales'
                 and 'zero_points'.
-            inplace (bool): If True, perform the operation in-place.
+            real (bool): If True, return the tensor with quantized type.
 
         Returns:
             torch.Tensor: The fake quantized weight tensor.
