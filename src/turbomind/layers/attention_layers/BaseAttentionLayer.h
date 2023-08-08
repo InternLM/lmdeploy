@@ -30,8 +30,7 @@
 
 namespace turbomind {
 
-enum class AttentionType
-{
+enum class AttentionType {
     UNFUSED_MHA,
     UNFUSED_PADDED_MHA,
     FUSED_MHA,
