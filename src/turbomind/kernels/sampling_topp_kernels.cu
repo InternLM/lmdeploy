@@ -46,8 +46,7 @@ template<typename T, int ELEMENTS_PER_WARP_LOAD>
 using Copy_t = Copy_half_t<sizeof(T) / sizeof(half) * ELEMENTS_PER_WARP_LOAD>;
 
 template<typename T>
-struct Float_as_int_ {
-};
+struct Float_as_int_ {};
 template<>
 struct Float_as_int_<float> {
     using Type = uint32_t;

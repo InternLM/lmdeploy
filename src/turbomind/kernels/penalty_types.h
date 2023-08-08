@@ -23,8 +23,7 @@
 
 namespace turbomind {
 
-enum class RepetitionPenaltyType
-{
+enum class RepetitionPenaltyType {
     Additive,        // the presence penalty
     Multiplicative,  // the repetition penalty
     None             // No repetition penalty.

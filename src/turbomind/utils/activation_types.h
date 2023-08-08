@@ -20,8 +20,7 @@
 
 namespace turbomind {
 
-enum class ActivationType
-{
+enum class ActivationType {
     Gelu,
     Relu,
     Silu,

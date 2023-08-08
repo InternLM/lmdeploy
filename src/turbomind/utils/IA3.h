@@ -18,8 +18,7 @@
 
 namespace turbomind {
 
-enum IA3_config
-{
+enum IA3_config {
     KEY_ADAPTER   = 1 << 0,
     VALUE_ADAPTER = 1 << 1,
     MLP_ADAPTER   = 1 << 2,
