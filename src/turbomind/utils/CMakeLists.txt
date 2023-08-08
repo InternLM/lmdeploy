@@ -48,7 +48,7 @@ set_property(TARGET word_list PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(nvtx_utils STATIC nvtx_utils.cc)
 set_property(TARGET nvtx_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nvtx_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(nvtx_utils PUBLIC CUDA::nvToolsExt)
+target_link_libraries(nvtx_utils PUBLIC CUDA::nvtx3)
 
 add_library(memory_utils STATIC memory_utils.cu)
 set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)

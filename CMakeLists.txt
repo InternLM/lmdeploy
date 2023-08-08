@@ -353,7 +353,7 @@ endif()
 
 if(USE_NVTX)
 target_link_libraries(transformer-shared PUBLIC
-  -lnvToolsExt
+  -lnvtx3
 )
 endif()
 
