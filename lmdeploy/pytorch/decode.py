@@ -70,29 +70,17 @@ def decode_single(model: PreTrainedModel,
         So prob is shorter than input_ids by 1.
     """
 
-    # input_ids = input_ids.cuda()
-    output = model(input_ids=input_ids,
-                   attention_mask=attention_mask,
-                   output_hidden_states=False,
-                   output_attentions=False,
-                   use_cache=False,
-                   return_dict=True)
-    logits = output.logits  # fp32, [bs, seq_len, vocab_size]
+    # Call Causal LM forward
+    outputs = model(input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    output_hidden_states=False,
+                    output_attentions=False,
+                    use_cache=False,
+                    return_dict=True)
+    # fp32, [bs, seq_len, vocab_size]
+    logits = outputs.logits
 
-    # Inplace softmax to save memory
-    torch.softmax(logits, dim=-1, out=logits)
-
-    # outputs = model.model(input_ids=input_ids,
-    #                       attention_mask=attention_mask,
-    #                       output_hidden_states=False,
-    #                       output_attentions=False,
-    #                       use_cache=False,
-    #                       return_dict=True)
-    # hidden_states = outputs[0]
-
-    # logits = model.lm_head(hidden_states)  # fp16, [bs, seq_len, vocab_size]
-
-    # Inplace softmax to save memory
+    # inplace softmax to save memory
     # probs is logits
     torch.softmax(logits, dim=-1, out=logits)
 
