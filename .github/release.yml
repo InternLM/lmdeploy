@@ -24,6 +24,7 @@ changelog:
         labels:
           - feature
           - enhancement
+          - improvement
           - bug
           - documentation
           - Bug:P0
