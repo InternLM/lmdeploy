@@ -604,6 +604,8 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                             qw.size(-1) * 8, qw.size(0), group_size)
         return _qw, _sz
 
+    attn_bias = False
+
     for i in range(num_layer):
         print(i)
 
@@ -622,6 +624,15 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         k_s = get_tensor(f'model.layers.{i}.self_attn.k_proj.scales')
         v_s = get_tensor(f'model.layers.{i}.self_attn.v_proj.scales')
         o_s = get_tensor(f'model.layers.{i}.self_attn.o_proj.scales')
+
+        try:
+            q_b = get_tensor(f'model.layers.{i}.self_attn.q_proj.bias')
+            k_b = get_tensor(f'model.layers.{i}.self_attn.k_proj.bias')
+            v_b = get_tensor(f'model.layers.{i}.self_attn.v_proj.bias')
+            o_b = get_tensor(f'model.layers.{i}.self_attn.o_proj.bias')
+            attn_bias = True
+        except:  # noqa: E722
+            pass
 
         q_qw = transpose_qk(q_qw)
         k_qw = transpose_qk(k_qw)
@@ -643,6 +654,13 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
 
         model_params[f'layers.{i}.attention.wo.qweight'] = o_qw
         model_params[f'layers.{i}.attention.wo.scales_zeros'] = o_sz
+
+        if attn_bias:
+            q_b = permute(q_b)
+            k_b = permute(k_b)
+            qkv_b = merge_qkv(q_b, k_b, v_b, tp, dim=1)
+            model_params[f'layers.{i}.attention.w_qkv.bias'] = qkv_b
+            model_params[f'layers.{i}.attention.wo.bias'] = o_b
 
         # ffn weights
         w1_qw = get_tensor(f'model.layers.{i}.mlp.gate_proj.qweight')
