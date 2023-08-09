@@ -25,7 +25,7 @@
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 
 namespace turbomind {
 

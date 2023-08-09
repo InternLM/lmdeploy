@@ -18,7 +18,7 @@
 #pragma once
 
 #include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 
 namespace turbomind {
 

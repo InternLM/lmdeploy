@@ -16,7 +16,7 @@
 
 #include "cublasMMWrapper.h"
 #include "cuda_utils.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!

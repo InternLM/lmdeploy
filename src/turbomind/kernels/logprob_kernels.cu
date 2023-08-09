@@ -29,7 +29,7 @@
 #include "src/turbomind/kernels/logprob_kernels.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 
 namespace turbomind {
 

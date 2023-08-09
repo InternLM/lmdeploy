@@ -15,7 +15,7 @@
  */
 
 #include "encoder_igemm_func.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 #ifdef _MSC_VER
 #include "src/turbomind/windows/gettimeofday.h"
 #endif

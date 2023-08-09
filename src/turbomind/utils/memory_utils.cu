@@ -18,7 +18,7 @@
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 #include <curand_kernel.h>
 #include <sys/stat.h>
 #include <unordered_map>

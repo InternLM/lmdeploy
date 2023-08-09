@@ -23,7 +23,7 @@
 #include "src/turbomind/triton_backend/triton_utils.hpp"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 #include <algorithm>
 #include <functional>
 #include <numeric>

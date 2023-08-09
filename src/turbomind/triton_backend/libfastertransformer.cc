@@ -60,7 +60,7 @@
 #include "src/turbomind/utils/instance_comm.h"
 #include "src/turbomind/utils/mpi_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include "src/turbomind/windows/marco.h"
+#include "src/turbomind/windows/macro.h"
 
 std::exception_ptr ptr[8];
 
