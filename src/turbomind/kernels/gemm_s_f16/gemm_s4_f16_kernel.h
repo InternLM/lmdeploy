@@ -17,12 +17,20 @@ struct IGemmKernel {
 
     virtual void GetMetric(Metric* metric, int m, int n, int k) = 0;
 
-    virtual void Launch(half* C, const uint* A, const half* B, const half2* Q, int M, int N, int K, cudaStream_t) = 0;
+    virtual void Launch(half*        C,
+                        const uint*  A,
+                        const half*  B,
+                        const half2* Q,
+                        int          M,
+                        int          N,
+                        int          K,
+                        int          output_op_idx,
+                        cudaStream_t) = 0;
 
     virtual void Dump(std::ostream& os) = 0;
 };
 
-template<typename CtaShape, typename WarpShape, int Stages, int GroupSize, typename OutputOp>
+template<typename CtaShape, typename WarpShape, int Stages, int GroupSize, typename OutputOps>
 struct GemmKernel: public IGemmKernel {
 
     static constexpr CtaShape  cta_shape{};
@@ -36,7 +44,7 @@ struct GemmKernel: public IGemmKernel {
                           warp_shape.k(),
                           Stages,
                           GroupSize,
-                          OutputOp>;
+                          OutputOps>;
 
     decltype(&gemm_s4_f16_nn<GemmType>) kernel_func_;
     std::shared_ptr<cudaDeviceProp>     props_;
@@ -105,13 +113,15 @@ struct GemmKernel: public IGemmKernel {
         metric->normalized = metric->cost / metric->active_ctas;
     }
 
-    void Launch(half* C, const uint* A, const half* B, const half2* Q, int M, int N, int K, cudaStream_t st) override
+    void Launch(
+        half* C, const uint* A, const half* B, const half2* Q, int M, int N, int K, int output_op_idx, cudaStream_t st)
+        override
     {
         constexpr int block_size = GemmType::kWarpCount * WARP_SIZE;
 
         dim3 grid_size((M + cta_shape.m() - 1) / cta_shape.m(), (N + cta_shape.n() - 1) / cta_shape.n());
 
-        kernel_func_<<<grid_size, block_size, kSmemByteSize, st>>>(C, A, B, Q, M, N, K);
+        kernel_func_<<<grid_size, block_size, kSmemByteSize, st>>>(C, A, B, Q, M, N, K, output_op_idx);
     }
 
     void Dump(std::ostream& os) override

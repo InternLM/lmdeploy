@@ -10,20 +10,23 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace turbomind {
 
 bool g_dump_kernel_info_once = false;
 
-struct IdentityOp {
+namespace ops {
+
+struct Identity {
     static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
     {
         (uint&)C[n * M + m] = (uint&)data;
     }
 };
 
-struct SiluActivationOp {
+struct SiluActivation {
     static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
     {
         auto  u    = __half22float2((half2&)data);
@@ -31,6 +34,18 @@ struct SiluActivationOp {
         half  val  = __float2half_rn(silu * u.y);
 
         C[n * (M / 2) + m / 2] = val;
+    }
+};
+
+}  // namespace ops
+
+template<typename... Ts>
+struct OutputOps {
+
+    template<int index>
+    static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
+    {
+        std::tuple_element_t<index, std::tuple<Ts...>>::apply(data, m, n, C, M, N);
     }
 };
 
@@ -99,6 +114,7 @@ struct GemmS4F16::Impl {
                  int                   n,
                  int                   k,
                  int                   group_size,
+                 Type                  type,
                  std::vector<Metric>&  metrics,
                  cudaStream_t          st,
                  std::vector<Kernels>& _kernels)
@@ -133,7 +149,7 @@ struct GemmS4F16::Impl {
                 if (j == kWarmup) {
                     cudaEventRecord(ev_start_, st);
                 }
-                kernels[i]->Launch(C, A, B, Q, m, n, k, st);
+                kernels[i]->Launch(C, A, B, Q, m, n, k, type, st);
             }
             cudaEventRecord(ev_end_, st);
             cudaEventSynchronize(ev_end_);
@@ -212,6 +228,7 @@ struct GemmS4F16::Impl {
              int                   n,
              int                   k,
              int                   group_size,
+             Type                  type,
              int                   algo_id,
              cudaStream_t          st,
              std::vector<Kernels>& kernels)
@@ -224,7 +241,7 @@ struct GemmS4F16::Impl {
                 if (algo_id < 0) {
                     throw std::runtime_error("no feasible kernel found");
                 }
-                kernels[i].at(algo_id)->Launch(C, A, B, Q, m, n, k, st);
+                kernels[i].at(algo_id)->Launch(C, A, B, Q, m, n, k, type, st);
                 return;
             }
         }
@@ -236,9 +253,10 @@ struct GemmS4F16::Impl {
         cudaEventCreate(&ev_start_);
         cudaEventCreate(&ev_end_);
 
+        using Ops = OutputOps<ops::Identity, ops::SiluActivation>;
+
         /// TODO: add more group sizes
-        Generate<128, IdentityOp>(gemm_kernels_);
-        Generate<128, SiluActivationOp>(fused_ffn_kernels_);
+        Generate<128, Ops>(kernels_);
         group_sizes_.push_back(128);
     }
 
@@ -248,8 +266,7 @@ struct GemmS4F16::Impl {
         cudaEventDestroy(ev_start_);
     }
 
-    std::vector<Kernels> gemm_kernels_;
-    std::vector<Kernels> fused_ffn_kernels_;
+    std::vector<Kernels> kernels_;
 
     std::vector<int> group_sizes_;
 
@@ -276,17 +293,7 @@ void GemmS4F16::Measure(half*                C,
                         std::vector<Metric>& metrics,
                         cudaStream_t         st)
 {
-    std::vector<Impl::Kernels>* kernels{};
-
-    switch (type) {
-        case kFusedSiluFfn:
-            kernels = &impl_->fused_ffn_kernels_;
-            break;
-        default:
-            kernels = &impl_->gemm_kernels_;
-    }
-
-    impl_->Measure(C, A, B, Q, m, n, k, group_size, metrics, st, *kernels);
+    impl_->Measure(C, A, B, Q, m, n, k, group_size, type, metrics, st, impl_->kernels_);
 }
 
 void GemmS4F16::Run(half*        C,
@@ -301,17 +308,7 @@ void GemmS4F16::Run(half*        C,
                     int          algo_id,
                     cudaStream_t st)
 {
-    std::vector<Impl::Kernels>* kernels{};
-
-    switch (type) {
-        case kFusedSiluFfn:
-            kernels = &impl_->fused_ffn_kernels_;
-            break;
-        default:
-            kernels = &impl_->gemm_kernels_;
-    }
-
-    impl_->Run(C, A, B, Q, m, n, k, group_size, algo_id, st, *kernels);
+    impl_->Run(C, A, B, Q, m, n, k, group_size, type, algo_id, st, impl_->kernels_);
 }
 
 }  // namespace turbomind

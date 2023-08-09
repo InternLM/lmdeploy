@@ -60,7 +60,7 @@ template<int CTA_M,
          int WARP_K,
          int STAGES,
          int GROUP_SIZE,
-         typename OutputOp>
+         typename OutputOps>
 struct Gemm {
 
     static constexpr int kWarpCountM = CTA_M / WARP_M;
@@ -215,6 +215,7 @@ struct Gemm {
         }
     }
 
+    template<int Index>
     __device__ void store_accum(float* tb_frag_C,
                                 float* tb_smem_C,
                                 half*  C,
@@ -248,7 +249,7 @@ struct Gemm {
                     uint trans_C = transpose_m8n8_b16((uint&)half_C);
                     // store to global memory
                     if (nn < n && mm < m) {
-                        OutputOp::apply(trans_C, mm, nn, C, m, n);
+                        OutputOps::template apply<Index>(trans_C, mm, nn, C, m, n);
                     }
                 }
             }
@@ -311,7 +312,8 @@ struct Gemm {
                            const half2* __restrict__ Q,
                            int M,
                            int N,
-                           int K)
+                           int K,
+                           int output_op_idx)
     {
         static_assert(WARP_M % OP_N == 0);
 
@@ -386,7 +388,16 @@ struct Gemm {
             sum_slices(tb_frag_C, tb_smem_C, warp_id_m, warp_id_n, lane_id, slice_id);
         }
 
-        store_accum(tb_frag_C, tb_smem_C, C, M, N, cta_m, cta_n, warp_id_m, warp_id_n, lane_id, slice_id);
+        switch (output_op_idx) {
+            case 0:
+                store_accum<0>(tb_frag_C, tb_smem_C, C, M, N, cta_m, cta_n, warp_id_m, warp_id_n, lane_id, slice_id);
+                break;
+            case 1:
+                store_accum<1>(tb_frag_C, tb_smem_C, C, M, N, cta_m, cta_n, warp_id_m, warp_id_n, lane_id, slice_id);
+                break;
+            default:
+                return;
+        }
     }
 };
 
@@ -397,9 +408,10 @@ __global__ void gemm_s4_f16_nn(half* __restrict__ C,
                                const half2* __restrict__ Q,
                                int M,
                                int N,
-                               int K)
+                               int K,
+                               int output_op_idx)
 {
-    Gemm{}.run_v2(C, A, B, Q, M, N, K);
+    Gemm{}.run_v2(C, A, B, Q, M, N, K, output_op_idx);
 }
 
 }  // namespace turbomind
