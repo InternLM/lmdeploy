@@ -1,6 +1,13 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
 
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy-zh-cn.readthedocs.io/zh_CN/latest/)
+[![badge](https://github.com/InternLM/lmdeploy/workflows/build/badge.svg)](https://github.com/InternLM/lmdeploy/actions)
+[![codecov](https://codecov.io/gh/InternLM/lmdeploy/branch/main/graph/badge.svg)](https://codecov.io/gh/InternLM/lmdeploy)
+[![license](https://img.shields.io/github/license/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/tree/main/LICENSE)
+[![issue resolution](https://img.shields.io/github/issues-closed-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
+[![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
+
 [English](README.md) | 简体中文
 
 </div>
