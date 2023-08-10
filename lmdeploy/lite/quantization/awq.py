@@ -118,3 +118,75 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
             assert torch.isnan(p).sum() == 0
 
     return scales
+
+
+def check_awq_supported(layer_type):
+    """Check if the smooth function is supported by inspecting layer type."""
+    norm_fcs_found = False
+    fc_fcs_found = False
+
+    if isinstance(layer_type, str):
+        if layer_type in NORM_FCS_MAP:
+            norm_fcs_found = True
+        if layer_type in FC_FCS_MAP:
+            fc_fcs_found = True
+
+    elif isinstance(layer_type, type):
+        if layer_type.__name__ in NORM_FCS_MAP:
+            norm_fcs_found = True
+        if layer_type.__name__ in FC_FCS_MAP:
+            fc_fcs_found = True
+
+    else:
+        raise NotImplementedError
+
+    if not norm_fcs_found:
+        raise NotImplementedError
+
+    if not fc_fcs_found:
+        raise NotImplementedError
+
+
+def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
+    """Quantize the weights of the target model's linear layers."""
+    from lmdeploy.lite.quantization import WeightQuantizer
+    from lmdeploy.pytorch.modules import WeightOnlyQLinear
+    for name, fc in fcs.items():
+        fc.to(device)
+        quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
+        q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
+
+        parent_name, _, child_name = name.rpartition('.')
+        parent = model.get_submodule(parent_name)
+        fc.to('cpu')
+        setattr(parent, child_name, q_linear)
+
+        print(f'{name} weight packed.')
+
+
+def smooth_layers(layers,
+                  fc2fcs,
+                  norm2fcs,
+                  a_scales,
+                  group_size=-1,
+                  device='cuda'):
+    """Apply weight smoothing based on input scales."""
+
+    for l_name, layer in layers.items():
+        layer.to(device)
+        for ln_name, fc_names in norm2fcs.items():
+            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+
+            ln = layer.get_submodule(ln_name)
+            fcs = [layer.get_submodule(n) for n in fc_names]
+            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
+
+        for f_name, fc_names in fc2fcs.items():
+            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+
+            fc = layer.get_submodule(f_name)
+            fcs = [layer.get_submodule(n) for n in fc_names]
+            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
+
+        layer.to('cpu')
+        print(f'{l_name} smooth weight done.')

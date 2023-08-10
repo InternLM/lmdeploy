@@ -1,21 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from functools import partial
-from pathlib import Path
 from typing import Union
 
-import numpy as np
 import torch
 from torch import nn
 
 from lmdeploy.lite.quantization.activation import (ActivationObserver,
                                                    KVCacheObserver)
-from lmdeploy.lite.quantization.smooth import (FC_FCS_MAP, NORM_FCS_MAP,
-                                               smooth_fc_fcs, smooth_ln_fcs)
-from lmdeploy.lite.quantization.weight import WeightQuantizer
 from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
                                  concat_decoder_layer_outputs,
                                  split_decoder_layer_inputs)
-from lmdeploy.pytorch.modules import WeightOnlyQLinear
 
 
 class QuantizeContext():
@@ -78,32 +72,6 @@ class QuantizeContext():
             return model.config.num_key_value_heads
         else:
             raise KeyError
-
-    def _check_smooth_supported(self):
-        """Check if the smooth function is supported by inspecting layer
-        type."""
-        norm_fcs_found = False
-        fc_fcs_found = False
-        if isinstance(self.layer_type, str):
-            if self.layer_type in NORM_FCS_MAP:
-                norm_fcs_found = True
-            if self.layer_type in FC_FCS_MAP:
-                fc_fcs_found = True
-
-        elif isinstance(self.layer_type, type):
-            if self.layer_type.__name__ in NORM_FCS_MAP:
-                norm_fcs_found = True
-            if self.layer_type.__name__ in FC_FCS_MAP:
-                fc_fcs_found = True
-
-        else:
-            raise NotImplementedError
-
-        if not norm_fcs_found:
-            raise NotImplementedError
-
-        if not fc_fcs_found:
-            raise NotImplementedError
 
     def _init_input_observers(self, name2mod):
         """Initialize input observers for given modules."""
@@ -273,51 +241,7 @@ class QuantizeContext():
             value_stats['absmax'][name] = obs.absmax_val
         return key_stats, value_stats
 
-    def quant_weights(self, bits, symmetry, granularity, group_size=-1):
-        """Quantize the weights of the target model's linear layers."""
-        for name, fc in self.name2fc.items():
-            fc.to(self.device)
-            quantizer = WeightQuantizer(bits, symmetry, granularity,
-                                        group_size)
-            q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
-
-            parent_name, _, child_name = name.rpartition('.')
-            parent = self.model.get_submodule(parent_name)
-            fc.to('cpu')
-            setattr(parent, child_name, q_linear)
-
-            print(f'{name} weight packed.')
-
-    def smooth_weights(self, a_scales, group_size=-1):
-        """Apply weight smoothing based on input scales."""
-        if isinstance(self.layer_type, str):
-            norm_fcs_map = NORM_FCS_MAP[self.layer_type]
-            fc_fcs_map = FC_FCS_MAP[self.layer_type]
-        else:
-            layer_str = self.layer_type.__name__
-            norm_fcs_map = NORM_FCS_MAP[layer_str]
-            fc_fcs_map = FC_FCS_MAP[layer_str]
-
-        for l_name, layer in self.name2layer.items():
-            layer.to(self.device)
-            for ln_name, fc_names in norm_fcs_map.items():
-                m_names = [f'{l_name}.{n}' for n in fc_names]
-
-                ln = self.name2mod[f'{l_name}.{ln_name}']
-                fcs = [self.name2mod[f'{l_name}.{n}'] for n in fc_names]
-                smooth_ln_fcs(ln, fcs, a_scales[m_names[0]], group_size)
-
-            for f_name, fc_names in fc_fcs_map.items():
-                m_names = [f'{l_name}.{n}' for n in fc_names]
-
-                fc = self.name2mod[f'{l_name}.{f_name}']
-                fcs = [self.name2mod[f'{l_name}.{n}'] for n in fc_names]
-                smooth_fc_fcs(fc, fcs, a_scales[m_names[0]], group_size)
-
-            layer.to('cpu')
-            print(f'{l_name} smooth weight done.')
-
-    def export_stats(self, out_dir):
+    def export(self, out_dir):
         inp_stats = self.collect_inputs_stats()
         torch.save(inp_stats, out_dir / 'inputs_stats.pth')
 
@@ -328,106 +252,10 @@ class QuantizeContext():
         torch.save(key_stats, out_dir / 'key_stats.pth')
         torch.save(value_stats, out_dir / 'value_stats.pth')
 
-    def _export_tm_sym_kv_qparams(self,
-                                  key_stats,
-                                  value_stats,
-                                  bits,
-                                  out_dir,
-                                  tp=1):
-        keys_absmax = key_stats['absmax']
-        values_absmax = value_stats['absmax']
-        for layer_idx, name in enumerate(keys_absmax.keys()):
-            k_absmax = keys_absmax[name]
-            v_absmax = values_absmax[name]
-
-            heads, dims = k_absmax.shape
-            assert heads % tp == 0
-
-            mp_k_absmax = torch.chunk(k_absmax, tp)
-            mp_v_absmax = torch.chunk(v_absmax, tp)
-            for i in range(tp):
-                # quant: q = f / scale
-                # dequant: f = q * scale
-                k_s = mp_k_absmax[i].max() / (2**(bits - 1) - 1)
-                v_s = mp_v_absmax[i].max() / (2**(bits - 1) - 1)
-
-                kv_qparams = np.array([k_s, v_s], dtype=np.float32)
-                save_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
-                kv_qparams.tofile(save_path)
-                print(f'Layer {layer_idx} MP {i} KV scales done.')
-
-    def _export_tm_asym_kv_qparams(self,
-                                   key_stats,
-                                   value_stats,
-                                   bits,
-                                   out_dir,
-                                   tp=1):
-        keys_min = key_stats['min']
-        values_min = value_stats['min']
-
-        keys_max = key_stats['max']
-        values_max = value_stats['max']
-        for layer_idx, name in enumerate(keys_min.keys()):
-            k_max = keys_max[name]
-            v_max = values_max[name]
-
-            k_min = keys_min[name]
-            v_min = values_min[name]
-
-            heads, dims = k_min.shape
-            assert heads % tp == 0
-
-            tp_k_min = torch.chunk(k_min, tp)
-            tp_v_min = torch.chunk(v_min, tp)
-
-            tp_k_max = torch.chunk(k_max, tp)
-            tp_v_max = torch.chunk(v_max, tp)
-            for i in range(tp):
-                # quant: q = (f - zp) / scale
-                # dequant: f = q * scale + zp
-                k_min = tp_k_min[i].min()
-                v_min = tp_v_min[i].min()
-
-                k_max = tp_k_max[i].max()
-                v_max = tp_v_max[i].max()
-
-                k_scale = (k_max - k_min) / (2**bits - 1)
-                v_scale = (v_max - v_min) / (2**bits - 1)
-
-                kv_qparams = np.array([k_scale, k_min, v_scale, v_min],
-                                      dtype=np.float32)
-                save_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
-                kv_qparams.tofile(save_path)
-                print(f'Layer {layer_idx} MP {i} KV scales&zeros done.')
-
-    def export_turbomind_kv_qparams(self, bits, symmetry, out_dir, tp=1):
-        out_dir = Path(out_dir)
-
-        key_stats, value_stats = self.collect_kv_stats()
-        if symmetry:
-
-            self._export_tm_sym_kv_qparams(key_stats, value_stats, bits,
-                                           out_dir, tp)
-        else:
-            self._export_tm_asym_kv_qparams(key_stats, value_stats, bits,
-                                            out_dir, tp)
-
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
         with torch.inference_mode():
             _ = self.model.model(data.to(self.device))
-
-    def auto_awq(self, bits, sym, group_size, out_dir):
-        self._check_smooth_supported()
-
-        inp_stats = self.collect_inputs_stats()
-
-        scales = inp_stats['absmean']
-        self.smooth_weights(scales, group_size)
-        self.quant_weights(bits, sym, 'per_group', group_size)
-
-        self.model.save_pretrained(out_dir)
-        self.tokenizer.save_pretrained(out_dir)
 
     def __enter__(self):
         """Prepares the Calibration object for a 'with' statement by

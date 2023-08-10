@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
-from typing import Optional
 
 import fire
 import torch
@@ -30,25 +29,11 @@ def main(model: str,
          calib_dataset: str = 'c4',
          calib_samples: int = 128,
          calib_seqlen: int = 2048,
-         use_awq: bool = True,
-         use_i8_kv: bool = False,
-         w_bits: int = 4,
-         w_sym: bool = False,
-         w_granularity: str = 'per_group',
-         w_group_size: int = 128,
-         kv_bits: int = 8,
-         kv_sym: bool = False,
-         kv_num_tp: int = 1,
-         pytorch_dir: Optional[str] = None,
-         turbomind_dir: Optional[str] = None,
+         work_dir: str = './work_dir',
          device: str = 'cuda'):
 
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Currently, only support `c4`, `ptb`, `wikitext2`, or `pileval`.'
-
-    if use_awq:
-        assert w_granularity == 'per_group'
-        assert pytorch_dir
 
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
@@ -94,18 +79,9 @@ def main(model: str,
         ]).to(device)
         quant_ctx.calibrate(all_data)
 
-    if pytorch_dir:
-        pytorch_dir = Path(pytorch_dir)
-        pytorch_dir.mkdir(parents=True, exist_ok=True)
-        quant_ctx.export_stats(pytorch_dir)
-        if use_awq:
-            quant_ctx.auto_awq(w_bits, w_sym, w_group_size, pytorch_dir)
-
-    if turbomind_dir and use_i8_kv:
-        turbomind_dir = Path(turbomind_dir)
-        turbomind_dir.mkdir(parents=True, exist_ok=True)
-        quant_ctx.export_turbomind_kv_qparams(kv_bits, kv_sym, turbomind_dir,
-                                              kv_num_tp)
+    work_dir = Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    quant_ctx.export(work_dir)
 
 
 if __name__ == '__main__':

@@ -50,6 +50,7 @@ examples/cpp/llama/*.csv
 
 # LMDeploy
 workspace/
+work_dir*/
 
 # Huggingface
 *.bin
