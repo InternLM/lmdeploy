@@ -348,8 +348,8 @@ class QuantizeContext():
             for i in range(tp):
                 # quant: q = f / scale
                 # dequant: f = q * scale
-                k_s = max(mp_k_absmax[i]) / (2**(bits - 1) - 1)
-                v_s = max(mp_v_absmax[i]) / (2**(bits - 1) - 1)
+                k_s = mp_k_absmax[i].max() / (2**(bits - 1) - 1)
+                v_s = mp_v_absmax[i].max() / (2**(bits - 1) - 1)
 
                 kv_qparams = np.array([k_s, v_s], dtype=np.float32)
                 save_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
@@ -374,22 +374,22 @@ class QuantizeContext():
             k_min = keys_min[name]
             v_min = values_min[name]
 
-            heads, dims = keys_min.shape
+            heads, dims = k_min.shape
             assert heads % tp == 0
 
-            mp_k_min = torch.chunk(k_min, tp)
-            mp_v_min = torch.chunk(v_min, tp)
+            tp_k_min = torch.chunk(k_min, tp)
+            tp_v_min = torch.chunk(v_min, tp)
 
-            mp_k_max = torch.chunk(k_max, tp)
-            mp_v_max = torch.chunk(v_max, tp)
+            tp_k_max = torch.chunk(k_max, tp)
+            tp_v_max = torch.chunk(v_max, tp)
             for i in range(tp):
                 # quant: q = (f - zp) / scale
                 # dequant: f = q * scale + zp
-                k_min = min(mp_k_min[i])
-                v_min = min(mp_v_min[i])
+                k_min = tp_k_min[i].min()
+                v_min = tp_v_min[i].min()
 
-                k_max = max(mp_k_max[i])
-                v_max = max(mp_v_max[i])
+                k_max = tp_k_max[i].max()
+                v_max = tp_v_max[i].max()
 
                 k_scale = (k_max - k_min) / (2**bits - 1)
                 v_scale = (v_max - v_min) / (2**bits - 1)
