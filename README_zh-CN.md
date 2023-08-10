@@ -151,35 +151,31 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 ## 量化部署
 
-### Weight Only 量化
+目前支持对权重的 INT4 量化和 KV Cache 的 INT8 量化
+
+首先，执行量化脚本，获取量化参数
+
+- 如需要使用 TurboMinde 推理，$TM_DIR 为 `deploy.py` 转换的 `workspace/triton_models/weights` 目录
+- 如不需要权重量化或 KV Cache 量化，对应将 `use_awq` 或 `use_i8_kv` 置为 False 即可
 
 ```
 
 python3 -m lmdeploy.lite.apis.calibrate \
   --model $HF_MODEL \
-  --smooth True \                # 使用 AWQ 算法调整模型权重
-  --w_bits 4 \                   # 权重量化的 bit 数
-  --w_sym True \                 # 权重是否使用对称量化
-  --w_granularity 'per_group' \  # 权重量化参数的统计粒度
-  --w_group_size 128 \           # 权重量化分组统计尺寸
-  --calib_dataset 'c4' \         # 校准数据集，支持 c4, ptb, wikitext2, pileval
-  --calib_samples 128 \          # 校准集的样本数，如果显存不够，可以适当调小
-  --calib_seqlen 2048 \          # 单条的文本长度，如果显存不够，可以适当调小
-  --work_dir ./work_dir \        # 保存量化统计参数和量化后权重的文件夹
-```
-
-### KV Cache 量化
-
-在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
-首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 `workspace/triton_models/weights` 目录下。
-
-```
-python3 -m lmdeploy.lite.apis.kv_qparams \
-  --model $HF_MODEL \
-  --output_dir $DEPLOY_WEIGHT_DIR \
-  --symmetry True \ # 对称量化或非对称量化，默认为 True
-  --offload  False \ # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
-  --num_tp 1  \  # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+  --calib_dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
+  --calib_samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
+  --calib_seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
+  --use_awq True \                   # 使用 AWQ 算法调整模型权重
+  --use_i8_kv True \                 # 对 KV Cache 做 INT8 量化
+  --w_bits 4 \                       # 权重量化的 bit 数；如果 use_awq=False 可忽略
+  --w_sym Flase \                    # 权重是否使用对称量化；如果 use_awq=False 可忽略
+  --w_granularity 'per_group' \      # 权重量化参数的统计粒度；如果 use_awq=False 可忽略
+  --w_group_size 128 \               # 权重量化分组统计尺寸；如果 use_awq=False 可忽略
+  --kv_sym False \                   # KV Cache 是否使用对称量化；如果 use_i8_kv=False 可忽略
+  --kv_num_tp 1 \                    # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+  --pytorch_dir $PT_DIR \            # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
+  --turbomind_dir $TM_DIR \          # 保存 turbomind 格式量化统计参数和量化后权重的文件夹;
+                                     # 不保存 Turbomind 格式可忽略
 ```
 
 然后调整 `workspace/triton_models/weights/config.ini`
