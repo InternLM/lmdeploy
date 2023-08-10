@@ -2,13 +2,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+.vscode/
 # C extensions
 *.so
 
 # Distribution / packaging
 .Python
-build/
 develop-eggs/
 dist/
 downloads/
@@ -48,6 +47,9 @@ dist/
 examples/cpp/llama/*.csv
 *.npy
 *.weight
+
+# LMDeploy
+workspace/
 
 # Huggingface
 *.bin

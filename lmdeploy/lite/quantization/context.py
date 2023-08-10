@@ -3,6 +3,7 @@ from functools import partial
 from pathlib import Path
 from typing import Union
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -10,14 +11,14 @@ from lmdeploy.lite.quantization.activation import (ActivationObserver,
                                                    KVCacheObserver)
 from lmdeploy.lite.quantization.smooth import (FC_FCS_MAP, NORM_FCS_MAP,
                                                smooth_fc_fcs, smooth_ln_fcs)
-from lmdeploy.lite.quantization.weight import WeightObserver, WeightQuantizer
+from lmdeploy.lite.quantization.weight import WeightQuantizer
 from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
                                  concat_decoder_layer_outputs,
                                  split_decoder_layer_inputs)
 from lmdeploy.pytorch.modules import WeightOnlyQLinear
 
 
-class Calibration():
+class QuantizeContext():
     """Calibration context manager for model quantization.
 
     Parameters:
@@ -25,7 +26,6 @@ class Calibration():
       - layer_type: Layer type to be targeted for calibration
       - norm_type: Normalization type used for calibration
       - smooth: Flag to indicate if smoothing to be applied or not
-      - w_qconfig: Config file path for weight quantization
       - work_dir: Directory path to save the calibration and quantization
                         results
       - device: Device on which model is to be calibrated ('cpu' or 'cuda')
@@ -39,37 +39,20 @@ class Calibration():
     key_obs_group = 'keys'
     value_obs_group = 'values'
 
-    w_obs_group = 'weights'
-    smooth_w_obs_group = 'smooth'
-
     def __init__(self,
                  model: nn.Module,
+                 tokenizer,
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
-                 smooth: bool = False,
-                 w_bits: int = 4,
-                 w_sym: bool = False,
-                 w_granularity: str = 'per_group',
-                 w_group_size: int = 128,
-                 work_dir: str = './work_dir',
                  device: str = 'cuda') -> None:
 
-        self.smooth = smooth
         self.layer_type = layer_type
         self.norm_type = norm_type
-        if self.smooth:
-            qconfig = {}
-            qconfig['bits'] = w_bits
-            qconfig['symmetry'] = w_sym
-            qconfig['granularity'] = w_granularity
-            qconfig['group_size'] = w_group_size
-
-            self.w_qconfig = qconfig
-            self._check_smooth_supported()
 
         self.num_head = self._guess_num_heads(model)
         self.head_dim = model.config.hidden_size // self.num_head
         self.model = model
+        self.tokenizer = tokenizer
 
         self.name2layer = collect_target_modules(self.model, layer_type)
         self.name2fc = {}
@@ -87,8 +70,6 @@ class Calibration():
         self._init_kv_observers(self.name2layer)
 
         self.device = device
-        self.work_dir = Path(work_dir)
-        self.work_dir.mkdir(parents=True, exist_ok=True)
 
     def _guess_num_heads(self, model):
         if hasattr(model.config, 'num_attention_heads'):
@@ -228,22 +209,25 @@ class Calibration():
             self._ori_forwards[layer] = layer.forward
             layer.forward = partial(_forward, layer)
 
-    def step(self, data):
-        """Forward pass through the model in inference mode with given data."""
-        with torch.inference_mode():
-            _ = self.model.model(data.to(self.device))
-
     def collect_inputs_stats(self):
         """Collect statistics (min, max, absmax values) of the observed inputs.
 
         Returns a dictionary with these collected stats.
         """
-        inputs_stats = {'max': {}, 'min': {}, 'absmax': {}}
+        inputs_stats = {
+            'max': {},
+            'min': {},
+            'mean': {},
+            'absmax': {},
+            'absmean': {}
+        }
         obs_group = ActivationObserver.find_group(self.inp_obs_group)
         for name, obs in obs_group.items():
             inputs_stats['max'][name] = obs.max_val
             inputs_stats['min'][name] = obs.min_val
+            inputs_stats['mean'][name] = obs.mean_val
             inputs_stats['absmax'][name] = obs.absmax_val
+            inputs_stats['absmean'][name] = obs.absmean_val
         return inputs_stats
 
     def collect_outputs_stats(self):
@@ -252,12 +236,20 @@ class Calibration():
 
         Returns a dictionary with these collected stats.
         """
-        outputs_stats = {'max': {}, 'min': {}, 'absmax': {}}
+        outputs_stats = {
+            'max': {},
+            'min': {},
+            'mean': {},
+            'absmax': {},
+            'absmean': {}
+        }
         obs_group = ActivationObserver.find_group(self.out_obs_group)
         for name, obs in obs_group.items():
             outputs_stats['max'][name] = obs.max_val
             outputs_stats['min'][name] = obs.min_val
+            outputs_stats['mean'][name] = obs.mean_val
             outputs_stats['absmax'][name] = obs.absmax_val
+            outputs_stats['absmean'][name] = obs.absmean_val
         return outputs_stats
 
     def collect_kv_stats(self):
@@ -281,11 +273,12 @@ class Calibration():
             value_stats['absmax'][name] = obs.absmax_val
         return key_stats, value_stats
 
-    def quant_weights(self):
+    def quant_weights(self, bits, symmetry, granularity, group_size=-1):
         """Quantize the weights of the target model's linear layers."""
         for name, fc in self.name2fc.items():
             fc.to(self.device)
-            quantizer = WeightQuantizer(**self.w_qconfig)
+            quantizer = WeightQuantizer(bits, symmetry, granularity,
+                                        group_size)
             q_linear = WeightOnlyQLinear.from_linear(fc, quantizer)
 
             parent_name, _, child_name = name.rpartition('.')
@@ -295,7 +288,7 @@ class Calibration():
 
             print(f'{name} weight packed.')
 
-    def smooth_weights(self, a_scales):
+    def smooth_weights(self, a_scales, group_size=-1):
         """Apply weight smoothing based on input scales."""
         if isinstance(self.layer_type, str):
             norm_fcs_map = NORM_FCS_MAP[self.layer_type]
@@ -305,41 +298,136 @@ class Calibration():
             norm_fcs_map = NORM_FCS_MAP[layer_str]
             fc_fcs_map = FC_FCS_MAP[layer_str]
 
-        for name, fc in self.name2fc.items():
-            obs = WeightObserver(fc.in_features, 0)
-            obs.observe(fc.weight)
-            obs.global_available(name, group=self.smooth_w_obs_group)
-
         for l_name, layer in self.name2layer.items():
             layer.to(self.device)
             for ln_name, fc_names in norm_fcs_map.items():
                 m_names = [f'{l_name}.{n}' for n in fc_names]
 
-                observers = [
-                    WeightObserver.find(n, group=self.smooth_w_obs_group)
-                    for n in m_names
-                ]
-                WeightObserver.merge_stats(observers)
-
                 ln = self.name2mod[f'{l_name}.{ln_name}']
                 fcs = [self.name2mod[f'{l_name}.{n}'] for n in fc_names]
-                smooth_ln_fcs(ln, fcs, a_scales[m_names[0]])
+                smooth_ln_fcs(ln, fcs, a_scales[m_names[0]], group_size)
 
             for f_name, fc_names in fc_fcs_map.items():
                 m_names = [f'{l_name}.{n}' for n in fc_names]
 
-                observers = [
-                    WeightObserver.find(n, group=self.smooth_w_obs_group)
-                    for n in m_names
-                ]
-                WeightObserver.merge_stats(observers)
-
                 fc = self.name2mod[f'{l_name}.{f_name}']
                 fcs = [self.name2mod[f'{l_name}.{n}'] for n in fc_names]
-                smooth_fc_fcs(fc, fcs, a_scales[m_names[0]])
+                smooth_fc_fcs(fc, fcs, a_scales[m_names[0]], group_size)
 
             layer.to('cpu')
             print(f'{l_name} smooth weight done.')
+
+    def export_stats(self, out_dir):
+        inp_stats = self.collect_inputs_stats()
+        torch.save(inp_stats, out_dir / 'inputs_stats.pth')
+
+        out_stats = self.collect_outputs_stats()
+        torch.save(out_stats, out_dir / 'outputs_stats.pth')
+
+        key_stats, value_stats = self.collect_kv_stats()
+        torch.save(key_stats, out_dir / 'key_stats.pth')
+        torch.save(value_stats, out_dir / 'value_stats.pth')
+
+    def _export_tm_sym_kv_qparams(self,
+                                  key_stats,
+                                  value_stats,
+                                  bits,
+                                  out_dir,
+                                  tp=1):
+        keys_absmax = key_stats['absmax']
+        values_absmax = value_stats['absmax']
+        for layer_idx, name in enumerate(keys_absmax.keys()):
+            k_absmax = keys_absmax[name]
+            v_absmax = values_absmax[name]
+
+            heads, dims = k_absmax.shape
+            assert heads % tp == 0
+
+            mp_k_absmax = torch.chunk(k_absmax, tp)
+            mp_v_absmax = torch.chunk(v_absmax, tp)
+            for i in range(tp):
+                # quant: q = f / scale
+                # dequant: f = q * scale
+                k_s = max(mp_k_absmax[i]) / (2**(bits - 1) - 1)
+                v_s = max(mp_v_absmax[i]) / (2**(bits - 1) - 1)
+
+                kv_qparams = np.array([k_s, v_s], dtype=np.float32)
+                save_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
+                kv_qparams.tofile(save_path)
+                print(f'Layer {layer_idx} MP {i} KV scales done.')
+
+    def _export_tm_asym_kv_qparams(self,
+                                   key_stats,
+                                   value_stats,
+                                   bits,
+                                   out_dir,
+                                   tp=1):
+        keys_min = key_stats['min']
+        values_min = value_stats['min']
+
+        keys_max = key_stats['max']
+        values_max = value_stats['max']
+        for layer_idx, name in enumerate(keys_min.keys()):
+            k_max = keys_max[name]
+            v_max = values_max[name]
+
+            k_min = keys_min[name]
+            v_min = values_min[name]
+
+            heads, dims = keys_min.shape
+            assert heads % tp == 0
+
+            mp_k_min = torch.chunk(k_min, tp)
+            mp_v_min = torch.chunk(v_min, tp)
+
+            mp_k_max = torch.chunk(k_max, tp)
+            mp_v_max = torch.chunk(v_max, tp)
+            for i in range(tp):
+                # quant: q = (f - zp) / scale
+                # dequant: f = q * scale + zp
+                k_min = min(mp_k_min[i])
+                v_min = min(mp_v_min[i])
+
+                k_max = max(mp_k_max[i])
+                v_max = max(mp_v_max[i])
+
+                k_scale = (k_max - k_min) / (2**bits - 1)
+                v_scale = (v_max - v_min) / (2**bits - 1)
+
+                kv_qparams = np.array([k_scale, k_min, v_scale, v_min],
+                                      dtype=np.float32)
+                save_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
+                kv_qparams.tofile(save_path)
+                print(f'Layer {layer_idx} MP {i} KV scales&zeros done.')
+
+    def export_turbomind_kv_qparams(self, bits, symmetry, out_dir, tp=1):
+        out_dir = Path(out_dir)
+
+        key_stats, value_stats = self.collect_kv_stats()
+        if symmetry:
+
+            self._export_tm_sym_kv_qparams(key_stats, value_stats, bits,
+                                           out_dir, tp)
+        else:
+            self._export_tm_asym_kv_qparams(key_stats, value_stats, bits,
+                                            out_dir, tp)
+
+    def calibrate(self, data):
+        """Forward pass through the model in inference mode with given data."""
+        with torch.inference_mode():
+            _ = self.model.model(data.to(self.device))
+
+    def auto_awq(self, bits, sym, group_size, out_dir):
+        self._check_smooth_supported()
+
+        inp_stats = self.collect_inputs_stats()
+
+        scales = inp_stats['absmean']
+        self.smooth_weights(scales, group_size)
+        self.quant_weights(bits, sym, 'per_group', group_size)
+
+        self.model.save_pretrained(out_dir)
+        self.tokenizer.save_pretrained(out_dir)
 
     def __enter__(self):
         """Prepares the Calibration object for a 'with' statement by
@@ -364,20 +452,3 @@ class Calibration():
 
         for layer in self.name2layer.values():
             layer.forward = self._ori_forwards[layer]
-
-        if exc_type is None and exc_value is None and traceback is None:
-
-            inp_stats = self.collect_inputs_stats()
-            torch.save(inp_stats, self.work_dir / 'inputs_stats.pth')
-
-            out_stats = self.collect_outputs_stats()
-            torch.save(out_stats, self.work_dir / 'outputs_stats.pth')
-
-            key_stats, value_stats = self.collect_kv_stats()
-            torch.save(key_stats, self.work_dir / 'key_stats.pth')
-            torch.save(value_stats, self.work_dir / 'value_stats.pth')
-
-            if self.smooth:
-                self.smooth_weights(inp_stats['absmax'])
-                self.quant_weights()
-                self.model.save_pretrained(self.work_dir)

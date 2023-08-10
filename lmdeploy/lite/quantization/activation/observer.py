@@ -21,7 +21,7 @@ class KVCacheObserver(GlobalAvailMixin):
                                      0,
                                      dtype=torch.float16)
 
-    @torch.inference_mode
+    @torch.no_grad()
     def observe(self, x: torch.Tensor):
 
         assert len(x.shape) == 4
@@ -49,17 +49,32 @@ class ActivationObserver(GlobalAvailMixin):
                                   dtype=torch.float16)
         self.min_val = torch.full((self.dim, ), torch.inf, dtype=torch.float16)
         self.absmax_val = torch.full((self.dim, ), 0, dtype=torch.float16)
+        self.absmean_val = torch.full((self.dim, ), 0, dtype=torch.float16)
+        self.mean_val = torch.full((self.dim, ), 0, dtype=torch.float16)
+        self.num_batches_tracked = 0
 
-    @torch.inference_mode
+    @torch.no_grad()
     def observe(self, x: torch.Tensor):
 
         assert len(x.shape) == 3
         assert x.size(2) == self.dim
+        cur_val = x.flatten(0, 1)
+        cur_max = cur_val.max(0)[0].cpu()
+        cur_min = cur_val.min(0)[0].cpu()
+        cur_mean = cur_val.mean(0).cpu()
 
-        cur_max = x.flatten(0, 1).max(0)[0].cpu()
-        cur_min = x.flatten(0, 1).min(0)[0].cpu()
-        cur_absmax = x.flatten(0, 1).abs().max(0)[0].cpu()
+        cur_abs = cur_val.abs()
+        cur_absmax = cur_abs.max(0)[0].cpu()
+        cur_absmax = cur_abs.mean(0).cpu()
 
         self.max_val = torch.maximum(self.max_val, cur_max)
         self.min_val = torch.minimum(self.min_val, cur_min)
         self.absmax_val = torch.maximum(self.absmax_val, cur_absmax)
+
+        self.mean_val = (self.mean_val * self.num_batches_tracked + cur_mean)
+        self.absmean_val = (self.absmean_val * self.num_batches_tracked +
+                            cur_absmax)
+        self.num_batches_tracked += 1
+
+        self.absmean_val = self.absmean_val / self.num_batches_tracked
+        self.mean_val = self.mean_val / self.num_batches_tracked
