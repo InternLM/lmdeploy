@@ -13,6 +13,7 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/08\] TurboMind 支持权重 4-bit 量化和推理
 - \[2023/07\] TurboMind 支持使用 GQA 的 Llama-2 70B 模型
 - \[2023/07\] TurboMind 支持 Llama-2 7B/13B 模型
 - \[2023/07\] TurboMind 支持 InternLM 的 Tensor Parallel 推理
@@ -151,12 +152,9 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 ## 量化部署
 
-#### 1. 获取量化参数
+### Step 1. 获取量化参数
 
 首先，执行量化脚本，获取量化参数；执行后，量化需要的各种参数会存放在 $WORK_DIR 中
-
-- 如需要使用 TurboMinde 推理，$TM_DIR 为 `deploy.py` 转换的 `workspace/triton_models/weights` 目录
-- 如不需要权重量化或 KV Cache 量化，对应将 `use_awq` 或 `use_i8_kv` 置为 False 即可
 
 ```
 
@@ -168,25 +166,25 @@ python3 -m lmdeploy.lite.apis.calibrate \
   --work_dir $WORK_DIR \            # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
 ```
 
-### 2. 实际量化模型
+### Step 2. 实际量化模型
 
 目前支持对权重的 INT4 量化和 KV Cache 的 INT8 量化，根据需求执行对应脚本即可
 
 #### 权重 INT4 量化
 
-LMDeploy 使用 AWQ 算法对模型权重进行量化；需要输入第一步的 $WORK_DIR ，量化后的权重也会存在这个文件夹中
+LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进行量化；需要输入第一步的 \`$WORK_DIR\`\` ，量化后的权重也会存在这个文件夹中
 
 ```
 python3 -m lmdeploy.lite.apis.auto_awq \
   --w_bits 4 \                       # 权重量化的 bit 数
   --w_sym Flase \                    # 权重是否使用对称量化
   --w_group_size 128 \               # 权重量化分组统计尺寸
-  --work_dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文
+  --work_dir $WORK_DIR \             # Step 1 保存量化参数的目录
 ```
 
 #### KV Cache INT8 量化
 
-首先，导出 TurboMind 格式的量化参数（KV Cache INT8 量化需要使用 TurboMind）；$TURBOMIND_DIR 为 `deploy.py` 转换的 `workspace/triton_models/weights` 目录
+首先，导出 TurboMind 格式的量化参数（KV Cache INT8 量化需要使用 `TurboMind`）；``` $TURBOMIND_DIR`` 为  ```deploy.py`转换的`workspace/triton_models/weights\` 目录
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
@@ -214,6 +212,7 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
 ## 致谢
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
+- [llm-awq](https://github.com/mit-han-lab/llm-awq)
 
 ## License
 
