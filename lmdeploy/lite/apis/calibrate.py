@@ -25,12 +25,12 @@ NORM_TYPE_MAP = {
 }
 
 
-def main(model: str,
-         calib_dataset: str = 'c4',
-         calib_samples: int = 128,
-         calib_seqlen: int = 2048,
-         work_dir: str = './work_dir',
-         device: str = 'cuda') -> None:
+def calibrate(model: str,
+              calib_dataset: str = 'c4',
+              calib_samples: int = 128,
+              calib_seqlen: int = 2048,
+              work_dir: str = './work_dir',
+              device: str = 'cuda') -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
 
@@ -107,4 +107,4 @@ def main(model: str,
 
 
 if __name__ == '__main__':
-    fire.Fire(main)
+    fire.Fire(calibrate)

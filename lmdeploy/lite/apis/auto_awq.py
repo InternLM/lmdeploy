@@ -25,12 +25,12 @@ NORM_TYPE_MAP = {
 }
 
 
-def main(model: str,
-         w_bits: int = 4,
-         w_sym: bool = False,
-         w_group_size: int = 128,
-         work_dir: str = './work_dir',
-         device: str = 'cuda'):
+def auto_awq(model: str,
+             w_bits: int = 4,
+             w_sym: bool = False,
+             w_group_size: int = 128,
+             work_dir: str = './work_dir',
+             device: str = 'cuda'):
 
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
@@ -62,4 +62,4 @@ def main(model: str,
 
 if __name__ == '__main__':
 
-    fire.Fire(main)
+    fire.Fire(auto_awq)
