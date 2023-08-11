@@ -14,20 +14,20 @@ from lmdeploy.serve.openai.protocol import (
     ErrorResponse, ChatMessage, ChatCompletionResponseStreamChoice, UsageInfo,
     ChatCompletionResponseChoice, ChatCompletionResponse, DeltaMessage,
     ChatCompletionStreamResponse)
-from lmdeploy.serve.openai.async_model import AsyncModel
+from lmdeploy.serve.openai.async_engine import AsyncEngine
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 class WorkerInstance:
-    instance: AsyncModel = None
+    instance: AsyncEngine = None
     request_hosts = []
 
 
 app = FastAPI()
 
 
-@app.get("/generate")
+@app.post("/generate")
 async def generate(request: Request):
     """Generate completion for the request.
 
@@ -38,6 +38,7 @@ async def generate(request: Request):
     request_dict = await request.json()
     prompt = request_dict.pop("prompt")
     stream_output = request_dict.pop("stream", False)
+    renew_session = request_dict.pop("renew_session", False)
     instance_id = int(request.client.host.replace('.', ''))
 
     # Streaming case
@@ -45,21 +46,22 @@ async def generate(request: Request):
         async for output in WorkerInstance.instance.generate(
                 prompt,
                 instance_id,
-                renew_session=False,
-                stream_response=stream_output):
-            ret = {"text": output}
+                stream_response=stream_output,
+                renew_session=renew_session,
+        ):
+            ret = {"text": output.response}
             yield (json.dumps(ret) + "\0").encode("utf-8")
 
     if stream_output:
         return StreamingResponse(stream_results())
     else:
         ret = {}
-        for out in WorkerInstance.instance.generate(
+        async for out in WorkerInstance.instance.generate(
                 prompt,
                 instance_id,
-                renew_session=False,
+                renew_session=renew_session,
                 stream_response=stream_output):
-            ret = {"text": out}
+            ret = {"text": out.response}
         return JSONResponse(ret)
 
 
@@ -69,7 +71,7 @@ def get_model_list():
 
 
 @app.get("/v1/models")
-async def available_models():
+def available_models():
     model_cards = []
     for model_name in get_model_list():
         model_cards.append(
@@ -135,7 +137,7 @@ async def chat_completions_v1(raw_request: Request):
     ) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
-            delta=DeltaMessage(content=text),
+            delta=DeltaMessage(role="assistant", content=text),
             finish_reason=finish_reason,
         )
         response = ChatCompletionStreamResponse(
@@ -164,7 +166,7 @@ async def chat_completions_v1(raw_request: Request):
         async for res in result_generator:
             response_json = create_stream_response_json(
                 index=0,
-                text=res,
+                text=res.response,
             )
             yield f"data: {response_json}\n\n"
         yield "data: [DONE]\n\n"
@@ -180,7 +182,7 @@ async def chat_completions_v1(raw_request: Request):
             background=background_tasks)
 
     # Non-streaming response
-    final_res: RequestOutput = None
+    final_res = None
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
@@ -190,21 +192,21 @@ async def chat_completions_v1(raw_request: Request):
         final_res = res
     assert final_res is not None
     choices = []
-    for output in final_res.outputs:
-        choice_data = ChatCompletionResponseChoice(
-            index=output.index,
-            message=ChatMessage(role="assistant", content=output.text),
-            finish_reason=output.finish_reason,
-        )
-        choices.append(choice_data)
+    choice_data = ChatCompletionResponseChoice(
+        index=0,
+        message=ChatMessage(role="assistant", content=final_res.response),
+        finish_reason=final_res.finish_reason,
+    )
+    choices.append(choice_data)
 
-    num_prompt_tokens = len(final_res.prompt_token_ids)
-    num_generated_tokens = sum(
-        len(output.token_ids) for output in final_res.outputs)
+    total_tokens = sum([
+        final_res.history_token_len, final_res.input_token_len,
+        final_res.generate_token_len
+    ])
     usage = UsageInfo(
-        prompt_tokens=num_prompt_tokens,
-        completion_tokens=num_generated_tokens,
-        total_tokens=num_prompt_tokens + num_generated_tokens,
+        prompt_tokens=final_res.input_token_len,
+        completion_tokens=final_res.generate_token_len,
+        total_tokens=total_tokens,
     )
     response = ChatCompletionResponse(
         id=request_id,
@@ -213,18 +215,6 @@ async def chat_completions_v1(raw_request: Request):
         choices=choices,
         usage=usage,
     )
-
-    if request.stream:
-        # When user requests streaming but we don't stream, we still need to
-        # return a streaming response with a single event.
-        response_json = response.json(ensure_ascii=False)
-
-        async def fake_stream_generator() -> AsyncGenerator[str, None]:
-            yield f"data: {response_json}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            fake_stream_generator(), media_type="text/event-stream")
 
     return response
 
@@ -241,7 +231,7 @@ def main(model_path: str,
         model_path (str): the path of the deployed model
         session_id (int): the identical id of a session
     """
-    WorkerInstance.instance = AsyncModel(model_path=model_path)
+    WorkerInstance.instance = AsyncEngine(model_path=model_path)
     import uvicorn
     uvicorn.run(
         app=app,  #'lmdeploy.serve.openai.launch_worker2:app',
