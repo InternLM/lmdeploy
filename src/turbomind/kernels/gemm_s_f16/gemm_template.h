@@ -248,9 +248,7 @@ struct Gemm {
                     // transpose 8x8 accum tile
                     uint trans_C = transpose_m8n8_b16((uint&)half_C);
                     // store to global memory
-                    if (nn < n && mm < m) {
-                        OutputOps::template apply<Index>(trans_C, mm, nn, C, m, n);
-                    }
+                    OutputOps::template apply<Index>(trans_C, mm, nn, C, m, n);
                 }
             }
         }

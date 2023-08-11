@@ -2,112 +2,109 @@
 
 #pragma once
 
+#include <array>
 #include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <array>
 
 namespace turbomind {
 
 struct Metric {
+    int  id;
     bool feasible;
-
-    int   max_active_ctas;
-    int   active_ctas;
-    float occupancy;
-    float waves;
-    int   stages;
-
-    float m_iter;
-    float n_iter;
-    float tile_efficiency;
-    float wave_efficiency;
-    float nice;
-    float cost;
-    float normalized;
+    bool prefer;
 
     std::array<int, 3> cta_shape;
     std::array<int, 3> warp_shape;
-    int                warps;
 
+    int   warps;
+    int   stages;
+    int   max_active_ctas;
+    float smem;
+
+    float cta_cnt_m;
+    float cta_cnt_n;
+    float cta_iter_k;
+    float grid_size;
+
+    int   active_ctas;
+    float waves;
+    float waves1;
+    float occupancy;
+
+    float tile_efficiency;
+    float wave_efficiency;
+
+    float grid_a0;
+    float grid_b0;
+    float grid_a1;
+    float grid_b1;
+    float grid_mm;
+
+    float grid_sum;
+    float grid_norm;
+
+    float cta_sum;
+    float cta_wave;
+
+    int   best;
     float time;
     int   count;
-
-    int id;
-
-    int best;
 };
 
-inline void DumpMetrics(std::ostream& os, const std::vector<Metric>& metrics, const std::vector<int>& indices)
+inline void DumpMetrics(std::ostream& os, const std::vector<Metric>& metrics, const std::vector<int>& indices = {})
 {
-    const std::vector<int>         widths{12, 14, 8, 8, 10, 12, 12, 12, 12, 10, 12, 12, 15, 12, 12, 12, 12, 12, 8};
-    const std::vector<std::string> names{"cta shape",
-                                         "warp shape",
-                                         "warps",
-                                         "id",
-                                         "feasible",
-                                         "max_ctas",
-                                         "active_ctas",
-                                         "occupancy",
-                                         "waves",
-                                         "stages",
-                                         "m_iter",
-                                         "n_iter",
-                                         "%tile",
-                                         "%wave",
-                                         "nice",
-                                         "cost",
-                                         "normalized",
-                                         "time",
-                                         "best"};
-    for (size_t i = 0; i < names.size(); ++i) {
-        os << std::setw(widths[i]) << names[i];
+    auto dump_shape = [](const std::array<int, 3>& shape) {
+        std::stringstream ss;
+        ss << std::setw(4) << shape[0] << std::setw(4) << shape[1] << std::setw(4) << shape[2];
+        return ss.str();
+    };
+
+    std::vector<std::tuple<std::string, int>> infos{
+        {"id", 4},       {"valid", 6},      {"cta_mnk", 14},   {"warp_mnk", 14},   {"warps", 6},     {"stages", 8},
+        {"smem", 8},     {"cta_cnt_m", 10}, {"cta_cnt_n", 10}, {"cta_iter_k", 11}, {"max_ctas", 9},  {"act_ctas", 10},
+        {"waves", 12},   {"waves1", 12},    {"occupancy", 12}, {"%tile", 10},      {"%wave", 10},    {"grid_a0", 12},
+        {"grid_b0", 12}, {"grid_a1", 12},   {"grid_b1", 12},   {"grid_mm", 12},    {"grid_sum", 12}, {"cta_cnt", 8},
+        {"cta_sum", 8},  {"cta_wave", 9},   {"grid_norm", 12}, {"time", 12},       {"best", 7}};
+
+    for (const auto& [name, width] : infos) {
+        os << std::setw(width) << name;
     }
     os << "\n";
 
     for (size_t i = 0; i < metrics.size(); ++i) {
         auto& metric = indices.empty() ? metrics[i] : metrics[indices[i]];
         int   c      = 0;
-
-        {
-            std::stringstream ss;
-            ss << std::setw(4) << metric.cta_shape[0] << std::setw(4) << metric.cta_shape[1] << std::setw(4)
-               << metric.cta_shape[2];
-            os << std::setw(widths[c++]) << ss.str();
-        }
-
-        {
-            std::stringstream ss;
-            ss << std::setw(4) << metric.warp_shape[0] << std::setw(4) << metric.warp_shape[1] << std::setw(4)
-               << metric.warp_shape[2];
-            os << std::setw(widths[c++]) << ss.str();
-        }
-
-        os << std::setw(widths[c++]) << metric.warps;
-
-        os << std::setw(widths[c++]) << metric.id;
-        os << std::setw(widths[c++]) << metric.feasible;
-        os << std::setw(widths[c++]) << metric.max_active_ctas;
-        os << std::setw(widths[c++]) << metric.active_ctas;
-        os << std::setw(widths[c++]) << metric.occupancy;
-        os << std::setw(widths[c++]) << metric.waves;
-        os << std::setw(widths[c++]) << metric.stages;
-        os << std::setw(widths[c++]) << metric.m_iter;
-        os << std::setw(widths[c++]) << metric.n_iter;
-        os << std::setw(widths[c++]) << metric.tile_efficiency;
-        os << std::setw(widths[c++]) << metric.wave_efficiency;
-        os << std::setw(widths[c++]) << metric.nice;
-        os << std::setw(widths[c++]) << metric.cost;
-        os << std::setw(widths[c++]) << metric.normalized;
-        if (metric.count) {
-            os << std::setw(widths[c]) << metric.time * 1000 / metric.count;
-        }
-        c++;
-        if (metric.best) {
-            os << std::setw(widths[c]) << '*';
-        }
-        c++;
+        os << std::setw(std::get<1>(infos[c++])) << metric.id;
+        os << std::setw(std::get<1>(infos[c++])) << metric.feasible;
+        os << std::setw(std::get<1>(infos[c++])) << dump_shape(metric.cta_shape);
+        os << std::setw(std::get<1>(infos[c++])) << dump_shape(metric.warp_shape);
+        os << std::setw(std::get<1>(infos[c++])) << metric.warps;
+        os << std::setw(std::get<1>(infos[c++])) << metric.stages;
+        os << std::setw(std::get<1>(infos[c++])) << metric.smem;
+        os << std::setw(std::get<1>(infos[c++])) << metric.cta_cnt_m;
+        os << std::setw(std::get<1>(infos[c++])) << metric.cta_cnt_n;
+        os << std::setw(std::get<1>(infos[c++])) << metric.cta_iter_k;
+        os << std::setw(std::get<1>(infos[c++])) << metric.max_active_ctas;
+        os << std::setw(std::get<1>(infos[c++])) << metric.active_ctas;
+        os << std::setw(std::get<1>(infos[c++])) << metric.waves;
+        os << std::setw(std::get<1>(infos[c++])) << metric.waves1;
+        os << std::setw(std::get<1>(infos[c++])) << metric.occupancy;
+        os << std::setw(std::get<1>(infos[c++])) << metric.tile_efficiency;
+        os << std::setw(std::get<1>(infos[c++])) << metric.wave_efficiency;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_a0;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_b0;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_a1;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_b1;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_mm;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_sum;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_size;
+        os << std::setw(std::get<1>(infos[c++])) << metric.cta_sum;
+        os << std::setw(std::get<1>(infos[c++])) << metric.cta_wave;
+        os << std::setw(std::get<1>(infos[c++])) << metric.grid_norm;
+        os << std::setw(std::get<1>(infos[c++])) << metric.time * 1000 / metric.count;
+        os << std::setw(std::get<1>(infos[c++])) << (metric.best ? "*" : "");
         os << "\n";
     }
 }

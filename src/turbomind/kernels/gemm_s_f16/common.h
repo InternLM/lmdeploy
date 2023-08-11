@@ -286,21 +286,6 @@ struct Shape {
         return get<1>();
     }
 
-    constexpr Shape<data_[0], data_[1]> mn() const noexcept
-    {
-        return {};
-    }
-
-    constexpr Shape<data_[0], data_[1]> mk() const noexcept
-    {
-        return {};
-    }
-
-    constexpr Shape<data_[0], data_[1]> kn() const noexcept
-    {
-        return {};
-    }
-
     constexpr int count() const noexcept
     {
         return (Ns * ...);

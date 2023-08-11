@@ -22,7 +22,9 @@ namespace ops {
 struct Identity {
     static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
     {
-        (uint&)C[n * M + m] = (uint&)data;
+        if (n < N) {
+            (uint&)C[n * M + m] = (uint&)data;
+        }
     }
 };
 
@@ -33,7 +35,9 @@ struct SiluActivation {
         float silu = u.x / (1.f + __expf(-u.x));
         half  val  = __float2half_rn(silu * u.y);
 
-        C[n * (M / 2) + m / 2] = val;
+        if (n < N) {
+            C[n * (M / 2) + m / 2] = val;
+        }
     }
 };
 
@@ -56,54 +60,39 @@ struct GemmS4F16::Impl {
     template<int GS, typename Op>
     void Generate(std::vector<Kernels>& kernels)
     {
+        // smem size (KB):
+        // sm75: 64
+        // sm80: 163
+        // sm86: 99
+        // sm89: 99
+        // sm90: 227
+
         Kernels k;
 
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 5, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 4, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 2, GS, Op>{});
+        // 256
+        k.emplace_back(new GemmKernel<Shape<256, 128, 32>, Shape<32, 128, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<256, 64, 64>, Shape<64, 64, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<256, 64, 32>, Shape<64, 64, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<256, 32, 64>, Shape<64, 32, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<256, 16, 256>, Shape<32, 16, 128>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<256, 8, 256>, Shape<32, 8, 128>, 3, GS, Op>{});
 
-        k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 4, GS, Op>{});
+        // 128
         k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 128, 64>, Shape<32, 128, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 5, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 4, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 96, 32>, Shape<32, 96, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 5, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 4, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 5, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 128, 32>, Shape<32, 128, 32>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 96, 64>, Shape<32, 96, 32>, 3, GS, Op>{});
         k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<128, 64, 64>, Shape<32, 64, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 4, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 64, 32>, Shape<32, 64, 32>, 3, GS, Op>{});
         k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 3, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 32, 128>, Shape<32, 32, 64>, 2, GS, Op>{});
         k.emplace_back(new GemmKernel<Shape<128, 16, 256>, Shape<32, 16, 64>, 3, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 16, 256>, Shape<32, 16, 64>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<128, 8, 512>, Shape<32, 8, 128>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 8, 512>, Shape<32, 8, 128>, 3, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<128, 8, 512>, Shape<32, 8, 128>, 2, GS, Op>{});  // for 86/89
 
-        k.emplace_back(new GemmKernel<Shape<64, 128, 128>, Shape<32, 128, 32>, 3, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 128, 128>, Shape<32, 128, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 4, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 96, 128>, Shape<32, 96, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 4, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 64, 128>, Shape<32, 64, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 4, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 32, 128>, Shape<32, 32, 32>, 2, GS, Op>{});
+        // 64
         k.emplace_back(new GemmKernel<Shape<64, 16, 256>, Shape<32, 16, 32>, 3, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 16, 256>, Shape<32, 16, 32>, 2, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 8, 512>, Shape<32, 8, 128>, 2, GS, Op>{});
-        // k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 3, GS, Op>{});
-        k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 2, GS, Op>{});
+        k.emplace_back(new GemmKernel<Shape<64, 8, 256>, Shape<32, 8, 32>, 3, GS, Op>{});
 
         kernels.push_back(std::move(k));
-        // group_sizes_.push_back(GS);
     }
 
     void Measure(half*                 C,
@@ -136,7 +125,7 @@ struct GemmS4F16::Impl {
 
         for (size_t i = 0; i < kernels.size(); ++i) {
             metrics[i].id = i;
-            kernels[i]->GetMetric(&metrics[i], m, n, k);
+            kernels[i]->GetMetric(metrics[i], m, n, k);
             if (!metrics[i].feasible) {
                 metrics[i].time  = std::numeric_limits<float>::infinity();
                 metrics[i].count = 1;
@@ -184,16 +173,12 @@ struct GemmS4F16::Impl {
         if (a.feasible != b.feasible) {
             return a.feasible > b.feasible;
         }
-        if (a.normalized != b.normalized) {
-            return a.normalized < b.normalized;
+
+        if (a.prefer != b.prefer) {
+            return a.prefer > b.prefer;
         }
-        if (a.cost != b.cost) {
-            return a.cost < b.cost;
-        }
-        if (a.nice != b.nice) {
-            return a.nice > b.nice;
-        }
-        return a.occupancy > b.occupancy;
+
+        return a.grid_norm < b.grid_norm;
     }
 
     int Estimate(int m, int n, int k, Kernels& kernels)
@@ -202,7 +187,7 @@ struct GemmS4F16::Impl {
         std::vector<Metric> metrics(kernels.size());
         for (size_t i = 0; i < kernels.size(); ++i) {
             metrics[i].id = i;
-            kernels[i]->GetMetric(&metrics[i], m, n, k);
+            kernels[i]->GetMetric(metrics[i], m, n, k);
             if (Compare(metrics[i], metrics[best])) {
                 best = i;
             }
