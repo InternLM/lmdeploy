@@ -48,10 +48,9 @@ class Vicuna(BaseModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.system = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """  # noqa: E501
-        self.user = kwargs['user'] if 'user' in kwargs else 'USER'
-        self.assistant = kwargs[
-            'assistant'] if 'assistant' in kwargs else 'ASSISTANT'
-        self.system = kwargs['system'] if 'system' in kwargs else self.system
+        self.user = kwargs.get('user', 'USER')
+        self.assistant = kwargs.get('assistant', 'ASSISTANT')
+        self.system = kwargs.get('system', self.system)
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -83,12 +82,11 @@ class InternLMChat7B(BaseModel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.system = kwargs['system'] if 'system' in kwargs else ''
-        self.user = kwargs['user'] if 'user' in kwargs else '<|User|>'
-        self.eoh = kwargs['eoh'] if 'eoh' in kwargs else '<eoh>'
-        self.eoa = kwargs['eoa'] if 'eoa' in kwargs else '<eoa>'
-        self.assistant = kwargs[
-            'assistant'] if 'assistant' in kwargs else '<|Bot|>'
+        self.system = kwargs.get('system', '')
+        self.user = kwargs.get('user', '<|User|>')
+        self.eoh = kwargs.get('eoh', '<eoh>')
+        self.eoa = kwargs.get('eoa', '<eoa>')
+        self.assistant = kwargs.get('assistant', '<|Bot|>')
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -119,8 +117,7 @@ class InternLMChat7B8K(InternLMChat7B):
 
     def __init__(self, **kwargs):
         super(InternLMChat7B8K, self).__init__(**kwargs)
-        self.session_len = kwargs[
-            'session_len'] if 'session_len' in kwargs else 8192
+        self.session_len = kwargs.get('session_len', 8192)
 
 
 @MODELS.register_module(name='puyu')
@@ -130,24 +127,24 @@ class Puyu(BaseModel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.system = """meta instruction
-You are an AI assistant whose name is InternLM (书生·浦语).
+        meta_instruction = """You are an AI assistant whose name is InternLM (书生·浦语).
 - 书生·浦语 is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
-- 书生·浦语 can understand and communicate fluently in the language chosen by the user such as English and 中文.
-conversation"""  # noqa: E501
-        self.user = kwargs['user'] if 'user' in kwargs else '<|Human|>'
-        self.eoh = kwargs['eoh'] if 'eoh' in kwargs else 'െ'
-        self.assistant = kwargs[
-            'assistant'] if 'assistant' in kwargs else '<|Assistant|>'
-        self.system = kwargs['system'] if 'system' in kwargs else self.system
+- 书生·浦语 can understand and communicate fluently in the language chosen by the user such as English and 中文.""",  # noqa: E501
+        self.meta_instruction = kwargs.get('meta_instruction',
+                                           meta_instruction)
+        self.user = kwargs.get('user', '<|Human|>: ')
+        self.eoh = kwargs.get('eoh', '')
+        self.eosys = kwargs.get('eosys', '')
+        self.assistant = kwargs.get('assistant', '<|Assistant|>: ')
+        self.system = kwargs.get('system', '<|System|>: ')
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
-            return f'<BOS>{self.system}\n' \
-                   f'{self.user}:{prompt}{self.eoh}\n' \
-                   f'{self.assistant}:'
+            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}\n' \
+                   f'{self.user}{prompt}{self.eoh}\n' \
+                   f'{self.assistant}'
         else:
-            return f'\n{self.user}:{prompt}{self.eoh}\n{self.assistant}:'
+            return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
 
     @property
     def stop_words(self):
