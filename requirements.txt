@@ -11,3 +11,4 @@ setuptools
 torch
 transformers
 tritonclient[all]
+uvicorn

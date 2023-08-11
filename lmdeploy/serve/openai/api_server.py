@@ -6,6 +6,7 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Optional
 
 import fire
+import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -239,7 +240,6 @@ def main(model_path: str,
         server_port (int): server port
     """
     WorkerInstance.instance = AsyncEngine(model_path=model_path)
-    import uvicorn
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 
