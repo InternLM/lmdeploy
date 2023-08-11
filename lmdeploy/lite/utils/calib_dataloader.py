@@ -16,6 +16,7 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
+
     Returns:
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized Wikitext-2 test set.
@@ -48,6 +49,7 @@ def get_ptb(tokenizer, nsamples, seed, seqlen):
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
+
     Returns:
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
@@ -83,6 +85,7 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
+
     Returns:
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
@@ -149,6 +152,7 @@ def get_ptb_new(tokenizer, nsamples, seed, seqlen):
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
+
     Returns:
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
@@ -181,6 +185,7 @@ def get_c4_new(tokenizer, nsamples, seed, seqlen):
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
+
     Returns:
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
@@ -234,6 +239,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
+
     Returns:
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
@@ -285,6 +291,7 @@ def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
       nsamples: Number of samples to take from train set.
       seed: Random seed for sampling.
       seqlen: Maximum sequence length.
+
     Returns:
       train_loader: List of sampled and tokenized training examples.
       test_data: Full tokenized validation set.

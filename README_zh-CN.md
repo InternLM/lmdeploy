@@ -13,6 +13,7 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/08\] TurboMind 支持权重 4-bit 量化和推理
 - \[2023/07\] TurboMind 支持使用 GQA 的 Llama-2 70B 模型
 - \[2023/07\] TurboMind 支持 Llama-2 7B/13B 模型
 - \[2023/07\] TurboMind 支持 InternLM 的 Tensor Parallel 推理
@@ -151,16 +152,51 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 ## 量化部署
 
-在 fp16 模式下，可以开启 kv_cache int8 量化，单卡可服务更多用户。
-首先执行量化脚本，量化参数存放到 `deploy.py` 转换的 `workspace/triton_models/weights` 目录下。
+### Step 1. 获取量化参数
+
+首先，执行量化脚本，获取量化参数
+
+> 执行后，量化需要的各种参数会存放在 $WORK_DIR 中; 接下来的步骤中会用到
+
+```
+
+python3 -m lmdeploy.lite.apis.calibrate \
+  --model $HF_MODEL \
+  --calib_dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
+  --calib_samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
+  --calib_seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
+  --work_dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
+```
+
+### Step 2. 实际量化模型
+
+目前支持对权重的 INT4 量化和 KV Cache 的 INT8 量化，根据需求执行对应脚本即可
+
+#### 权重 INT4 量化
+
+LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进行量化
+
+> 需要输入第一步的 \`$WORK_DIR\`\` ，量化后的权重也会存在这个文件夹中
+
+```
+python3 -m lmdeploy.lite.apis.auto_awq \
+  --w_bits 4 \                       # 权重量化的 bit 数
+  --w_group_size 128 \               # 权重量化分组统计尺寸
+  --work_dir $WORK_DIR \             # Step 1 保存量化参数的目录
+```
+
+#### KV Cache INT8 量化
+
+首先，导出 TurboMind 格式的量化参数（KV Cache INT8 量化需要使用 `TurboMind`）
+
+> `$TURBOMIND_DIR` 为  `deploy.py` 转换得到的`workspace/triton_models/weights\` 目录
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --model $HF_MODEL \
-  --output_dir $DEPLOY_WEIGHT_DIR \
-  --symmetry True \ # 对称量化或非对称量化，默认为 True
-  --offload  False \ # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
-  --num_tp 1  \  # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+  --work_dir $WORK_DIR \              # Step 1 保存量化参数的目录
+  --turbomind_dir $TURBOMIND_DIR \
+  --kv_sym False \                    # 对称量化或非对称量化，默认为 False
+  --num_tp 1  \                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
 
 然后调整 `workspace/triton_models/weights/config.ini`
@@ -180,6 +216,7 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
 ## 致谢
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
+- [llm-awq](https://github.com/mit-han-lab/llm-awq)
 
 ## License
 
