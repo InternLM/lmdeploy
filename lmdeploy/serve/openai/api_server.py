@@ -119,7 +119,13 @@ async def chat_completions_v1(raw_request: Request):
     created_time = int(time.time())
 
     result_generator = WorkerInstance.instance.generate(
-        request.messages, instance_id, request.stream, request.renew_session)
+        request.messages,
+        instance_id,
+        request.stream,
+        request.renew_session,
+        stop=request.stop,
+        top_p=request.top_p,
+        temperature=request.temperature)
 
     async def abort_request() -> None:
         async for _ in WorkerInstance.instance.generate(
@@ -220,25 +226,19 @@ async def chat_completions_v1(raw_request: Request):
 
 
 def main(model_path: str,
-         server_name: str,
-         server_port: int,
-         session_id: int = 1,
-         repetition_penalty: float = 1.0):
+         server_name: str = 'localhost',
+         server_port: int = 23333):
     """An example to perform model inference through the command line
     interface.
 
     Args:
         model_path (str): the path of the deployed model
-        session_id (int): the identical id of a session
+        server_name (str): host ip for serving
+        server_port (int): server port
     """
     WorkerInstance.instance = AsyncEngine(model_path=model_path)
     import uvicorn
-    uvicorn.run(
-        app=app,  #'lmdeploy.serve.openai.launch_worker2:app',
-        # workers=4,
-        host=server_name,
-        port=server_port,
-        log_level='info')
+    uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 
 if __name__ == '__main__':

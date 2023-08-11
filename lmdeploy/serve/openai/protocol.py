@@ -63,7 +63,7 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
     # additional argument of lmdeploy
-    renew_session = False
+    renew_session: Optional[bool] = False
 
 
 class ChatMessage(BaseModel):
