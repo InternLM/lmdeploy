@@ -181,7 +181,6 @@ LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进
 ```
 python3 -m lmdeploy.lite.apis.auto_awq \
   --w_bits 4 \                       # 权重量化的 bit 数
-  --w_sym Flase \                    # 权重是否使用对称量化
   --w_group_size 128 \               # 权重量化分组统计尺寸
   --work_dir $WORK_DIR \             # Step 1 保存量化参数的目录
 ```
@@ -194,11 +193,10 @@ python3 -m lmdeploy.lite.apis.auto_awq \
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --model $HF_MODEL \
-  --output_dir $TURBOMIND_DIR \
-  --symmetry True \                    # 对称量化或非对称量化，默认为 True
-  --offload  False \                   # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
-  --num_tp 1  \                        # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+  --work_dir $WORK_DIR \
+  --turbomind_dir $TURBOMIND_DIR \
+  --kv_sym False \                    # 对称量化或非对称量化，默认为 False
+  --num_tp 1  \                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
 
 然后调整 `workspace/triton_models/weights/config.ini`

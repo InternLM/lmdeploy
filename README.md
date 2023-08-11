@@ -193,10 +193,9 @@ First execute the quantization script, and the quantization parameters are store
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --model $HF_MODEL \
-  --output_dir $TURBOMIND_DIR \
-  --symmetry True \                # Whether to use symmetric or asymmetric quantization.
-  --offload  False \               # Whether to offload some modules to CPU to save GPU memory.
+  --work_dir $WORK_DIR \
+  --turbomind_dir $TURBOMIND_DIR \
+  --kv_sym False \                   # Whether to use symmetric or asymmetric quantization.
   --num_tp 1 \                     # The number of GPUs used for tensor parallelism
 ```
 
