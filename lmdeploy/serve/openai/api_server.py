@@ -1,20 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import os
-import os.path as osp
 import time
 from http import HTTPStatus
-import json
 from typing import AsyncGenerator, Optional
 
 import fire
-from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import StreamingResponse, JSONResponse
-from lmdeploy.serve.openai.protocol import (
-    ModelCard, ModelPermission, ModelList, ChatCompletionRequest,
-    ErrorResponse, ChatMessage, ChatCompletionResponseStreamChoice, UsageInfo,
-    ChatCompletionResponseChoice, ChatCompletionResponse, DeltaMessage,
-    ChatCompletionStreamResponse)
+from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
 from lmdeploy.serve.openai.async_engine import AsyncEngine
+from lmdeploy.serve.openai.protocol import (  # noqa: E501
+    ChatCompletionRequest, ChatCompletionResponse,
+    ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
+    ChatCompletionStreamResponse, ChatMessage, DeltaMessage, ErrorResponse,
+    ModelCard, ModelList, ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -27,7 +27,7 @@ class WorkerInstance:
 app = FastAPI()
 
 
-@app.post("/generate")
+@app.post('/generate')
 async def generate(request: Request):
     """Generate completion for the request.
 
@@ -36,9 +36,9 @@ async def generate(request: Request):
     - stream: whether to stream the results or not.
     """
     request_dict = await request.json()
-    prompt = request_dict.pop("prompt")
-    stream_output = request_dict.pop("stream", False)
-    renew_session = request_dict.pop("renew_session", False)
+    prompt = request_dict.pop('prompt')
+    stream_output = request_dict.pop('stream', False)
+    renew_session = request_dict.pop('renew_session', False)
     instance_id = int(request.client.host.replace('.', ''))
 
     # Streaming case
@@ -49,8 +49,8 @@ async def generate(request: Request):
                 stream_response=stream_output,
                 renew_session=renew_session,
         ):
-            ret = {"text": output.response}
-            yield (json.dumps(ret) + "\0").encode("utf-8")
+            ret = {'text': output.response}
+            yield (json.dumps(ret) + '\0').encode('utf-8')
 
     if stream_output:
         return StreamingResponse(stream_results())
@@ -61,41 +61,44 @@ async def generate(request: Request):
                 instance_id,
                 renew_session=renew_session,
                 stream_response=stream_output):
-            ret = {"text": out.response}
+            ret = {'text': out.response}
         return JSONResponse(ret)
 
 
 def get_model_list():
-    """Available models. Only provided one now."""
+    """Available models.
+
+    Only provided one now.
+    """
     return [WorkerInstance.instance.tm_model.model_name]
 
 
-@app.get("/v1/models")
+@app.get('/v1/models')
 def available_models():
     model_cards = []
     for model_name in get_model_list():
         model_cards.append(
-            ModelCard(
-                id=model_name, root=model_name,
-                permission=[ModelPermission()]))
+            ModelCard(id=model_name,
+                      root=model_name,
+                      permission=[ModelPermission()]))
     return ModelList(data=model_cards)
 
 
 def create_error_response(status: HTTPStatus, message: str):
-    return JSONResponse(
-        ErrorResponse(message=message, type="invalid_request_error").dict(),
-        status_code=status.value)
+    return JSONResponse(ErrorResponse(message=message,
+                                      type='invalid_request_error').dict(),
+                        status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
     if request.model in get_model_list():
         return
     ret = create_error_response(
-        HTTPStatus.NOT_FOUND, f"The model `{request.model}` does not exist.")
+        HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
     return ret
 
 
-@app.post("/v1/chat/completions")
+@app.post('/v1/chat/completions')
 async def chat_completions_v1(raw_request: Request):
     """Completion API similar to OpenAI's API.
 
@@ -128,12 +131,11 @@ async def chat_completions_v1(raw_request: Request):
         temperature=request.temperature)
 
     async def abort_request() -> None:
-        async for _ in WorkerInstance.instance.generate(
-                request.messages,
-                instance_id,
-                request.stream,
-                request.renew_session,
-                stop=True):
+        async for _ in WorkerInstance.instance.generate(request.messages,
+                                                        instance_id,
+                                                        request.stream,
+                                                        request.renew_session,
+                                                        stop=True):
             pass
 
     def create_stream_response_json(
@@ -143,7 +145,7 @@ async def chat_completions_v1(raw_request: Request):
     ) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
-            delta=DeltaMessage(role="assistant", content=text),
+            delta=DeltaMessage(role='assistant', content=text),
             finish_reason=finish_reason,
         )
         response = ChatCompletionStreamResponse(
@@ -161,31 +163,31 @@ async def chat_completions_v1(raw_request: Request):
         for i in range(request.n):
             choice_data = ChatCompletionResponseStreamChoice(
                 index=i,
-                delta=DeltaMessage(role="assistant"),
+                delta=DeltaMessage(role='assistant'),
                 finish_reason=None,
             )
-            chunk = ChatCompletionStreamResponse(
-                id=request_id, choices=[choice_data], model=model_name)
+            chunk = ChatCompletionStreamResponse(id=request_id,
+                                                 choices=[choice_data],
+                                                 model=model_name)
             data = chunk.json(exclude_unset=True, ensure_ascii=False)
-            yield f"data: {data}\n\n"
+            yield f'data: {data}\n\n'
 
         async for res in result_generator:
             response_json = create_stream_response_json(
                 index=0,
                 text=res.response,
             )
-            yield f"data: {response_json}\n\n"
-        yield "data: [DONE]\n\n"
+            yield f'data: {response_json}\n\n'
+        yield 'data: [DONE]\n\n'
 
     # Streaming response
     if request.stream:
         background_tasks = BackgroundTasks()
         # Abort the request if the client disconnects.
         background_tasks.add_task(abort_request)
-        return StreamingResponse(
-            completion_stream_generator(),
-            media_type="text/event-stream",
-            background=background_tasks)
+        return StreamingResponse(completion_stream_generator(),
+                                 media_type='text/event-stream',
+                                 background=background_tasks)
 
     # Non-streaming response
     final_res = None
@@ -194,13 +196,13 @@ async def chat_completions_v1(raw_request: Request):
             # Abort the request if the client disconnects.
             await abort_request()
             return create_error_response(HTTPStatus.BAD_REQUEST,
-                                         "Client disconnected")
+                                         'Client disconnected')
         final_res = res
     assert final_res is not None
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role="assistant", content=final_res.response),
+        message=ChatMessage(role='assistant', content=final_res.response),
         finish_reason=final_res.finish_reason,
     )
     choices.append(choice_data)

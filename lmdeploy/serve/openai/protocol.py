@@ -1,22 +1,22 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # Modified from
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
-from typing import Literal, Optional, List, Dict, Any, Union
-
 import time
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import shortuuid
 from pydantic import BaseModel, Field
 
 
 class ErrorResponse(BaseModel):
-    object: str = "error"
+    object: str = 'error'
     message: str
     code: int
 
 
 class ModelPermission(BaseModel):
-    id: str = Field(default_factory=lambda: f"modelperm-{shortuuid.random()}")
-    object: str = "model_permission"
+    id: str = Field(default_factory=lambda: f'modelperm-{shortuuid.random()}')
+    object: str = 'model_permission'
     created: int = Field(default_factory=lambda: int(time.time()))
     allow_create_engine: bool = False
     allow_sampling: bool = True
@@ -24,23 +24,23 @@ class ModelPermission(BaseModel):
     allow_search_indices: bool = True
     allow_view: bool = True
     allow_fine_tuning: bool = False
-    organization: str = "*"
+    organization: str = '*'
     group: Optional[str] = None
     is_blocking: str = False
 
 
 class ModelCard(BaseModel):
     id: str
-    object: str = "model"
+    object: str = 'model'
     created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "lmdeploy"
+    owned_by: str = 'lmdeploy'
     root: Optional[str] = None
     parent: Optional[str] = None
     permission: List[ModelPermission] = []
 
 
 class ModelList(BaseModel):
-    object: str = "list"
+    object: str = 'list'
     data: List[ModelCard] = []
 
 
@@ -74,12 +74,12 @@ class ChatMessage(BaseModel):
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal["stop", "length"]]
+    finish_reason: Optional[Literal['stop', 'length']]
 
 
 class ChatCompletionResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{shortuuid.random()}")
-    object: str = "chat.completion"
+    id: str = Field(default_factory=lambda: f'chatcmpl-{shortuuid.random()}')
+    object: str = 'chat.completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[ChatCompletionResponseChoice]
@@ -94,12 +94,12 @@ class DeltaMessage(BaseModel):
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
-    finish_reason: Optional[Literal["stop", "length"]]
+    finish_reason: Optional[Literal['stop', 'length']]
 
 
 class ChatCompletionStreamResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{shortuuid.random()}")
-    object: str = "chat.completion.chunk"
+    id: str = Field(default_factory=lambda: f'chatcmpl-{shortuuid.random()}')
+    object: str = 'chat.completion.chunk'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[ChatCompletionResponseStreamChoice]
@@ -133,7 +133,7 @@ class EmbeddingsRequest(BaseModel):
 
 
 class EmbeddingsResponse(BaseModel):
-    object: str = "list"
+    object: str = 'list'
     data: List[Dict[str, Any]]
     model: str
     usage: UsageInfo
@@ -160,12 +160,12 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[int] = None
-    finish_reason: Optional[Literal["stop", "length"]]
+    finish_reason: Optional[Literal['stop', 'length']]
 
 
 class CompletionResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"cmpl-{shortuuid.random()}")
-    object: str = "text_completion"
+    id: str = Field(default_factory=lambda: f'cmpl-{shortuuid.random()}')
+    object: str = 'text_completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[CompletionResponseChoice]
@@ -176,12 +176,12 @@ class CompletionResponseStreamChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[float] = None
-    finish_reason: Optional[Literal["stop", "length"]] = None
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class CompletionStreamResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"cmpl-{shortuuid.random()}")
-    object: str = "text_completion"
+    id: str = Field(default_factory=lambda: f'cmpl-{shortuuid.random()}')
+    object: str = 'text_completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[CompletionResponseStreamChoice]

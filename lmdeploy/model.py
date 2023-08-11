@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from abc import abstractclassmethod, abstractmethod
+from abc import abstractmethod
 from typing import List
+
 from mmengine import Registry
 
 MODELS = Registry('model', locations=['lmdeploy.model'])
@@ -33,7 +34,7 @@ class BaseModel:
 
     @staticmethod
     def _translate_messages(messages: List):
-        """Translate messages into system, user speaking list, assistant 
+        """Translate messages into system, user speaking list, assistant
         speaking list.
 
         Args:
@@ -47,15 +48,15 @@ class BaseModel:
         assistants = []
         assert isinstance(messages, List)
         for message in messages:
-            msg_role = message["role"]
-            if msg_role == "system":
-                system = message["content"]
-            elif msg_role == "user":
-                users.append(message["content"])
-            elif msg_role == "assistant":
-                assistants.append(message["content"])
+            msg_role = message['role']
+            if msg_role == 'system':
+                system = message['content']
+            elif msg_role == 'user':
+                users.append(message['content'])
+            elif msg_role == 'assistant':
+                assistants.append(message['content'])
             else:
-                raise ValueError(f"Unknown role: {msg_role}")
+                raise ValueError(f'Unknown role: {msg_role}')
         assistants.append(None)
         return system, users, assistants
 
@@ -179,7 +180,8 @@ class InternLMChat7B(BaseModel):
         ret = '<BOS>'
         for user, assistant in zip(users, assistants):
             if assistant:
-                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:{assistant}{self.eoa}'
+                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
+                       f'{assistant}{self.eoa}'
             else:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
         return ret
@@ -239,7 +241,8 @@ conversation"""  # noqa: E501
         ret = f'<BOS>{system}\n'
         for user, assistant in zip(users, assistants):
             if assistant:
-                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:{assistant}{self.eoa}'
+                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
+                       f'{assistant}{self.eoa}'
             else:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
         return ret
