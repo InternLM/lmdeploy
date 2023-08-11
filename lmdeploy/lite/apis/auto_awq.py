@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
-from typing import Optional
 
 import fire
 import torch
@@ -30,7 +29,7 @@ def main(model: str,
          w_bits: int = 4,
          w_sym: bool = False,
          w_group_size: int = 128,
-         work_dir: Optional[str] = None,
+         work_dir: str = './work_dir',
          device: str = 'cuda'):
 
     tokenizer = AutoTokenizer.from_pretrained(model,

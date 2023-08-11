@@ -4,6 +4,7 @@ from typing import Union
 
 import torch
 from torch import nn
+from transformers import PreTrainedTokenizer
 
 from lmdeploy.lite.quantization.activation import (ActivationObserver,
                                                    KVCacheObserver)
@@ -12,20 +13,15 @@ from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
                                  split_decoder_layer_inputs)
 
 
-class QuantizeContext():
+class CalibrationContext():
     """Calibration context manager for model quantization.
 
     Parameters:
       - model: The target model to be calibrated and quantized
+      - tokenizer: The tokenizer used in the model training
       - layer_type: Layer type to be targeted for calibration
       - norm_type: Normalization type used for calibration
-      - smooth: Flag to indicate if smoothing to be applied or not
-      - work_dir: Directory path to save the calibration and quantization
-                        results
       - device: Device on which model is to be calibrated ('cpu' or 'cuda')
-
-    Note: More detailed information should be added here to explain what this
-            class does exactly and how it works.
     """
 
     inp_obs_group = 'inputs'
@@ -35,10 +31,20 @@ class QuantizeContext():
 
     def __init__(self,
                  model: nn.Module,
-                 tokenizer,
+                 tokenizer: PreTrainedTokenizer,
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
                  device: str = 'cuda') -> None:
+        """Initiate calibration context.
+
+        Args:
+            model (nn.Module): Model to be calibrated.
+            tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
+            layer_type (Union[str, type]): Type of the layers to be observed.
+            norm_type (Union[str, type]): Norm type used in the model.
+            device (str, optional): Device where the model should run.
+                Defaults to 'cuda'.
+        """
 
         self.layer_type = layer_type
         self.norm_type = norm_type
@@ -48,6 +54,7 @@ class QuantizeContext():
         self.model = model
         self.tokenizer = tokenizer
 
+        # Collect modules to observe
         self.name2layer = collect_target_modules(self.model, layer_type)
         self.name2fc = {}
         for l_name, layer in self.name2layer.items():
@@ -58,6 +65,7 @@ class QuantizeContext():
         maps = bimap_name_mod([self.name2layer, self.name2fc, self.name2norm])
         self.name2mod, self.mod2name = maps
 
+        # Initialize observers
         self._init_input_observers(self.name2fc)
         self._init_output_observers(self.name2norm)
         self._init_output_observers(self.name2fc)
@@ -242,6 +250,14 @@ class QuantizeContext():
         return key_stats, value_stats
 
     def export(self, out_dir):
+        """Export the calibration statistics (inputs, outputs, keys and values)
+        to specified directory.
+
+        Args:
+            out_dir (Union[str, Path]): The directory path where the stats
+                will be saved.
+        """
+
         inp_stats = self.collect_inputs_stats()
         torch.save(inp_stats, out_dir / 'inputs_stats.pth')
 
