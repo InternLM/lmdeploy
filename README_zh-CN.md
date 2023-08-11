@@ -154,7 +154,9 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 ### Step 1. 获取量化参数
 
-首先，执行量化脚本，获取量化参数；执行后，量化需要的各种参数会存放在 $WORK_DIR 中
+首先，执行量化脚本，获取量化参数
+
+> 执行后，量化需要的各种参数会存放在 $WORK_DIR 中
 
 ```
 
@@ -172,7 +174,9 @@ python3 -m lmdeploy.lite.apis.calibrate \
 
 #### 权重 INT4 量化
 
-LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进行量化；需要输入第一步的 \`$WORK_DIR\`\` ，量化后的权重也会存在这个文件夹中
+LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进行量化
+
+> 需要输入第一步的 \`$WORK_DIR\`\` ，量化后的权重也会存在这个文件夹中
 
 ```
 python3 -m lmdeploy.lite.apis.auto_awq \
@@ -184,7 +188,9 @@ python3 -m lmdeploy.lite.apis.auto_awq \
 
 #### KV Cache INT8 量化
 
-首先，导出 TurboMind 格式的量化参数（KV Cache INT8 量化需要使用 `TurboMind`）；``` $TURBOMIND_DIR`` 为  ```deploy.py`转换的`workspace/triton_models/weights\` 目录
+首先，导出 TurboMind 格式的量化参数（KV Cache INT8 量化需要使用 `TurboMind`）
+
+> `$TURBOMIND_DIR` 为  `deploy.py` 转换得到的`workspace/triton_models/weights\` 目录
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
