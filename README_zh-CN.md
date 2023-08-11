@@ -165,7 +165,7 @@ python3 -m lmdeploy.lite.apis.calibrate \
   --calib_dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
   --calib_samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
   --calib_seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
-  --work_dir $WORK_DIR \            # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
+  --work_dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
 ```
 
 ### Step 2. 实际量化模型
@@ -193,7 +193,7 @@ python3 -m lmdeploy.lite.apis.auto_awq \
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --work_dir $WORK_DIR \
+  --work_dir $WORK_DIR \              # Step 1 保存量化参数的目录
   --turbomind_dir $TURBOMIND_DIR \
   --kv_sym False \                    # 对称量化或非对称量化，默认为 False
   --num_tp 1  \                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致

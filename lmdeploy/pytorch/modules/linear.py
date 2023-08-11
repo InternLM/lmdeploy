@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Type, TypeVar, Union
+from typing import Optional, Type, TypeVar
 
 import torch
 from torch import nn
@@ -15,7 +15,7 @@ class WeightOnlyQLinear(nn.Module):
         group_size (int): size of the quantization group.
         in_features (int): size of each input sample.
         out_features (int): size of each output sample.
-        bias (Tensor, optional): Learnable bias. Defaults to None.
+        bias (Tensor, optional): Defaults to None.
     """
 
     def __init__(self,
@@ -62,17 +62,16 @@ class WeightOnlyQLinear(nn.Module):
             self.qzeros = None
 
     @classmethod
-    def from_linear(
-            cls: Type['WeightOnlyQLinear'],
-            linear: nn.Linear,
-            quantizer: TypeVar('Quantizer'),
-            awq_layout: Union[str, bool] = True) -> 'WeightOnlyQLinear':
+    def from_linear(cls: Type['WeightOnlyQLinear'],
+                    linear: nn.Linear,
+                    quantizer: TypeVar('Quantizer'),
+                    awq_layout: bool = True) -> 'WeightOnlyQLinear':
         """Create a WeightOnlyQLinear object from a PyTorch Linear object.
 
         Args:
             linear (nn.Linear): PyTorch Linear object.
             quantizer (Quantizer): Object that handles quantization.
-            awq_layout (str or bool, optional): AWQ layout. Defaults to False.
+            awq_layout (bool): AWQ layout. Defaults to True.
 
         Returns:
             WeightOnlyQLinear: A WeightOnlyQLinear object.

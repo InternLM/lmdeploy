@@ -193,10 +193,10 @@ First execute the quantization script, and the quantization parameters are store
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --work_dir $WORK_DIR \
+  --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
   --turbomind_dir $TURBOMIND_DIR \
   --kv_sym False \                   # Whether to use symmetric or asymmetric quantization.
-  --num_tp 1 \                     # The number of GPUs used for tensor parallelism
+  --num_tp 1 \                       # The number of GPUs used for tensor parallelism
 ```
 
 Then adjust `workspace/triton_models/weights/config.ini`
