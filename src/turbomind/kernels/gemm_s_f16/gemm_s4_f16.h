@@ -19,7 +19,8 @@ public:
 
     ~GemmS4F16();
 
-    enum Type {
+    enum Type
+    {
         kGemm,
         kFusedSiluFfn
     };
