@@ -156,7 +156,7 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 首先，执行量化脚本，获取量化参数
 
-> 执行后，量化需要的各种参数会存放在 $WORK_DIR 中
+> 执行后，量化需要的各种参数会存放在 $WORK_DIR 中; 接下来的步骤中会用到
 
 ```
 

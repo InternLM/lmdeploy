@@ -154,7 +154,9 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
 
 ### Step 1. Obtain Quantization Parameters
 
-First, run the quantization script to obtain the quantization parameters. After execution, various parameters needed for quantization will be stored in `$WORK_DIR`.
+First, run the quantization script to obtain the quantization parameters.
+
+> After execution, various parameters needed for quantization will be stored in `$WORK_DIR`; these will be used in the following steps..
 
 ```
 python3 -m lmdeploy.lite.apis.calibrate \
