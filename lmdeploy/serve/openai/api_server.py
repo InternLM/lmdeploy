@@ -109,6 +109,9 @@ async def chat_completions_v1(raw_request: Request):
     NOTE: Currently we do not support the following features:
         - function_call (Users should implement this by themselves)
         - logit_bias (not supported yet)
+        - presence_penalty (replaced with repetition_penalty)
+        - frequency_penalty (replaced with repetition_penalty)
+        - n (only supports one choice)
     """
     request = await raw_request.json()
     request = ChatCompletionRequest(**request)
@@ -127,9 +130,12 @@ async def chat_completions_v1(raw_request: Request):
         instance_id,
         request.stream,
         request.renew_session,
+        request_output_len=request.max_tokens if request.max_tokens else 512,
         stop=request.stop,
         top_p=request.top_p,
-        temperature=request.temperature)
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos)
 
     async def abort_request() -> None:
         async for _ in WorkerInstance.instance.generate(request.messages,
