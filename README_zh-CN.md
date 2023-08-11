@@ -195,10 +195,10 @@ python3 -m lmdeploy.lite.apis.auto_awq \
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
   --model $HF_MODEL \
-  --output_dir $DEPLOY_WEIGHT_DIR \
-  --symmetry True \   # Whether to use symmetric or asymmetric quantization.
-  --offload  False \  # Whether to offload some modules to CPU to save GPU memory.
-  --num_tp 1 \   # The number of GPUs used for tensor parallelism
+  --output_dir $TURBOMIND_DIR \
+  --symmetry True \                    # 对称量化或非对称量化，默认为 True
+  --offload  False \                   # 将模型放在 CPU，只在推理时加载部分模块到 GPU，默认为 False
+  --num_tp 1  \                        # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
 
 然后调整 `workspace/triton_models/weights/config.ini`
