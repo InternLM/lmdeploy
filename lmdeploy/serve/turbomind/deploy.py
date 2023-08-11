@@ -515,6 +515,9 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         tokenizer_path (str): the path of the tokenizer model path
         triton_models_path (str): the path of the exported triton models
         tp (int): the number of tensor parallelism
+        quant_path (str): path of the quantized model, which can be None
+        group_size (int): a parameter used in AWQ to quantize fp16 weights
+            to 4 bits
     """
     if tokenizer_path is None:
         tokenizer_path = osp.join(model_path, 'tokenizer.model')
@@ -550,10 +553,19 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
         return False
 
     # convert weights from hf to turbomind
+    if quant_path is None:
+        _files = [
+            osp.join(model_path, file) for file in os.listdir(model_path)
+            if file.endswith('.bin')
+        ]
+        _files = sorted(_files)
+    else:
+        _files = [quant_path]
+
     model_params = {}
 
     _params = {}
-    for _file in [quant_path]:
+    for _file in _files:
         _tmp = torch.load(_file, map_location='cpu')
         _params.update(_tmp)
 
@@ -757,6 +769,9 @@ def main(model_name: str,
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism
+        quant_path (str): path of the quantized model, which can be None
+        group_size (int): a parameter used in AWQ to quantize fp16 weights
+            to 4 bits
     """
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
