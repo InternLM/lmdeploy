@@ -75,7 +75,7 @@ def _export_asym(key_stats: dict,
 
             k_scale = (k_max - k_min) / (2**bits - 1)
             v_scale = (v_max - v_min) / (2**bits - 1)
-            
+
             k_zp = (k_max + k_min) / 2
             v_zp = (v_max + v_min) / 2
 
