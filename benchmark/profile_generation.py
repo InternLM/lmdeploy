@@ -3,6 +3,7 @@ import os.path as osp
 import time
 from queue import Queue
 from threading import Thread
+from typing import List
 
 import fire
 import numpy as np
@@ -29,25 +30,29 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
             tokens.append(token)
 
         # TODO: ignore first token
-        first_token_latency = timestamps[0] - start
+        first_token_latency = np.round(timestamps[0] - start, 2)
         if len(timestamps) == 1:
-            token_latency = timestamps[0] - start
+            token_latency = np.round(timestamps[0] - start, 2)
             token = tokens[0]
         else:
-            token_latency = timestamps[-1] - timestamps[0]
+            token_latency = np.round(timestamps[-1] - timestamps[0], 2)
             token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
     que.put((session_id, stats))
 
 
-def warmup(model, concurrency: int, output_seqlen: int, warmup_round: int = 4):
+def warmup(model,
+           concurrency: int,
+           input_ids: List[int],
+           output_seqlen: int,
+           warmup_round: int = 2):
     print('start to warmup ...')
 
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
             for _ in chatbot.stream_infer(session_id,
-                                          input_ids=[1],
+                                          input_ids=input_ids,
                                           request_output_len=output_seqlen,
                                           sequence_start=True,
                                           sequence_end=True,
@@ -76,17 +81,18 @@ def main(model_path: str,
          concurrency: int = 1,
          input_seqlen: int = 0,
          output_seqlen: int = 512,
-         test_round: int = 10,
+         test_round: int = 20,
          tp: int = 1):
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = TurboMind(model_path=model_path, tp=tp)
 
-    warmup(tm_model, concurrency, output_seqlen)
-
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)
     input_ids = tokenizer.encode(prompt)
+
+    warmup(tm_model, concurrency, input_ids, output_seqlen)
+
     que = Queue()
     procs = []
     _start = time.perf_counter()
@@ -134,7 +140,7 @@ def main(model_path: str,
           f'{first_token_latency_ave:.2f}s\ntoken latency(min, max, ave): '
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
-          f'throughput: {throughput} token/s\n{"-" * 50}')
+          f'throughput: {throughput:.2f} token/s\n{"-" * 50}')
 
 
 if __name__ == '__main__':
