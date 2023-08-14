@@ -37,7 +37,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 ![PersistentBatchInference](https://github.com/InternLM/lmdeploy/assets/67539920/e3876167-0671-44fc-ac52-5a0f9382493e)
 
 ## Supported Models
-
+### TurboMind
 |  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
 | :------: | :-------------: | :--: | :-----: | :---: | :--: |
 |  Llama   |       ✅        |  ✅  |   ✅    |  ✅   |  ❌  |
