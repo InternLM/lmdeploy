@@ -16,7 +16,8 @@ class Tokenizer:
             self.pad_id = self.model.pad_id()
         else:
             from transformers import AutoTokenizer
-            self.model = AutoTokenizer.from_pretrained(model_file)
+            self.model = AutoTokenizer.from_pretrained(model_file,
+                                                       trust_remote_code=True)
             self.vocab_size = self.model.vocab_size
             self.start_id = self.model.bos_token_id
             self.end_id = self.model.eos_token_id

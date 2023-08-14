@@ -1370,31 +1370,6 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int total_seq_len = param.max_prefix_prompt_length + seq_len;
 
     const bool is_masked = tidx * vec_size >= size_per_head;
-    // NOTE: blockIdx.x < batch_size * param.max_prefix_prompt_length really handles prefix prompts
-    if (PREFIX_PROMPT && token_idx < 0) {
-        const int prompt_batch_idx = blockIdx.x / param.max_prefix_prompt_length;
-        const int prompt_seq_idx   = blockIdx.x % param.max_prefix_prompt_length;
-        const int prompt_length    = param.d_prefix_prompt_lengths[prompt_batch_idx];
-
-        if (prompt_seq_idx < prompt_length) {
-            const int dest_kv_idx = prompt_batch_idx * size_per_head * total_seq_len * head_num
-                                    + head_idx * size_per_head * total_seq_len + prompt_seq_idx * size_per_head
-                                    + tidx * vec_size;
-            const int prefix_kv_idx =
-                size_per_head * prompt_length * head_idx + size_per_head * prompt_seq_idx + tidx * vec_size;
-
-            const T* prefix_prompt_k = param.d_prefix_prompt_batch[prompt_batch_idx]
-                                       + param.prefix_prompt_layer_offset_per_seq * prompt_length;
-            const T* prefix_prompt_v = prefix_prompt_k + prompt_length * head_num * size_per_head;
-            if (!is_masked) {
-                *reinterpret_cast<Vec_t*>(&k_buf[dest_kv_idx]) =
-                    *reinterpret_cast<const Vec_t*>(&prefix_prompt_k[prefix_kv_idx]);
-                *reinterpret_cast<Vec_t*>(&v_buf[dest_kv_idx]) =
-                    *reinterpret_cast<const Vec_t*>(&prefix_prompt_v[prefix_kv_idx]);
-            }
-        }
-        return;
-    }
 
     const int prefix_prompt_length = PREFIX_PROMPT ? param.d_prefix_prompt_lengths[batch_idx] : 0;
     const int hidden_idx           = head_idx * size_per_head + tidx * vec_size;
@@ -1447,48 +1422,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
 
     const int t_offset = history_length ? history_length[batch_idx] : 0;
 
-    if (!neox_rotary_style) {
-        // TODO: unused computation on k if GQA is used
-        mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, dst_kv_seq_idx + t_offset);
-    }
-    else {
-        const bool do_rotary = !is_masked && vec_size * tidx < rotary_embedding_dim;
-
-        T* q_smem = reinterpret_cast<T*>(smem_);
-        T* k_smem = q_smem + rotary_embedding_dim;
-
-        const int half_rotary_dim = rotary_embedding_dim / 2;
-        const int half_idx        = (tidx * vec_size) / half_rotary_dim;
-        const int intra_half_idx  = (tidx * vec_size) % half_rotary_dim;
-        const int smem_pitch      = half_rotary_dim;  // TODO: adjust for bank conflicts?
-
-        if (do_rotary) {
-            *reinterpret_cast<Vec_t*>(q_smem + half_idx * smem_pitch + intra_half_idx) = q;
-            *reinterpret_cast<Vec_t*>(k_smem + half_idx * smem_pitch + intra_half_idx) = k;
-        }
-
-        __syncthreads();
-
-        const int     transpose_idx = half_idx * (half_rotary_dim / 2) + intra_half_idx / 2;
-        constexpr int tidx_factor   = vec_size / 2;
-        if (do_rotary) {
-            mmha::vec_from_smem_transpose(q, q_smem, transpose_idx, smem_pitch);
-            mmha::vec_from_smem_transpose(k, k_smem, transpose_idx, smem_pitch);
-
-            mmha::apply_rotary_embedding(
-                q, k, transpose_idx / tidx_factor, rotary_embedding_dim, dst_kv_seq_idx + t_offset);
-
-            mmha::write_smem_transpose(q, q_smem, transpose_idx, smem_pitch);
-            mmha::write_smem_transpose(k, k_smem, transpose_idx, smem_pitch);
-        }
-
-        __syncthreads();
-
-        if (do_rotary) {
-            q = *reinterpret_cast<Vec_t*>(q_smem + half_idx * smem_pitch + intra_half_idx);
-            k = *reinterpret_cast<Vec_t*>(k_smem + half_idx * smem_pitch + intra_half_idx);
-        }
-    }
+    // TODO: unused computation on k if GQA is used
+    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, dst_kv_seq_idx + t_offset);
 
     if (!is_masked && !q_buf) {  // also skip modifying QKV if q/k/v_buf are present
         *reinterpret_cast<Vec_t*>(&QKV[src_q_idx]) = q;
