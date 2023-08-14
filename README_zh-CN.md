@@ -13,7 +13,9 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
-- \[2023/08\] TurboMind 支持权重 4-bit 量化和推理
+- \[2023/08\] TurboMind 支持 4-bit 推理，比 FP16 快 2.4 倍，是目前最快的开源实现🚀
+- \[2023/08\] LMDeploy 开通了 [HuggingFace Hub](https://huggingface.co/lmdeploy) ，提供开箱即用的 4-bit 模型
+- \[2023/08\] LMDeploy 支持使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法进行 4-bit 量化
 - \[2023/07\] TurboMind 支持使用 GQA 的 Llama-2 70B 模型
 - \[2023/07\] TurboMind 支持 Llama-2 7B/13B 模型
 - \[2023/07\] TurboMind 支持 InternLM 的 Tensor Parallel 推理
@@ -34,6 +36,24 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 - **persistent batch 推理**：进一步优化模型执行效率。
 
   ![PersistentBatchInference](https://github.com/InternLM/lmdeploy/assets/67539920/e3876167-0671-44fc-ac52-5a0f9382493e)
+
+## 支持的模型
+
+### TurboMind
+
+|   模型   | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
+| :------: | :------: | :--: | :-----: | :---: | :--: |
+|  Llama   |    ✅    |  ✅  |   ✅    |  ✅   |  ❌  |
+|  Llama2  |    ✅    |  ✅  |   ✅    |  ✅   |  ❌  |
+| InternLM |    ✅    |  ✅  |   ✅    |  ✅   |  ❌  |
+
+### Pytorch
+
+|   模型   | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
+| :------: | :------: | :--: | :-----: | :---: | :--: |
+|  Llama   |    ✅    |  ✅  |   ❌    |  ❌   |  ❌  |
+|  Llama2  |    ✅    |  ✅  |   ❌    |  ❌   |  ❌  |
+| InternLM |    ✅    |  ✅  |   ❌    |  ❌   |  ❌  |
 
 ## 性能
 
