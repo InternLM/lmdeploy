@@ -182,8 +182,8 @@ LMDeploy uses AWQ algorithm for model weight quantization
 
 ```
 python3 -m lmdeploy.lite.apis.auto_awq \
+  --model $HF_MODEL \
   --w_bits 4 \                       # Bit number for weight quantization
-  --w_sym False \                    # Whether to use symmetric quantization for weights
   --w_group_size 128 \               # Group size for weight quantization statistics
   --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
 ```
