@@ -22,6 +22,7 @@ def valid_str(string, coding='utf-8'):
 
 @dataclasses.dataclass
 class GenOut:
+    """Pack all response information together."""
     response: str
     history_token_len: int
     input_token_len: int
@@ -30,6 +31,13 @@ class GenOut:
 
 
 class AsyncEngine:
+    """Async inference engine. Maintaining a bunch of tm_model instances.
+
+    Args:
+        model_path (str): the path of the deployed model
+        instance_num (int): instance numbers to be created
+        tp (int): tensor parallel
+    """
 
     def __init__(self, model_path, instance_num=32, tp=1) -> None:
         tokenizer_model_path = osp.join(model_path, 'triton_models',
@@ -49,6 +57,7 @@ class AsyncEngine:
         self.steps = {}
 
     async def get_generator(self, instance_id):
+        """Only return the model instance if it is available."""
         while self.available[instance_id] is False:
             await asyncio.sleep(0.1)
         return self.generators[instance_id]
@@ -67,6 +76,16 @@ class AsyncEngine:
         repetition_penalty=1.0,
         ignore_eos=False,
     ):
+        """Generate responses.
+
+        Args:
+            messages (str | List): chat history or prompt
+            instance_id (int): actually request host ip
+            stream_response (bool): whether return responses streamingly
+            renew_session (bool): renew the session
+            request_output_len (int): output token nums
+            stop (bool): whether stop inference
+        """
         session_id = instance_id
         instance_id %= self.instance_num
         sequence_start = False

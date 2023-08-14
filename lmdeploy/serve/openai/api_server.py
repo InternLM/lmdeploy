@@ -21,6 +21,7 @@ os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 class WorkerInstance:
+    """A IO interface maintaining variables."""
     instance: AsyncEngine = None
     request_hosts = []
 
@@ -76,6 +77,7 @@ def get_model_list():
 
 @app.get('/v1/models')
 def available_models():
+    """Show available models."""
     model_cards = []
     for model_name in get_model_list():
         model_cards.append(
@@ -86,12 +88,19 @@ def available_models():
 
 
 def create_error_response(status: HTTPStatus, message: str):
+    """Create error response according to http status and message.
+
+    Args:
+        status (HTTPStatus): HTTP status codes and reason phrases
+        message (str): error message
+    """
     return JSONResponse(ErrorResponse(message=message,
                                       type='invalid_request_error').dict(),
                         status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
+    """Check if a request is valid."""
     if request.model in get_model_list():
         return
     ret = create_error_response(

@@ -9,12 +9,14 @@ from pydantic import BaseModel, Field
 
 
 class ErrorResponse(BaseModel):
+    """Error responses."""
     object: str = 'error'
     message: str
     code: int
 
 
 class ModelPermission(BaseModel):
+    """Model permissions."""
     id: str = Field(default_factory=lambda: f'modelperm-{shortuuid.random()}')
     object: str = 'model_permission'
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -30,6 +32,7 @@ class ModelPermission(BaseModel):
 
 
 class ModelCard(BaseModel):
+    """Model cards."""
     id: str
     object: str = 'model'
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -40,17 +43,20 @@ class ModelCard(BaseModel):
 
 
 class ModelList(BaseModel):
+    """Model list consists of model cards."""
     object: str = 'list'
     data: List[ModelCard] = []
 
 
 class UsageInfo(BaseModel):
+    """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: Optional[int] = 0
 
 
 class ChatCompletionRequest(BaseModel):
+    """Chat completion request."""
     model: str
     messages: Union[str, List[Dict[str, str]]]
     temperature: Optional[float] = 0.7
@@ -69,17 +75,20 @@ class ChatCompletionRequest(BaseModel):
 
 
 class ChatMessage(BaseModel):
+    """Chat messages."""
     role: str
     content: str
 
 
 class ChatCompletionResponseChoice(BaseModel):
+    """Chat completion response choices."""
     index: int
     message: ChatMessage
     finish_reason: Optional[Literal['stop', 'length']]
 
 
 class ChatCompletionResponse(BaseModel):
+    """Chat completion response."""
     id: str = Field(default_factory=lambda: f'chatcmpl-{shortuuid.random()}')
     object: str = 'chat.completion'
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -89,17 +98,20 @@ class ChatCompletionResponse(BaseModel):
 
 
 class DeltaMessage(BaseModel):
+    """Delta messages."""
     role: Optional[str] = None
     content: Optional[str] = None
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
+    """Chat completion response stream choice."""
     index: int
     delta: DeltaMessage
     finish_reason: Optional[Literal['stop', 'length']]
 
 
 class ChatCompletionStreamResponse(BaseModel):
+    """Chat completion stream response."""
     id: str = Field(default_factory=lambda: f'chatcmpl-{shortuuid.random()}')
     object: str = 'chat.completion.chunk'
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -107,41 +119,8 @@ class ChatCompletionStreamResponse(BaseModel):
     choices: List[ChatCompletionResponseStreamChoice]
 
 
-class TokenCheckRequestItem(BaseModel):
-    model: str
-    prompt: str
-    max_tokens: int
-
-
-class TokenCheckRequest(BaseModel):
-    prompts: List[TokenCheckRequestItem]
-
-
-class TokenCheckResponseItem(BaseModel):
-    fits: bool
-    tokenCount: int
-    contextLength: int
-
-
-class TokenCheckResponse(BaseModel):
-    prompts: List[TokenCheckResponseItem]
-
-
-class EmbeddingsRequest(BaseModel):
-    model: Optional[str] = None
-    engine: Optional[str] = None
-    input: Union[str, List[Any]]
-    user: Optional[str] = None
-
-
-class EmbeddingsResponse(BaseModel):
-    object: str = 'list'
-    data: List[Dict[str, Any]]
-    model: str
-    usage: UsageInfo
-
-
 class CompletionRequest(BaseModel):
+    """Completion request."""
     model: str
     prompt: Union[str, List[Any]]
     suffix: Optional[str] = None
@@ -159,6 +138,7 @@ class CompletionRequest(BaseModel):
 
 
 class CompletionResponseChoice(BaseModel):
+    """Completion response choices."""
     index: int
     text: str
     logprobs: Optional[int] = None
@@ -166,6 +146,7 @@ class CompletionResponseChoice(BaseModel):
 
 
 class CompletionResponse(BaseModel):
+    """Completion response."""
     id: str = Field(default_factory=lambda: f'cmpl-{shortuuid.random()}')
     object: str = 'text_completion'
     created: int = Field(default_factory=lambda: int(time.time()))
