@@ -47,17 +47,17 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 |  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
 | :------: | :-------------: | :--: | :-----: | :---: | :--: |
-|  Llama   |       ✅        |  ✅  |   ✅    |  ✅   |  ❌  |
-|  Llama2  |       ✅        |  ✅  |   ✅    |  ✅   |  ❌  |
-| InternLM |       ✅        |  ✅  |   ✅    |  ✅   |  ❌  |
+|  Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Llama2  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| InternLM |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 
 ### Pytorch
 
 |  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
 | :------: | :-------------: | :--: | :-----: | :---: | :--: |
-|  Llama   |       ✅        |  ✅  |   ❌    |  ❌   |  ❌  |
-|  Llama2  |       ✅        |  ✅  |   ❌    |  ❌   |  ❌  |
-| InternLM |       ✅        |  ✅  |   ❌    |  ❌   |  ❌  |
+|  Llama   |       Yes       | Yes  |   No    |  No   |  No  |
+|  Llama2  |       Yes       | Yes  |   No    |  No   |  No  |
+| InternLM |       Yes       | Yes  |   No    |  No   |  No  |
 
 ## Performance
 
