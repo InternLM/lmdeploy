@@ -41,6 +41,9 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ### TurboMind
 
+> **Note**<br />
+> W4A16 推理需要 Ampere 及以上架构的 Nvidia GPU
+
 |   模型   | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
 | :------: | :------: | :--: | :-----: | :---: | :--: |
 |  Llama   |    ✅    |  ✅  |   ✅    |  ✅   |  ❌  |
