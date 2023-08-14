@@ -22,14 +22,7 @@
 #include "stdlib.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
-#ifdef _MSC_VER
-#define NOMINMAX
-#include "src/turbomind/windows/dirent.h"
 #include <filesystem>
-namespace fs = std::filesystem;
-#else
-#include <dirent.h>
-#endif
 #include <numeric>
 #include <stdlib.h>
 #include <string>
@@ -38,6 +31,7 @@ namespace fs = std::filesystem;
 #include <unordered_map>
 #include <vector>
 
+namespace fs = std::filesystem;
 namespace turbomind {
 
 Tensor::Tensor():
@@ -414,14 +408,9 @@ std::string TensorMap::toString()
 
 TensorMap TensorMap::fromNpyFolder(const std::string& base_folder)
 {
-    DIR* dir_p = opendir(base_folder.c_str());
-    FT_CHECK_WITH_INFO(dir_p != nullptr, fmtstr("Could not open folder %s. ", base_folder.c_str()));
-    struct dirent* dp;
-
-    TensorMap ret_tensor;
-    while ((dp = readdir(dir_p)) != nullptr) {
-        std::string filename(dp->d_name);
-        size_t      len = filename.length();
+    for (auto const& entry : fs::directory_iterator{base_folder}) {
+        std::string filename = entry.path();
+        size_t      len      = filename.length();
         if (len < 4 || filename.compare(len - 4, 4, ".npy")) {
             continue;
         }
@@ -446,29 +435,16 @@ TensorMap TensorMap::fromNpyFolder(const std::string& base_folder)
 
         ret_tensor.tensor_map_.insert({key, Tensor::loadNpy(base_folder + "/" + filename, where)});
     }
-
-    closedir(dir_p);
-
     return ret_tensor;
 }
 
 void TensorMap::saveNpy(const std::string& base_folder)
 {
-#ifdef _MSC_VER
     bool ret = fs::exists(base_folder) | fs::create_directory(base_folder);
     FT_CHECK_WITH_INFO(ret == true, fmtstr("Could not create folder %s.\n", base_folder.c_str()));
     for (const auto& item : tensor_map_) {
         item.second.saveNpy(base_folder + "/" + item.second.whereToString() + "-" + item.first + ".npy");
     }
-#else
-    mode_t mode_0755 = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
-    int    ret       = mkdir(base_folder.c_str(), mode_0755);
-    FT_CHECK_WITH_INFO(ret == 0 || errno == EEXIST, fmtstr("Could not create folder %s.\n", base_folder.c_str()));
-
-    for (const auto& item : tensor_map_) {
-        item.second.saveNpy(base_folder + "/" + item.second.whereToString() + "-" + item.first + ".npy");
-    }
-#endif
 }
 
 }  // namespace turbomind
