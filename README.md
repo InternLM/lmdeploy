@@ -13,7 +13,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
-- \[2023/08\] Turbomind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀.
+- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀.
 - \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
 - \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
 - \[2023/07\] TurboMind supports Llama-2 70B with GQA.
