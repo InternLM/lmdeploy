@@ -1,11 +1,14 @@
+#include "src/turbomind/kernels/gemm_s_f16/format.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 #include <cuda_runtime.h>
 #include <memory>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
@@ -211,6 +214,13 @@ std::shared_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* t
     return std::make_shared<triton::Tensor>(where, dtype, shape, data);
 }
 
+DLTensor GetDLTensor(py::object obj)
+{
+    py::capsule      cap  = obj.attr("__dlpack__")();
+    DLManagedTensor* dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+    return dlmt->dl_tensor;
+}
+
 PYBIND11_MODULE(_turbomind, m)
 {
     // nccl param
@@ -335,7 +345,7 @@ PYBIND11_MODULE(_turbomind, m)
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
-                if (data_type == "half" || data_type == "fp16") {
+                if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
                     return std::make_shared<LlamaTritonModel<half>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
                 }
@@ -389,4 +399,57 @@ PYBIND11_MODULE(_turbomind, m)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
         .def("get_pipeline_para_size", &AbstractTransformerModel::getPipelineParaSize);
+
+    m.def("transpose_qk_s4_k_m8", [](py::object src, py::object dst, int m, int k, int size_per_head) {
+        auto src_tensor = GetDLTensor(src);
+        auto dst_tensor = GetDLTensor(dst);
+
+        turbomind::transpose_qk_s4_k_m8_hf(
+            (uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, size_per_head, nullptr);
+    });
+
+    m.def("fuse_w1_w3_s4_k_m8", [](py::object src, py::object dst, int m, int k) {
+        auto src_tensor = GetDLTensor(src);
+        auto dst_tensor = GetDLTensor(dst);
+
+        turbomind::fuse_w1_w3_s4_k_m8((uint32_t*)dst_tensor.data, (const uint32_t*)src_tensor.data, m, k, nullptr);
+    });
+
+    m.def("convert_s4_k_m8",
+          [](py::object A_dst,
+             py::object Q_dst,
+             py::object ws,
+             py::object A_src,
+             py::object scales,
+             py::object qzeros,
+             int        m,
+             int        k,
+             int        group_size) {
+              auto a_dst = GetDLTensor(A_dst);
+              auto q_dst = GetDLTensor(Q_dst);
+              auto w     = GetDLTensor(ws);
+              auto a_src = GetDLTensor(A_src);
+              auto s     = GetDLTensor(scales);
+              auto qz    = GetDLTensor(qzeros);
+
+              turbomind::convert_s4_k_m8((uint32_t*)a_dst.data,
+                                         (half2*)q_dst.data,
+                                         (half*)w.data,
+                                         (const uint32_t*)a_src.data,
+                                         (const half*)s.data,
+                                         (const uint32_t*)qz.data,
+                                         m,
+                                         k,
+                                         group_size,
+                                         nullptr);
+          });
+
+    m.def("dequantize_s4", [](py::object src, py::object dst) {
+        auto src_tensor = GetDLTensor(src);
+        auto dst_tensor = GetDLTensor(dst);
+        auto src_count  = std::accumulate(src_tensor.shape, src_tensor.shape + src_tensor.ndim, size_t{1});
+        auto dst_count  = std::accumulate(dst_tensor.shape, dst_tensor.shape + dst_tensor.ndim, size_t{1});
+        turbomind::FT_CHECK(src_count * 8 == dst_count);
+        turbomind::dequantize_s4((uint4*)dst_tensor.data, (uint32_t*)src_tensor.data, src_count, nullptr);
+    });
 }

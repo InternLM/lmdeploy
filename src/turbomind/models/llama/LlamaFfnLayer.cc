@@ -85,12 +85,16 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
 
     PUSH_RANGE("ffn");
-    // TODO: fuse the two GEMMs with activation
-    linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating);
 
-    linear_.forward(inter_buf_, ffn_input_data, num_token, weights->intermediate);
-
-    activation(num_token);
+    if (weights->fused_gating_intermediate.kernel) {
+        linear_.forward(
+            gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, LlamaLinear<T>::kFusedSiluFfn);
+    }
+    else {
+        linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating);
+        linear_.forward(inter_buf_, ffn_input_data, num_token, weights->intermediate);
+        activation(num_token);
+    }
 
     linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output);
     POP_RANGE;

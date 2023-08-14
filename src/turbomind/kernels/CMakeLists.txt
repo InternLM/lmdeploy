@@ -69,3 +69,5 @@ set_property(TARGET sampling_penalty_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOL
 add_library(custom_ar_kernels STATIC custom_ar_kernels.cu)
 set_property(TARGET custom_ar_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_subdirectory(gemm_s_f16)

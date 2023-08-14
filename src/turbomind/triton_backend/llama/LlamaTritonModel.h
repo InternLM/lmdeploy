@@ -95,8 +95,7 @@ private:
     ft::WeightType weight_type_;
     bool           attn_bias_;
     int            quant_policy_;
-
-    size_t prefix_cache_len_{};
+    int            group_size_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;
@@ -106,15 +105,6 @@ private:
     // weak_ptr is used so that the instances get released when all strong references are gone
     std::vector<std::weak_ptr<LlamaTritonSharedModelInstance<T>>> shared_instances_;
     std::deque<std::mutex>                                        shared_mutexes_;  // is locking really needed?
-
-    // // residual type
-    // bool use_gptj_residual_ = true;
-
-    // // number of tasks (for prefix-prompt, p/prompt-tuning)
-    // size_t                                     num_tasks_                  = 0;
-    // int                                        prompt_learning_start_id_   = 0;
-    // ft::PromptLearningType                     prompt_learning_type_       = ft::PromptLearningType::no_prompt;
-    // std::map<std::string, std::pair<int, int>> prompt_learning_table_pair_ = {};
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;
