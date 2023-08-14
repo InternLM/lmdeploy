@@ -3,6 +3,7 @@
 #pragma once
 
 #include "metric.h"
+#include "src\turbomind\windows\macro.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 

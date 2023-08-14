@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "src\turbomind\windows\macro.h"
 #include <cassert>
 #include <cstdint>
 #include <cuda_fp16.h>
