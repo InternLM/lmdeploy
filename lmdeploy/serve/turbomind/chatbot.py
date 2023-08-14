@@ -26,7 +26,6 @@ class Session:
     request_id: str = ''
     histories: str = ''  # history conversations of the session
     sequence_length: int = 0  # the total generated token number in the session
-    sequence_offset: int = 0  # the new generated token offset in the session
     prompt: str = ''
     response: str = ''
     status: int = None  # status of the session
@@ -599,15 +598,14 @@ class Chatbot:
         Yields:
             tuple: status, text, generated token number
         """
-        session.sequence_offset = n_input_token + preseq_length
-        sentinel = n_input_token + preseq_length
+        offset = n_input_token + preseq_length
         status, res, n_token = None, '', 0
         while True:
             result = res_queue.get()
             if result is None:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
-                n_token = session.sequence_length - sentinel
+                n_token = session.sequence_length - offset
                 session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
@@ -630,31 +628,30 @@ class Chatbot:
                 output_ids = result.as_numpy('output_ids')
 
                 session.sequence_length = sequence_length.squeeze()
-                new_token_length = sequence_length - session.sequence_offset
+                sequence_length = sequence_length - offset
                 last_token_id = output_ids[-1][-1][session.sequence_length - 1]
                 if last_token_id == eos_id:
                     session.sequence_length = session.sequence_length - 1
-                    new_token_length = new_token_length - 1
+                    sequence_length = sequence_length - 1
 
                 output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
-                new_token_length = new_token_length.reshape(
-                    (1, new_token_length.shape[-1]))
+                sequence_length = sequence_length.reshape(
+                    (1, sequence_length.shape[-1]))
 
                 if profile_generation:
                     yield (StatusCode.TRITON_STREAM_ING,
                            'postprocessing is ignored during profiling '
-                           'token generation', new_token_length.squeeze())
+                           'token generation', sequence_length.squeeze())
                     continue
-                output_str = postprocess(
-                    output_ids[:, :, session.sequence_offset:],
-                    new_token_length)
-                session.sequence_offset = session.sequence_length
+                output_str = postprocess(output_ids[:, :, offset:],
+                                         sequence_length)
                 text = output_str[0].decode()
                 if display:
-                    print(text, end='', flush=True)
-                session.response += text
+                    new_text = text[len(session.response):]
+                    print(new_text, end='', flush=True)
+                session.response = text
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
-                       session.sequence_offset - sentinel)
+                       sequence_length.squeeze())
             except Exception as e:
                 logger.error(f'catch exception: {e}')
 

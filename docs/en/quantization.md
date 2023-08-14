@@ -2,7 +2,7 @@
 
 ## Benchmark the Graphics Memory Usage
 
-We take the [Chinese-LLaMa-Alpaca 7B](https://github.com/ymcui/Chinese-LLaMA-Alpaca) instruction model as the benchmark target. The benchmark process is as follows:
+We take the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) instruction model as the benchmark target. The benchmark process is as follows:
 
 1. Use the `deploy.py` to convert the model, modify the maximum concurrent amount in `workspace`, and adjust the request amount in `llama_config.ini`
 2. Compile the `bin/llama_triton_example` and get the graphics usage status of the fp16 version model under different batch_size settings
@@ -28,25 +28,30 @@ Note that `kCacheKVInt8` and `WeightInt4` can be used simultaneously, and we wil
 
 ## Benchmark the Accuracy
 
-Here we take the [Chinese-LLaMa-Alpaca 7B](https://github.com/ymcui/Chinese-LLaMA-Alpaca) instruction model as the benchmark target again. The benchmark process is as follows:
+The quantification method is PTQ, and the related formula is as follows:
+
+```
+zp = (min+max) / 2
+scale = (max-min) / 255
+quant: q = round( (f-zp) / scale)
+dequant: f = q * scale + zp
+```
+
+Here we take the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) instruction model as the benchmark target again. The benchmark process is as follows:
 
 1. Convert the model with `deploy.py` and run the docker service
 2. Test the fp16 version accuracy with `client.py` using the dataset
 3. Execute the quantization script to get the quantization parameters, and put them into the weights directory. Then modify the configuration file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) option to be effective
 4. Execute the `client.py` again to get the int8 version precision
 
-The following table is the precision result obtained by the `kCacheKVInt8` method after quantizing 128 randomly selected data from the c4 dataset and testing it on the mmlu-social-science dataset, which has a total of 3065 multiple-choice questions:
+The following table is the precision result obtained by the `kCacheKVInt8` method after quantizing 128 randomly selected data from the c4 dataset and testing it with [opencompass](https://github.com/InternLM/opencompass).
 
-| task |       dataset       | metric | fp16  | int8  | diff  |
-| :--: | :-----------------: | :----: | :---: | :---: | :---: |
-| Exam | mmlu-social-science | score  | 31.81 | 32.00 | +0.19 |
-
-We noticed that there is a slight improvement in the precision, and the differences are as follows:
-
-|                      Type                      | Number |
-| :--------------------------------------------: | :----: |
-| fp16 version failed but int8 version got right |   72   |
-| fp16 version got right but int8 version failed |   66   |
-|      failed in both fp16 and int8 version      |  118   |
-
-We have validated the quantization implementation on more datasets and larger models and will keep updating the results.
+|     task      |     dataset     |    metric     | int8  | fp16  | diff  |
+| :-----------: | :-------------: | :-----------: | :---: | :---: | :---: |
+|   Language    |   winogrande    |   accuracy    | 60.77 | 61.48 | -0.71 |
+|   Knowledge   |       nq        |     score     | 2.69  | 2.60  | +0.09 |
+|   Reasoning   |      gsm8k      |   accuracy    | 33.28 | 34.72 | -1.44 |
+|   Reasoning   |       bbh       | naive_average | 20.12 | 20.51 | -0.39 |
+| Understanding | openbookqa_fact |   accuracy    | 82.40 | 82.20 | +0.20 |
+| Understanding |   eprstmt-dev   |   accuracy    | 90.62 | 88.75 | +1.87 |
+|    Safety     |   crows_pairs   |   accuracy    | 32.56 | 31.43 | +1.13 |
