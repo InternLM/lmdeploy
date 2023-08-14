@@ -299,7 +299,7 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     std::ifstream in(scale_path, std::ios::in);
     if (in.is_open()) {
         in.close();
-        self_attn_weights.past_kv_scale = loadArrayFromBin({2}, scale_path);
+        self_attn_weights.past_kv_scale = loadArrayFromBin({4}, scale_path);
     }
     else {
         self_attn_weights.past_kv_scale = {};
