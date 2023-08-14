@@ -38,6 +38,8 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 ## Supported Models
 
+`LMDeploy` has two inference backends, `Pytorch` and `TurboMind`.
+
 ### TurboMind
 
 > **Note**<br />
