@@ -180,6 +180,7 @@ LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进
 
 ```
 python3 -m lmdeploy.lite.apis.auto_awq \
+  --model $HF_MODEL \
   --w_bits 4 \                       # 权重量化的 bit 数
   --w_group_size 128 \               # 权重量化分组统计尺寸
   --work_dir $WORK_DIR \             # Step 1 保存量化参数的目录
