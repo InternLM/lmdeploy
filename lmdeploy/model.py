@@ -72,7 +72,9 @@ class BaseModel:
         Returns:
             str: the concatenated prompt
         """
-        pass
+        if isinstance(messages, str):
+            return self.get_prompt(messages)
+        # chat history processing in derived classes
 
     @property
     def stop_words(self):
