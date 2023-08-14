@@ -15,9 +15,6 @@
  */
 
 #include "swin_igemm_func.h"
-#ifdef _MSC_VER
-#include "src/turbomind/windows/gettimeofday.h"
-#endif
 
 namespace turbomind {
 
@@ -92,7 +89,7 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // 
             struct timeval start, end;
             cublasStatus_t oneRunStatus;
             cudaDeviceSynchronize();
-            gettimeofday(&start, NULL);
+            auto start = std::chrono::high_resolution_clock::now();
             for (int loop = 0; loop < repeats; loop++) {
                 oneRunStatus = cublasLtMatmul(ltHandle,
                                               operationDesc,
@@ -112,11 +109,12 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // 
                                               stream);
             }
             cudaDeviceSynchronize();
-            gettimeofday(&end, NULL);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto dur = std::chrono::duration<float, std::milli>(end - start);
             if (oneRunStatus != CUBLAS_STATUS_SUCCESS) {
                 algoStatus = oneRunStatus;
             }
-            float time = diffTime(start, end);
+            float time = dur.count();
             // For the moment only add successful findings
             if (algoStatus == CUBLAS_STATUS_SUCCESS) {
                 perfResults.algo          = algo;

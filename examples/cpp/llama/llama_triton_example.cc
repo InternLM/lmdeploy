@@ -19,6 +19,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
 
 #include "3rdparty/INIReader.h"
+#include <chrono>
 #include <memory>
 #include <thread>
 
@@ -31,10 +32,6 @@
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/word_list.h"
 #include "src/turbomind/windows/macro.h"
-#ifdef _MSC_VER
-#include "src/turbomind/windows/gettimeofday.h"
-using turbomind::gettimeofday;
-#endif
 
 namespace ft = turbomind;
 
@@ -480,8 +477,7 @@ int main(int argc, char* argv[])
 
     if (1) {
         // test time
-        struct timeval start, end;
-        gettimeofday(&start, NULL);
+        auto start = std::chrono::high_resolution_clock::now();
 
         const int ite = 1;
         for (int i = 0; i < ite; i++) {
@@ -504,14 +500,15 @@ int main(int argc, char* argv[])
             ft::mpi::barrier();
         }
 
-        gettimeofday(&end, NULL);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto dur = std::chrono::duration<float, std::milli>(end - start);
 
         printf("[INFO] batch_size %d beam_width %d seq_len %d"
                " FT-CPP-GPT-Triton-time %.2f ms\n",
                batch_size,
                beam_width,
                seq_lens[0],
-               ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
+               dur.count() / ite);
     }
 
     if (kUSE_MPI) {

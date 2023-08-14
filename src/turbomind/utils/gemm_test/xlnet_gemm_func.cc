@@ -16,9 +16,6 @@
 
 #include "src/turbomind/utils/gemm_test/xlnet_gemm_func.h"
 #include "src/turbomind/windows/macro.h"
-#ifdef _MSC_VER
-#include "src/turbomind/windows/gettimeofday.h"
-#endif
 
 namespace turbomind {
 
@@ -289,7 +286,7 @@ void generate_xlnet_gemm_config(int   batch_size,
         for (int algo = startAlgo; algo <= endAlgo; algo++) {
             cublasStatus_t status;
             cudaDeviceSynchronize();
-            gettimeofday(&start, NULL);
+            auto start = std::chrono::high_resolution_clock::now();
             for (int ite = 0; ite < ites; ++ite) {
                 if (i == 1 || i == 7 || i == 8 || i == 9) {
                     status = cublasGemmEx(cublas_handle,
@@ -342,11 +339,12 @@ void generate_xlnet_gemm_config(int   batch_size,
                 }
             }
             cudaDeviceSynchronize();
-            gettimeofday(&end, NULL);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto dur = std::chrono::duration<float, std::milli>(end - start);
             if (status == CUBLAS_STATUS_SUCCESS) {
-                printf("algo_%d costs %.3fms \n", algo, diffTime(start, end) / ites);
-                if (diffTime(start, end) / ites < exec_time) {
-                    exec_time = diffTime(start, end) / ites;
+                printf("algo_%d costs %.3fms \n", algo, dur.count() / ites);
+                if (dur.count() / ites < exec_time) {
+                    exec_time = dur.count() / ites;
                     fast_algo = algo;
                 }  // end if diffTime
             }      // end status

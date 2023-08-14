@@ -265,11 +265,6 @@ public:
     ~CudaTimer() {}
 };
 
-static double diffTime(timeval start, timeval end)
-{
-    return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001;
-}
-
 /* ***************************** common utils ****************************** */
 
 inline void print_mem_usage(std::string time = "after allocation")
