@@ -1,5 +1,15 @@
 name: linux-x64-gpu
 on:
+  pull:
+    branches: [main]
+    paths:
+      - '.github/workflows/linux-x64-gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
   pull_request:
     branches: [main]
     paths:
