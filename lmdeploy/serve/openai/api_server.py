@@ -36,34 +36,63 @@ async def generate(request: Request):
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - stream: whether to stream the results or not.
+    - renew_session: whether to restart the session.
+    - instance_id: determin which instance will be called. If not specified,
+        using host ip directly.
+    - request_output_len (int): output token nums
+    - top_p (float): If set to float < 1, only the smallest set of most
+        probable tokens with probabilities that add up to top_p or higher
+        are kept for generation.
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
+    - temperature (float): to modulate the next token probability
+    - repetition_penalty (float): The parameter for repetition penalty.
+        1.0 means no penalty
+    - ignore_eos (bool): indicator for ignoring eos
     """
     request_dict = await request.json()
     prompt = request_dict.pop('prompt')
     stream_output = request_dict.pop('stream', False)
+    request_output_len = request_dict.pop('request_output_len', 512)
     renew_session = request_dict.pop('renew_session', False)
+    sequence_start = request_dict.pop('sequence_start', True)
+    sequence_end = request_dict.pop('sequence_end', False)
+    top_p = request_dict.pop('top_p', 0.8)
+    top_k = request_dict.pop('top_k', 40)
+    temperature = request_dict.pop('temperature', 0.8)
+    repetition_penalty = request_dict.pop('repetition_penalty', 1)
+    ignore_eos = request_dict.pop('ignore_eos', False)
     instance_id = int(request.client.host.replace('.', ''))
+    instance_id = request_dict.pop('instance_id', instance_id)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
-        async for output in WorkerInstance.instance.generate(
+        async for out in WorkerInstance.instance.generate(
                 prompt,
                 instance_id,
                 stream_response=stream_output,
+                sequence_start=sequence_start,
+                sequence_end=sequence_end,
                 renew_session=renew_session,
-        ):
-            ret = {'text': output.response}
+                request_output_len=request_output_len,
+                top_p=top_p,
+                top_k=top_k,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                ignore_eos=ignore_eos):
+            ret = {'text': out.response, 'tokens': out.generate_token_len}
             yield (json.dumps(ret) + '\0').encode('utf-8')
 
     if stream_output:
         return StreamingResponse(stream_results())
     else:
         ret = {}
-        async for out in WorkerInstance.instance.generate(
+        async for out in WorkerInstance.instance.generate_openai(
                 prompt,
                 instance_id,
                 renew_session=renew_session,
                 stream_response=stream_output):
-            ret = {'text': out.response}
+            ret = {'text': out.response, 'tokens': out.generate_token_len}
         return JSONResponse(ret)
 
 
@@ -81,9 +110,9 @@ def available_models():
     model_cards = []
     for model_name in get_model_list():
         model_cards.append(
-            ModelCard(id=model_name,
-                      root=model_name,
-                      permission=[ModelPermission()]))
+            ModelCard(
+                id=model_name, root=model_name,
+                permission=[ModelPermission()]))
     return ModelList(data=model_cards)
 
 
@@ -94,9 +123,9 @@ def create_error_response(status: HTTPStatus, message: str):
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
     """
-    return JSONResponse(ErrorResponse(message=message,
-                                      type='invalid_request_error').dict(),
-                        status_code=status.value)
+    return JSONResponse(
+        ErrorResponse(message=message, type='invalid_request_error').dict(),
+        status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
@@ -134,7 +163,7 @@ async def chat_completions_v1(raw_request: Request):
     request_id = str(instance_id)
     created_time = int(time.time())
 
-    result_generator = WorkerInstance.instance.generate(
+    result_generator = WorkerInstance.instance.generate_openai(
         request.messages,
         instance_id,
         request.stream,
@@ -147,11 +176,12 @@ async def chat_completions_v1(raw_request: Request):
         ignore_eos=request.ignore_eos)
 
     async def abort_request() -> None:
-        async for _ in WorkerInstance.instance.generate(request.messages,
-                                                        instance_id,
-                                                        request.stream,
-                                                        request.renew_session,
-                                                        stop=True):
+        async for _ in WorkerInstance.instance.generate_openai(
+                request.messages,
+                instance_id,
+                request.stream,
+                request.renew_session,
+                stop=True):
             pass
 
     def create_stream_response_json(
@@ -182,9 +212,8 @@ async def chat_completions_v1(raw_request: Request):
                 delta=DeltaMessage(role='assistant'),
                 finish_reason=None,
             )
-            chunk = ChatCompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
+            chunk = ChatCompletionStreamResponse(
+                id=request_id, choices=[choice_data], model=model_name)
             data = chunk.json(exclude_unset=True, ensure_ascii=False)
             yield f'data: {data}\n\n'
 
@@ -201,9 +230,10 @@ async def chat_completions_v1(raw_request: Request):
         background_tasks = BackgroundTasks()
         # Abort the request if the client disconnects.
         background_tasks.add_task(abort_request)
-        return StreamingResponse(completion_stream_generator(),
-                                 media_type='text/event-stream',
-                                 background=background_tasks)
+        return StreamingResponse(
+            completion_stream_generator(),
+            media_type='text/event-stream',
+            background=background_tasks)
 
     # Non-streaming response
     final_res = None
@@ -244,6 +274,8 @@ async def chat_completions_v1(raw_request: Request):
 
 
 def main(model_path: str,
+         instance_num: int = 32,
+         tp: int = 1,
          server_name: str = 'localhost',
          server_port: int = 23333):
     """An example to perform model inference through the command line
@@ -251,10 +283,13 @@ def main(model_path: str,
 
     Args:
         model_path (str): the path of the deployed model
+        instance_num (int): number of instances of turbomind model
+        tp (int): tensor parallel
         server_name (str): host ip for serving
         server_port (int): server port
     """
-    WorkerInstance.instance = AsyncEngine(model_path=model_path)
+    WorkerInstance.instance = AsyncEngine(
+        model_path=model_path, instance_num=instance_num, tp=tp)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 

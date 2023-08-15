@@ -173,8 +173,9 @@ class TurboMindInstance:
         model_insts = [None] * self.gpu_count
         threads = []
         for device_id in range(self.gpu_count):
-            t = Thread(target=self._create_model_instance,
-                       args=(device_id, model_insts))
+            t = Thread(
+                target=self._create_model_instance,
+                args=(device_id, model_insts))
             t.start()
             threads.append(t)
         for t in threads:
@@ -209,6 +210,7 @@ class TurboMindInstance:
             self.threads[device_id] = t
 
     async def async_stream_infer(self, *args, **kwargs):
+        """Async wrapper of self.stream_infer"""
         for output in self.stream_infer(*args, **kwargs):
             # Allow the pipeline add new requests into the queue.
             await asyncio.sleep(0)
@@ -270,9 +272,8 @@ class TurboMindInstance:
 
         input_ids = [torch.IntTensor(ids) for ids in input_ids]
         input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
+        input_ids = pad_sequence(
+            input_ids, batch_first=True, padding_value=self.eos_id)
 
         if isinstance(session_id, int):
             session_id = [session_id]
@@ -283,9 +284,8 @@ class TurboMindInstance:
         inputs = dict(
             input_ids=input_ids,
             input_lengths=input_lengths,
-            request_output_len=np.full(input_lengths.shape,
-                                       request_output_len,
-                                       dtype=np.uint32),
+            request_output_len=np.full(
+                input_lengths.shape, request_output_len, dtype=np.uint32),
             runtime_top_k=_broadcast_np(top_k, np.uint32),
             runtime_top_p=_broadcast_np(top_p, np.float32),
             temperature=_broadcast_np(temperature, np.float32),
@@ -380,14 +380,14 @@ class TurboMindInstance:
 
         input_ids = [torch.IntTensor(ids) for ids in input_ids]
         input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
+        input_ids = pad_sequence(
+            input_ids, batch_first=True, padding_value=self.eos_id)
 
-        inputs = dict(input_ids=input_ids,
-                      input_lengths=input_lengths,
-                      request_output_len=_broadcast_np(0, dtype=np.uint32),
-                      is_return_logits=_broadcast_np(1, np.uint32))
+        inputs = dict(
+            input_ids=input_ids,
+            input_lengths=input_lengths,
+            request_output_len=_broadcast_np(0, dtype=np.uint32),
+            is_return_logits=_broadcast_np(1, np.uint32))
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
 
