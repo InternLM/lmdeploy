@@ -43,8 +43,9 @@ class AsyncEngine:
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
-        self.tm_model = tm.TurboMind(
-            model_path, eos_id=tokenizer.eos_token_id, tp=tp)
+        self.tm_model = tm.TurboMind(model_path,
+                                     eos_id=tokenizer.eos_token_id,
+                                     tp=tp)
         self.tokenizer = tokenizer
         self.generators = [
             self.tm_model.create_instance() for i in range(instance_num)
@@ -183,12 +184,11 @@ class AsyncEngine:
                 session_id)] > 0:  # renew a session
             empty_prompt = self.model.messages2prompt('', False)
             empty_input_ids = self.tokenizer.encode(empty_prompt)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[empty_input_ids],
-                    request_output_len=1,
-                    sequence_start=False,
-                    sequence_end=True):
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=[empty_input_ids],
+                                                  request_output_len=1,
+                                                  sequence_start=False,
+                                                  sequence_end=True):
                 pass
             self.steps[str(session_id)] = 0
         if str(session_id) not in self.steps:

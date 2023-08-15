@@ -36,7 +36,7 @@ async def generate(request: Request):
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - stream: whether to stream the results or not.
-    - instance_id: determin which instance will be called. If not specified,
+    - instance_id: determine which instance will be called. If not specified,
         using host ip directly.
     - request_output_len (int): output token nums
     - sequence_start (bool): indicator for starting a sequence
@@ -117,9 +117,9 @@ def available_models():
     model_cards = []
     for model_name in get_model_list():
         model_cards.append(
-            ModelCard(
-                id=model_name, root=model_name,
-                permission=[ModelPermission()]))
+            ModelCard(id=model_name,
+                      root=model_name,
+                      permission=[ModelPermission()]))
     return ModelList(data=model_cards)
 
 
@@ -130,9 +130,9 @@ def create_error_response(status: HTTPStatus, message: str):
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
     """
-    return JSONResponse(
-        ErrorResponse(message=message, type='invalid_request_error').dict(),
-        status_code=status.value)
+    return JSONResponse(ErrorResponse(message=message,
+                                      type='invalid_request_error').dict(),
+                        status_code=status.value)
 
 
 async def check_request(request) -> Optional[JSONResponse]:
@@ -219,8 +219,9 @@ async def chat_completions_v1(raw_request: Request):
                 delta=DeltaMessage(role='assistant'),
                 finish_reason=None,
             )
-            chunk = ChatCompletionStreamResponse(
-                id=request_id, choices=[choice_data], model=model_name)
+            chunk = ChatCompletionStreamResponse(id=request_id,
+                                                 choices=[choice_data],
+                                                 model=model_name)
             data = chunk.json(exclude_unset=True, ensure_ascii=False)
             yield f'data: {data}\n\n'
 
@@ -237,10 +238,9 @@ async def chat_completions_v1(raw_request: Request):
         background_tasks = BackgroundTasks()
         # Abort the request if the client disconnects.
         background_tasks.add_task(abort_request)
-        return StreamingResponse(
-            completion_stream_generator(),
-            media_type='text/event-stream',
-            background=background_tasks)
+        return StreamingResponse(completion_stream_generator(),
+                                 media_type='text/event-stream',
+                                 background=background_tasks)
 
     # Non-streaming response
     final_res = None
@@ -295,8 +295,9 @@ def main(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
     """
-    WorkerInstance.instance = AsyncEngine(
-        model_path=model_path, instance_num=instance_num, tp=tp)
+    WorkerInstance.instance = AsyncEngine(model_path=model_path,
+                                          instance_num=instance_num,
+                                          tp=tp)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 

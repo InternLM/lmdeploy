@@ -1,14 +1,13 @@
-import argparse
 import json
-from typing import Iterable, List
 import multiprocessing as mp
 import os
 import random
 import time
+from typing import Iterable, List
 
-import requests
 import fire
 import numpy as np
+import requests
 from sentencepiece import SentencePieceProcessor
 
 
@@ -20,23 +19,26 @@ def get_streaming_response(prompt: str,
                            sequence_start: bool = True,
                            sequence_end: bool = False,
                            ignore_eos: bool = False) -> Iterable[List[str]]:
-    headers = {"User-Agent": "Test Client"}
+    headers = {'User-Agent': 'Test Client'}
     pload = {
-        "prompt": prompt,
-        "stream": stream,
-        "instance_id": instance_id,
-        "request_output_len": request_output_len,
-        "sequence_start": sequence_start,
-        "sequence_end": sequence_end,
-        "ignore_eos": ignore_eos
+        'prompt': prompt,
+        'stream': stream,
+        'instance_id': instance_id,
+        'request_output_len': request_output_len,
+        'sequence_start': sequence_start,
+        'sequence_end': sequence_end,
+        'ignore_eos': ignore_eos
     }
-    response = requests.post(
-        api_url, headers=headers, json=pload, stream=stream)
-    for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b"\0"):
+    response = requests.post(api_url,
+                             headers=headers,
+                             json=pload,
+                             stream=stream)
+    for chunk in response.iter_lines(chunk_size=8192,
+                                     decode_unicode=False,
+                                     delimiter=b'\0'):
         if chunk:
-            data = json.loads(chunk.decode("utf-8"))
-            output = data["text"]
+            data = json.loads(chunk.decode('utf-8'))
+            output = data['text']
             tokens = data['tokens']
             yield output, tokens
 
@@ -49,8 +51,9 @@ class Tokenizer:
         self.sp_model = SentencePieceProcessor(model_file=model_path)
 
     def encode(self, prompts: List):
-        prompts_token_ids = self.sp_model.Encode(
-            prompts, add_bos=False, add_eos=False)
+        prompts_token_ids = self.sp_model.Encode(prompts,
+                                                 add_bos=False,
+                                                 add_eos=False)
         return [len(token_ids) for token_ids in prompts_token_ids]
 
 
@@ -165,8 +168,8 @@ def main(server_addr: str,
     procs = []
     _start = time.perf_counter()
     for i in range(concurrency):
-        proc = mp.Process(
-            target=infer, args=(api_url, i + 1, req_que, res_que))
+        proc = mp.Process(target=infer,
+                          args=(api_url, i + 1, req_que, res_que))
         procs.append(proc)
         proc.start()
     for proc in procs:
