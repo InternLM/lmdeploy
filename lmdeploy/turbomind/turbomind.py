@@ -5,7 +5,7 @@ from configparser import ConfigParser
 from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
-from typing import Iterable, List
+from typing import Dict, Iterable, List
 
 import numpy as np
 import torch
@@ -17,8 +17,9 @@ from lmdeploy.utils import get_logger
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
-sys.path.append(osp.join(lmdeploy_dir, 'lib'))
-import _turbomind as _tm  # noqa: E402
+if osp.exists(osp.join(lmdeploy_dir, 'lib')):
+    sys.path.append(osp.join(lmdeploy_dir, 'lib'))
+    import _turbomind as _tm  # noqa: E402
 
 
 def _stop_words(stop_words: List[int]):
@@ -46,7 +47,7 @@ def _np_dict_to_tm_dict(np_dict: dict):
     return ret
 
 
-def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
+def _tm_dict_to_torch_dict(tm_dict: Dict):
     """map turbomind's tensor to torch's tensor."""
     ret = dict()
     for k, v in tm_dict.items():
