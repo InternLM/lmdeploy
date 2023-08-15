@@ -410,7 +410,7 @@ TensorMap TensorMap::fromNpyFolder(const std::string& base_folder)
 {
     TensorMap ret_tensor;
     for (auto const& entry : fs::directory_iterator{base_folder}) {
-        std::string filename = entry.path();
+        std::string filename = entry.path().stem().string();
         size_t      len      = filename.length();
         if (len < 4 || filename.compare(len - 4, 4, ".npy")) {
             continue;
