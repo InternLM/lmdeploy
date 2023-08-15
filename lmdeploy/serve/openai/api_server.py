@@ -36,10 +36,12 @@ async def generate(request: Request):
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - stream: whether to stream the results or not.
-    - renew_session: whether to restart the session.
     - instance_id: determin which instance will be called. If not specified,
         using host ip directly.
     - request_output_len (int): output token nums
+    - sequence_start (bool): indicator for starting a sequence
+    - sequence_end (bool): indicator for ending a sequence
+    - step (int): the offset of the k/v cache
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
@@ -54,7 +56,6 @@ async def generate(request: Request):
     prompt = request_dict.pop('prompt')
     stream_output = request_dict.pop('stream', False)
     request_output_len = request_dict.pop('request_output_len', 512)
-    renew_session = request_dict.pop('renew_session', False)
     sequence_start = request_dict.pop('sequence_start', True)
     sequence_end = request_dict.pop('sequence_end', False)
     top_p = request_dict.pop('top_p', 0.8)
@@ -73,7 +74,6 @@ async def generate(request: Request):
                 stream_response=stream_output,
                 sequence_start=sequence_start,
                 sequence_end=sequence_end,
-                renew_session=renew_session,
                 request_output_len=request_output_len,
                 top_p=top_p,
                 top_k=top_k,
@@ -87,11 +87,18 @@ async def generate(request: Request):
         return StreamingResponse(stream_results())
     else:
         ret = {}
-        async for out in WorkerInstance.instance.generate_openai(
+        async for out in WorkerInstance.instance.generate(
                 prompt,
                 instance_id,
-                renew_session=renew_session,
-                stream_response=stream_output):
+                stream_response=stream_output,
+                sequence_start=sequence_start,
+                sequence_end=sequence_end,
+                request_output_len=request_output_len,
+                top_p=top_p,
+                top_k=top_k,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                ignore_eos=ignore_eos):
             ret = {'text': out.response, 'tokens': out.generate_token_len}
         return JSONResponse(ret)
 
