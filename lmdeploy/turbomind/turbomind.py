@@ -107,6 +107,10 @@ class TurboMind:
         model = MODELS.get(self.model_name)()
         self.stop_words = _stop_words(model.stop_words)
 
+        # workaround for qwen-7b's tokenizer
+        if self.eos_id is None:
+            self.eos_id = model.eos_id
+
         # params
         self.node_id = node_id
         self.node_num = node_num

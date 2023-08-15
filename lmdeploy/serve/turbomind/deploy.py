@@ -102,11 +102,9 @@ def tokenizer_info_sp(model_path: str):
 
 
 def tokenizer_info_qwen(model_dir: str):
-    from transformers import AutoTokenizer
-    model = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
-    n_words = model.vocab_size
-    bos_id = model.im_start_id
-    eos_id = model.im_end_id
+    n_words = 151851
+    bos_id = 0
+    eos_id = 151643
     return n_words, bos_id, eos_id
 
 
@@ -121,6 +119,9 @@ def export(model_name: str,
            size_per_head: int = 128,
            group_size: int = 0,
            weight_type: str = 'fp16',
+           max_position_embeddings: int = 0,
+           use_dynamic_ntk: int = 0,
+           use_logn_attn: int = 0,
            tokenizer_info=tokenizer_info_sp):
     """Export deploying information to a config file.
 
@@ -220,7 +221,11 @@ def export(model_name: str,
         cache_chunk_size=1,
         use_context_fmha=1,
         quant_policy=0,
-        tensor_para_size=tp))
+        tensor_para_size=tp,
+        # extra attention params
+        max_position_embeddings=max_position_embeddings,
+        use_dynamic_ntk=int(use_dynamic_ntk),
+        use_logn_attn=int(use_logn_attn)))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -751,17 +756,35 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
             to 4 bits
     """
 
+    if osp.exists(model_path):
+        shutil.copy(osp.join(model_path, 'qwen.tiktoken'),
+                    osp.join(triton_models_path, 'tokenizer'))
+        for _file in os.listdir(model_path):
+            if _file.endswith('.json') or _file.endswith('.py'):
+                json_path = osp.join(model_path, _file)
+                shutil.copy(json_path,
+                            osp.join(triton_models_path, 'tokenizer', _file))
+        with get_package_root_path() as root_path:
+            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+                        osp.join(triton_models_path, 'tokenizer'))
+    else:
+        print(f'tokenizer model {tokenizer_path} does not exist')
+        exit(-1)
+
     # read model arguments from params.json
     try:
         params_path = osp.join(model_path, 'config.json')
         with open(params_path) as f:
-            model_arg = json.load(f)
-            num_layer = model_arg['num_hidden_layers']
-            norm_eps = model_arg['layer_norm_epsilon']
-            if 'num_key_value_heads' in model_arg:
-                kv_head_num = model_arg['num_key_value_heads']
+            config = json.load(f)
+            num_layer = config['num_hidden_layers']
+            norm_eps = config['layer_norm_epsilon']
+            if 'num_key_value_heads' in config:
+                kv_head_num = config['num_key_value_heads']
             else:
-                kv_head_num = model_arg['num_attention_heads']
+                kv_head_num = config['num_attention_heads']
+            seq_length = config['seq_length']
+            use_dynamic_ntk = config['use_dynamic_ntk']
+            use_logn_attn = config['use_logn_attn']
     except Exception as e:
         print(f'get "num_hidden_layers" and "layer_norm_epsilon" from '
               f'{params_path} failed: {e}')
@@ -839,6 +862,9 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
                   model_path,
                   triton_models_path,
                   tp,
+                  max_position_embeddings=seq_length,
+                  use_dynamic_ntk=use_dynamic_ntk,
+                  use_logn_attn=use_logn_attn,
                   tokenizer_info=tokenizer_info_qwen)
 
 

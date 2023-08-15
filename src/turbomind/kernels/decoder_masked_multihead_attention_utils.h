@@ -863,7 +863,7 @@ inline __device__ float
 rotary_embedding_get_base(float seq_len, int max_position_embeddings, float rot_embed_dim, float base)
 {
     if (seq_len < max_position_embeddings) {
-        return 1.f;
+        return base;
     }
     float scaling_factor = 1.f;
 
@@ -878,12 +878,6 @@ inline __device__ float2 rotary_embedding_coefficient(int zid, int rot_embed_dim
     const float inv_freq = t_step / powf(base, zid / (float)rot_embed_dim);
     return {cos(inv_freq), sin(inv_freq)};
 }
-
-// inline __device__ float2 rotary_embedding_coefficient(const int zid, const int rot_embed_dim, const float t_step)
-// {
-//     const float inv_freq = t_step / pow(10000.0f, zid / (float)rot_embed_dim);
-//     return {cos(inv_freq), sin(inv_freq)};
-// }
 
 inline __device__ float2 rotary_embedding_transform(const float2 v, const float2 coef)
 {
