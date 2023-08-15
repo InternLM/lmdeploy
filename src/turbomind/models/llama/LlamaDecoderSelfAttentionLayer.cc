@@ -109,13 +109,9 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     FT_CHECK(k_cache_per_sample && v_cache_per_sample);
 
-    params.k_cache                    = reinterpret_cast<DataType*>(key_cache);
-    params.v_cache                    = reinterpret_cast<DataType*>(value_cache);
     params.k_cache_per_sample         = reinterpret_cast<DataType**>(k_cache_per_sample);
     params.v_cache_per_sample         = reinterpret_cast<DataType**>(v_cache_per_sample);
     params.kv_cache_per_sample_offset = kv_cache_per_sample_offset;
-    params.k_cache_interleaved        = false;
-    params.cache_indir                = cache_indir;
     params.batch_size                 = inference_batch_size;
     params.beam_width                 = beam_width;
     params.memory_max_len             = memory_max_len;
@@ -144,10 +140,6 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
         params.linear_bias_slopes = reinterpret_cast<const DataType*>(linear_bias_slopes);
     }
     params.max_input_length = max_input_len;
-
-    params.ia3_tasks         = ia3_tasks;
-    params.ia3_key_weights   = reinterpret_cast<const DataType*>(ia3_key_weights);
-    params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
 
     params.int8_mode = int8_mode;
 
@@ -184,8 +176,6 @@ void LlamaDecoderSelfAttentionLayer<T>::freeBuffer()
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&qkv_buf_));
         allocator_->free((void**)(&context_buf_));
-        // allocator_->free((void**)(&k_cache_buf_));
-        // allocator_->free((void**)(&v_cache_buf_));
         is_allocate_buffer_ = false;
     }
 }
@@ -262,7 +252,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         local_head_num_,
         local_kv_head_num_,
         size_per_head_,
-        rotary_embedding_dim_,
+        params_.rotray_embedding_dim,
         memory_len,
         nullptr,  // prefix_prompt_lengths
         0,        // max_prefix_prompt_length
