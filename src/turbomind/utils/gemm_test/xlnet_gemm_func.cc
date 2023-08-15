@@ -16,6 +16,7 @@
 
 #include "src/turbomind/utils/gemm_test/xlnet_gemm_func.h"
 #include "src/turbomind/windows/macro.h"
+#include <chrono>
 
 namespace turbomind {
 
@@ -226,7 +227,6 @@ void generate_xlnet_gemm_config(int   batch_size,
     cudaDataType_t computeType;
     int            startAlgo, endAlgo;
     const int      ites = 100;
-    struct timeval start, end;
 
     CublasDataType data_type;
     if (std::is_same<T, float>::value) {

@@ -15,6 +15,7 @@
  */
 
 #include "swin_igemm_func.h"
+#include <chrono>
 
 namespace turbomind {
 
@@ -86,7 +87,6 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // 
         cublasLtMatmulAlgoCheck(ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Ddesc, &algo, &heurResult);
     if (algoStatus == CUBLAS_STATUS_SUCCESS) {
         if (heurResult.workspaceSize <= workSpaceSizeInBytes) {
-            struct timeval start, end;
             cublasStatus_t oneRunStatus;
             cudaDeviceSynchronize();
             auto start = std::chrono::high_resolution_clock::now();

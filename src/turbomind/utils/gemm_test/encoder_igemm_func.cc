@@ -16,6 +16,7 @@
 
 #include "encoder_igemm_func.h"
 #include "src/turbomind/windows/macro.h"
+#include <chrono>
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -229,7 +230,6 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // 
         cublasLtMatmulAlgoCheck(ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Ddesc, &algo, &heurResult);
     if (algoStatus == CUBLAS_STATUS_SUCCESS) {
         if (heurResult.workspaceSize <= workSpaceSizeInBytes) {
-            struct timeval start, end;
             cublasStatus_t oneRunStatus;
             cudaDeviceSynchronize();
             auto start = std::chrono::high_resolution_clock::now();
@@ -1168,11 +1168,10 @@ int generate_encoder_igemm_config(
     }
     if (do_sparse_test) {
         printf("***cusparseLt Gemm Testing Begin***\n");
-        const int      spgemm_num = 3;
-        FILE*          fd;
-        int            line_count = 0;
-        const int      ites       = 100;
-        struct timeval start, end;
+        const int spgemm_num = 3;
+        FILE*     fd;
+        int       line_count = 0;
+        const int ites       = 100;
         if (!isAppend) {
             fd = fopen(SPIGEMM_CONFIG, "w+");
         }

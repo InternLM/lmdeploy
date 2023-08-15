@@ -408,6 +408,7 @@ std::string TensorMap::toString()
 
 TensorMap TensorMap::fromNpyFolder(const std::string& base_folder)
 {
+    TensorMap ret_tensor;
     for (auto const& entry : fs::directory_iterator{base_folder}) {
         std::string filename = entry.path();
         size_t      len      = filename.length();
