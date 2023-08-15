@@ -6,10 +6,6 @@ add_subdirectory(fused_multi_head_attention)
 
 find_package(CUDAToolkit REQUIRED)
 
-if(MSVC)
-        set(pthread_win32_lib libpthreadVC3)
-endif()
-
 add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
@@ -43,8 +39,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         nccl_utils
         cuda_utils
         logger
-        llama_fmha
-        ${pthread_win32_lib})
+        llama_fmha)
 
 add_executable(llama_gemm llama_gemm.cc)
 target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)
