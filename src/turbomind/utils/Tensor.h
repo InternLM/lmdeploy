@@ -110,7 +110,7 @@ struct Tensor {
     MemoryType          where;
     DataType            type;
     std::vector<size_t> shape;
-    void*               data;  // TODO(bhseuh) modify from const void* to void* const
+    void*               data;
     std::vector<size_t> offsets = std::vector<size_t>{};
 
     Tensor();
