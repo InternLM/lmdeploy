@@ -13,8 +13,6 @@ from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
 from lmdeploy.serve.gradio.css import CSS
 from lmdeploy.serve.turbomind.chatbot import Chatbot
-from lmdeploy.turbomind.chat import valid_str
-from lmdeploy.turbomind.tokenizer import Tokenizer
 
 THEME = gr.themes.Soft(
     primary_hue=gr.themes.colors.blue,
@@ -169,6 +167,7 @@ def chat_stream_local(
         nth_round (gr.State): round num
         request (gr.Request): the request from a user
     """
+    from lmdeploy.turbomind.chat import valid_str
     session_id = threading.current_thread().ident
     if request is not None:
         session_id = int(request.kwargs['client']['host'].replace('.', ''))
@@ -264,6 +263,7 @@ def run_local(model_path: str,
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
     """
+    from lmdeploy.turbomind.tokenizer import Tokenizer
     InterFace.tokenizer_model_path = osp.join(model_path, 'triton_models',
                                               'tokenizer')
     InterFace.tokenizer = Tokenizer(InterFace.tokenizer_model_path)

@@ -13,7 +13,9 @@ ______________________________________________________________________
 
 ## News 🎉
 
-- \[2023/08\] TurboMind supports 4-bit quantization and inference.
+- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](./docs/en/w4a16.md) guide for detailed info
+- \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
+- \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
 - \[2023/07\] TurboMind supports Llama-2 70B with GQA.
 - \[2023/07\] TurboMind supports Llama-2 7B/13B.
 - \[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
@@ -33,6 +35,29 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
 ![PersistentBatchInference](https://github.com/InternLM/lmdeploy/assets/67539920/e3876167-0671-44fc-ac52-5a0f9382493e)
+
+## Supported Models
+
+`LMDeploy` has two inference backends, `Pytorch` and `TurboMind`.
+
+### TurboMind
+
+> **Note**<br />
+> W4A16 inference requires Nvidia GPU with Ampere architecture or above.
+
+|  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
+| :------: | :-------------: | :--: | :-----: | :---: | :--: |
+|  Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Llama2  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| InternLM |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+
+### Pytorch
+
+|  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
+| :------: | :-------------: | :--: | :-----: | :---: | :--: |
+|  Llama   |       Yes       | Yes  |   No    |  No   |  No  |
+|  Llama2  |       Yes       | Yes  |   No    |  No   |  No  |
+| InternLM |       Yes       | Yes  |   No    |  No   |  No  |
 
 ## Performance
 
@@ -182,8 +207,8 @@ LMDeploy uses AWQ algorithm for model weight quantization
 
 ```
 python3 -m lmdeploy.lite.apis.auto_awq \
+  --model $HF_MODEL \
   --w_bits 4 \                       # Bit number for weight quantization
-  --w_sym False \                    # Whether to use symmetric quantization for weights
   --w_group_size 128 \               # Group size for weight quantization statistics
   --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
 ```
