@@ -1,6 +1,7 @@
 import json
 import pickle
 import time
+from pathlib import Path
 
 import fire
 from transformers import AutoTokenizer
@@ -46,8 +47,15 @@ def benchmark(model_path,
     print(f'Decoded {len(probs)} prompts in {elapsed:.1f} seconds, '
           f'{len(probs) / elapsed} requests/s.')
 
-    with open(save_to, 'wb') as f:
+    pkl_path = Path(save_to).with_suffix('.pkl')
+
+    with pkl_path.open('wb') as f:
         pickle.dump(probs, f)
+
+    txt_path = Path(save_to).with_suffix('.txt')
+    np.savetxt(txt_path.as_posix(), probs, fmt='%.4e')
+
+    print(probs)
 
 
 if __name__ == '__main__':
