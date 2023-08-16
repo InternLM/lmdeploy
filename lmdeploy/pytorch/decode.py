@@ -228,9 +228,10 @@ class Engine:
                 Defaults to True. Set to False to save memory.
 
         Returns:
-            List[torch.Tensor] or torch.Tensor: List of probabilities of all prompts.
-                If pad is False, the result is a list.
-                If pad is True, the result if a batch of tensor.
+            numpy.ndarray: List of probabilities of all prompts, with prob=0 padded.
+                If pad is True
+            List[numpy.ndarray]: List of probabilities of all prompts without padding.
+                If pad is False, the result if a batch of tensor.
 
         Note:
             This function will accept input token_ids = [x0(=bos), x1, x2, ..., xn]
