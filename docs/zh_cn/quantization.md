@@ -1,4 +1,4 @@
-# PTQ 量化测试结果
+# KV Cache 量化测试结果
 
 ## 显存测试
 
@@ -23,7 +23,7 @@
 
 ![](../../resources/batch_memory.png)
 
-因为每个并发需要 1030MB 显存为 2048 token 保存 kv_cache，而服务端需要考量高并发场景的成本，所以量化 kv_cache 比量化 weight 更合适。
+可以看到，每个并发需要 1030MB 显存为 2048 token 保存 kv_cache，因此量化 kv_cache 能显著降低运行时的显存增长速度。
 
 需要注意的是，`kCacheKVInt8` 和 `WeightInt4` 两种方案可以同时开启。
 
