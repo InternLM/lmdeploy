@@ -1,6 +1,4 @@
 import json
-import logging
-import multiprocessing
 import pickle
 import time
 from pathlib import Path
@@ -10,8 +8,6 @@ import numpy as np
 from transformers import AutoTokenizer
 
 from lmdeploy.pytorch.decode import Engine
-
-multiprocessing.log_to_stderr(logging.DEBUG)
 
 
 def benchmark(model_path,
@@ -41,9 +37,9 @@ def benchmark(model_path,
 
     texts = texts[::downsample]
     input_ids = tokenizer(texts, padding=False).input_ids
-    print(F"Number of prompts: {len(input_ids)}")
-    print(F"Maximum length: {max(map(len, input_ids))}")
-    print(F"Total length: {sum(map(len, input_ids))}")
+    print(F'Number of prompts: {len(input_ids)}')
+    print(F'Maximum length: {max(map(len, input_ids))}')
+    print(F'Total length: {sum(map(len, input_ids))}')
 
     start = time.monotonic()
     # Init an engine
@@ -65,8 +61,6 @@ def benchmark(model_path,
 
     txt_path = Path(save_to).with_suffix('.txt')
     np.savetxt(txt_path.as_posix(), probs, fmt='%.4e')
-
-    print(probs)
 
 
 if __name__ == '__main__':
