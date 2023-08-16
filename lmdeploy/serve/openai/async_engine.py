@@ -10,16 +10,6 @@ from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.turbomind.tokenizer import Tokenizer
 
 
-def valid_str(string, coding='utf-8'):
-    """decode text according to its encoding type."""
-    invalid_chars = [b'\xef\xbf\xbd']
-    bstr = bytes(string, coding)
-    for invalid_char in invalid_chars:
-        bstr = bstr.replace(invalid_char, b'')
-    ret = bstr.decode(encoding=coding, errors='ignore')
-    return ret
-
-
 @dataclasses.dataclass
 class GenOut:
     """Pack all response information together."""
@@ -43,8 +33,9 @@ class AsyncEngine:
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
-        self.tm_model = tm.TurboMind(
-            model_path, eos_id=tokenizer.eos_token_id, tp=tp)
+        self.tm_model = tm.TurboMind(model_path,
+                                     eos_id=tokenizer.eos_token_id,
+                                     tp=tp)
         self.tokenizer = tokenizer
         self.generators = [
             self.tm_model.create_instance() for i in range(instance_num)
@@ -131,12 +122,11 @@ class AsyncEngine:
                 random_seed=seed if sequence_start else None):
             res, tokens = outputs[0]
             # decode res
-            response = self.tokenizer.decode(res)[response_size:]
-            response = valid_str(response)
+            response = self.tokenizer.decode(res[response_size:])
             # response out, history token len, input token len, gen token len
             yield GenOut(response, self.steps[str(session_id)], len(input_ids),
                          tokens, finish_reason)
-            response_size += len(response)
+            response_size = tokens
 
         # update step
         self.steps[str(session_id)] += len(input_ids) + tokens
@@ -184,12 +174,11 @@ class AsyncEngine:
                 session_id)] > 0:  # renew a session
             empty_prompt = self.model.messages2prompt('', False)
             empty_input_ids = self.tokenizer.encode(empty_prompt)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[empty_input_ids],
-                    request_output_len=1,
-                    sequence_start=False,
-                    sequence_end=True):
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=[empty_input_ids],
+                                                  request_output_len=1,
+                                                  sequence_start=False,
+                                                  sequence_end=True):
                 pass
             self.steps[str(session_id)] = 0
         if str(session_id) not in self.steps:
@@ -217,12 +206,11 @@ class AsyncEngine:
                 random_seed=seed if sequence_start else None):
             res, tokens = outputs[0]
             # decode res
-            response = self.tokenizer.decode(res)[response_size:]
-            response = valid_str(response)
+            response = self.tokenizer.decode(res[response_size:])
             # response out, history token len, input token len, gen token len
             yield GenOut(response, self.steps[str(session_id)], len(input_ids),
                          tokens)
-            response_size += len(response)
+            response_size = tokens
 
         # update step
         self.steps[str(session_id)] += len(input_ids) + tokens
