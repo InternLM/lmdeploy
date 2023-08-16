@@ -15,10 +15,10 @@
  */
 
 #include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include "src/turbomind/windows/macro.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!

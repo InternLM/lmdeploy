@@ -19,7 +19,7 @@
 #include "3rdparty/INIReader.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/windows/macro.h"
+#include "src/turbomind/macro.h"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>

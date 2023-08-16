@@ -23,6 +23,7 @@
 #include <memory>
 #include <thread>
 
+#include "src/turbomind/macro.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -31,7 +32,6 @@
 #include "src/turbomind/utils/nccl_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/word_list.h"
-#include "src/turbomind/windows/macro.h"
 
 namespace ft = turbomind;
 

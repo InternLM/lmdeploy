@@ -18,8 +18,8 @@
 #pragma once
 
 #include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include "src/turbomind/windows/macro.h"
 
 namespace turbomind {
 

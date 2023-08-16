@@ -21,11 +21,11 @@
 #include "src/turbomind/models/llama/LlamaContextDecoder.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaContextDecoder.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/windows/macro.h"
 
 namespace turbomind {
 

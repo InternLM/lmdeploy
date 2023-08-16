@@ -15,7 +15,7 @@
  */
 
 #include "src/turbomind/utils/gemm_test/gpt_gemm_func.h"
-#include "src/turbomind/windows/macro.h"
+#include "src/turbomind/macro.h"
 #include <chrono>
 
 namespace turbomind {

@@ -15,7 +15,7 @@
  */
 
 #include "src/turbomind/utils/nccl_utils.h"
-#include "src/turbomind/windows/macro.h"
+#include "src/turbomind/macro.h"
 #include <atomic>
 
 namespace turbomind {

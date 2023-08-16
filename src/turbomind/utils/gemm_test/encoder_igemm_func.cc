@@ -15,7 +15,7 @@
  */
 
 #include "encoder_igemm_func.h"
-#include "src/turbomind/windows/macro.h"
+#include "src/turbomind/macro.h"
 #include <chrono>
 
 #ifndef CUDART_VERSION

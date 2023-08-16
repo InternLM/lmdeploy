@@ -52,6 +52,7 @@
 #include "triton/core/tritonbackend.h"
 
 // FT's libraries have dependency with triton's lib
+#include "src/turbomind/macro.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -60,7 +61,6 @@
 #include "src/turbomind/utils/instance_comm.h"
 #include "src/turbomind/utils/mpi_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include "src/turbomind/windows/macro.h"
 
 std::exception_ptr ptr[8];
 

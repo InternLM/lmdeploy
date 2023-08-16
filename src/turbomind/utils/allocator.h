@@ -20,7 +20,7 @@
 #pragma once
 
 #include "cuda_utils.h"
-#include "src/turbomind/windows/macro.h"
+#include "src/turbomind/macro.h"
 #include <cuda_runtime.h>
 #include <unordered_map>
 #include <vector>

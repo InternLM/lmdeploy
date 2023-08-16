@@ -12,11 +12,11 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include "src/turbomind/windows/macro.h"
 
 #include "tests/unittests/unittest_utils.h"
 
@@ -1512,7 +1512,7 @@ int main()
     for (auto& tc : test_cases) {
         LAUNCH_VARIANTS(float, tc, false);  // without local batch
         LAUNCH_VARIANTS(half, tc, false);
-        LAUNCH_VARIANTS(float, tc, true);   // with local batch
+        LAUNCH_VARIANTS(float, tc, true);  // with local batch
         LAUNCH_VARIANTS(half, tc, true);
     }
 #undef LAUNCH_VARIANTS

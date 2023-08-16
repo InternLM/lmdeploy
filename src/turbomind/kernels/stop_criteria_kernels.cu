@@ -16,9 +16,9 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include "src/turbomind/windows/macro.h"
 
 namespace turbomind {
 
