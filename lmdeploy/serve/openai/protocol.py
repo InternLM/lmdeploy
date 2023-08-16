@@ -156,6 +156,7 @@ class CompletionResponse(BaseModel):
 
 
 class CompletionResponseStreamChoice(BaseModel):
+    """Completion response stream choice."""
     index: int
     text: str
     logprobs: Optional[float] = None
@@ -163,8 +164,25 @@ class CompletionResponseStreamChoice(BaseModel):
 
 
 class CompletionStreamResponse(BaseModel):
+    """Completion stream response."""
     id: str = Field(default_factory=lambda: f'cmpl-{shortuuid.random()}')
     object: str = 'text_completion'
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[CompletionResponseStreamChoice]
+
+
+class EmbeddingsRequest(BaseModel):
+    """Embedding request."""
+    model: Optional[str] = None
+    engine: Optional[str] = None
+    input: Union[str, List[Any]]
+    user: Optional[str] = None
+
+
+class EmbeddingsResponse(BaseModel):
+    """Embedding response."""
+    object: str = 'list'
+    data: List[Dict[str, Any]]
+    model: str
+    usage: UsageInfo

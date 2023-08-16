@@ -46,6 +46,11 @@ class AsyncEngine:
         self.starts = [None] * instance_num
         self.steps = {}
 
+    async def get_embeddings(self, prompt):
+        prompt = self.model.get_prompt(prompt)
+        input_ids = self.tokenizer.encode(prompt)
+        return input_ids
+
     async def get_generator(self, instance_id):
         """Only return the model instance if it is available."""
         while self.available[instance_id] is False:
