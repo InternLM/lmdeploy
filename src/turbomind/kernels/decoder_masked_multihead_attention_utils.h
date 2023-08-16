@@ -856,7 +856,7 @@ inline __device__ float logn_attn_get_scaling(float seq_len, int max_position_em
     if (seq_len <= max_position_embeddings) {
         return 1.f;
     }
-    return logf(seq_len) / logf(max_position_embeddings);
+    return log2f(seq_len) / log2f(max_position_embeddings);
 }
 
 inline __device__ float
@@ -865,13 +865,22 @@ rotary_embedding_get_base(float seq_len, int max_position_embeddings, float rot_
     if (seq_len < max_position_embeddings) {
         return base;
     }
-    float scaling_factor = 1.f;
-
-    base *= powf((scaling_factor * seq_len / max_position_embeddings) - (scaling_factor - 1.f),
-                 rot_embed_dim / (rot_embed_dim - 2.f));
-
+    float ntk_alpha = max(exp2f(ceilf(log2f(seq_len / max_position_embeddings) + 1.f)) - 1.f, 1.f);
+    base *= powf(ntk_alpha, rot_embed_dim / (rot_embed_dim - 2.f));
     return base;
 }
+
+// inline __device__ float
+// rotary_embedding_get_base(float seq_len, int max_position_embeddings, float rot_embed_dim, float base)
+// {
+//     constexpr float scaling_factor = 1.f;
+//     if (scaling_factor * seq_len < max_position_embeddings) {
+//         return base;
+//     }
+//     base *= powf((scaling_factor * seq_len / max_position_embeddings) - (scaling_factor - 1.f),
+//                  rot_embed_dim / (rot_embed_dim - 2.f));
+//     return base;
+// }
 
 inline __device__ float2 rotary_embedding_coefficient(int zid, int rot_embed_dim, float base, float t_step)
 {

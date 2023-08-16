@@ -218,7 +218,7 @@ class Qwen7BChat(BaseModel):
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
-        return [151643]
+        return [151645]  # <|im_end|>
 
 
 def main(model_name: str = 'test'):
