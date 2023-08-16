@@ -43,6 +43,8 @@ jobs:
           echo ${PLAT_NAME}
           echo ${DOCKER_TAG}
           echo ${OUTPUT_FOLDER}
+          export GIT_REMOTE=$(git remote get-url origin)
+          export GIT_BRANCH=$(git branch --show-current)
           # remove -it
           sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
           bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
