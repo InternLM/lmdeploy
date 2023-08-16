@@ -1,0 +1,33 @@
+changelog:
+  categories:
+    - title: 🚀 Features
+      labels:
+        - feature
+        - enhancement
+    - title: 💥 Improvements
+      labels:
+        - improvement
+    - title: 🐞 Bug fixes
+      labels:
+        - bug
+        - Bug:P0
+        - Bug:P1
+        - Bug:P2
+        - Bug:P3
+    - title: 📚 Documentations
+      labels:
+        - documentation
+    - title: 🌐 Other
+      labels:
+        - '*'
+      exclude:
+        labels:
+          - feature
+          - enhancement
+          - improvement
+          - bug
+          - documentation
+          - Bug:P0
+          - Bug:P1
+          - Bug:P2
+          - Bug:P3

@@ -116,7 +116,9 @@ struct Multihead_attention_params_base {
     const float* attention_out_scale = nullptr;
     int          int8_mode           = 0;
     float        attention_k_scale   = 0.f;
+    float        attention_k_zp      = 0.f;
     float        attention_v_scale   = 0.f;
+    float        attention_v_zp      = 0.f;
 };
 
 template<typename T>

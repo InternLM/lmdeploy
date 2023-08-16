@@ -13,6 +13,9 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](./docs/en/w4a16.md) guide for detailed info
+- \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
+- \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
 - \[2023/07\] TurboMind supports Llama-2 70B with GQA.
 - \[2023/07\] TurboMind supports Llama-2 7B/13B.
 - \[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
@@ -32,6 +35,29 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 - **Persistent Batch Inference**: Further optimization of model execution efficiency.
 
 ![PersistentBatchInference](https://github.com/InternLM/lmdeploy/assets/67539920/e3876167-0671-44fc-ac52-5a0f9382493e)
+
+## Supported Models
+
+`LMDeploy` has two inference backends, `Pytorch` and `TurboMind`.
+
+### TurboMind
+
+> **Note**<br />
+> W4A16 inference requires Nvidia GPU with Ampere architecture or above.
+
+|  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
+| :------: | :-------------: | :--: | :-----: | :---: | :--: |
+|  Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Llama2  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| InternLM |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+
+### Pytorch
+
+|  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
+| :------: | :-------------: | :--: | :-----: | :---: | :--: |
+|  Llama   |       Yes       | Yes  |   No    |  No   |  No  |
+|  Llama2  |       Yes       | Yes  |   No    |  No   |  No  |
+| InternLM |       Yes       | Yes  |   No    |  No   |  No  |
 
 ## Performance
 
@@ -122,11 +148,7 @@ For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and
 
 ### Inference with PyTorch
 
-You have to install deepspeed first before running with PyTorch.
-
-```
-pip install deepspeed
-```
+For detailed instructions on Inference pytorch models, see [here](docs/en/pytorch.md).
 
 #### Single GPU
 
@@ -149,18 +171,59 @@ deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     --seed 0
 ```
 
+You need to install deepspeed first to use this feature.
+
+```
+pip install deepspeed
+```
+
 ## Quantization
+
+### Step 1. Obtain Quantization Parameters
+
+First, run the quantization script to obtain the quantization parameters.
+
+> After execution, various parameters needed for quantization will be stored in `$WORK_DIR`; these will be used in the following steps..
+
+```
+python3 -m lmdeploy.lite.apis.calibrate \
+  --model $HF_MODEL \
+  --calib_dataset 'c4' \             # Calibration dataset, supports c4, ptb, wikitext2, pileval
+  --calib_samples 128 \              # Number of samples in the calibration set, if memory is insufficient, you can appropriately reduce this
+  --calib_seqlen 2048 \              # Length of a single piece of text, if memory is insufficient, you can appropriately reduce this
+  --work_dir $WORK_DIR \             # Folder storing Pytorch format quantization statistics parameters and post-quantization weight
+
+```
+
+### Step 2. Actual Model Quantization
+
+`LMDeploy` supports INT4 quantization of weights and INT8 quantization of KV Cache. Run the corresponding script according to your needs.
+
+#### Weight INT4 Quantization
+
+LMDeploy uses AWQ algorithm for model weight quantization
+
+> Requires input from the $WORK_DIR of step 1, and the quantized weights will also be stored in this folder.
+
+```
+python3 -m lmdeploy.lite.apis.auto_awq \
+  --model $HF_MODEL \
+  --w_bits 4 \                       # Bit number for weight quantization
+  --w_group_size 128 \               # Group size for weight quantization statistics
+  --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
+```
+
+#### KV Cache INT8 Quantization
 
 In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
 First execute the quantization script, and the quantization parameters are stored in the `workspace/triton_models/weights` transformed by `deploy.py`.
 
 ```
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --model $HF_MODEL \
-  --output_dir $DEPLOY_WEIGHT_DIR \
-  --symmetry True \   # Whether to use symmetric or asymmetric quantization.
-  --offload  False \  # Whether to offload some modules to CPU to save GPU memory.
-  --num_tp 1 \   # The number of GPUs used for tensor parallelism
+  --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
+  --turbomind_dir $TURBOMIND_DIR \
+  --kv_sym False \                   # Whether to use symmetric or asymmetric quantization.
+  --num_tp 1 \                       # The number of GPUs used for tensor parallelism
 ```
 
 Then adjust `workspace/triton_models/weights/config.ini`
@@ -180,6 +243,7 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 ## Acknowledgement
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
+- [llm-awq](https://github.com/mit-han-lab/llm-awq)
 
 ## License
 

@@ -26,7 +26,6 @@ class Session:
     request_id: str = ''
     histories: str = ''  # history conversations of the session
     sequence_length: int = 0  # the total generated token number in the session
-    sequence_offset: int = 0  # the new generated token offset in the session
     prompt: str = ''
     response: str = ''
     status: int = None  # status of the session
@@ -294,6 +293,65 @@ class Chatbot:
         self._session.histories = histories
         return status
 
+    def infer(self,
+              session_id: int,
+              prompt: str,
+              request_id: str = '',
+              request_output_len: int = None,
+              sequence_start: bool = False,
+              sequence_end: bool = False,
+              *args,
+              **kwargs):
+        """Start a new round conversion of a session. Return the chat
+        completions in non-stream mode.
+
+        Args:
+            session_id (int): the identical id of a session
+            prompt (str): user's prompt in this round conversation
+            request_id (str): the identical id of this round conversation
+            request_output_len (int): the expected generated token numbers
+            sequence_start (bool): start flag of a session
+            sequence_end (bool): end flag of a session
+        Returns:
+            tuple(Status, str, int): status, text/chat completion,
+            generated token number
+        """
+        assert isinstance(session_id, int), \
+            f'INT session id is required, but got {type(session_id)}'
+
+        logger = get_logger(log_level=self.log_level)
+        logger.info(f'session {session_id}, request_id {request_id}, '
+                    f'request_output_len {request_output_len}')
+
+        if self._session is None:
+            sequence_start = True
+            self._session = Session(session_id=session_id)
+        elif self._session.status == 0:
+            logger.error(f'session {session_id} has been ended. Please set '
+                         f'`sequence_start` be True if you want to restart it')
+            return StatusCode.TRITON_SESSION_CLOSED, '', 0
+
+        self._session.status = 1
+        self._session.request_id = request_id
+        self._session.response = ''
+
+        self._session.prompt = self._get_prompt(prompt, sequence_start)
+        status, res, tokens = None, '', 0
+        for status, res, tokens in self._stream_infer(self._session,
+                                                      self._session.prompt,
+                                                      request_output_len,
+                                                      sequence_start,
+                                                      sequence_end):
+            if status.value < 0:
+                break
+        if status.value == 0:
+            self._session.histories = \
+                self._session.histories + self._session.prompt + \
+                self._session.response
+            return status, res, tokens
+        else:
+            return status, res, tokens
+
     def reset_session(self):
         """reset session."""
         self._session = None
@@ -540,15 +598,14 @@ class Chatbot:
         Yields:
             tuple: status, text, generated token number
         """
-        session.sequence_offset = n_input_token + preseq_length
-        sentinel = n_input_token + preseq_length
+        offset = n_input_token + preseq_length
         status, res, n_token = None, '', 0
         while True:
             result = res_queue.get()
             if result is None:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
-                n_token = session.sequence_length - sentinel
+                n_token = session.sequence_length - offset
                 session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
@@ -571,31 +628,30 @@ class Chatbot:
                 output_ids = result.as_numpy('output_ids')
 
                 session.sequence_length = sequence_length.squeeze()
-                new_token_length = sequence_length - session.sequence_offset
+                sequence_length = sequence_length - offset
                 last_token_id = output_ids[-1][-1][session.sequence_length - 1]
                 if last_token_id == eos_id:
                     session.sequence_length = session.sequence_length - 1
-                    new_token_length = new_token_length - 1
+                    sequence_length = sequence_length - 1
 
                 output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
-                new_token_length = new_token_length.reshape(
-                    (1, new_token_length.shape[-1]))
+                sequence_length = sequence_length.reshape(
+                    (1, sequence_length.shape[-1]))
 
                 if profile_generation:
                     yield (StatusCode.TRITON_STREAM_ING,
                            'postprocessing is ignored during profiling '
-                           'token generation', new_token_length.squeeze())
+                           'token generation', sequence_length.squeeze())
                     continue
-                output_str = postprocess(
-                    output_ids[:, :, session.sequence_offset:],
-                    new_token_length)
-                session.sequence_offset = session.sequence_length
+                output_str = postprocess(output_ids[:, :, offset:],
+                                         sequence_length)
                 text = output_str[0].decode()
                 if display:
-                    print(text, end='', flush=True)
-                session.response += text
+                    new_text = text[len(session.response):]
+                    print(new_text, end='', flush=True)
+                session.response = text
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
-                       session.sequence_offset - sentinel)
+                       sequence_length.squeeze())
             except Exception as e:
                 logger.error(f'catch exception: {e}')
 
