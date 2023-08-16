@@ -1,19 +1,24 @@
 import json
+import logging
+import multiprocessing
 import pickle
 import time
 from pathlib import Path
 
 import fire
+import numpy as np
 from transformers import AutoTokenizer
 
 from lmdeploy.pytorch.decode import Engine
+
+multiprocessing.log_to_stderr(logging.DEBUG)
 
 
 def benchmark(model_path,
               share_gpt_path,
               downsample=100,
               accel=None,
-              save_to='decode_result.pkl'):
+              save_to='decode_result'):
     """Benchmark using ShareGPT data.
 
     Please download `ShareGPT_V3_unfiltered_cleaned_split.json` as data for
@@ -34,12 +39,18 @@ def benchmark(model_path,
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.padding_side = 'right'
 
+    texts = texts[::downsample]
+    input_ids = tokenizer(texts, padding=False).input_ids
+    print(F"Number of prompts: {len(input_ids)}")
+    print(F"Maximum length: {max(map(len, input_ids))}")
+    print(F"Total length: {sum(map(len, input_ids))}")
+
     start = time.monotonic()
     # Init an engine
     engine = Engine(model_path, tokenizer=tokenizer, accel=accel)
     # decode prompts
-    probs = engine.decode(texts[::downsample], sort=True)
-    total_tokens = sum(p.numel() for p in probs)
+    probs = engine.decode(input_ids)
+    total_tokens = sum(p.size for p in probs)
 
     elapsed = time.monotonic() - start
     print(f'Decoded {total_tokens} tokens in {elapsed:.1f} seconds, '

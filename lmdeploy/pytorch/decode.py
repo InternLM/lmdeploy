@@ -111,16 +111,22 @@ def worker_fn(model_path: str,
 
     while True:
         try:
-            idx, inputs = inq.get(timeout=1)
+            idx, input_ids, input_lens = inq.get(timeout=1)
         except queue.Empty:
             continue
 
-        if inputs is None:
+        if input_ids is None:
             break
 
-        input_ids = inputs['input_ids'].cuda(gpu_id)
-        attention_mask = inputs['attention_mask'].cuda(gpu_id)
-
+        input_ids = input_ids.cuda(gpu_id)
+        max_len = max(input_lens)
+        print(f"input_ids.shape = {input_ids.shape}")
+        # assert max_len == input_ids.size(-1)
+        input_lens = torch.tensor(input_lens, device=gpu_id)
+        attention_mask = torch.arange(
+            max_len, device=gpu_id)[None, :] < input_lens[:, None]
+        # attention_mask = inputs['attention_mask'].cuda(gpu_id)
+        print(f"attention_mask.shape = {attention_mask.shape}")
         try:
             probs = decode_single(model, input_ids, attention_mask)
         except torch.cuda.OutOfMemoryError:
@@ -205,21 +211,21 @@ class Engine:
                 q.get()
 
     def decode(self,
-               prompts: List[str],
+               prompt_token_ids: List[List[int]],
                sort=True,
                max_bs: int = 1024,
-               pad=False):
+               pad=True):
         """Inference the model to compute probabilities.
 
         Args:
-            prompts (List[str]): List of prompts.
+            prompts (List[List[int]]): List of list of token ids.
             sort (bool, optional): Internally sort the prompts by length to achieve better efficiency.
                 Defaults to True.
                 Note: orders of returned probabilities are always the same as the input.
             max_bs (int, optional): Maximum batch size.
                 Defaults to 1024.
             pad (bool, optional): Pad the prompts in every mini batch to the same length.
-                Defaults to False to save memory.
+                Defaults to True. Set to False to save memory.
 
         Returns:
             List[torch.Tensor] or torch.Tensor: List of probabilities of all prompts.
@@ -227,8 +233,8 @@ class Engine:
                 If pad is True, the result if a batch of tensor.
 
         Note:
-            This function will tokenize input prompt to token_ids = [bos, x1, x2, ..., xn]
-            and compute prob = [p(x1|bos), p(x2|bos,x1), ..., p(xn|bos..xn-1)]
+            This function will accept input token_ids = [x0(=bos), x1, x2, ..., xn]
+            and compute prob = [p(x1|x0), p(x2|x0,x1), ..., p(xn|x0..xn-1)]
             So prob is shorter than input_ids by 1.
         """  # noqa: E501
 
@@ -236,56 +242,59 @@ class Engine:
 
         # sort to achieve better efficiency
         if sort:
-            prompts_and_indicis = sorted(enumerate(prompts),
+            prompts_and_indicis = sorted(enumerate(prompt_token_ids),
                                          key=lambda i_and_x: len(i_and_x[1]))
         else:
-            prompts_and_indicis = list(enumerate(prompts))
+            prompts_and_indicis = list(enumerate(prompt_token_ids))
 
         left = 0
         bs = max_bs
 
-        while left < len(prompts):
+        while left < len(prompt_token_ids):
 
             if not sort:
                 bs = max_bs
 
-            right = min(left + bs, len(prompts))
+            right = min(left + bs, len(prompt_token_ids))
 
             # batch of prompts
             sub_p_and_i = prompts_and_indicis[left:right]
             idx, sub_p = zip(*sub_p_and_i)
 
             # batch of input_ids and attn_masks
-            inputs = self.tokenizer(sub_p, return_tensors='pt', padding=True)
+            # inputs = self.tokenizer(sub_p, return_tensors='pt', padding=True)
+            input_ids = [torch.tensor(p) for p in sub_p]
+            input_ids = pad_sequence(input_ids, batch_first=True)
+            input_lens = [len(p) for p in sub_p]
 
             # Dynamic batch size based on safe memory
-            while inputs.input_ids.numel() > self.safe_numel:
+            while input_ids.numel() > self.safe_numel:
                 if bs == 1:
                     break
                 bs = max(1, round(bs / 1.5))
                 print(f'\nReduce bs to {bs} when seq len reaches '
-                      f'{inputs.input_ids.shape[-1]}')
+                      f'{input_ids.shape[-1]}')
                 idx = idx[:bs]
-                inputs['input_ids'] = inputs['input_ids'][:bs]
-                inputs['attention_mask'] = inputs['attention_mask'][:bs]
+                input_lens = input_lens[:bs]
+                input_ids = input_ids[:bs, :max(input_lens)]
 
             # Send to worker
-            self.inq.put((idx, inputs))
+            self.inq.put((idx, input_ids, input_lens))
 
             left += bs
 
             print(
-                f'Tokenizing and distributing prompts {right}/{len(prompts)},'
-                f' {right/len(prompts):.0%}',
+                f'Distributing prompts {right}/{len(prompt_token_ids)},'
+                f' {right/len(prompt_token_ids):.0%}',
                 end='\r')
 
         print()
 
         # Collect outputs from workers
-        all_probs = [None] * len(prompts)
+        all_probs = [None] * len(prompt_token_ids)
         count = 0
 
-        while count < len(prompts):
+        while count < len(prompt_token_ids):
             idx, probs = self.outq.get()
             for i, p in zip(idx, probs):
                 assert all_probs[i] is None
@@ -293,18 +302,21 @@ class Engine:
 
             count += len(idx)
             print(
-                f'Decoding and collecting outputs {count}/{len(prompts)}'
-                f', {count/len(prompts):.0%}',
+                f'Decoding and collecting outputs {count}/{len(prompt_token_ids)}'
+                f', {count/len(prompt_token_ids):.0%}',
                 end='\r')
 
         if pad:
             all_probs = pad_sequence(all_probs, batch_first=True)
+            all_probs = all_probs.cpu().numpy()
+        else:
+            all_probs = [p.cpu().numpy() for p in all_probs]
 
         return all_probs
 
     def __del__(self):
         print('Exiting engine ...')
         for _ in self.ps:
-            self.inq.put((None, None))
+            self.inq.put((None, None, None))
         for p in self.ps:
             p.join(timeout=1)
