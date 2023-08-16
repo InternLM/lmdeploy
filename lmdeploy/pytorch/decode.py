@@ -120,13 +120,16 @@ def worker_fn(model_path: str,
 
         input_ids = input_ids.cuda(gpu_id)
         max_len = max(input_lens)
-        print(f'input_ids.shape = {input_ids.shape}')
-        # assert max_len == input_ids.size(-1)
+        assert max_len == input_ids.size(-1), \
+            f'input_ids.shape = {input_ids.shape}, max_len = {max_len}'
+
         input_lens = torch.tensor(input_lens, device=gpu_id)
         attention_mask = torch.arange(
             max_len, device=gpu_id)[None, :] < input_lens[:, None]
         # attention_mask = inputs['attention_mask'].cuda(gpu_id)
-        print(f'attention_mask.shape = {attention_mask.shape}')
+
+        assert attention_mask.shape == input_ids.shape, \
+            f'attention_mask.shape = {attention_mask.shape}'
         try:
             probs = decode_single(model, input_ids, attention_mask)
         except torch.cuda.OutOfMemoryError:
