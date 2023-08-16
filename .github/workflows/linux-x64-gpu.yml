@@ -27,22 +27,14 @@ permissions:
 jobs:
   cuda-118:
     runs-on: ubuntu-latest
-    env:
-      PYTHON_VERSION: 'py38'
-      PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
-      OUTPUT_FOLDER: cuda11.8_dist
+    container: openmmlab/lmdeploy-builder:cuda11.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Build
         run: |
-          echo ${PYTHON_VERSION}
-          echo ${PLAT_NAME}
-          echo ${DOCKER_TAG}
-          echo ${OUTPUT_FOLDER}
-          export GIT_REMOTE=$(git remote get-url origin)
-          export GIT_BRANCH=$(git branch --show-current)
-          # remove -it
-          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
-          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+          source /opt/conda/bin/activate
+          conda activate py38
+          mkdir build && cd build
+          bash ../generate.sh
+          make -j$(nproc) && make install
