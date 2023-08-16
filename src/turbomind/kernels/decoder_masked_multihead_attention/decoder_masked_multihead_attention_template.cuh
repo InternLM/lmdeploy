@@ -78,7 +78,8 @@ namespace mmha {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Dh>
-struct Qk_vec_m_ {};
+struct Qk_vec_m_ {
+};
 
 template<>
 struct Qk_vec_m_<float, 32> {
@@ -178,7 +179,8 @@ struct Qk_vec_k_<__nv_fp8_e4m3, 256> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int THREADS_PER_KEY>
-struct K_vec_m_ {};
+struct K_vec_m_ {
+};
 
 template<>
 struct K_vec_m_<float, 4> {
@@ -259,7 +261,8 @@ struct K_vec_k_<__nv_fp8_e4m3, 1> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int V_VEC_SIZE>
-struct V_vec_m_ {};
+struct V_vec_m_ {
+};
 
 template<>
 struct V_vec_m_<float, 1> {
@@ -339,7 +342,8 @@ struct V_vec_k_<__nv_fp8_e4m3, 16> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_FMA
 template<typename T>
-struct Qk_vec_acum_fp32_ {};
+struct Qk_vec_acum_fp32_ {
+};
 
 template<>
 struct Qk_vec_acum_fp32_<float> {
@@ -421,7 +425,8 @@ struct Qk_vec_acum_fp32_<fp8_4_t> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-struct K_vec_acum_fp32_ {};
+struct K_vec_acum_fp32_ {
+};
 
 template<>
 struct K_vec_acum_fp32_<float> {
@@ -483,7 +488,8 @@ struct K_vec_acum_fp32_<fp8_4_t> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_OUT
 template<typename T>
-struct V_vec_acum_fp32_ {};
+struct V_vec_acum_fp32_ {
+};
 
 template<>
 struct V_vec_acum_fp32_<float> {
