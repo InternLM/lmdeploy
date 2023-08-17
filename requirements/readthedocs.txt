@@ -1,0 +1,4 @@
+lmdeploy
+mmengine
+torch
+urllib3<2.0.0
