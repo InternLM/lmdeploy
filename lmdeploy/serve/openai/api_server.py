@@ -15,15 +15,15 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse, ChatMessage, DeltaMessage, EmbeddingsRequest,
-    EmbeddingsResponse, ErrorResponse, ModelCard, ModelList, ModelPermission,
-    UsageInfo)
+    EmbeddingsResponse, ErrorResponse, GenerateRequest, ModelCard, ModelList,
+    ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-class WorkerInstance:
+class VariableInterface:
     """A IO interface maintaining variables."""
-    instance: AsyncEngine = None
+    async_engine: AsyncEngine = None
     request_hosts = []
 
 
@@ -31,7 +31,7 @@ app = FastAPI()
 
 
 @app.post('/generate')
-async def generate(request: Request):
+async def generate(raw_request: Request):
     """Generate completion for the request.
 
     The request should be a JSON object with the following fields:
@@ -53,53 +53,34 @@ async def generate(request: Request):
         1.0 means no penalty
     - ignore_eos (bool): indicator for ignoring eos
     """
-    request_dict = await request.json()
-    prompt = request_dict.pop('prompt')
-    stream_output = request_dict.pop('stream', False)
-    request_output_len = request_dict.pop('request_output_len', 512)
-    sequence_start = request_dict.pop('sequence_start', True)
-    sequence_end = request_dict.pop('sequence_end', False)
-    top_p = request_dict.pop('top_p', 0.8)
-    top_k = request_dict.pop('top_k', 40)
-    temperature = request_dict.pop('temperature', 0.8)
-    repetition_penalty = request_dict.pop('repetition_penalty', 1)
-    ignore_eos = request_dict.pop('ignore_eos', False)
-    instance_id = int(request.client.host.replace('.', ''))
-    instance_id = request_dict.pop('instance_id', instance_id)
+    request_dict = await raw_request.json()
+    instance_id = int(raw_request.client.host.replace('.', ''))
+    request_dict['instance_id'] = instance_id
+    request = GenerateRequest(**request_dict)
+    generation = VariableInterface.async_engine.generate(
+        request.prompt,
+        request.instance_id,
+        stream_response=request.stream,
+        sequence_start=request.sequence_start,
+        sequence_end=request.sequence_end,
+        request_output_len=request.request_output_len,
+        top_p=request.top_p,
+        top_k=request.top_k,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
-        async for out in WorkerInstance.instance.generate(
-                prompt,
-                instance_id,
-                stream_response=stream_output,
-                sequence_start=sequence_start,
-                sequence_end=sequence_end,
-                request_output_len=request_output_len,
-                top_p=top_p,
-                top_k=top_k,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=ignore_eos):
+        async for out in generation:
             ret = {'text': out.response, 'tokens': out.generate_token_len}
             yield (json.dumps(ret) + '\0').encode('utf-8')
 
-    if stream_output:
+    if request.stream:
         return StreamingResponse(stream_results())
     else:
         ret = {}
-        async for out in WorkerInstance.instance.generate(
-                prompt,
-                instance_id,
-                stream_response=stream_output,
-                sequence_start=sequence_start,
-                sequence_end=sequence_end,
-                request_output_len=request_output_len,
-                top_p=top_p,
-                top_k=top_k,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=ignore_eos):
+        async for out in generation:
             ret = {'text': out.response, 'tokens': out.generate_token_len}
         return JSONResponse(ret)
 
@@ -109,7 +90,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [WorkerInstance.instance.tm_model.model_name]
+    return [VariableInterface.async_engine.tm_model.model_name]
 
 
 @app.get('/v1/models')
@@ -171,7 +152,7 @@ async def chat_completions_v1(raw_request: Request):
     request_id = str(instance_id)
     created_time = int(time.time())
 
-    result_generator = WorkerInstance.instance.generate_openai(
+    result_generator = VariableInterface.async_engine.generate_openai(
         request.messages,
         instance_id,
         request.stream,
@@ -184,7 +165,7 @@ async def chat_completions_v1(raw_request: Request):
         ignore_eos=request.ignore_eos)
 
     async def abort_request() -> None:
-        async for _ in WorkerInstance.instance.generate_openai(
+        async for _ in VariableInterface.async_engine.generate_openai(
                 request.messages,
                 instance_id,
                 request.stream,
@@ -291,7 +272,8 @@ async def create_embeddings(request: EmbeddingsRequest,
     if error_check_ret is not None:
         return error_check_ret
 
-    embedding = await WorkerInstance.instance.get_embeddings(request.input)
+    embedding = await VariableInterface.async_engine.get_embeddings(
+        request.input)
     data = [{'object': 'embedding', 'embedding': embedding, 'index': 0}]
     token_num = len(embedding)
     return EmbeddingsResponse(
@@ -320,9 +302,9 @@ def main(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
     """
-    WorkerInstance.instance = AsyncEngine(model_path=model_path,
-                                          instance_num=instance_num,
-                                          tp=tp)
+    VariableInterface.async_engine = AsyncEngine(model_path=model_path,
+                                                 instance_num=instance_num,
+                                                 tp=tp)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 
