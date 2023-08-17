@@ -18,7 +18,7 @@
 
 #include "nvtx_utils.h"
 #ifdef USE_NVTX
-#include "nvToolsExt.h"
+#include "nvtx3/nvToolsExt.h"
 #endif
 
 namespace ft_nvtx {

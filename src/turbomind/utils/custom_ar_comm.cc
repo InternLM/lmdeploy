@@ -51,7 +51,7 @@ void CustomAllReduceComm<T>::customAllReduce(size_t elts, cudaStream_t stream)
     invokeOneOrTwoShotAllReduceKernel<T>(param_, stream);
 
     // swap back
-    output_tensor_->at(0).data = (const void*)tmp_tensor_data_;
+    output_tensor_->at(0).data = (void*)tmp_tensor_data_;
 }
 
 template<typename T>
@@ -114,7 +114,7 @@ bool CustomAllReduceComm<T>::swapInternalBuffer(std::vector<Tensor>* tensor_buff
     if (rank_size_ > 1 && elts * sizeof(T) <= CUSTOM_AR_SIZE_THRESHOLD) {
         tmp_tensor_data_               = (T*)(tensor_buffer->at(0).data);
         output_tensor_                 = tensor_buffer;
-        tensor_buffer->at(0).data      = param_.peer_comm_buffer_ptrs[rank_];
+        tensor_buffer->at(0).data      = (void*)param_.peer_comm_buffer_ptrs[rank_];
         param_.local_output_buffer_ptr = tmp_tensor_data_;
         return true;
     }

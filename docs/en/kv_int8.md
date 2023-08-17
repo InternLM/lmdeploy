@@ -1,4 +1,4 @@
-# PTQ Quantization Benchmark Results
+# KV Cache Quantization Benchmark Results
 
 ## Benchmark the Graphics Memory Usage
 
@@ -22,9 +22,9 @@ To compare with the weight quantization method such as [GPTQ-for-LLaMa](https://
 
 ![](../../resources/batch_memory.png)
 
-Since each concurrency requires 1030MB of the graphics memory to save the kv_cache for 2048 tokens, and the server side needs to consider the cost of high concurrency scenarios, it is more appropriate to run kv_cache quantization rather than directly quantize the weights.
+It can be seen that each concurrency requires 1030MB of GPU memory to save kv_cache for 2048 tokens, so quantizing kv_cache can significantly reduce the speed of the memory growth at runtime.
 
-Note that `kCacheKVInt8` and `WeightInt4` can be used simultaneously, and we will provide relevant implementations later.
+Note that `kCacheKVInt8` and `WeightInt4` can be used simultaneously.
 
 ## Benchmark the Accuracy
 

@@ -25,9 +25,11 @@
 #include <map>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/time.h>
 #include <time.h>
+#ifdef __linux__
+#include <sys/time.h>
 #include <unistd.h>
+#endif
 #include <vector>
 
 namespace turbomind {

@@ -22,6 +22,7 @@
 #include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -265,40 +266,41 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
     // flash attention
     using AttentionOp = FlashAttentionOp<T>;
     using Layout      = typename AttentionOp::AttentionLayout;
-    Layout layout_q{.stride_batch = int(local_head_num_ * max_q_len * size_per_head_),
-                    .stride_seq   = int(size_per_head_),
-                    .stride_head  = int(max_q_len * size_per_head_)};
-    Layout layout_k{.stride_batch      = int(local_head_num_ * max_seq_len * size_per_head_),
-                    .stride_seq        = int(size_per_head_),
-                    .stride_head       = int(max_seq_len * size_per_head_),
-                    .batch_seqs_offset = int(cache_layer_offset),
-                    .batch_seqs        = key_cache_ptrs};
-    Layout layout_v{.stride_batch      = int(local_head_num_ * max_seq_len * size_per_head_),
-                    .stride_seq        = int(size_per_head_),
-                    .stride_head       = int(max_seq_len * size_per_head_),
-                    .batch_seqs_offset = int(cache_layer_offset),
-                    .batch_seqs        = val_cache_ptrs};
+    Layout layout_q{
+        int(local_head_num_ * max_q_len * size_per_head_), int(size_per_head_), int(max_q_len * size_per_head_)};
+    Layout layout_k{int(local_head_num_ * max_seq_len * size_per_head_),
+                    int(size_per_head_),
+                    int(max_seq_len * size_per_head_),
+                    false,
+                    int(cache_layer_offset),
+                    key_cache_ptrs};
+    Layout layout_v{int(local_head_num_ * max_seq_len * size_per_head_),
+                    int(size_per_head_),
+                    int(max_seq_len * size_per_head_),
+                    false,
+                    int(cache_layer_offset),
+                    val_cache_ptrs};
     Layout layout_o{
-        .stride_batch = int(local_head_num_ * max_q_len * size_per_head_),
-        .stride_seq   = int(local_head_num_ * size_per_head_),
-        .stride_head  = int(size_per_head_),
-        .use_seqlens  = true,
+        int(local_head_num_ * max_q_len * size_per_head_),
+        int(local_head_num_ * size_per_head_),
+        int(size_per_head_),
+        true,
     };
     size_t                       group_size = size_t(local_head_num_ / local_kv_head_num_);
     AttentionOp                  flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
-    typename AttentionOp::Params attn_params{.attn_out     = qkv_buf_3_,
-                                             .query        = q_buf_2_,
-                                             .key          = k_cache_buf_,
-                                             .val          = v_cache_buf_,
-                                             .mask         = attention_mask,
-                                             .out_accum    = qk_buf_float_,
-                                             .cu_seqlens_q = cu_seqlens,
-                                             .cu_seqlens_k = nullptr,
-                                             .group_size   = group_size,
-                                             .layout_q     = layout_q,
-                                             .layout_k     = layout_k,
-                                             .layout_v     = layout_v,
-                                             .layout_o     = layout_o};
+    typename AttentionOp::Params attn_params{qkv_buf_3_,
+                                             q_buf_2_,
+                                             k_cache_buf_,
+                                             v_cache_buf_,
+                                             attention_mask,
+                                             qk_buf_float_,
+                                             cu_seqlens,
+                                             nullptr,
+                                             group_size,
+                                             layout_q,
+                                             layout_k,
+                                             layout_v,
+                                             layout_o};
 
     //
     flash_attention(attn_params, stream_);

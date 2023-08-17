@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 
 namespace turbomind {
@@ -250,6 +251,8 @@ void printMatrix(int* ptr, int m, int k, int stride, bool is_device_ptr)
     }
 }
 
+// multiple definitions for msvc
+#ifndef _MSC_VER
 void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr)
 {
     typedef size_t T;
@@ -286,6 +289,7 @@ void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr)
         free(tmp);
     }
 }
+#endif
 
 template<typename T>
 void check_max_val(const T* result, const int size)

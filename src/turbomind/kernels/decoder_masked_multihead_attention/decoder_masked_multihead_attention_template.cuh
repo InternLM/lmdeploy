@@ -17,6 +17,7 @@
 
 #include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include <assert.h>
 #include <float.h>
@@ -1423,7 +1424,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                 int offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + tlength_circ * Dh
                              + co * QK_ELTS_IN_16B + ci;
 
-                if (not QUANT_POLICY) {
+                if (!QUANT_POLICY) {
                     *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
                         vec_conversion<Qk_vec_m, Qk_vec_k>(k);
                 }
@@ -1513,7 +1514,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     T*      k_cache_batch      = nullptr;
     int8_t* k_cache_batch_int8 = nullptr;
 
-    if (not QUANT_POLICY) {
+    if (!QUANT_POLICY) {
         k_cache_batch =
             params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + ki;
     }
@@ -1550,7 +1551,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                 else {
                     int beam_offset = 0;
 
-                    if (not QUANT_POLICY) {
+                    if (!QUANT_POLICY) {
                         k[ii] = vec_conversion<K_vec_k, K_vec_m>(
                             (*reinterpret_cast<const K_vec_m*>(&k_cache_batch[beam_offset + jj * QK_ELTS_IN_16B])));
                     }
@@ -1684,7 +1685,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     int8_t* v_cache_int8       = nullptr;
     int8_t* v_cache_batch_int8 = nullptr;
 
-    if (not QUANT_POLICY) {
+    if (!QUANT_POLICY) {
         v_cache =
             params.v_cache_per_sample[bi] + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + vi;
         // Base pointer for the beam's batch, before offsetting with indirection buffer
@@ -1727,7 +1728,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             // Load the values from the cache.
             V_vec_k v;
 
-            if (not QUANT_POLICY) {
+            if (!QUANT_POLICY) {
                 v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&v_cache_batch[ti * Dh]));
             }
             else if (QUANT_POLICY == 4) {
@@ -1769,7 +1770,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
             // Load the values from the cache.
             V_vec_k v;
-            if (not QUANT_POLICY) {
+            if (!QUANT_POLICY) {
                 v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&v_cache_batch[ti_circ * Dh]));
             }
             else if (QUANT_POLICY == 4) {
@@ -1825,7 +1826,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         if (group_leader) {
 
             // Store the values with bias back to global memory in the cache for V.
-            if (not QUANT_POLICY) {
+            if (!QUANT_POLICY) {
                 *reinterpret_cast<V_vec_m*>(&v_cache[tlength_circ * Dh]) = vec_conversion<V_vec_m, V_vec_k>(v);
             }
             else if (QUANT_POLICY == 4) {

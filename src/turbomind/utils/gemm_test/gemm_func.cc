@@ -17,6 +17,7 @@
 #include "encoder_gemm_func.h"
 #include <assert.h>
 #include <sys/types.h>
+#include <vector>
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -268,17 +269,17 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     // given algo
     const int splitKSequenceA[] = {2, 3, 4, 5, 6, 8, 12, 16, 32};
     // Let try a fixed number of combinations
-    int                  AlgoCount         = 0;
-    int                  AlgoCountRestrict = 0;            // workspace == 0
-    const int            maxNumTraversal   = 50;           // max number of traversal
-    cublasLtMatmulAlgo_t algos[AlgoCombinations];          // 0 <= workspace <= 32MB
-    cublasLtMatmulAlgo_t algosRestrict[AlgoCombinations];  // workspace == 0
-    const int            kernelRepeats = 100;              // number of time the CUDA kernels will be run back to back
-    int                  nbAlgoIds     = 0;                // Number of algorithms actually returned by
-                                                           // cublasLtMatmulAlgoGetIds function.
-#define ALGO_IDS 100                                       // Number of algorithms requested.
-    int algoIdA[ALGO_IDS];                                 // Array containing the algorithm IDs returned by
-                                                           // cublasLtMatmulAlgoGetIds function.
+    int                               AlgoCount         = 0;
+    int                               AlgoCountRestrict = 0;            // workspace == 0
+    const int                         maxNumTraversal   = 50;           // max number of traversal
+    std::vector<cublasLtMatmulAlgo_t> algos(AlgoCombinations);          // 0 <= workspace <= 32MB
+    std::vector<cublasLtMatmulAlgo_t> algosRestrict(AlgoCombinations);  // workspace == 0
+    const int                         kernelRepeats = 100;  // number of time the CUDA kernels will be run back to back
+    int                               nbAlgoIds     = 0;    // Number of algorithms actually returned by
+                                                            // cublasLtMatmulAlgoGetIds function.
+#define ALGO_IDS 100                                        // Number of algorithms requested.
+    int algoIdA[ALGO_IDS];                                  // Array containing the algorithm IDs returned by
+                                                            // cublasLtMatmulAlgoGetIds function.
     cudaDataType_t Atype, Btype, Ctype, scaleType, Dtype;
 #if (CUDART_VERSION >= 11000)
     cublasComputeType_t computeType;
