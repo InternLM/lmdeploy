@@ -101,3 +101,8 @@ curl http://{server_name}:{server_port}/v1/embeddings \
     "input": "Hello world!"
   }'
 ```
+
+### FAQ
+
+当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。
+请添加 `"renew_session": true` 到下一次请求中。

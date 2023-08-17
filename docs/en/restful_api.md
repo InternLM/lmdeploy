@@ -99,3 +99,8 @@ curl http://{server_name}:{server_port}/v1/embeddings \
     "input": "Hello world!"
   }'
 ```
+
+### FAQ
+
+When user got `"finish_reason":"length"` which means the session is too long to be continued.
+Please add `"renew_session": true` into the next request.
