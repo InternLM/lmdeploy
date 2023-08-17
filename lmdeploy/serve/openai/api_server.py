@@ -54,8 +54,9 @@ async def generate(raw_request: Request):
     - ignore_eos (bool): indicator for ignoring eos
     """
     request_dict = await raw_request.json()
-    instance_id = int(raw_request.client.host.replace('.', ''))
-    request_dict['instance_id'] = instance_id
+    if 'instance_id' not in request_dict:
+        instance_id = int(raw_request.client.host.replace('.', ''))
+        request_dict['instance_id'] = instance_id
     request = GenerateRequest(**request_dict)
     generation = VariableInterface.async_engine.generate(
         request.prompt,
