@@ -38,11 +38,6 @@ You can switch between Chinese and English documents in the lower-left corner of
 
    switch_language.md
 
-.. toctree::
-   :maxdepth: 1
-   :caption: API Reference
-
-   api.rst
 
 Indices and tables
 ==================

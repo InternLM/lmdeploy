@@ -38,11 +38,6 @@
 
    switch_language.md
 
-.. toctree::
-   :maxdepth: 1
-   :caption: API 文档
-
-   api.rst
 
 Indices and tables
 ==================
