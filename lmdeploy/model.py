@@ -129,6 +129,34 @@ class Baichuan7B(BaseModel):
             'repetition_penalty'] if 'repetition_penalty' in kwargs else 1.1
 
 
+@MODELS.register_module(name='puyu')
+class Puyu(BaseModel):
+    """Chat template of puyu model.This is only for internal usage in Shanghai
+    AI Laboratory."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.meta_instruction = kwargs.get('meta_instruction', '')
+        self.user = kwargs.get('user', '<|Human|>: ')
+        self.eoh = kwargs.get('eoh', '')
+        self.eosys = kwargs.get('eosys', '')
+        self.assistant = kwargs.get('assistant', '<|Assistant|>: ')
+        self.system = kwargs.get('system', '<|System|>: ')
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}\n' \
+                   f'{self.user}{prompt}{self.eoh}\n' \
+                   f'{self.assistant}'
+        else:
+            return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
+
+    @property
+    def stop_words(self):
+        """Return the stop-words' token ids."""
+        return [45623]
+
+
 @MODELS.register_module(name='llama2')
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
