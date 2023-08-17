@@ -22,6 +22,19 @@ pip install lmdeploy
 
 2. 如果已经安装了，还是出现这个问题，请检查下执行目录。不要在 lmdeploy 的源码根目录下执行 python -m lmdeploy.turbomind.\*下的package，换到其他目录下执行。
 
+### libnccl.so.2 not found
+
+确保通过 `pip install lmdeploy` 安装了 lmdeploy (>=v0.0.5)。
+
+如果安装之后，问题还存在，那么就把`libnccl.so.2`的路径加入到环境变量 LD_LIBRARY_PATH 中。
+
+```shell
+# 获取nvidia-nccl-cu11 package的安装目录
+pip show nvidia-nccl-cu11|grep Location
+# 把"libnccl.so.2"的路径加入到 LD_LIBRARY_PATH
+export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
+```
+
 ## Turbomind 推理
 
 ## Pytorch 推理
