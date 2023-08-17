@@ -249,6 +249,29 @@ If a question does not make any sense, or is not factually coherent, explain why
 
         return f'{self.b_inst} {prompt} {self.e_inst} '
 
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.default_sys_prompt if not system else system
+        ret = f'<BOS>{self.b_inst} {self.b_sys} {system} {self.e_sys}'
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            if i != 0:
+                ret += f'{self.b_inst} '
+            if assistant:
+                ret += f'{user} {self.e_inst} {assistant}'
+            else:
+                ret += f'{user} {self.e_inst} '
+        return ret
+
 
 def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
