@@ -231,7 +231,7 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
 - `use_context_fmha` 改为 0，表示关闭
 - `quant_policy` 设置为 4。此参数默认为 0，表示不开启
 
-这里是[量化测试结果](./docs/zh_cn/quantization.md)。
+这里是[量化测试结果](./docs/zh_cn/kv_int8.md)。
 
 > **Warning**<br />
 > 量化部署不支持运行时 Tensor 并发。如果希望使用 Tensor 并发，需要在 deploy 时配置 tp 参数。

@@ -232,7 +232,7 @@ Then adjust `workspace/triton_models/weights/config.ini`
 - `use_context_fmha` changed to 0, means off
 - `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
 
-Here is [quantization test results](./docs/en/quantization.md).
+Here is [quantization test results](./docs/en/kv_int8.md).
 
 > **Warning**<br />
 > runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
