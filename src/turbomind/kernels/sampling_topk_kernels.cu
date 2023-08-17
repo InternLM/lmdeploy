@@ -311,6 +311,39 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
     }
 }
 
+#ifdef _MSC_VER
+#define CASE_K(K_MIN, K_MAX, BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_)                                           \
+    if (K_MIN <= max_top_k && max_top_k <= K_MAX) {                                                                    \
+        topk_stage1<T, BLOCK_SIZE_1_, BLOCKS_PER_BEAM_>                                                                \
+            <<<batch_size * BLOCKS_PER_BEAM_, BLOCK_SIZE_1_, 0, stream>>>(log_probs,                                   \
+                                                                          temp_log_probs,                              \
+                                                                          topk_tmp_id_buf,                             \
+                                                                          topk_tmp_val_buf,                            \
+                                                                          finished,                                    \
+                                                                          max_top_k,                                   \
+                                                                          top_ks,                                      \
+                                                                          vocab_size,                                  \
+                                                                          end_ids,                                     \
+                                                                          skip_decode);                                \
+        topk_stage2_sampling<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                                       \
+            <<<batch_size, BLOCK_SIZE_2_, K_MAX * sizeof(int) + K_MAX * sizeof(float), stream>>>(topk_tmp_id_buf,      \
+                                                                                                 topk_tmp_val_buf,     \
+                                                                                                 ids,                  \
+                                                                                                 sequence_length,      \
+                                                                                                 finished,             \
+                                                                                                 cum_log_probs,        \
+                                                                                                 output_log_probs,     \
+                                                                                                 max_top_k,            \
+                                                                                                 top_ks,               \
+                                                                                                 top_p,                \
+                                                                                                 top_ps,               \
+                                                                                                 curandstate,          \
+                                                                                                 end_ids,              \
+                                                                                                 vocab_size,           \
+                                                                                                 skip_decode);         \
+        break;                                                                                                         \
+    }
+#else
 #define CASE_K(K_MIN, K_MAX, BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_)                                           \
     case K_MIN ... K_MAX:                                                                                              \
         topk_stage1<T, BLOCK_SIZE_1_, BLOCKS_PER_BEAM_>                                                                \
@@ -341,6 +374,7 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
                                                                                                  vocab_size,           \
                                                                                                  skip_decode);         \
         break;
+#endif
 
 template<typename T>
 void invokeBatchTopKSampling(void*          workspace,
@@ -385,6 +419,15 @@ void invokeBatchTopKSampling(void*          workspace,
     int* topk_tmp_id_buf  = (int*)(temp_log_probs + temp_log_probs_buf_size);
     T*   topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
 
+#ifdef _MSC_VER
+    do {
+        CASE_K(1, 16, 128, 128, 8);
+        CASE_K(17, 32, 256, 128, 8);
+        CASE_K(33, 64, 256, 256, 8);
+        CASE_K(65, 1024, 256, 256, 8);
+        throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
+    } while (0);
+#else
     switch (max_top_k) {
         CASE_K(1, 16, 128, 128, 8);
         CASE_K(17, 32, 256, 128, 8);
@@ -393,6 +436,7 @@ void invokeBatchTopKSampling(void*          workspace,
         default:
             throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
     }
+#endif
 }
 
 #undef CASE_K

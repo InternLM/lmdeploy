@@ -14,17 +14,19 @@
 
 cmake_minimum_required(VERSION 3.8)
 
+find_package(CUDAToolkit REQUIRED)
+
 add_library(BaseSamplingLayer STATIC BaseSamplingLayer.cc)
 set_property(TARGET BaseSamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET BaseSamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(BaseSamplingLayer PUBLIC -lcudart sampling_penalty_kernels memory_utils)
+target_link_libraries(BaseSamplingLayer PUBLIC CUDA::cudart sampling_penalty_kernels memory_utils)
 
 add_library(TopKSamplingLayer STATIC TopKSamplingLayer.cu)
 set_property(TARGET TopKSamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TopKSamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TopKSamplingLayer PUBLIC -lcudart BaseSamplingLayer sampling_topk_kernels)
+target_link_libraries(TopKSamplingLayer PUBLIC CUDA::cudart BaseSamplingLayer sampling_topk_kernels)
 
 add_library(TopPSamplingLayer STATIC TopPSamplingLayer.cu)
 set_property(TARGET TopPSamplingLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TopPSamplingLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TopPSamplingLayer PUBLIC -lcudart BaseSamplingLayer sampling_topk_kernels sampling_topp_kernels)
+target_link_libraries(TopPSamplingLayer PUBLIC CUDA::cudart BaseSamplingLayer sampling_topk_kernels sampling_topp_kernels)

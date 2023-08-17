@@ -32,8 +32,10 @@
 #endif
 #include <cuda_profiler_api.h>
 #include <map>
+#ifdef __linux__
 #include <sys/time.h>
 #include <unistd.h>
+#endif
 #include <vector>
 
 namespace turbomind {

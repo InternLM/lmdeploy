@@ -2,6 +2,7 @@
 
 #include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
@@ -111,7 +112,7 @@ template<typename T>
 void invokeAddResidual(T* out, const T* in, int m, int n, cudaStream_t stream)
 {
     auto total = static_cast<size_t>(m) * n;
-    dim3 block(std::min(total, 1024UL));
+    dim3 block(std::min((unsigned long)total, 1024UL));
     dim3 grid((total + block.x - 1) / block.x);
 
     addResidual<<<grid, block, 0, stream>>>(out, in, total);

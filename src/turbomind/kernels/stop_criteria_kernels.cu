@@ -16,6 +16,7 @@
 
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -94,7 +95,7 @@ void invokeStopWordsCriterion(const int*   output_ids,
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     // Check if we have sampled a word from the stop_words list. If so, stop the sequence.
     dim3 block, grid;
-    block.x = min(((stop_words_len + 32 - 1) / 32) * 32, 256UL);
+    block.x = min((unsigned long)((stop_words_len + 32 - 1) / 32) * 32, 256UL);
     grid.x  = (stop_words_len + block.x - 1) / block.x;
     grid.y  = batch_size * beam_width;
 
@@ -150,7 +151,11 @@ void invokeLengthCriterion(bool*           finished,
 
     length_criterion<<<grid, block, 0, stream>>>(
         finished, should_stop, h_pinned_finished_sum_, sequence_limit_length, batch_size, beam_width, step);
+#ifdef _MSC_VER
+    cudaStreamSynchronize(stream);
+#else
     while (((volatile int*)h_pinned_finished_sum_)[0] == -1) {};
+#endif
     sync_check_cuda_error();
 
     *should_stop = h_pinned_finished_sum_[0] == batch_size * beam_width;

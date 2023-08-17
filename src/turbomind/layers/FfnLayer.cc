@@ -16,6 +16,7 @@
 
 #include "src/turbomind/layers/FfnLayer.h"
 #include "src/turbomind/kernels/transpose_int8_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 
 namespace turbomind {

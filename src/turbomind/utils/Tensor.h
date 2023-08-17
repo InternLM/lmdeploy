@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -24,7 +25,6 @@
 #include "stdlib.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
-#include <dirent.h>
 #include <numeric>
 #include <stdlib.h>
 #include <string>
@@ -107,11 +107,11 @@ typedef enum memorytype_enum
 } MemoryType;
 
 struct Tensor {
-    const MemoryType          where;
-    const DataType            type;
-    const std::vector<size_t> shape;
-    const void*               data;  // TODO(bhseuh) modify from const void* to void* const
-    const std::vector<size_t> offsets = std::vector<size_t>{};
+    MemoryType          where;
+    DataType            type;
+    std::vector<size_t> shape;
+    void*               data;
+    std::vector<size_t> offsets = std::vector<size_t>{};
 
     Tensor();
     Tensor(const MemoryType _where, const DataType _type, const std::vector<size_t> _shape, const void* _data);

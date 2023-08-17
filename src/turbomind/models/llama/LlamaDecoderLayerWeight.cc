@@ -163,8 +163,8 @@ void loadWeights(LlamaDenseWeight<T>& w,
         if (enable_slice) {
             if (slice_dim == 1) {
                 size_t       start = 0;
-                ConcateSlice slice0{.slices = {{0, 1}}};
-                ConcateSlice slice1{.slices = {{}}};
+                ConcateSlice slice0{{{0, 1}}};
+                ConcateSlice slice1{{{}}};
                 for (auto len : slice_shape) {
                     size_t stride = len / tensor_para_size;
                     slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
@@ -181,8 +181,8 @@ void loadWeights(LlamaDenseWeight<T>& w,
         if (enable_slice) {
             if (slice_dim == 1) {
                 size_t       start = 0;
-                ConcateSlice slice0{.slices = {{0, dim0}}};
-                ConcateSlice slice1{.slices = {{}}};
+                ConcateSlice slice0{{{0, dim0}}};
+                ConcateSlice slice1{{{}}};
                 for (auto len : slice_shape) {
                     size_t stride = len / tensor_para_size;
                     slice1.slices.push_back({start + stride * rank, start + stride * (rank + 1)});
@@ -192,8 +192,8 @@ void loadWeights(LlamaDenseWeight<T>& w,
             }
             else {
                 size_t       start = 0;
-                ConcateSlice slice0{.slices = {}};
-                ConcateSlice slice1{.slices = {{0, dim1}}};
+                ConcateSlice slice0{{}};
+                ConcateSlice slice1{{{0, dim1}}};
                 for (auto len : slice_shape) {
                     size_t stride = len / tensor_para_size;
                     slice0.slices.push_back({start + stride * rank, start + stride * (rank + 1)});

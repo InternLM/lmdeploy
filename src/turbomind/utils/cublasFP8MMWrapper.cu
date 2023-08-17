@@ -16,6 +16,7 @@
 
 #include "cublasFP8MMWrapper.h"
 #include "cuda_utils.h"
+#include "src/turbomind/macro.h"
 
 namespace turbomind {
 
