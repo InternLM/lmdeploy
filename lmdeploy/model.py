@@ -166,9 +166,9 @@ class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
 
     def __init__(self):
-        self.eos_id = 151643
+        super().__init__()
         self.session_len = 8192
-        self.top_p = 0.8
+        self.top_p = 0.5
         self.top_k = 40
         self.temperature = 1.0
 
