@@ -21,6 +21,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaV2.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -73,29 +74,29 @@ private:
                               std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
                               std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr);
 
-    size_t         head_num_;
-    size_t         kv_head_num_;
-    size_t         size_per_head_;
-    size_t         inter_size_;
-    size_t         num_layer_;
-    size_t         vocab_size_;
-    size_t         rotary_embedding_dim_;
-    float          norm_eps_;
-    int            max_batch_size_;
-    int            max_context_token_num_;
-    int            session_len_;
-    int            step_length_;
-    int            start_id_;
-    int            end_id_;
-    int            cache_max_entry_count_;
-    int            cache_chunk_size_;
-    int            use_context_fmha_;
-    size_t         tensor_para_size_;
-    size_t         pipeline_para_size_;
-    ft::WeightType weight_type_;
-    bool           attn_bias_;
-    int            quant_policy_;
-    int            group_size_;
+    size_t                          head_num_;
+    size_t                          kv_head_num_;
+    size_t                          size_per_head_;
+    size_t                          inter_size_;
+    size_t                          num_layer_;
+    size_t                          vocab_size_;
+    turbomind::LlamaAttentionParams attn_params_;
+    float                           norm_eps_;
+    int                             max_batch_size_;
+    int                             max_context_token_num_;
+    int                             session_len_;
+    int                             step_length_;
+    int                             start_id_;
+    int                             end_id_;
+    int                             cache_max_entry_count_;
+    int                             cache_chunk_size_;
+    int                             use_context_fmha_;
+    size_t                          tensor_para_size_;
+    size_t                          pipeline_para_size_;
+    ft::WeightType                  weight_type_;
+    bool                            attn_bias_;
+    int                             quant_policy_;
+    int                             group_size_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;

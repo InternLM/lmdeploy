@@ -122,7 +122,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     inter_size_            = reader.GetInteger("llama", "inter_size");
     num_layer_             = reader.GetInteger("llama", "num_layer");
     vocab_size_            = reader.GetInteger("llama", "vocab_size");
-    rotary_embedding_dim_  = reader.GetInteger("llama", "rotary_embedding");
     norm_eps_              = reader.GetFloat("llama", "norm_eps");
     start_id_              = reader.GetInteger("llama", "start_id");
     end_id_                = reader.GetInteger("llama", "end_id");
@@ -136,6 +135,11 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
     quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
     group_size_            = reader.GetInteger("llama", "group_size", 0);
+
+    attn_params_.rotray_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
+    attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
+    attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
+    attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
 
     handleMissingParams();
 
@@ -222,7 +226,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   inter_size_,
                                                   num_layer_,
                                                   vocab_size_,
-                                                  rotary_embedding_dim_,
+                                                  attn_params_,
                                                   norm_eps_,
                                                   max_batch_size_,
                                                   max_context_token_num_,

@@ -16,7 +16,7 @@ from sentencepiece import SentencePieceProcessor
 import lmdeploy
 from lmdeploy.model import MODELS
 
-supported_formats = ['llama', 'hf', 'awq']
+supported_formats = ['llama', 'hf', 'awq', 'qwen']
 
 
 def get_package_root_path():
@@ -84,7 +84,7 @@ def copy_triton_model_templates(_path: str):
         return None
 
 
-def tokenizer_info(model_path: str):
+def tokenizer_info_sp(model_path: str):
     """Return the vocabulary size, bos token id and eos token id.
 
     Args:
@@ -101,6 +101,13 @@ def tokenizer_info(model_path: str):
     return n_words, bos_id, eos_id
 
 
+def tokenizer_info_qwen(model_dir: str):
+    n_words = 151851
+    bos_id = 0
+    eos_id = 151643
+    return n_words, bos_id, eos_id
+
+
 def export(model_name: str,
            num_layer: int,
            norm_eps: float,
@@ -111,7 +118,11 @@ def export(model_name: str,
            tp: int,
            size_per_head: int = 128,
            group_size: int = 0,
-           weight_type: str = 'fp16'):
+           weight_type: str = 'fp16',
+           max_position_embeddings: int = 0,
+           use_dynamic_ntk: int = 0,
+           use_logn_attn: int = 0,
+           tokenizer_info=tokenizer_info_sp):
     """Export deploying information to a config file.
 
     Args:
@@ -191,7 +202,7 @@ def export(model_name: str,
         head_num=head_num,
         kv_head_num=kv_head_num,
         size_per_head=size_per_head,
-        vocab_size=vocab_size,
+        vocab_size=_vocab_size,
         num_layer=num_layer,
         rotary_embedding=size_per_head,
         inter_size=inter_size,
@@ -210,7 +221,11 @@ def export(model_name: str,
         cache_chunk_size=1,
         use_context_fmha=1,
         quant_policy=0,
-        tensor_para_size=tp))
+        tensor_para_size=tp,
+        # extra attention params
+        max_position_embeddings=max_position_embeddings,
+        use_dynamic_ntk=int(use_dynamic_ntk),
+        use_logn_attn=int(use_logn_attn)))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -725,6 +740,134 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                   group_size=group_size)
 
 
+def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
+                triton_models_path: str, tp: int):
+    """Deploy a model with huggingface transformers' format.
+
+    Args:
+        model_name (str): the name of the to-be-deployed model
+        model_path (str): the path of the directory where the model weight
+          files are
+        tokenizer_path (str): the path of the tokenizer model path
+        triton_models_path (str): the path of the exported triton models
+        tp (int): the number of tensor parallelism
+        quant_path (str): path of the quantized model, which can be None
+        group_size (int): a parameter used in AWQ to quantize fp16 weights
+            to 4 bits
+    """
+
+    if osp.exists(model_path):
+        shutil.copy(osp.join(model_path, 'qwen.tiktoken'),
+                    osp.join(triton_models_path, 'tokenizer'))
+        for _file in os.listdir(model_path):
+            if _file.endswith('.json') or _file.endswith('.py'):
+                json_path = osp.join(model_path, _file)
+                shutil.copy(json_path,
+                            osp.join(triton_models_path, 'tokenizer', _file))
+        with get_package_root_path() as root_path:
+            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+                        osp.join(triton_models_path, 'tokenizer'))
+    else:
+        print(f'tokenizer model {tokenizer_path} does not exist')
+        exit(-1)
+
+    # read model arguments from params.json
+    try:
+        params_path = osp.join(model_path, 'config.json')
+        with open(params_path) as f:
+            config = json.load(f)
+            num_layer = config['num_hidden_layers']
+            norm_eps = config['layer_norm_epsilon']
+            if 'num_key_value_heads' in config:
+                kv_head_num = config['num_key_value_heads']
+            else:
+                kv_head_num = config['num_attention_heads']
+            seq_length = config['seq_length']
+            use_dynamic_ntk = config['use_dynamic_ntk']
+            use_logn_attn = config['use_logn_attn']
+    except Exception as e:
+        print(f'get "num_hidden_layers" and "layer_norm_epsilon" from '
+              f'{params_path} failed: {e}')
+        return False
+
+    # convert weights from hf to turbomind
+    model_params = {}
+
+    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
+    _files = sorted(_files)
+    print(_files)
+
+    _params = {}
+    for _file in _files:
+        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
+        _params.update(_tmp)
+
+    def get_tensor(name, trans=True):
+        """return a transposed tensor according its name."""
+        if trans:
+            return _params[name].cuda().t()
+        else:
+            return _params[name].cuda()
+
+    for i in range(num_layer):
+        print(i)
+
+        # qkv weights
+        qkv_w = get_tensor(f'transformer.h.{i}.attn.c_attn.weight')
+        q_w, k_w, v_w = torch.split(qkv_w, qkv_w.size(-1) // 3, dim=-1)
+        q_w, k_w = permute(q_w), permute(k_w)
+        qkv_w = merge_qkv(q_w, k_w, v_w, tp, dim=2)
+        model_params[f'layers.{i}.attention.w_qkv.weight'] = qkv_w
+
+        # qkv bias
+        qkv_b = get_tensor(f'transformer.h.{i}.attn.c_attn.bias')
+        q_b, k_b, v_b = torch.split(qkv_b, qkv_b.size(-1) // 3)
+        q_b, k_b = permute(q_b), permute(k_b)
+        qkv_b = merge_qkv(q_b, k_b, v_b, tp, dim=1)
+        model_params[f'layers.{i}.attention.w_qkv.bias'] = qkv_b
+
+        # o weights
+        o_w = get_tensor(f'transformer.h.{i}.attn.c_proj.weight')
+        model_params[f'layers.{i}.attention.wo.weight'] = o_w
+        model_params[f'layers.{i}.attention.wo.bias'] = torch.zeros_like(q_b)
+
+        # ffn weights
+        # ours: w2(silu(w1(x)) * w3(x))
+        # qwen: c_proj(w1(x) * silu(w2(x)))
+        w1 = get_tensor(f'transformer.h.{i}.mlp.w2.weight')
+        w3 = get_tensor(f'transformer.h.{i}.mlp.w1.weight')
+        w2 = get_tensor(f'transformer.h.{i}.mlp.c_proj.weight')
+        model_params[f'layers.{i}.feed_forward.w1.weight'] = w1
+        model_params[f'layers.{i}.feed_forward.w2.weight'] = w2
+        model_params[f'layers.{i}.feed_forward.w3.weight'] = w3
+
+        # norm weights
+        attn_norm = get_tensor(f'transformer.h.{i}.ln_1.weight')
+        ffn_norm = get_tensor(f'transformer.h.{i}.ln_2.weight')
+
+        model_params[f'layers.{i}.attention_norm.weight'] = attn_norm
+        model_params[f'layers.{i}.ffn_norm.weight'] = ffn_norm
+
+    other = [('tok_embeddings.weight', 'transformer.wte.weight'),
+             ('norm.weight', 'transformer.ln_f.weight'),
+             ('output.weight', 'lm_head.weight')]
+    for ft, hf in other:
+        model_params[ft] = get_tensor(hf, trans=False)
+
+    return export(model_name,
+                  num_layer,
+                  norm_eps,
+                  kv_head_num,
+                  model_params,
+                  model_path,
+                  triton_models_path,
+                  tp,
+                  max_position_embeddings=seq_length,
+                  use_dynamic_ntk=use_dynamic_ntk,
+                  use_logn_attn=use_logn_attn,
+                  tokenizer_info=tokenizer_info_qwen)
+
+
 def pack_model_repository(workspace_path: str):
     """package the model repository.
 
@@ -752,7 +895,7 @@ def pack_model_repository(workspace_path: str):
 
 def main(model_name: str,
          model_path: str,
-         model_format: str = 'hf',
+         model_format: str = None,
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1,
@@ -776,6 +919,9 @@ def main(model_name: str,
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
+
+    if model_format is None:
+        model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
@@ -803,6 +949,9 @@ def main(model_name: str,
     elif model_format == 'awq':
         res = deploy_awq(model_name, model_path, tokenizer_path,
                          triton_models_path, tp, quant_path, group_size)
+    elif model_format == 'qwen':
+        res = deploy_qwen(model_name, model_path, tokenizer_path,
+                          triton_models_path, tp)
 
     # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
     with open(osp.join(triton_models_path, 'interactive/config.pbtxt'),

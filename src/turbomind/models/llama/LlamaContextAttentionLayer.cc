@@ -163,21 +163,21 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     invokeAddFusedQKVBiasTranspose(q_buf_2_,
                                    k_buf_2_,
                                    v_buf_2_,
-                                   PrefixPromptBatchWeightsParam<T>{},
                                    qkv_buf_,
                                    weights->qkv.bias,
                                    padding_offset,  // padding_offset,
                                    history_length,  // used for applying rotary embedding
+                                   input_length,
                                    batch_size,
                                    max_q_len,  // seq_len
                                    num_token,  // batch_size * seq_len
                                    local_head_num_,
                                    local_kv_head_num_,
                                    size_per_head_,
-                                   rotary_embedding_dim_,
-                                   neox_rotary_style_,
-                                   nullptr,  // query_weight.scale_out
-                                   0,        // int8 mode
+                                   params_.rotray_embedding_dim,
+                                   params_.max_position_embeddings,
+                                   params_.use_dynamic_ntk,
+                                   params_.use_logn_attn,
                                    stream_);
     sync_check_cuda_error();
 

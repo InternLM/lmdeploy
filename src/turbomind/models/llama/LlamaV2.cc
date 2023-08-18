@@ -28,6 +28,7 @@
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -45,7 +46,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     size_t                       inter_size,
                     size_t                       num_layer,
                     size_t                       vocab_size,
-                    size_t                       rotary_embedding_dim,
+                    const LlamaAttentionParams&  attn_params,
                     float                        norm_eps,
                     int                          max_batch_size,
                     int                          max_context_token_num,
@@ -70,7 +71,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     inter_size_(inter_size),
     num_layer_(num_layer),
     vocab_size_(vocab_size),
-    rotary_embedding_dim_(rotary_embedding_dim),
     rmsnorm_eps_(norm_eps),
     start_id_(start_id),
     end_id_(end_id),
@@ -116,7 +116,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                                                         cache_chunk_size,
                                                         tensor_para.rank_,
                                                         allocator);
-    initialize(kv_head_num, use_context_fmha, quant_policy);
+    initialize(attn_params, kv_head_num, use_context_fmha, quant_policy);
     start();
 }
 
@@ -131,7 +131,10 @@ LlamaV2<T>::~LlamaV2()
 }
 
 template<typename T>
-void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant_policy)
+void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
+                            size_t                      kv_head_num,
+                            bool                        use_context_fmha,
+                            int                         quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -140,7 +143,7 @@ void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant
                                                   size_per_head_,
                                                   inter_size_,
                                                   num_layer_,
-                                                  rotary_embedding_dim_,
+                                                  attn_params,
                                                   rmsnorm_eps_,
                                                   tensor_para_,
                                                   stream_,
@@ -155,7 +158,7 @@ void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant
                                    size_per_head_,
                                    inter_size_,
                                    num_layer_,
-                                   rotary_embedding_dim_,
+                                   attn_params,
                                    rmsnorm_eps_,
                                    tensor_para_,
                                    stream_,

@@ -61,15 +61,17 @@ void LlamaContextDecoder<T>::freeBuffer()
 }
 
 template<typename T>
-void LlamaContextDecoder<T>::initialize(size_t kv_head_num, bool use_fmha, int quant_policy)
+void LlamaContextDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
+                                        size_t                      kv_head_num,
+                                        bool                        use_fmha,
+                                        int                         quant_policy)
 {
     h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
 
     context_attention_layer_ = new LlamaContextAttentionLayer<T>(head_num_,
                                                                  kv_head_num,
                                                                  size_per_head_,
-                                                                 rotary_embedding_dim_,
-                                                                 false,  // neox_rotary_style
+                                                                 attn_params,
                                                                  tensor_para_,
                                                                  stream_,
                                                                  cublas_wrapper_,
@@ -124,32 +126,31 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
 }
 
 template<typename T>
-LlamaContextDecoder<T>::LlamaContextDecoder(size_t           head_num,
-                                            size_t           kv_head_num,
-                                            size_t           size_per_head,
-                                            size_t           inter_size,
-                                            size_t           num_layer,
-                                            size_t           rotary_embedding_dim,
-                                            float            rmsnorm_eps,
-                                            NcclParam        tensor_para,
-                                            cudaStream_t     stream,
-                                            cublasMMWrapper* cublas_wrapper,
-                                            IAllocator*      allocator,
-                                            bool             is_free_buffer_after_forward,
-                                            bool             use_fmha,
-                                            int              quant_policy):
+LlamaContextDecoder<T>::LlamaContextDecoder(size_t                      head_num,
+                                            size_t                      kv_head_num,
+                                            size_t                      size_per_head,
+                                            size_t                      inter_size,
+                                            size_t                      num_layer,
+                                            const LlamaAttentionParams& attn_params,
+                                            float                       rmsnorm_eps,
+                                            NcclParam                   tensor_para,
+                                            cudaStream_t                stream,
+                                            cublasMMWrapper*            cublas_wrapper,
+                                            IAllocator*                 allocator,
+                                            bool                        is_free_buffer_after_forward,
+                                            bool                        use_fmha,
+                                            int                         quant_policy):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
     inter_size_(inter_size),
     hidden_units_(head_num * size_per_head),
     num_layer_(num_layer),
-    rotary_embedding_dim_(rotary_embedding_dim),
     rmsnorm_eps_(rmsnorm_eps),
     tensor_para_(tensor_para),
     data_type_(getTensorType<T>())
 {
-    initialize(kv_head_num, use_fmha, quant_policy);
+    initialize(attn_params, kv_head_num, use_fmha, quant_policy);
 }
 
 template<typename T>

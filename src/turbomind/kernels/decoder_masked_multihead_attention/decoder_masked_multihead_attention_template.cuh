@@ -18,8 +18,6 @@
 #include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/turbomind/macro.h"
-// #include "src/turbomind/utils/cuda_bf16_wrapper.h"
-// #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include <assert.h>
 #include <float.h>
@@ -592,42 +590,6 @@ __inline__ __device__ uint4 vec_conversion<uint4, Float8_>(const Float8_& a)
     return b;
 }
 
-#ifdef ENABLE_FP8
-// fp8_t
-template<>
-__inline__ __device__ float vec_conversion<float, __nv_fp8_e4m3>(const __nv_fp8_e4m3& a)
-{
-    return float(a);
-}
-template<>
-__inline__ __device__ __nv_fp8_e4m3 vec_conversion<__nv_fp8_e4m3, float>(const float& a)
-{
-    return __nv_fp8_e4m3(a);
-}
-// fp8_2_t
-template<>
-__inline__ __device__ float2 vec_conversion<float2, fp8_2_t>(const fp8_2_t& a)
-{
-    return float2(a);
-}
-template<>
-__inline__ __device__ fp8_2_t vec_conversion<fp8_2_t, float2>(const float2& a)
-{
-    return fp8_2_t(a);
-}
-// fp8_4_t
-template<>
-__inline__ __device__ float4 vec_conversion<float4, fp8_4_t>(const fp8_4_t& a)
-{
-    return float4(a);
-}
-template<>
-__inline__ __device__ fp8_4_t vec_conversion<fp8_4_t, float4>(const float4& a)
-{
-    return fp8_4_t(a);
-}
-#endif  // ENABLE_FP8
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<int THREADS_PER_KEY, typename K_vec, int N>
@@ -865,19 +827,6 @@ inline __device__ void convert_from_float(bf16_8_t& dst, Float8_ src)
 #endif
 }
 #endif  // ENABLE_BF16
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef ENABLE_FP8
-inline __device__ void convert_from_float(fp8_4_t& dst, float4 src)
-{
-    dst = fp8_4_t(src);
-}
-inline __device__ void convert_from_float(fp8_2_t& dst, float2 src)
-{
-    dst = fp8_2_t(src);
-}
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1365,8 +1314,6 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // The thread in the block.
     const int tidx = threadIdx.x;
 
-    constexpr bool handle_kv = true;
-
     // While doing the product Q*K^T for the different keys we track the max.
     float qk_max = -FLT_MAX;
 
@@ -1422,28 +1369,36 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     Qk_vec_k k_bias;
     zero(k_bias);
-    if (handle_kv) {
-        k_bias =
-            !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) && params.k_bias != nullptr ?
-                vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.k_bias[k_bias_offset])) :
-                k_bias;
-    }
+
+    k_bias = !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) && params.k_bias != nullptr ?
+                 vec_conversion<Qk_vec_k, Qk_vec_m>(*reinterpret_cast<const Qk_vec_m*>(&params.k_bias[k_bias_offset])) :
+                 k_bias;
 
     // Computes the Q/K values with bias.
     q = add(q, q_bias);
-    if (handle_kv) {
-        k = add(k, k_bias);
+    k = add(k, k_bias);
+
+    float rotary_emb_base = 10000.f;
+    if (params.use_dynamic_ntk) {
+        // +1 because of `length_per_sample == context_length - 1`
+        rotary_emb_base = rotary_embedding_get_base(params.length_per_sample[bi] + 1,
+                                                    params.max_position_embeddings,
+                                                    params.rotary_embedding_dim,
+                                                    rotary_emb_base);
     }
 
     // Padded len
     const int padd_len = (params.total_padding_tokens == nullptr) ? 0 : params.total_padding_tokens[bi];
     if (params.rotary_embedding_dim > 0) {
-        if (handle_kv) {
-            apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, params.timestep - padd_len);
-        }
-        else {
-            apply_rotary_embedding(q, tidx, params.rotary_embedding_dim, params.timestep - padd_len);
-        }
+        apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, rotary_emb_base, params.timestep - padd_len);
+    }
+
+    if (params.use_logn_attn) {
+        T log_n_scaling;
+        // +1 because of `length_per_sample == context_length - 1`
+        convert_from_float(log_n_scaling,
+                           logn_attn_get_scaling(params.length_per_sample[bi] + 1, params.max_position_embeddings));
+        q = mul<Qk_vec_k, T, Qk_vec_k>(log_n_scaling, q);
     }
 
     if (!is_masked) {
@@ -1462,47 +1417,23 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         // The position of the thread in that 16B chunk.
         int ci = tidx % QK_VECS_IN_16B * QK_VEC_SIZE;
 
-        if (handle_kv && group_leader) {
+        if (group_leader) {
             // Trigger the stores to global memory.
             if (Dh == Dh_MAX || co < Dh / QK_ELTS_IN_16B) {
-                if (!params.k_cache_per_sample) {
-                    // Two chunks are separated by L * x elements. A thread write QK_VEC_SIZE elements.
-                    int offset = bhi * params.memory_max_len * Dh + co * params.memory_max_len * QK_ELTS_IN_16B
-                                 + tlength_circ * QK_ELTS_IN_16B + ci;
 
-                    if (!QUANT_POLICY) {
-                        *reinterpret_cast<Qk_vec_m*>(&params.k_cache[offset]) = vec_conversion<Qk_vec_m, Qk_vec_k>(k);
-                    }
-                    else if (QUANT_POLICY == 4) {
-                        using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
-                        Packed_Int8_t k_int8 = quant(k, k_scale, k_zp);
+                int offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + tlength_circ * Dh
+                             + co * QK_ELTS_IN_16B + ci;
 
-                        int8_t* dst_ptr                                     = reinterpret_cast<int8_t*>(params.k_cache);
-                        *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
-                    }
+                if (!QUANT_POLICY) {
+                    *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
+                        vec_conversion<Qk_vec_m, Qk_vec_k>(k);
                 }
-                else {
-                    int offset;
-                    if (params.k_cache_interleaved) {
-                        offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh
-                                 + co * params.memory_max_len * QK_ELTS_IN_16B + tlength_circ * QK_ELTS_IN_16B + ci;
-                    }
-                    else {
-                        offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh
-                                 + tlength_circ * Dh + co * QK_ELTS_IN_16B + ci;
-                    }
+                else if (QUANT_POLICY == 4) {
+                    using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
+                    Packed_Int8_t k_int8 = quant(k, k_scale, k_zp);
 
-                    if (!QUANT_POLICY) {
-                        *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
-                            vec_conversion<Qk_vec_m, Qk_vec_k>(k);
-                    }
-                    else if (QUANT_POLICY == 4) {
-                        using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec_k>::value>::type;
-                        Packed_Int8_t k_int8 = quant(k, k_scale, k_zp);
-
-                        int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
-                        *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
-                    }
+                    int8_t* dst_ptr = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
+                    *reinterpret_cast<Packed_Int8_t*>(&dst_ptr[offset]) = k_int8;
                 }
             }
         }
@@ -1584,33 +1515,21 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     int8_t* k_cache_batch_int8 = nullptr;
 
     if (!QUANT_POLICY) {
-        k_cache_batch = params.k_cache_per_sample ? (params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset
-                                                     + kvhi * params.memory_max_len * Dh + ki) :
-                                                    &params.k_cache[bhi * params.memory_max_len * Dh + ki];
-        // Base pointer for the beam's batch, before offsetting with indirection buffer
-        // T* k_cache_batch = &params.k_cache[bbhi * params.memory_max_len * Dh + ki];
+        k_cache_batch =
+            params.k_cache_per_sample[bi] + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + ki;
     }
     else if (QUANT_POLICY == 4) {
         // convert k_cache_per_sample to int8
-        if (params.k_cache_per_sample) {
-            int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
-            k_cache_batch_int8 = ptr + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + ki;
-        }
-        else {
-            int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache);
-            k_cache_batch_int8 = &ptr[bhi * params.memory_max_len * Dh + ki];
-        }
+        int8_t* ptr        = reinterpret_cast<int8_t*>(params.k_cache_per_sample[bi]);
+        k_cache_batch_int8 = ptr + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + ki;
     }
 
     // Pick a number of keys to make sure all the threads of a warp enter (due to shfl_sync).
     // int ti_end = div_up(params.timestep, K_PER_WARP) * K_PER_WARP;
     int ti_end = div_up(tlength - first_step, K_PER_WARP) * K_PER_WARP + first_step;
 
-    // prefix prompt length if has
-    const int prefix_prompt_length = (params.prefix_prompt_lengths == nullptr) ? 0 : params.prefix_prompt_lengths[bi];
-
     // Iterate over the keys/timesteps to compute the various (Q*K^T)_{ti} values.
-    const int* beam_indices = HAS_BEAMS ? &params.cache_indir[bi_seq_len_offset] : nullptr;
+    // const int* beam_indices = HAS_BEAMS ? &params.cache_indir[bi_seq_len_offset] : nullptr;
 
     for (int ti = first_step + ko; ti < ti_end; ti += K_PER_ITER) {
         const int ti_circ = ti % params.memory_max_len;
@@ -1622,8 +1541,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         zero(k_vec_zero);
 #pragma unroll
         for (int ii = 0; ii < K_VECS_PER_THREAD; ++ii) {
-            int jj =
-                params.k_cache_interleaved ? ii * params.memory_max_len + ti_circ : ti_circ * Dh / QK_ELTS_IN_16B + ii;
+            int jj = ti_circ * Dh / QK_ELTS_IN_16B + ii;
             // if( ti < params.timestep ) {
             const bool within_bounds = (Dh == Dh_MAX || jj * QK_ELTS_IN_16B < Dh * params.memory_max_len);
             if (ti < tlength) {
@@ -1632,9 +1550,6 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
                 }
                 else {
                     int beam_offset = 0;
-                    if (HAS_BEAMS) {
-                        beam_offset = beam_indices[ti_circ] * params.num_heads * params.memory_max_len * Dh;
-                    }
 
                     if (!QUANT_POLICY) {
                         k[ii] = vec_conversion<K_vec_k, K_vec_m>(
@@ -1771,24 +1686,15 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     int8_t* v_cache_batch_int8 = nullptr;
 
     if (!QUANT_POLICY) {
-
-        v_cache = params.v_cache_per_sample ? (params.v_cache_per_sample[bi] + params.kv_cache_per_sample_offset
-                                               + kvhi * params.memory_max_len * Dh + vi) :
-                                              &params.v_cache[bhi * params.memory_max_len * Dh + vi];
+        v_cache =
+            params.v_cache_per_sample[bi] + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + vi;
         // Base pointer for the beam's batch, before offsetting with indirection buffer
         // T* v_cache_batch = &params.v_cache[bbhi * params.memory_max_len * Dh + vi];
         v_cache_batch = v_cache;
     }
     else if (QUANT_POLICY == 4) {
-        if (params.v_cache_per_sample) {
-            int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
-            v_cache_int8 = ptr + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + vi;
-        }
-        else {
-            int8_t* ptr  = reinterpret_cast<int8_t*>(params.v_cache);
-            v_cache_int8 = &ptr[bhi * params.memory_max_len * Dh + vi];
-        }
-
+        int8_t* ptr        = reinterpret_cast<int8_t*>(params.v_cache_per_sample[bi]);
+        v_cache_int8       = ptr + params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + vi;
         v_cache_batch_int8 = v_cache_int8;
     }
 
@@ -1819,19 +1725,14 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         // the compiler cannot optimize the codes automatically.
         const int min_length = min(tlength, params.memory_max_len);
         for (int ti = first_step + vo; ti < min_length; ti += V_PER_ITER) {
-            // Fetch offset based on cache_indir when beam sampling
-            const int beam_src    = HAS_BEAMS ? params.cache_indir[bi_seq_len_offset + ti] : 0;
-            const int beam_offset = HAS_BEAMS ? beam_src * params.num_heads * params.memory_max_len * Dh : 0;
             // Load the values from the cache.
             V_vec_k v;
 
             if (!QUANT_POLICY) {
-                v = vec_conversion<V_vec_k, V_vec_m>(
-                    *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti * Dh]));
+                v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&v_cache_batch[ti * Dh]));
             }
             else if (QUANT_POLICY == 4) {
-                Packed_Int8_t v_vec_m_int8 =
-                    *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti * Dh]);
+                Packed_Int8_t  v_vec_m_int8  = *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[ti * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale, v_zp);
 
                 v = vec_conversion<V_vec_k, Packed_Float_t>(v_vec_m_float);
@@ -1867,18 +1768,13 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             }
             const int ti_circ = ti % params.memory_max_len;
 
-            // Fetch offset based on cache_indir when beam sampling
-            const int beam_src    = HAS_BEAMS ? params.cache_indir[bi_seq_len_offset + ti_circ] : 0;
-            const int beam_offset = HAS_BEAMS ? beam_src * params.num_heads * params.memory_max_len * Dh : 0;
             // Load the values from the cache.
             V_vec_k v;
             if (!QUANT_POLICY) {
-                v = vec_conversion<V_vec_k, V_vec_m>(
-                    *reinterpret_cast<const V_vec_m*>(&v_cache_batch[beam_offset + ti_circ * Dh]));
+                v = vec_conversion<V_vec_k, V_vec_m>(*reinterpret_cast<const V_vec_m*>(&v_cache_batch[ti_circ * Dh]));
             }
             else if (QUANT_POLICY == 4) {
-                Packed_Int8_t v_vec_m_int8 =
-                    *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[beam_offset + ti_circ * Dh]);
+                Packed_Int8_t v_vec_m_int8 = *reinterpret_cast<const Packed_Int8_t*>(&v_cache_batch_int8[ti_circ * Dh]);
                 Packed_Float_t v_vec_m_float = dequant(v_vec_m_int8, v_scale, v_zp);
 
                 v = vec_conversion<V_vec_k, Packed_Float_t>(v_vec_m_float);
@@ -1927,11 +1823,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         }
 
         // Store the V values to cache
-        if (handle_kv && group_leader) {
+        if (group_leader) {
 
             // Store the values with bias back to global memory in the cache for V.
-            //*reinterpret_cast<V_vec_k*>(&v_cache[params.timestep*Dh]) = v;
-
             if (!QUANT_POLICY) {
                 *reinterpret_cast<V_vec_m*>(&v_cache[tlength_circ * Dh]) = vec_conversion<V_vec_m, V_vec_k>(v);
             }
