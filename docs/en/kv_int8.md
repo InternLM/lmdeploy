@@ -1,15 +1,73 @@
-# KV Cache Quantization Benchmark Results
+# KV Cache Quantization and Test Results
 
-## Benchmark the Graphics Memory Usage
+For the LLaMa-7B fp16 model with a maximum length of 2048, the server requires approximately 1030MB of GPU memory to store kv_cache for each concurrent session created. This means that even an A100 80G can only serve a limited number of users.
 
-We take the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) instruction model as the benchmark target. The benchmark process is as follows:
+To reduce runtime GPU memory usage, we have implemented PTQ quantization for kv cache, using the following formula:
 
-1. Use the `deploy.py` to convert the model, modify the maximum concurrent amount in `workspace`, and adjust the request amount in `llama_config.ini`
-2. Compile the `bin/llama_triton_example` and get the graphics usage status of the fp16 version model under different batch_size settings
-3. Execute the quantization script and get the quantization parameters. Then modify the config file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) be effective
-4. Re-execute the `bin/llama_triton_example` and get the graphics usage status of the int8 version model under different batch_size settings
+```bash
+zp = (min+max) / 2
+scale = (max-min) / 255
+quant: q = round( (f-zp) / scale)
+dequant: f = q * scale + zp
+```
 
-Here is the benchmark result between the two versions of the model:
+## How to Enable KV Cache INT8
+
+### **Step One**
+
+Convert the Hugging Face model format to the TurboMind inference format to create a workspace directory.
+
+```bash
+python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
+```
+
+If you already have a workspace directory, skip this step.
+
+### **Step Two**
+
+Get the quantization parameters.
+
+```bash
+python3 -m lmdeploy.lite.apis.kv_qparams \
+  --work_dir /path/to/internlm-chat-7b  \             # Directory of the Hugging Face model
+  --turbomind_dir workspace/trition_models/weights/ \ # Directory to save the quantization parameters
+  --kv_sym False \                                    # Symmetric or asymmetric quantization, default is False
+  --num_tp 1  \                                       # Number of GPUs used for Tensor parallelization, keep it consistent with deploy.py
+```
+
+`kv_qparams` will generate fp32 scaling factors in the `weights` directory. The file format is a binary produced by `numpy.tofile`.
+
+You can also first set `turbomind_dir` to a private directory, then copy the scaling factors into `workspace/trition_models/weights/`.
+
+### **Step Three**
+
+Modify `workspace/trition_models/weights/config.ini`:
+
+- Set use_context_fmha to 0, which means turning off flashattention
+- Set quant_policy to 4. This means enabling kv_cache int8
+
+This is because there are two versions of flashattention, v1 and v2, and kv_cache int8 has also previously realized the symmetric version.
+
+Considering there are four combinations of kernels needed to be implemented, premature optimization when the algorithm is uncertain can be disastrous for software.
+
+### **Step Four**
+
+Test the chat performance.
+
+```bash
+python3 -m lmdeploy.turbomind.chat ./workspace
+```
+
+## GPU Memory Test
+
+The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) model.
+Testing method:
+
+1. Use `deploy.py` to convert the model, modify the maximum concurrency in the `workspace` configuration; adjust the number of requests in `llama_config.ini`.
+2. Compile and run `bin/llama_triton_example` to obtain the GPU memory situation of the fp16 version under different batch_size.
+3. Enable quantization, re-run `bin/llama_triton_example` to obtain the GPU memory situation of the int8 version under different batch_size.
+
+Below shows the comparison of GPU memory between the two versions:
 
 | batch_size | fp16 memory(MiB) | int8 memory(MiB) | diff(MiB) |
 | :--------: | :--------------: | :--------------: | :-------: |
@@ -18,33 +76,17 @@ Here is the benchmark result between the two versions of the model:
 |     32     |      47073       |      30625       |  -16448   |
 |     48     |      63553       |      38881       |  -24672   |
 
-To compare with the weight quantization method such as [GPTQ-for-LLaMa](https://github.com/qwopqwop200/GPTQ-for-LLaMa/) , we benchmarked the memory usages of the 7B model between the two solutions, with part of the data from [llama.cpp](https://github.com/ggerganov/llama.cpp) . Here is the result:
+Compared to directly quantizing Weight (such as [GPTQ-for-LLaMa](https://github.com/qwopqwop200/GPTQ-for-LLaMa/)), we have done a comparative estimation of memory growth in the 7B model for both methods, with some data from [llama.cpp](https://github.com/ggerganov/llama.cpp).
 
 ![](../../resources/batch_memory.png)
 
-It can be seen that each concurrency requires 1030MB of GPU memory to save kv_cache for 2048 tokens, so quantizing kv_cache can significantly reduce the speed of the memory growth at runtime.
+As can be seen, the fp16 version requires 1030MB of GPU memory for each concurrency, so quantizing kv_cache can significantly reduce the rate of increase of runtime memory.
 
-Note that `kCacheKVInt8` and `WeightInt4` can be used simultaneously.
+## Accuracy Test
 
-## Benchmark the Accuracy
+The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) command model.
 
-The quantification method is PTQ, and the related formula is as follows:
-
-```
-zp = (min+max) / 2
-scale = (max-min) / 255
-quant: q = round( (f-zp) / scale)
-dequant: f = q * scale + zp
-```
-
-Here we take the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) instruction model as the benchmark target again. The benchmark process is as follows:
-
-1. Convert the model with `deploy.py` and run the docker service
-2. Test the fp16 version accuracy with `client.py` using the dataset
-3. Execute the quantization script to get the quantization parameters, and put them into the weights directory. Then modify the configuration file to make [kCacheKVInt8](../../src/turbomind/models/llama/llama_utils.h) option to be effective
-4. Execute the `client.py` again to get the int8 version precision
-
-The following table is the precision result obtained by the `kCacheKVInt8` method after quantizing 128 randomly selected data from the c4 dataset and testing it with [opencompass](https://github.com/InternLM/opencompass).
+Below is the result of PTQ quantization of `kCacheKVInt8` method with only 128 randomly selected data from the c4 dataset. The accuracy was tested using [opencompass](https://github.com/InternLM/opencompass) before and after quantization.
 
 |     task      |     dataset     |    metric     | int8  | fp16  | diff  |
 | :-----------: | :-------------: | :-----------: | :---: | :---: | :---: |
@@ -55,3 +97,5 @@ The following table is the precision result obtained by the `kCacheKVInt8` metho
 | Understanding | openbookqa_fact |   accuracy    | 82.40 | 82.20 | +0.20 |
 | Understanding |   eprstmt-dev   |   accuracy    | 90.62 | 88.75 | +1.87 |
 |    Safety     |   crows_pairs   |   accuracy    | 32.56 | 31.43 | +1.13 |
+
+Note that both `kCacheKVInt8` and `WeightInt4` methods can be enabled at the same time.
