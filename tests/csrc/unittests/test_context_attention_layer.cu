@@ -334,7 +334,12 @@ int main(int argc, const char* argv[])
                         &cublas_wrapper);
 
     // compute actual
-    using AttentionOp = FlashAttentionOpImpl<scalar_t, 2>;
+#ifdef _MSC_VER
+    static constexpr int FMHA_VERSION = 1;
+#else
+    static constexpr int FMHA_VERSION = 2;
+#endif
+    using AttentionOp = FlashAttentionOpImpl<scalar_t, FMHA_VERSION>;
     using Layout      = typename AttentionOp::AttentionLayout;
     Layout      layout_q{num_heads * seq_len * size_per_head, size_per_head, seq_len * size_per_head};
     Layout      layout_k{num_heads * key_len * size_per_head, size_per_head, key_len * size_per_head};

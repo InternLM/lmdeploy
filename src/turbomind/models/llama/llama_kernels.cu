@@ -740,28 +740,42 @@ template<typename T>
 FlashAttentionOp<T>::FlashAttentionOp(int batch_size, int head_num, int key_len, int seq_len, int size_per_head):
     batch_size_(batch_size), head_num_(head_num), key_len_(key_len), seq_len_(seq_len), size_per_head_(size_per_head)
 {
+#ifdef _MSC_VER
+    op_version_ = 1;
+#else
     op_version_ = std::is_same<half, typename std::decay<T>::type>::value ? 2 : 1;
     if (op_version_ == 2 && getSMVersion() < 80) {
         op_version_ = 1;
     }
+#endif
 }
 
 template<typename T>
 int FlashAttentionOp<T>::get_workspace_size() const
 {
+#ifdef _MSC_VER
+    FlashAttentionOpImpl<T, 1> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
+    return attention_op.get_workspace_size();
+#else
     return VERSION_SWITCH(op_version_, OP_VERSION, [&]() {
         FlashAttentionOpImpl<T, OP_VERSION> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
         return attention_op.get_workspace_size();
     });
+#endif
 }
 
 template<typename T>
 void FlashAttentionOp<T>::operator()(Params& params, cudaStream_t st) const
 {
+#ifdef _MSC_VER
+    FlashAttentionOpImpl<T, 1> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
+    return attention_op(params, st);
+#else
     return VERSION_SWITCH(op_version_, OP_VERSION, [&]() {
         FlashAttentionOpImpl<T, OP_VERSION> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
         return attention_op(params, st);
     });
+#endif
 }
 
 template class FlashAttentionOp<float>;
