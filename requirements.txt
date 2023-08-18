@@ -10,3 +10,4 @@ setuptools
 torch
 transformers
 tritonclient[all]
+tiktoken
