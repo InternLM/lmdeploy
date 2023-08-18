@@ -895,7 +895,7 @@ def pack_model_repository(workspace_path: str):
 
 def main(model_name: str,
          model_path: str,
-         model_format: str = 'hf',
+         model_format: str = None,
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1,
@@ -919,6 +919,9 @@ def main(model_name: str,
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
+
+    if model_format is None:
+        model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
