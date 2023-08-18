@@ -13,7 +13,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
-- \[2023/08\] TurboMind supports Qwen-7B, dyanmic NTK-RoPE scaling and dynamic logN scaling
+- \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
 - \[2023/08\] TurboMind supports Windows (tp=1)
 - \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](./docs/en/w4a16.md) guide for detailed info
 - \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
