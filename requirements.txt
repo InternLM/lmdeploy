@@ -1,3 +1,4 @@
+accelerate
 datasets
 fire
 gradio
