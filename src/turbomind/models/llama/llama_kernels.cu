@@ -329,11 +329,11 @@ static inline __device__ uint32_t float4_to_char4(float x, float y, float z, flo
     asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2, %0;\n" : "+r"(dst) : "r"(b), "r"(a));
 #else
     char4 tmp;
-    tmp.x = x;
-    tmp.y = y;
-    tmp.z = z;
-    tmp.w = w;
-    dst   = reinterpret_cast<const uint32_t&>(tmp);
+    tmp.x       = x;
+    tmp.y       = y;
+    tmp.z       = z;
+    tmp.w       = w;
+    dst         = reinterpret_cast<const uint32_t&>(tmp);
 #endif
     return dst;
 }
