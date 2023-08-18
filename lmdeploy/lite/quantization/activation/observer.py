@@ -37,9 +37,17 @@ class KVCacheObserver(GlobalAvailMixin):
             x : Input tensor
         """
         assert len(x.shape) == 4
-        x = x.transpose(1, 2)
-        assert x.size(2) == self.num_head
-        assert x.size(3) == self.head_dim
+
+        if x.size(2) == self.num_head and x.size(3) == self.head_dim:
+            # layout: (bs, seqlen, heads, dims)
+            x = x
+        elif x.size(1) == self.num_head and x.size(3) == self.head_dim:
+            # layout: (bs, heads, seqlen, dims)
+            x = x.transpose(1, 2)
+        else:
+            import pdb
+            pdb.set_trace()
+            raise RuntimeError
 
         cur_max = x.flatten(0, 1).max(0)[0].cpu()
         cur_min = x.flatten(0, 1).min(0)[0].cpu()

@@ -14,6 +14,10 @@ NORM_FCS_MAP = {
         'input_layernorm':
         ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
+    'QWenBlock': {
+        'ln_1': ['attn.c_attn'],
+        'ln_2': ['mlp.w1', 'mlp.w2']
     }
 }
 
@@ -25,6 +29,10 @@ FC_FCS_MAP = {
     'InternLMDecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
+    },
+    'QWenBlock': {
+        'attn.c_attn|back': ['attn.c_proj'],
+        'mlp.w1': ['mlp.w3']
     }
 }
 
@@ -94,6 +102,14 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     :return: Scales
     """
     device, dtype = pre_fc.weight.device, pre_fc.weight.dtype
+
+    size_a = act_scales.size(0)
+    size_pre_fc = pre_fc.weight.size(0)
+
+    # special case: use group query attention, pre_fc is v_proj, fc is o_proj
+    if size_pre_fc < size_a and size_a % size_pre_fc == 0:
+        return
+
     act_scales = act_scales.to(device=device, dtype=dtype)
 
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
@@ -186,6 +202,7 @@ def smooth_layers(layers,
 
             fc = layer.get_submodule(f_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
+
             smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
 
         layer.to('cpu')
