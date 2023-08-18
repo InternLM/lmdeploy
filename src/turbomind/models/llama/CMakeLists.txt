@@ -42,6 +42,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         llama_fmha)
 
 if (NOT MSVC)
+        add_subdirectory(flash_attention2)
         target_link_libraries(Llama flash_attention2)
 endif()
 
