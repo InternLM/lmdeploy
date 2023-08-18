@@ -1,12 +1,14 @@
 import enum
 from typing import Sequence, Dict, Any
 from dataclasses import dataclass, field
+from lmdeploy.pytorch_poc.block import LogicalTokenBlock
 
 
 class MessageStatus(enum.Enum):
     """Status of a sequence."""
     WAITING = enum.auto()
     RUNNING = enum.auto()
+    SWAP_OUT = enum.auto()
     STOPPED = enum.auto()
     ENDED = enum.auto()
     FINISHED = enum.auto()
@@ -15,7 +17,10 @@ class MessageStatus(enum.Enum):
 @dataclass
 class SchedulerSession:
     session_id: int
+    logical_blocks: Sequence[LogicalTokenBlock] = field(default_factory=list)
     block_table: Dict = field(default_factory=dict)
+    status: MessageStatus = MessageStatus.WAITING
+    arrive_time: float = 0.0
 
 
 @dataclass

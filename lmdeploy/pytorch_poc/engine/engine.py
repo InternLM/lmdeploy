@@ -2,7 +2,7 @@ from typing import List
 import torch
 from lmdeploy.pytorch_poc.patch import patch
 from lmdeploy.pytorch_poc.paging import Scheduler
-from lmdeploy.pytorch_poc.config import SchedulerConfig
+from lmdeploy.pytorch_poc.config import SchedulerConfig, CacheConfig
 from lmdeploy.pytorch_poc.messages import SchedulerMessage, SchedulerSession
 
 from transformers import AutoModelForCausalLM
@@ -37,7 +37,9 @@ class Engine:
         self.patched_model = patch(hf_model).cuda()
 
         scheduler_config = SchedulerConfig(4, 2048)
-        self.scheduler = Scheduler(scheduler_config)
+        cache_config = CacheConfig(
+            block_size=16, num_cpu_blocks=1024, num_gpu_blocks=1024)
+        self.scheduler = Scheduler(scheduler_config, cache_config)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -79,6 +81,8 @@ class Engine:
 
     def step(self):
         # TODO: cache manage
+        import pdb
+        pdb.set_trace()
 
         # schedule
         running = self.scheduler.schedule()
