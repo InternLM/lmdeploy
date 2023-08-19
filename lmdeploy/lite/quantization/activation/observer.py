@@ -45,8 +45,6 @@ class KVCacheObserver(GlobalAvailMixin):
             # layout: (bs, heads, seqlen, dims)
             x = x.transpose(1, 2)
         else:
-            import pdb
-            pdb.set_trace()
             raise RuntimeError
 
         cur_max = x.flatten(0, 1).max(0)[0].cpu()
