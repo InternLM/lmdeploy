@@ -22,6 +22,8 @@ pip install lmdeploy
 
 2. If you have installed it and still encounter this issue, it is probably because you are executing turbomind-related command in the root directory of lmdeploy source code. Switching to another directory will fix it
 
+## Libs
+
 ### libnccl.so.2 not found
 
 Make sure you have install lmdeploy (>=v0.0.5) through `pip install lmdeploy`.
@@ -34,6 +36,10 @@ pip show nvidia-nccl-cu11|grep Location
 # insert the path of "libnccl.so.2" to LD_LIBRARY_PATH
 export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 ```
+
+### symbol cudaFreeAsync version libcudart.so.11.0 not defined in file libcudart.so.11.0 with link time reference
+
+It's probably due to a low-version cuda toolkit. LMDeploy runtime requires a minimum CUDA version of 11.2
 
 ## Turbomind Inference
 

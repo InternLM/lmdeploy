@@ -22,6 +22,8 @@ pip install lmdeploy
 
 2. 如果已经安装了，还是出现这个问题，请检查下执行目录。不要在 lmdeploy 的源码根目录下执行 python -m lmdeploy.turbomind.\*下的package，换到其他目录下执行。
 
+## Libs
+
 ### libnccl.so.2 not found
 
 确保通过 `pip install lmdeploy` 安装了 lmdeploy (>=v0.0.5)。
@@ -34,6 +36,10 @@ pip show nvidia-nccl-cu11|grep Location
 # 把"libnccl.so.2"的路径加入到 LD_LIBRARY_PATH
 export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 ```
+
+### symbol cudaFreeAsync version libcudart.so.11.0 not defined in file libcudart.so.11.0 with link time reference
+
+很可能是机器上的 cuda 版本太低导致的。LMDeploy运行时要求 cuda 不低于 11.2
 
 ## Turbomind 推理
 
