@@ -43,7 +43,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
 
 if (NOT MSVC)
         add_subdirectory(flash_attention2)
-        target_link_libraries(Llama flash_attention2)
+        target_link_libraries(Llama PUBLIC flash_attention2)
 endif()
 
 add_executable(llama_gemm llama_gemm.cc)
