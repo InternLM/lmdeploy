@@ -31,8 +31,8 @@ FC_FCS_MAP = {
         'mlp.up_proj': ['mlp.down_proj']
     },
     'QWenBlock': {
-        'attn.c_attn|back': ['attn.c_proj'],
-        'mlp.w1': ['mlp.w3']
+        'attn.c_attn': ['attn.c_proj'],
+        'mlp.w1': ['mlp.c_proj']
     }
 }
 
@@ -106,7 +106,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     size_a = act_scales.size(0)
     size_pre_fc = pre_fc.weight.size(0)
 
-    # special case: use group query attention, pre_fc is v_proj, fc is o_proj
+    # (for llama2) use group query attention, pre_fc is v_proj, fc is o_proj
     if size_pre_fc < size_a and size_a % size_pre_fc == 0:
         return
 
@@ -119,10 +119,19 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
               w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
-    pre_fc.weight.div_(scales.view(-1, 1))
+    # (for qwen) pre_fc is packed QKV, only V needs to scale
+    if size_pre_fc > size_a and size_pre_fc % size_a == 0 \
+            and size_pre_fc // size_a == 3:
 
-    if getattr(pre_fc, 'bias', None) is not None:
-        pre_fc.bias.div_(scales)
+        pre_fc.weight[-size_a:].div_(scales.view(-1, 1))
+
+        if getattr(pre_fc, 'bias', None) is not None:
+            pre_fc.bias[-size_a:].div_(scales)
+    else:
+        pre_fc.weight.div_(scales.view(-1, 1))
+
+        if getattr(pre_fc, 'bias', None) is not None:
+            pre_fc.bias.div_(scales)
 
     for fc in fcs:
         fc.weight.mul_(scales.view(1, -1))

@@ -54,6 +54,7 @@ class CalibrationContext():
         self.head_dim = model.config.hidden_size // num_attn_heads
         self.model = model
         del self.model.lm_head
+
         self.tokenizer = tokenizer
 
         # Collect modules to observe
@@ -276,9 +277,12 @@ class CalibrationContext():
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        # if type(self.model).__name__ == ''
+        if type(self.model).__name__ == 'QWenLMHeadModel':
+            model = self.model.transformer
+        else:
+            model = self.model.model
         with torch.inference_mode():
-            _ = self.model.model(data.to(self.device))
+            _ = model(data.to(self.device))
 
     def __enter__(self):
         """Prepares the Calibration object for a 'with' statement by
