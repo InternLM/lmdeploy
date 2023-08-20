@@ -1,7 +1,9 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import List, Dict
-from lmdeploy.pytorch_poc.messages import SchedulerSession
+from typing import Dict, List
+
 from lmdeploy.pytorch_poc.block import PhysicalTokenBlock
+from lmdeploy.pytorch_poc.messages import SchedulerSession
 
 
 class BlockAllocator:
@@ -93,12 +95,11 @@ class BlockManager:
 
     def can_append_slot(self, session: SchedulerSession):
         session_id = session.session_id
-        logical_blocks = len(session.logical_blocks)
+        num_blocks = len(session.logical_blocks)
         assert session_id in self.block_tables
         block_table = self.block_tables[session_id]
-
-        return len(logical_blocks) - len(
-            block_table) >= self.gpu_allocator.get_num_free_blocks()
+        return num_blocks - len(
+            block_table) <= self.gpu_allocator.get_num_free_blocks()
 
     def append_slot(self, session: SchedulerSession):
         session_id = session.session_id
@@ -130,7 +131,7 @@ class BlockManager:
             block = block_table[i]
             if block.device == 'cpu':
                 new_block = self.gpu_allocator.allocate()
-                swap_map[block.block_id] = swap_map[new_block.block_id]
+                swap_map[block.block_id] = new_block.block_id
                 block_table[i] = new_block
                 self.cpu_allocator.free(block)
 
@@ -148,7 +149,7 @@ class BlockManager:
             block = block_table[i]
             if block.device == 'gpu':
                 new_block = self.cpu_allocator.allocate()
-                swap_map[block.block_id] = swap_map[new_block.block_id]
+                swap_map[block.block_id] = new_block.block_id
                 block_table[i] = new_block
                 self.gpu_allocator.free(block)
 

@@ -1,19 +1,23 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import List, Dict
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Dict, List
+
 from lmdeploy.pytorch_poc.block import LogicalTokenBlock, PhysicalTokenBlock
-from lmdeploy.pytorch_poc.config import SchedulerConfig, CacheConfig
+from lmdeploy.pytorch_poc.config import CacheConfig, SchedulerConfig
+from lmdeploy.pytorch_poc.messages import (MessageStatus, SchedulerMessage,
+                                           SchedulerSession)
 from lmdeploy.pytorch_poc.paging.block_manager import BlockManager
-from lmdeploy.pytorch_poc.messages import (SchedulerSession, SchedulerMessage,
-                                           MessageStatus)
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 def _find_message_with_session_id(message_list: List[SchedulerMessage],
                                   session_id: int):
     return [
-        message for message in message_list
-        if message.session.session_id == session_id
+        message for message in message_list if message.session_id == session_id
     ]
 
 
@@ -38,6 +42,7 @@ class Scheduler:
         self.waiting: List[SchedulerMessage] = []
         self.running: List[SchedulerMessage] = []
         self.swapped: List[SchedulerMessage] = []
+        self.aborted: List[SchedulerMessage] = []
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = BlockManager(cache_config.block_size,
@@ -46,7 +51,10 @@ class Scheduler:
 
     def add_session(self, session: SchedulerSession):
         assert session.session_id not in self.sessions
-        self.sessions[session.session_id] = self.sessions
+        self.sessions[session.session_id] = session
+
+    def get_sessions(self, messages: List[SchedulerMessage]):
+        return [self.sessions[msg.session_id] for msg in messages]
 
     def add_message(self, message: SchedulerMessage):
         assert message.session_id in self.sessions, (
@@ -72,6 +80,7 @@ class Scheduler:
             if len(logical_blocks) == 0:
                 block = LogicalTokenBlock(
                     0, block_size=self.cache_config.block_size)
+                logical_blocks.append(block)
                 block.append_tokens(1)
             else:
                 block = logical_blocks[-1]
@@ -91,6 +100,12 @@ class Scheduler:
             session = _get_session(msg)
             # token + 1
             _add_session_logical_block(session)
+
+            if len(session.logical_blocks) > self.block_manager.num_gpu_blocks:
+                logger.warning(f'session {session.session_id} '
+                               'reach max gpu size.')
+                msg.status = MessageStatus.ABORTED
+                self.aborted.append(msg)
 
             if self.block_manager.can_append_slot(session):
                 # append slot
@@ -153,21 +168,19 @@ class Scheduler:
             self.block_manager.get_block_table(session) for session in sessions
         ]
 
-        return SchedulerOutput(
-            running=running,
-            swap_in_map=swap_in_map,
-            swap_out_map=swap_out_map,
-            block_tables=block_tables)
+        return SchedulerOutput(running=running,
+                               swap_in_map=swap_in_map,
+                               swap_out_map=swap_out_map,
+                               block_tables=block_tables)
 
     def _set_session_status(self, session_id, status):
         session = self.sessions[session_id]
         session.status = status
         running_msg = _find_message_with_session_id(self.running, session_id)
         waiting_msg = _find_message_with_session_id(self.waiting, session_id)
+        swaping_msg = _find_message_with_session_id(self.swapped, session_id)
 
-        for msg in running_msg:
-            msg.status = status
-        for msg in waiting_msg:
+        for msg in running_msg + waiting_msg + swaping_msg:
             msg.status = status
 
     def stop_session(self, session_id):
@@ -188,6 +201,11 @@ class Scheduler:
 
         session_id_to_remove = set()
 
+        for msg in self.running:
+            session = self.sessions[msg.session_id]
+            session.history_length = sum(block.num_tokens
+                                         for block in session.logical_blocks)
+
         def _update_queue(que: List[SchedulerMessage],
                           expect_status: MessageStatus):
             for msg in que:
@@ -201,8 +219,12 @@ class Scheduler:
 
         self.waiting = _update_queue(self.waiting, MessageStatus.WAITING)
         self.running = _update_queue(self.running, MessageStatus.RUNNING)
-        self.swapped = _update_queue(self.running, MessageStatus.RUNNING)
+        self.swapped = _update_queue(self.swapped, MessageStatus.SWAP_OUT)
 
         # remove session
         for session_id in session_id_to_remove:
             self._remove_session(session_id)
+
+    def get_block_tables(self, messages: List[SchedulerMessage]):
+        sessions = [self.sessions[msg.session_id] for msg in messages]
+        return [self.block_manager.get_block_table(sess) for sess in sessions]

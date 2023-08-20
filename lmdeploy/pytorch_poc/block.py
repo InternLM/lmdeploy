@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 from dataclasses import dataclass
 

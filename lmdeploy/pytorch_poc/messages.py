@@ -1,6 +1,8 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from typing import Sequence, Dict, Any
 from dataclasses import dataclass, field
+from typing import Any, Dict, Sequence
+
 from lmdeploy.pytorch_poc.block import LogicalTokenBlock
 
 
@@ -12,6 +14,7 @@ class MessageStatus(enum.Enum):
     STOPPED = enum.auto()
     ENDED = enum.auto()
     FINISHED = enum.auto()
+    ABORTED = enum.auto()
 
 
 @dataclass
@@ -21,6 +24,7 @@ class SchedulerSession:
     block_table: Dict = field(default_factory=dict)
     status: MessageStatus = MessageStatus.WAITING
     arrive_time: float = 0.0
+    history_length: int = 0
 
 
 @dataclass

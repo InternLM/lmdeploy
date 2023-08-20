@@ -1,6 +1,12 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+from typing import Dict, List, Tuple
+
 import torch
+
 from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
+
+KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 
 class CacheEngine:
@@ -17,6 +23,7 @@ class CacheEngine:
         self.head_size = model_config.get_head_size()
         self.num_layers = model_config.num_layers
         self.num_heads = model_config.num_heads
+        self.dtype = model_config.dtype
 
         # Initialize the cache.
         self.gpu_cache = self.allocate_gpu_cache()
@@ -28,10 +35,90 @@ class CacheEngine:
         # Initialize the events for stream synchronization.
         self.events = [torch.cuda.Event() for _ in range(self.num_layers)]
 
+    def get_key_block_shape(self) -> Tuple[int, int, int]:
+        return (
+            self.num_heads,
+            self.head_size,
+            self.block_size,
+        )
 
-def allocate_gpu_cache(self):
-    pass
+    def get_value_block_shape(self) -> Tuple[int, int, int]:
+        return (
+            self.num_heads,
+            self.head_size,
+            self.block_size,
+        )
+
+    def allocate_gpu_cache(self):
+        gpu_cache: List[KVCache] = []
+        key_block_shape = self.get_key_block_shape()
+        value_block_shape = self.get_value_block_shape()
+
+        for _ in range(self.num_layers):
+            key_blocks = torch.empty(size=(self.num_gpu_blocks,
+                                           *key_block_shape),
+                                     dtype=self.dtype,
+                                     device='cuda')
+            value_blocks = torch.empty(size=(self.num_gpu_blocks,
+                                             *value_block_shape),
+                                       dtype=self.dtype,
+                                       device='cuda')
+            gpu_cache.append((key_blocks, value_blocks))
+        return gpu_cache
+
+    def allocate_cpu_cache(self):
+        cpu_cache: List[KVCache] = []
+        key_block_shape = self.get_key_block_shape()
+        value_block_shape = self.get_value_block_shape()
+
+        # TODO: pin memory might need be banned on wsl
+        pin_memory = True
+
+        for _ in range(self.num_layers):
+            key_blocks = torch.empty(size=(self.num_cpu_blocks,
+                                           *key_block_shape),
+                                     dtype=self.dtype,
+                                     pin_memory=pin_memory)
+            value_blocks = torch.empty(size=(self.num_cpu_blocks,
+                                             *value_block_shape),
+                                       dtype=self.dtype,
+                                       pin_memory=pin_memory)
+            cpu_cache.append((key_blocks, value_blocks))
+        return cpu_cache
+
+    def _swap(self, src: List[KVCache], dst: List[KVCache],
+              src_to_dst: Dict[int, int]):
+        with torch.cuda.stream(self.cache_stream):
+            for i in range(self.num_layers):
+                src_key_cache, src_value_cache = src[i]
+                dst_key_cache, dst_value_cache = dst[i]
+
+                for src_id, dst_id in src_to_dst.items():
+                    dst_key_cache[dst_id].copy_(src_key_cache[src_id])
+                    dst_value_cache[dst_id].copy_(src_value_cache[src_id])
+
+                    event = self.events[i]
+                    event.record(stream=self.cache_stream)
+
+    def swap_in(self, src_to_dst: Dict[int, int]) -> None:
+        self._swap(self.cpu_cache, self.gpu_cache, src_to_dst)
+
+    def swap_out(self, src_to_dst: Dict[int, int]) -> None:
+        self._swap(self.gpu_cache, self.cpu_cache, src_to_dst)
+
+    @staticmethod
+    def get_cache_block_size(block_size: int,
+                             model_config: ModelConfig) -> int:
+        head_size = model_config.get_head_size()
+        num_layers = model_config.num_layers
+        num_heads = model_config.num_heads
+
+        key_cache_block = block_size * num_heads * head_size
+        value_cache_block = key_cache_block
+        total = num_layers * (key_cache_block + value_cache_block)
+        dtype_size = _get_dtype_size(model_config.dtype)
+        return dtype_size * total
 
 
-def allocate_cpu_cache(self):
-    pass
+def _get_dtype_size(dtype: torch.dtype) -> int:
+    return torch.tensor([], dtype=dtype).element_size()

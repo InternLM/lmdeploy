@@ -1,12 +1,18 @@
-from typing import List
-import torch
-from lmdeploy.pytorch_poc.patch import patch
-from lmdeploy.pytorch_poc.paging import Scheduler
-from lmdeploy.pytorch_poc.config import SchedulerConfig, CacheConfig
-from lmdeploy.pytorch_poc.messages import SchedulerMessage, SchedulerSession
-
-from transformers import AutoModelForCausalLM
+# Copyright (c) OpenMMLab. All rights reserved.
 import itertools
+from dataclasses import dataclass, field
+from typing import List
+
+import torch
+from transformers import AutoModelForCausalLM
+
+from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
+                                         SchedulerConfig)
+from lmdeploy.pytorch_poc.messages import SchedulerMessage, SchedulerSession
+from lmdeploy.pytorch_poc.paging import BlockTable, Scheduler
+from lmdeploy.pytorch_poc.patch import patch
+
+from .cache_engine import CacheEngine
 
 
 class SamplingParam:
@@ -30,16 +36,35 @@ class SamplingParam:
         self.bad_words = bad_words
 
 
+@dataclass
+class ModelContext:
+    block_tables: List[BlockTable] = field(default_factory=list)
+    history_lengths: List[int] = field(default_factory=list)
+
+
 class Engine:
 
     def __init__(self, model_path: str) -> None:
         hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-        self.patched_model = patch(hf_model).cuda()
+        self.context = ModelContext()
+        self.patched_model = patch(hf_model, self.context).cuda()
+        hf_config = hf_model.config
 
         scheduler_config = SchedulerConfig(4, 2048)
-        cache_config = CacheConfig(
-            block_size=16, num_cpu_blocks=1024, num_gpu_blocks=1024)
+        cache_config = CacheConfig(block_size=16,
+                                   num_cpu_blocks=1024,
+                                   num_gpu_blocks=4)
+        model_config = ModelConfig(hf_config['hidden_size'],
+                                   hf_config['num_layers'],
+                                   hf_config['num_heads'],
+                                   dtype=torch.float32)
+
+        self.scheduler_config = scheduler_config
+        self.cache_config = cache_config
+        self.model_config = model_config
+
         self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.cache_engine = CacheEngine(cache_config, model_config)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -57,7 +82,10 @@ class Engine:
     def add_message(self, message: SchedulerMessage):
         self.scheduler.add_message(message)
 
-    def _make_inputs(self, token_ids, device='cuda'):
+    def _make_inputs(self, messages: List[SchedulerMessage], device='cuda'):
+
+        token_ids = [msg.token_ids for msg in messages]
+
         if isinstance(token_ids[0], int):
             token_ids = [token_ids]
 
@@ -73,38 +101,66 @@ class Engine:
         position_ids = attention_mask.long().cumsum(-1) - 1
         seq_length = torch.tensor(seq_length).to(device)
 
-        return dict(
-            input_ids=input_ids,
-            seq_length=seq_length,
-            attention_mask=attention_mask,
-            position_ids=position_ids)
+        block_tables = self.scheduler.get_block_tables(messages)
+
+        return dict(input_ids=input_ids,
+                    seq_length=seq_length,
+                    attention_mask=attention_mask,
+                    block_tables=block_tables,
+                    past_key_values=self.cache_engine.gpu_cache,
+                    position_ids=position_ids)
 
     def step(self):
         # TODO: cache manage
-        import pdb
-        pdb.set_trace()
 
         # schedule
-        running = self.scheduler.schedule()
+        schedule_output = self.scheduler.schedule()
+
+        running = schedule_output.running
+        swap_in_map = schedule_output.swap_in_map
+        swap_out_map = schedule_output.swap_out_map
         if len(running) == 0:
             return dict()
 
+        sessions = self.scheduler.get_sessions(running)
+        session_ids = [msg.session_id for msg in running]
+        history_lengths = [sess.history_length for sess in sessions]
+
+        # swap in/out
+        issued_cache_op = False
+        if len(swap_in_map) > 0:
+            self.cache_engine.swap_in(swap_in_map)
+            issued_cache_op = True
+        if len(swap_out_map) > 0:
+            self.cache_engine.swap_out(swap_out_map)
+            issued_cache_op = True
+
+        if issued_cache_op:
+            cache_events = self.cache_engine.events
+        else:
+            cache_events = None
+
+        if cache_events is not None:
+            for event in cache_events:
+                event.wait()
+
         # make batch
-        token_ids = [msg.token_ids for msg in running]
-        inputs = self._make_inputs(token_ids)
+        inputs = self._make_inputs(running)
 
         # inference
         with torch.no_grad():
+            self.context.block_tables = inputs['block_tables']
+            self.context.history_lengths = history_lengths
             hf_outputs = self.patched_model(
                 input_ids=inputs['input_ids'],
                 position_ids=inputs['position_ids'],
                 attention_mask=inputs['attention_mask'],
+                past_key_values=inputs['past_key_values'],
                 return_dict=True,
                 output_attentions=False,
                 output_hidden_states=False)
 
         logits = hf_outputs['logits']
-        past_key_values = hf_outputs['past_key_values']
 
         # update scheduler
         self.scheduler.update()
@@ -113,7 +169,6 @@ class Engine:
         output_index = inputs['seq_length'].cumsum(0) - 1
         output_token_ids = logits.max(-1)[1]
         next_token_ids = output_token_ids[output_index]
-        session_ids = [msg.session_id for msg in running]
 
         outputs = dict(zip(session_ids, next_token_ids))
 

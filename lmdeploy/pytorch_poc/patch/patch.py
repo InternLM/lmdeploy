@@ -1,7 +1,11 @@
-from lmdeploy.utils import get_logger
-import torch
-import inspect
+# Copyright (c) OpenMMLab. All rights reserved.
 import importlib
+import inspect
+from typing import Any
+
+import torch
+
+from lmdeploy.utils import get_logger
 
 MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
@@ -23,7 +27,7 @@ def _class_from_qualname(qualname):
     return cls_type
 
 
-def patch(model: torch.nn.Module):
+def patch(model: torch.nn.Module, context: Any = None):
     global MODULE_MAP
     logger = get_logger('lmdeploy')
 
@@ -48,6 +52,6 @@ def patch(model: torch.nn.Module):
             f'Rewrite module {origin_qualname} with {rewrite_qualname}.')
         cls_type = _class_from_qualname(rewrite_qualname)
 
-        model = cls_type(model)
+        model = cls_type(model, context)
 
     return model

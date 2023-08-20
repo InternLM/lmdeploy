@@ -1,10 +1,10 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
 import torch
-
 import triton
 import triton.language as tl
 
-assert triton.__version__ >= "2.1.0"
+assert triton.__version__ >= '2.1.0'
 
 
 @triton.jit
@@ -63,7 +63,7 @@ def _fwd_kernel(
     v_ptrs = V + off_v
 
     # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
@@ -72,17 +72,17 @@ def _fwd_kernel(
     for start_n in range(0, block_mask * (start_m + 1) * BLOCK_M, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(
-            k_ptrs + (cur_batch_in_all_start_index + start_n) * stride_kbs,
-            mask=(start_n + offs_n[None, :]) < cur_batch_seq_len,
-            other=0.0)
+        k = tl.load(k_ptrs +
+                    (cur_batch_in_all_start_index + start_n) * stride_kbs,
+                    mask=(start_n + offs_n[None, :]) < cur_batch_seq_len,
+                    other=0.0)
         # mask = tl.load(mask_ptrs + start_n, mask=start_n + offs_n < cur_batch_end_loc, other=0.0)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
         qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk,
-                      float("-inf"))
+                      float('-inf'))
 
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -101,10 +101,10 @@ def _fwd_kernel(
         acc_scale = l_i / l_i_new * alpha
         acc = acc * acc_scale[:, None]
         # update acc
-        v = tl.load(
-            v_ptrs + (cur_batch_in_all_start_index + start_n) * stride_vbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_seq_len,
-            other=0.0)
+        v = tl.load(v_ptrs +
+                    (cur_batch_in_all_start_index + start_n) * stride_vbs,
+                    mask=(start_n + offs_n[:, None]) < cur_batch_seq_len,
+                    other=0.0)
 
         p = p.to(v.dtype)
         acc += tl.dot(p, v)

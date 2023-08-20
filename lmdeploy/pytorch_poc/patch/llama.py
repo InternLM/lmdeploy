@@ -1,9 +1,12 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from typing import Any, List, Optional, Tuple, Union
+
 import torch
-from typing import Optional, Tuple, List, Union
+import torch.functional as F
 from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
-import torch.functional as F
 from transformers.models.llama.modeling_llama import rotate_half
+
 from lmdeploy.pytorch_poc.kernels import context_attention_fwd
 
 
@@ -25,10 +28,11 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """
-    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep).
-    The hidden states go from (batch, num_key_value_heads, seqlen, head_dim)
-    to (batch, num_attention_heads, seqlen, head_dim)
+    """This is the equivalent of torch.repeat_interleave(x, dim=1,
+    repeats=n_rep).
+
+    The hidden states go from (batch, num_key_value_heads, seqlen, head_dim) to
+    (batch, num_attention_heads, seqlen, head_dim)
     """
     slen, num_key_value_heads, head_dim = hidden_states.shape
     if n_rep == 1:
@@ -41,9 +45,10 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 class LlamaAttention(nn.Module):
 
-    def __init__(self, origin_mod):
+    def __init__(self, origin_mod: nn.Module, context: Any):
         super().__init__()
         self.origin_mod = origin_mod
+        self.model_context = context
 
     def _contiguous_batching_forward(
         self,
@@ -69,10 +74,10 @@ class LlamaAttention(nn.Module):
                 (origin_self.num_heads * origin_self.head_dim) //
                 origin_self.pretraining_tp,
                 dim=0)
-            key_slices = origin_self.k_proj.weight.split(
-                key_value_slicing, dim=0)
-            value_slices = origin_self.v_proj.weight.split(
-                key_value_slicing, dim=0)
+            key_slices = origin_self.k_proj.weight.split(key_value_slicing,
+                                                         dim=0)
+            value_slices = origin_self.v_proj.weight.split(key_value_slicing,
+                                                           dim=0)
 
             query_states = [
                 F.linear(hidden_states, query_slices[i])
@@ -133,8 +138,9 @@ class LlamaAttention(nn.Module):
         attn_output = attn_output.reshape(-1, origin_self.hidden_size)
 
         if origin_self.pretraining_tp > 1:
-            attn_output = attn_output.split(
-                origin_self.hidden_size // origin_self.pretraining_tp, dim=1)
+            attn_output = attn_output.split(origin_self.hidden_size //
+                                            origin_self.pretraining_tp,
+                                            dim=1)
             o_proj_slices = origin_self.o_proj.weight.split(
                 origin_self.hidden_size // origin_self.pretraining_tp, dim=1)
             attn_output = sum([
@@ -171,9 +177,10 @@ class LlamaAttention(nn.Module):
 
 class LlamaModel(nn.Module):
 
-    def __init__(self, origin_mod):
+    def __init__(self, origin_mod: nn.Module, context: Any):
         super().__init__()
         self.origin_mod = origin_mod
+        self.context = context
 
     def _continuous_batching_forward(
         self,
@@ -188,19 +195,16 @@ class LlamaModel(nn.Module):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         origin_self = self.origin_mod
-        output_attentions = (
-            output_attentions if output_attentions is not None else
-            origin_self.config.output_attentions)
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else
-            origin_self.config.output_hidden_states)
-        use_cache = (
-            use_cache
-            if use_cache is not None else origin_self.config.use_cache)
+        output_attentions = (output_attentions if output_attentions is not None
+                             else origin_self.config.output_attentions)
+        output_hidden_states = (output_hidden_states
+                                if output_hidden_states is not None else
+                                origin_self.config.output_hidden_states)
+        use_cache = (use_cache if use_cache is not None else
+                     origin_self.config.use_cache)
 
-        return_dict = (
-            return_dict
-            if return_dict is not None else origin_self.config.use_return_dict)
+        return_dict = (return_dict if return_dict is not None else
+                       origin_self.config.use_return_dict)
 
         assert position_ids is not None, (
             'position_ids can not be none when using continuous batching mode.'
@@ -280,8 +284,8 @@ class LlamaModel(nn.Module):
         use_origin = False
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both decoder_input_ids "
-                             "and decoder_inputs_embeds at the same time")
+            raise ValueError('You cannot specify both decoder_input_ids '
+                             'and decoder_inputs_embeds at the same time')
         elif input_ids is not None:
             if input_ids.dim() == 2:
                 use_origin = True
@@ -290,8 +294,8 @@ class LlamaModel(nn.Module):
                 use_origin = True
         else:
             raise ValueError(
-                "You have to specify "
-                "either decoder_input_ids or decoder_inputs_embeds")
+                'You have to specify '
+                'either decoder_input_ids or decoder_inputs_embeds')
 
         if use_origin:
             # use origin model
