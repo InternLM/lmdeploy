@@ -293,5 +293,4 @@ struct Shape {
     }
 };
 
-
 }  // namespace turbomind
