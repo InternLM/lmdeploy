@@ -33,7 +33,7 @@ def patch(model: torch.nn.Module, context: Any = None):
 
     # recursive over children
     for name, child in model.named_children():
-        patched_child = patch(child)
+        patched_child = patch(child, context)
         if patched_child != child:
             setattr(model, name, patched_child)
 

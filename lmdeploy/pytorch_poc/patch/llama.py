@@ -7,7 +7,7 @@ from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.llama.modeling_llama import rotate_half
 
-from lmdeploy.pytorch_poc.kernels import context_attention_fwd
+from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
@@ -48,7 +48,7 @@ class LlamaAttention(nn.Module):
     def __init__(self, origin_mod: nn.Module, context: Any):
         super().__init__()
         self.origin_mod = origin_mod
-        self.model_context = context
+        self.context = context
 
     def _contiguous_batching_forward(
         self,
@@ -63,6 +63,9 @@ class LlamaAttention(nn.Module):
 
         assert not output_attentions
         origin_self = self.origin_mod
+
+        block_tables = self.context.block_tables
+        history_lengths = self.context.history_lengths
 
         max_seq_len = position_ids.size(-1)
 
@@ -109,32 +112,37 @@ class LlamaAttention(nn.Module):
         value_states = value_states.view(-1, origin_self.num_key_value_heads,
                                          origin_self.head_dim)
 
-        kv_seq_len = max_seq_len
+        kv_seq_len = max_seq_len + max(history_lengths)
         # TODO: setup past_key_value with paged attention
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
         cos, sin = origin_self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, cos, sin, position_ids)
 
-        if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+        seq_length = position_ids[..., -1] + 1
+        state_seq_length = seq_length - seq_length.new_tensor(history_lengths)
+        state_start_loc = state_seq_length.cumsum(0)
+        state_start_loc = torch.cat(
+            [state_start_loc.new_zeros(1), state_start_loc[:-1]])
+        self.context.fill_cache(
+            key_states,
+            value_states,
+            state_start_loc,
+            state_seq_length,
+            past_key_value[0],
+            past_key_value[1],
+        )
 
-        past_key_value = (key_states, value_states) if use_cache else None
-
+        # TODO: fix GQA
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, origin_self.num_key_value_groups)
         value_states = repeat_kv(value_states,
                                  origin_self.num_key_value_groups)
 
-        attn_output = torch.empty_like(query_states)
-        seq_length = position_ids[..., -1] + 1
         start_loc = seq_length.cumsum(0)
         start_loc = torch.cat([start_loc.new_zeros(1), start_loc[:-1]])
-        context_attention_fwd(query_states, key_states, value_states,
-                              attn_output, start_loc, seq_length, max_seq_len)
+        attn_output = torch.empty_like(query_states)
+        # context_attention_fwd(query_states, key_states, value_states,
+        #                       attn_output, start_loc, seq_length, max_seq_len)
         attn_output = attn_output.reshape(-1, origin_self.hidden_size)
 
         if origin_self.pretraining_tp > 1:

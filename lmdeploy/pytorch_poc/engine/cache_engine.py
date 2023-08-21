@@ -37,16 +37,16 @@ class CacheEngine:
 
     def get_key_block_shape(self) -> Tuple[int, int, int]:
         return (
+            self.block_size,
             self.num_heads,
             self.head_size,
-            self.block_size,
         )
 
     def get_value_block_shape(self) -> Tuple[int, int, int]:
         return (
+            self.block_size,
             self.num_heads,
             self.head_size,
-            self.block_size,
         )
 
     def allocate_gpu_cache(self):

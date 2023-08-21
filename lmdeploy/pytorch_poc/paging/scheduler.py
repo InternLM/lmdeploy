@@ -99,14 +99,14 @@ class Scheduler:
         for msg in self.running:
             session = _get_session(msg)
             # token + 1
-            _add_session_logical_block(session)
+            block_size = self.cache_config.block_size
+            session.append_tokens(1, block_size)
 
             if len(session.logical_blocks) > self.block_manager.num_gpu_blocks:
                 logger.warning(f'session {session.session_id} '
                                'reach max gpu size.')
                 msg.status = MessageStatus.ABORTED
                 self.aborted.append(msg)
-
             if self.block_manager.can_append_slot(session):
                 # append slot
                 self.block_manager.append_slot(session)
@@ -145,6 +145,12 @@ class Scheduler:
                     enable_running = True
             else:
                 if self.block_manager.can_allocate(session):
+                    # update logical blocks of session
+                    msg_length = len(msg.token_ids)
+                    block_size = self.cache_config.block_size
+                    session.append_tokens(msg_length + 1, block_size)
+
+                    # allocate session memory
                     self.block_manager.allocate(session)
                     enable_running = True
 
