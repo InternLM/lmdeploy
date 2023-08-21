@@ -161,8 +161,8 @@ class Puyu(BaseModel):
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         B_INST, E_INST = '[INST]', '[/INST]'
         B_SYS, E_SYS = '<<SYS>>\n', '\n<</SYS>>\n\n'
 
@@ -171,12 +171,13 @@ You are a helpful, respectful and honest assistant. Always answer as helpfully a
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""  # noqa: E501
 
-        self.b_inst = B_INST
-        self.e_inst = E_INST
-        self.b_sys = B_SYS
-        self.e_sys = E_SYS
-        self.default_sys_prompt = DEFAULT_SYSTEM_PROMPT
-        self.session_len = 4096
+        self.b_inst = kwargs.get('b_inst', B_INST)
+        self.e_inst = kwargs.get('e_inst', E_INST)
+        self.b_sys = kwargs.get('b_sys', B_SYS)
+        self.e_sys = kwargs.get('e_sys', E_SYS)
+        self.default_sys_prompt = kwargs.get('default_sys_prompt',
+                                             DEFAULT_SYSTEM_PROMPT)
+        self.session_len = kwargs.get('session_len', 4096)
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -201,16 +202,16 @@ If a question does not make any sense, or is not factually coherent, explain why
 class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
 
-    def __init__(self):
-        super().__init__()
-        self.session_len = 8192
-        self.top_p = 0.5
-        self.top_k = 40
-        self.temperature = 1.0
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.session_len = kwargs.get('session_len', 8192)
+        self.top_p = kwargs.get('top_p', 0.5)
+        self.top_k = kwargs.get('top_k', 40)
+        self.temperature = kwargs.get('temperature', 1.0)
 
-        self.im_start = '<|im_start|>'
-        self.im_end = '<|im_end|>'
-        self.system = 'You are a helpful assistant.'
+        self.im_start = kwargs.get('im_start', '<|im_start|>')
+        self.im_end = kwargs.get('im_end', '<|im_end|>')
+        self.system = kwargs.get('system', 'You are a helpful assistant.')
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
