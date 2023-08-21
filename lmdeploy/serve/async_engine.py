@@ -7,7 +7,6 @@ from typing import Literal, Optional
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS, BaseModel
-from lmdeploy.turbomind.tokenizer import Tokenizer
 
 
 @dataclasses.dataclass
@@ -30,6 +29,7 @@ class AsyncEngine:
     """
 
     def __init__(self, model_path, instance_num=32, tp=1) -> None:
+        from lmdeploy.turbomind.tokenizer import Tokenizer
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)

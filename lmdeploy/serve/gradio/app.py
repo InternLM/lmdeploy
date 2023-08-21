@@ -1,7 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-import os.path as osp
-import random
 import threading
 from functools import partial
 from typing import Sequence
@@ -9,8 +7,7 @@ from typing import Sequence
 import fire
 import gradio as gr
 
-from lmdeploy import turbomind as tm
-from lmdeploy.model import MODELS
+from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.css import CSS
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
@@ -141,20 +138,14 @@ def run_server(triton_server_addr: str,
     )
 
 
-# a IO interface mananing global variables
+# a IO interface mananing variables
 class InterFace:
-    tokenizer_model_path = None
-    tokenizer = None
-    tm_model = None
-    request2instance = None
-    model_name = None
-    model = None
+    async_engine: AsyncEngine = None
 
 
-def chat_stream_local(
+async def chat_stream_local(
     instruction: str,
     state_chatbot: Sequence,
-    step: gr.State,
     nth_round: gr.State,
     request: gr.Request,
 ):
@@ -163,91 +154,70 @@ def chat_stream_local(
     Args:
         instruction (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        step (gr.State): chat history length
         nth_round (gr.State): round num
         request (gr.Request): the request from a user
     """
-    from lmdeploy.turbomind.chat import valid_str
     session_id = threading.current_thread().ident
     if request is not None:
         session_id = int(request.kwargs['client']['host'].replace('.', ''))
-    if str(session_id) not in InterFace.request2instance:
-        InterFace.request2instance[str(
-            session_id)] = InterFace.tm_model.create_instance()
-    llama_chatbot = InterFace.request2instance[str(session_id)]
-    seed = random.getrandbits(64)
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
-    instruction = InterFace.model.get_prompt(instruction, nth_round == 1)
-    if step >= InterFace.tm_model.session_len:
-        raise gr.Error('WARNING: exceed session max length.'
-                       ' Please end the session.')
-    input_ids = InterFace.tokenizer.encode(instruction)
-    bot_response = llama_chatbot.stream_infer(
-        session_id, [input_ids],
-        stream_output=True,
-        request_output_len=512,
-        sequence_start=(nth_round == 1),
-        sequence_end=False,
-        step=step,
-        stop=False,
-        top_k=40,
-        top_p=0.8,
-        temperature=0.8,
-        repetition_penalty=1.0,
-        ignore_eos=False,
-        random_seed=seed if nth_round == 1 else None)
 
-    yield (state_chatbot, state_chatbot, step, nth_round,
+    yield (state_chatbot, state_chatbot, nth_round,
            f'{bot_summarized_response}'.strip())
 
-    response_size = 0
-    for outputs in bot_response:
-        res, tokens = outputs[0]
-        # decode res
-        response = InterFace.tokenizer.decode(res)[response_size:]
-        response = valid_str(response)
-        response_size += len(response)
+    async for outputs in InterFace.async_engine.generate(
+            instruction,
+            session_id,
+            stream_response=True,
+            sequence_start=(nth_round == 1)):
+        response = outputs.response
+        if outputs.finish_reason == 'length':
+            raise gr.Error('WARNING: exceed session max length.'
+                           ' Please end the session.')
         if state_chatbot[-1][-1] is None:
             state_chatbot[-1] = (state_chatbot[-1][0], response)
         else:
             state_chatbot[-1] = (state_chatbot[-1][0],
                                  state_chatbot[-1][1] + response
                                  )  # piece by piece
-        yield (state_chatbot, state_chatbot, step, nth_round,
+        yield (state_chatbot, state_chatbot, nth_round,
                f'{bot_summarized_response}'.strip())
 
-    step += len(input_ids) + tokens
     nth_round += 1
-    yield (state_chatbot, state_chatbot, step, nth_round,
+    yield (state_chatbot, state_chatbot, nth_round,
            f'{bot_summarized_response}'.strip())
 
 
-def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
-                     step: gr.State, nth_round: gr.State, request: gr.Request):
+async def reset_local_func(instruction_txtbox: gr.Textbox,
+                           state_chatbot: gr.State, nth_round: gr.State,
+                           request: gr.Request):
     """reset the session.
 
     Args:
         instruction_txtbox (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        step (gr.State): chat history length
         nth_round (gr.State): round num
         request (gr.Request): the request from a user
     """
     state_chatbot = []
-    step = 0
     nth_round = 1
 
     session_id = threading.current_thread().ident
     if request is not None:
         session_id = int(request.kwargs['client']['host'].replace('.', ''))
-    InterFace.request2instance[str(
-        session_id)] = InterFace.tm_model.create_instance()
+    # end the session
+    async for out in InterFace.async_engine.generate('',
+                                                     session_id,
+                                                     request_output_len=1,
+                                                     stream_response=True,
+                                                     sequence_start=False,
+                                                     sequence_end=True):
+        pass
 
     return (
         state_chatbot,
         state_chatbot,
-        step,
         nth_round,
         gr.Textbox.update(value=''),
     )
@@ -255,33 +225,32 @@ def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
 
 def run_local(model_path: str,
               server_name: str = 'localhost',
-              server_port: int = 6006):
+              server_port: int = 6006,
+              batch_size: int = 4,
+              tp: int = 1):
     """chat with AI assistant through web ui.
 
     Args:
         model_path (str): the path of the deployed model
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
+        batch_size (int): batch size for running Turbomind directly
+        tp (int): tensor parallel for Turbomind
     """
-    from lmdeploy.turbomind.tokenizer import Tokenizer
-    InterFace.tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                              'tokenizer')
-    InterFace.tokenizer = Tokenizer(InterFace.tokenizer_model_path)
-    InterFace.tm_model = tm.TurboMind(model_path,
-                                      eos_id=InterFace.tokenizer.eos_token_id)
-    InterFace.request2instance = dict()
-    InterFace.model_name = InterFace.tm_model.model_name
-    InterFace.model = MODELS.get(InterFace.model_name)()
+    InterFace.async_engine = AsyncEngine(model_path=model_path,
+                                         instance_num=batch_size,
+                                         tp=tp)
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
         nth_round = gr.State(1)
-        step = gr.State(0)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = gr.Chatbot(elem_id='chatbot', label=InterFace.model_name)
+            chatbot = gr.Chatbot(
+                elem_id='chatbot',
+                label=InterFace.async_engine.tm_model.model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
@@ -290,9 +259,8 @@ def run_local(model_path: str,
                 reset_btn = gr.Button(value='Reset')
 
         send_event = instruction_txtbox.submit(
-            chat_stream_local,
-            [instruction_txtbox, state_chatbot, step, nth_round],
-            [state_chatbot, chatbot, step, nth_round])
+            chat_stream_local, [instruction_txtbox, state_chatbot, nth_round],
+            [state_chatbot, chatbot, nth_round])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
             [],
@@ -300,23 +268,25 @@ def run_local(model_path: str,
         )
 
         reset_btn.click(
-            reset_local_func,
-            [instruction_txtbox, state_chatbot, step, nth_round],
-            [state_chatbot, chatbot, step, nth_round, instruction_txtbox],
+            reset_local_func, [instruction_txtbox, state_chatbot, nth_round],
+            [state_chatbot, chatbot, nth_round, instruction_txtbox],
             cancels=[send_event])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
-        max_threads=10,
-        share=True,
-        server_port=server_port,
-        server_name=server_name,
-    )
+    demo.queue(concurrency_count=batch_size, max_size=100,
+               api_open=True).launch(
+                   max_threads=10,
+                   share=True,
+                   server_port=server_port,
+                   server_name=server_name,
+               )
 
 
 def run(model_path_or_server: str,
         server_name: str = 'localhost',
-        server_port: int = 6006):
+        server_port: int = 6006,
+        batch_size: int = 32,
+        tp: int = 1):
     """chat with AI assistant through web ui.
 
     Args:
@@ -325,11 +295,14 @@ def run(model_path_or_server: str,
             gradio. The latter is for running with tritonserver
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
+        batch_size (int): batch size for running Turbomind directly
+        tp (int): tensor parallel for Turbomind
     """
     if ':' in model_path_or_server:
         run_server(model_path_or_server, server_name, server_port)
     else:
-        run_local(model_path_or_server, server_name, server_port)
+        run_local(model_path_or_server, server_name, server_port, batch_size,
+                  tp)
 
 
 if __name__ == '__main__':
