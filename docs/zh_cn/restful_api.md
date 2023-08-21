@@ -59,7 +59,7 @@ for output, tokens in get_streaming_response(
 
 ### Golang/Rust
 
-Golang 也可以建立 http 请求使用启动的服务，用户可以参考[这篇博客](https://sohamkamani.com/golang/http-client/)构建自己的客户端。
+Golang 也可以建立 http 请求使用启动的服务，用户可以参考[这篇博客](https://pkg.go.dev/net/http)构建自己的客户端。
 Rust 也有许多[方法](https://blog.logrocket.com/best-rust-http-client/)构建客户端，使用服务。
 
 ### cURL
