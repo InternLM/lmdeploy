@@ -222,25 +222,11 @@ python3 -m lmdeploy.lite.apis.auto_awq \
   --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
 ```
 
+[Click here](./docs/zh_cn/w4a16.md) to view the test results for weight int4 usage.
+
 #### KV Cache INT8 Quantization
 
-In fp16 mode, kv_cache int8 quantization can be enabled, and a single card can serve more users.
-First execute the quantization script, and the quantization parameters are stored in the `workspace/triton_models/weights` transformed by `deploy.py`.
-
-```
-python3 -m lmdeploy.lite.apis.kv_qparams \
-  --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
-  --turbomind_dir $TURBOMIND_DIR \
-  --kv_sym False \                   # Whether to use symmetric or asymmetric quantization.
-  --num_tp 1 \                       # The number of GPUs used for tensor parallelism
-```
-
-Then adjust `workspace/triton_models/weights/config.ini`
-
-- `use_context_fmha` changed to 0, means off
-- `quant_policy` is set to 4. This parameter defaults to 0, which means it is not enabled
-
-Here is [quantization test results](./docs/en/kv_int8.md).
+[Click here](./docs/zh_cn/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
 
 > **Warning**<br />
 > runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
