@@ -115,7 +115,7 @@ __global__ void fusedAddBiasResidualNorm(T* __restrict__ r_data,
 
     constexpr int PACK_DIM = sizeof(uint4) / sizeof(T);
 
-    const auto batch_idx            = grid.block_rank();
+    const auto batch_idx            = block.group_index().x;
     uint4* __restrict__ r_ptr       = reinterpret_cast<uint4*>(r_data + batch_idx * n_dims);
     uint4* __restrict__ x_ptr       = reinterpret_cast<uint4*>(x_data + batch_idx * n_dims);
     const uint4* __restrict__ b_ptr = reinterpret_cast<const uint4*>(bias);
@@ -123,7 +123,7 @@ __global__ void fusedAddBiasResidualNorm(T* __restrict__ r_data,
     res_norm_t<T> ops;
 
     float thread_sum{};
-    for (auto i = block.thread_rank(); i < n_dims / PACK_DIM; i += block.num_threads()) {
+    for (auto i = block.thread_rank(); i < n_dims / PACK_DIM; i += block.size()) {
         auto  r  = r_ptr[i];
         auto  x  = x_ptr[i];
         uint4 b  = b_ptr ? b_ptr[i] : uint4{};
@@ -136,7 +136,7 @@ __global__ void fusedAddBiasResidualNorm(T* __restrict__ r_data,
     float s_inv_mean = rsqrt(total_sum / n_dims + eps);
 
     const uint4* __restrict__ s_ptr = reinterpret_cast<const uint4*>(scale);
-    for (uint i = block.thread_rank(); i < n_dims / PACK_DIM; i += block.num_threads()) {
+    for (uint i = block.thread_rank(); i < n_dims / PACK_DIM; i += block.size()) {
         auto r   = r_ptr[i];
         auto s   = s_ptr[i];
         auto o   = ops.normvec(r, s, s_inv_mean);
