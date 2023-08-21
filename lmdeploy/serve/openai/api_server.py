@@ -74,7 +74,11 @@ async def generate(raw_request: Request):
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
         async for out in generation:
-            ret = {'text': out.response, 'tokens': out.generate_token_len}
+            ret = {
+                'text': out.response,
+                'tokens': out.generate_token_len,
+                'finish_reason': out.finish_reason
+            }
             yield (json.dumps(ret) + '\0').encode('utf-8')
 
     if request.stream:
@@ -82,7 +86,11 @@ async def generate(raw_request: Request):
     else:
         ret = {}
         async for out in generation:
-            ret = {'text': out.response, 'tokens': out.generate_token_len}
+            ret = {
+                'text': out.response,
+                'tokens': out.generate_token_len,
+                'finish_reason': out.finish_reason
+            }
         return JSONResponse(ret)
 
 
