@@ -10,6 +10,8 @@ import numpy as np
 import requests
 from sentencepiece import SentencePieceProcessor
 
+from lmdeploy.utils import get_logger
+
 
 def get_streaming_response(prompt: str,
                            api_url: str,
@@ -62,8 +64,9 @@ def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
     stats = []
     while not req_queue.empty():
         prompt, input_seqlen, output_seqlen = req_queue.get()
-        print(f'request info: session {session_id}, '
-              f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
+        get_logger('profile_restful_api').info(
+            f'request info: session {session_id}, '
+            f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         timestamps = []
         tokens = []
         start = time.perf_counter()

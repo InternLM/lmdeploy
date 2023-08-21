@@ -58,7 +58,7 @@ for output, tokens in get_streaming_response(
 ### Golang/Rust
 
 Golang can also build a http request to use the service. You may refer
-to [the blog](https://www.sohamkamani.com/golang/http-client/) for details to build own client.
+to [the blog](https://sohamkamani.com/golang/http-client/) for details to build own client.
 Besides, Rust supports building a client in [many ways](https://blog.logrocket.com/best-rust-http-client/).
 
 ### cURL

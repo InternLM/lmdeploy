@@ -96,7 +96,7 @@ class AsyncEngine:
         """
         session_id = instance_id
         instance_id %= self.instance_num
-        if str(session_id) not in self.steps or sequence_end:
+        if str(session_id) not in self.steps:
             self.steps[str(session_id)] = 0
         if step != 0:
             self.steps[str(session_id)] = step
@@ -138,6 +138,8 @@ class AsyncEngine:
 
             # update step
             self.steps[str(session_id)] += len(input_ids) + tokens
+            if sequence_end:
+                self.steps[str(session_id)] = 0
             self.available[instance_id] = True
 
     async def generate_openai(
