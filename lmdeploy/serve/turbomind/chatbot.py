@@ -76,7 +76,8 @@ class Chatbot:
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False,
-                 profile_serving: bool = False):
+                 profile_serving: bool = False,
+                 **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
         if self.model_name == '':
@@ -84,7 +85,7 @@ class Chatbot:
         assert self.model_name in MODELS.module_dict.keys(), \
             f"'{self.model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'
-        self.model = MODELS.get(self.model_name)()
+        self.model = MODELS.get(self.model_name)(**model_kwargs)
         self._session = None
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
