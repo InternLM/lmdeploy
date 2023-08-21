@@ -147,7 +147,7 @@ class AsyncEngine:
 
                 # update step
                 self.steps[str(session_id)] += len(input_ids) + tokens
-                if sequence_end:
+                if sequence_end or stop:
                     self.steps[str(session_id)] = 0
 
     async def generate_openai(

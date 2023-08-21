@@ -16,6 +16,9 @@ THEME = gr.themes.Soft(
     secondary_hue=gr.themes.colors.sky,
     font=[gr.themes.GoogleFont('Inconsolata'), 'Arial', 'sans-serif'])
 
+enable_btn = gr.Button.update(interactive=True)
+disable_btn = gr.Button.update(interactive=False)
+
 
 def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
                 request: gr.Request):
@@ -146,7 +149,8 @@ class InterFace:
 async def chat_stream_local(
     instruction: str,
     state_chatbot: Sequence,
-    nth_round: gr.State,
+    cancel_btn: gr.Button,
+    reset_btn: gr.Button,
     request: gr.Request,
 ):
     """Chat with AI assistant.
@@ -154,7 +158,6 @@ async def chat_stream_local(
     Args:
         instruction (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        nth_round (gr.State): round num
         request (gr.Request): the request from a user
     """
     session_id = threading.current_thread().ident
@@ -163,14 +166,14 @@ async def chat_stream_local(
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
 
-    yield (state_chatbot, state_chatbot, nth_round,
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
            f'{bot_summarized_response}'.strip())
 
     async for outputs in InterFace.async_engine.generate(
             instruction,
             session_id,
             stream_response=True,
-            sequence_start=(nth_round == 1)):
+            sequence_start=(len(state_chatbot) == 1)):
         response = outputs.response
         if outputs.finish_reason == 'length':
             raise gr.Error('WARNING: exceed session max length.'
@@ -181,27 +184,23 @@ async def chat_stream_local(
             state_chatbot[-1] = (state_chatbot[-1][0],
                                  state_chatbot[-1][1] + response
                                  )  # piece by piece
-        yield (state_chatbot, state_chatbot, nth_round,
+        yield (state_chatbot, state_chatbot, enable_btn, disable_btn,
                f'{bot_summarized_response}'.strip())
 
-    nth_round += 1
-    yield (state_chatbot, state_chatbot, nth_round,
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
            f'{bot_summarized_response}'.strip())
 
 
 async def reset_local_func(instruction_txtbox: gr.Textbox,
-                           state_chatbot: gr.State, nth_round: gr.State,
-                           request: gr.Request):
+                           state_chatbot: gr.State, request: gr.Request):
     """reset the session.
 
     Args:
         instruction_txtbox (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        nth_round (gr.State): round num
         request (gr.Request): the request from a user
     """
     state_chatbot = []
-    nth_round = 1
 
     session_id = threading.current_thread().ident
     if request is not None:
@@ -218,9 +217,44 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     return (
         state_chatbot,
         state_chatbot,
-        nth_round,
         gr.Textbox.update(value=''),
     )
+
+
+async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
+                            reset_btn: gr.Button, request: gr.Request):
+    """stop the session.
+
+    Args:
+        instruction_txtbox (str): user's prompt
+        state_chatbot (Sequence): the chatting history
+        request (gr.Request): the request from a user
+    """
+    session_id = threading.current_thread().ident
+    if request is not None:
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+    # end the session
+    async for out in InterFace.async_engine.generate('',
+                                                     session_id,
+                                                     request_output_len=0,
+                                                     stream_response=True,
+                                                     sequence_start=False,
+                                                     sequence_end=False,
+                                                     stop=True):
+        pass
+    messages = []
+    for qa in state_chatbot:
+        messages.append(dict(role='user', content=qa[0]))
+        if qa[1] is not None:
+            messages.append(dict(role='assistant', content=qa[1]))
+    async for out in InterFace.async_engine.generate(messages,
+                                                     session_id,
+                                                     request_output_len=0,
+                                                     stream_response=True,
+                                                     sequence_start=True,
+                                                     sequence_end=False):
+        pass
+    return (state_chatbot, disable_btn, enable_btn)
 
 
 def run_local(model_path: str,
@@ -243,7 +277,6 @@ def run_local(model_path: str,
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
-        nth_round = gr.State(1)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -255,22 +288,26 @@ def run_local(model_path: str,
                 placeholder='Please input the instruction',
                 label='Instruction')
             with gr.Row():
-                gr.Button(value='Cancel')  # noqa: E501
+                cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
 
         send_event = instruction_txtbox.submit(
-            chat_stream_local, [instruction_txtbox, state_chatbot, nth_round],
-            [state_chatbot, chatbot, nth_round])
+            chat_stream_local,
+            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn],
+            [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
             [],
             [instruction_txtbox],
         )
+        cancel_btn.click(cancel_local_func,
+                         [state_chatbot, cancel_btn, reset_btn],
+                         [state_chatbot, cancel_btn, reset_btn],
+                         cancels=[send_event])
 
-        reset_btn.click(
-            reset_local_func, [instruction_txtbox, state_chatbot, nth_round],
-            [state_chatbot, chatbot, nth_round, instruction_txtbox],
-            cancels=[send_event])
+        reset_btn.click(reset_local_func, [instruction_txtbox, state_chatbot],
+                        [state_chatbot, chatbot, instruction_txtbox],
+                        cancels=[send_event])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=batch_size, max_size=100,
