@@ -23,7 +23,7 @@ __inline__ __device__ void cp_async_cg_A(uint32_t smem_int_ptr, const T* __restr
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
-                 "  @p cp.async.cg.shared.global" L2_CACHEHINT(256) " [%1], [%2], %3;\n" 
+                 "  @p cp.async.cg.shared.global" L2_CACHEHINT(256) " [%1], [%2], %3;\n"
                  "}\n" ::"r"((int)mask),
                  "r"(smem_int_ptr),
                  "l"(src),
