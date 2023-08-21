@@ -57,11 +57,11 @@ class Tokenizer:
         return [len(token_ids) for token_ids in prompts_token_ids]
 
 
-def infer(server_addr: str, session_id: int, req_que: mp.Queue,
+def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
           res_que: mp.Queue):
     stats = []
-    while not req_que.empty():
-        prompt, input_seqlen, output_seqlen = req_que.get()
+    while not req_queue.empty():
+        prompt, input_seqlen, output_seqlen = req_queue.get()
         print(f'request info: session {session_id}, '
               f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         timestamps = []
@@ -162,14 +162,14 @@ def main(server_addr: str,
          samples: int = 1000):
     api_url = server_addr + '/generate'
     warmup(api_url, concurrency, session_len - 1)
-    req_que, n_req = read_dataset(tokenizer_path, dataset_path, samples,
-                                  session_len)
+    req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,
+                                    session_len)
     res_que = mp.Queue()
     procs = []
     _start = time.perf_counter()
     for i in range(concurrency):
         proc = mp.Process(target=infer,
-                          args=(api_url, i + 1, req_que, res_que))
+                          args=(api_url, i + 1, req_queue, res_que))
         procs.append(proc)
         proc.start()
     for proc in procs:

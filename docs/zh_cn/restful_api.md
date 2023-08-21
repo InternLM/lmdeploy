@@ -57,6 +57,11 @@ for output, tokens in get_streaming_response(
     print(output, end='')
 ```
 
+### Golang/Rust
+
+Golang 也可以建立 http 请求使用启动的服务，用户可以参考[这篇博客](https://www.sohamkamani.com/golang/http-client/)构建自己的客户端。
+Rust 也有许多[方法](https://blog.logrocket.com/best-rust-http-client/)构建客户端，使用服务。
+
 ### cURL
 
 cURL 也可以用于查看 API 的输出结果
