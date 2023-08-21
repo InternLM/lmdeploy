@@ -45,12 +45,16 @@ class BaseModel:
 class Vicuna(BaseModel):
     """Chat template of vicuna model."""
 
-    def __init__(self, **kwargs):
+    def __init__(
+            self,
+            system="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """,  # noqa: E501
+            user='USER',
+            assistant='ASSISTANT',
+            **kwargs):
         super().__init__(**kwargs)
-        self.system = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """  # noqa: E501
-        self.user = kwargs.get('user', 'USER')
-        self.assistant = kwargs.get('assistant', 'ASSISTANT')
-        self.system = kwargs.get('system', self.system)
+        self.system = system
+        self.user = user
+        self.assistant = assistant
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -80,13 +84,19 @@ class InternLM(BaseModel):
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""
 
-    def __init__(self, **kwargs):
+    def __init__(self,
+                 system='',
+                 user='<|User|>',
+                 eoh='<eoh>',
+                 eoa='<eoa>',
+                 assistant='<|Bot|>',
+                 **kwargs):
         super().__init__(**kwargs)
-        self.system = kwargs.get('system', '')
-        self.user = kwargs.get('user', '<|User|>')
-        self.eoh = kwargs.get('eoh', '<eoh>')
-        self.eoa = kwargs.get('eoa', '<eoa>')
-        self.assistant = kwargs.get('assistant', '<|Bot|>')
+        self.system = system
+        self.user = user
+        self.eoh = eoh
+        self.eoa = eoa
+        self.assistant = assistant
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -115,18 +125,17 @@ class InternLMChat7B(BaseModel):
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
 
-    def __init__(self, **kwargs):
+    def __init__(self, session_len=8192, **kwargs):
         super(InternLMChat7B8K, self).__init__(**kwargs)
-        self.session_len = kwargs.get('session_len', 8192)
+        self.session_len = session_len
 
 
 @MODELS.register_module(name='baichuan-7b')
 class Baichuan7B(BaseModel):
 
-    def __init__(self, **kwargs):
+    def __init__(self, repetition_penalty=1.1, **kwargs):
         super().__init__(**kwargs)
-        self.repetition_penalty = kwargs[
-            'repetition_penalty'] if 'repetition_penalty' in kwargs else 1.1
+        self.repetition_penalty = repetition_penalty
 
 
 @MODELS.register_module(name='puyu')
@@ -134,14 +143,21 @@ class Puyu(BaseModel):
     """Chat template of puyu model.This is only for internal usage in Shanghai
     AI Laboratory."""
 
-    def __init__(self, **kwargs):
+    def __init__(self,
+                 meta_instruction='',
+                 user='<|Human|>: ',
+                 eoh='',
+                 eosys='',
+                 assistant='<|Assistant|>: ',
+                 system='<|System|>: ',
+                 **kwargs):
         super().__init__(**kwargs)
-        self.meta_instruction = kwargs.get('meta_instruction', '')
-        self.user = kwargs.get('user', '<|Human|>: ')
-        self.eoh = kwargs.get('eoh', '')
-        self.eosys = kwargs.get('eosys', '')
-        self.assistant = kwargs.get('assistant', '<|Assistant|>: ')
-        self.system = kwargs.get('system', '<|System|>: ')
+        self.meta_instruction = meta_instruction
+        self.user = user
+        self.eoh = eoh
+        self.eosys = eosys
+        self.assistant = assistant
+        self.system = system
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
@@ -161,23 +177,25 @@ class Puyu(BaseModel):
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        B_INST, E_INST = '[INST]', '[/INST]'
-        B_SYS, E_SYS = '<<SYS>>\n', '\n<</SYS>>\n\n'
-
-        DEFAULT_SYSTEM_PROMPT = """\
+    def __init__(
+            self,
+            b_inst='[INST]',
+            e_inst='[/INST]',
+            b_sys='<<SYS>>\n',
+            e_sys='\n<</SYS>>\n\n',
+            default_sys_prompt="""\
 You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""  # noqa: E501
-
-        self.b_inst = kwargs.get('b_inst', B_INST)
-        self.e_inst = kwargs.get('e_inst', E_INST)
-        self.b_sys = kwargs.get('b_sys', B_SYS)
-        self.e_sys = kwargs.get('e_sys', E_SYS)
-        self.default_sys_prompt = kwargs.get('default_sys_prompt',
-                                             DEFAULT_SYSTEM_PROMPT)
-        self.session_len = kwargs.get('session_len', 4096)
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.""",  # noqa: E501
+            session_len=4096,
+            **kwargs):
+        super().__init__(**kwargs)
+        self.b_inst = b_inst
+        self.e_inst = e_inst
+        self.b_sys = b_sys
+        self.e_sys = e_sys
+        self.default_sys_prompt = default_sys_prompt
+        self.session_len = session_len
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -202,16 +220,24 @@ If a question does not make any sense, or is not factually coherent, explain why
 class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
 
-    def __init__(self, **kwargs):
+    def __init__(self,
+                 session_len=8192,
+                 top_p=0.5,
+                 top_k=40,
+                 temperature=1.0,
+                 im_start='<|im_start|>',
+                 im_end='<|im_end|>',
+                 system='You are a helpful assistant.',
+                 **kwargs):
         super().__init__(**kwargs)
-        self.session_len = kwargs.get('session_len', 8192)
-        self.top_p = kwargs.get('top_p', 0.5)
-        self.top_k = kwargs.get('top_k', 40)
-        self.temperature = kwargs.get('temperature', 1.0)
+        self.session_len = session_len
+        self.top_p = top_p
+        self.top_k = top_k
+        self.temperature = temperature
 
-        self.im_start = kwargs.get('im_start', '<|im_start|>')
-        self.im_end = kwargs.get('im_end', '<|im_end|>')
-        self.system = kwargs.get('system', 'You are a helpful assistant.')
+        self.im_start = im_start
+        self.im_end = im_end
+        self.system = system
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
