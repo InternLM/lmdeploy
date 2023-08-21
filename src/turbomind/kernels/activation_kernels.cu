@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"

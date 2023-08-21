@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "src/turbomind/macro.h"
 #include <string>
 #include <vector>
 

@@ -1,0 +1,9 @@
+version: 2
+
+formats: all
+
+python:
+  version: 3.8
+  install:
+    - requirements: requirements/docs.txt
+    - requirements: requirements/readthedocs.txt

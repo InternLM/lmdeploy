@@ -24,6 +24,12 @@
 
 namespace turbomind {
 
+// cub.cuh brings windows.h
+// should be included after cub.cuh
+#ifdef ERROR
+#undef ERROR
+#endif
+
 class Logger {
 
 public:

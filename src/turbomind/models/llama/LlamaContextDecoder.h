@@ -20,14 +20,11 @@
 
 #pragma once
 
-// #include "src/turbomind/kernels/add_residual_kernels.h"
-// #include "src/turbomind/kernels/layernorm_kernels.h"
 #include "src/turbomind/layers/BaseLayer.h"
-// #include "src/turbomind/layers/FfnLayer.h"
-// #include "src/turbomind/layers/attention_layers/BaseAttentionLayer.h"
 #include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
@@ -43,13 +40,12 @@ protected:
     void allocateBuffer(size_t batch_size, size_t num_token, size_t max_q_len, size_t max_kv_len);
     void freeBuffer() override;
 
-    void initialize(size_t kv_head_num, bool use_fmha, int quant_policy);
+    void initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, bool use_fmha, int quant_policy);
 
     size_t head_num_;
     size_t size_per_head_;
     size_t inter_size_;
     size_t num_layer_;
-    size_t rotary_embedding_dim_;
     size_t hidden_units_;
     float  rmsnorm_eps_;
 
@@ -87,20 +83,20 @@ protected:
                          bool                                           is_final);
 
 public:
-    LlamaContextDecoder(size_t           head_num,
-                        size_t           kv_head_num,
-                        size_t           size_per_head,
-                        size_t           inter_size,
-                        size_t           num_layer,
-                        size_t           rotary_embedding_dim,
-                        float            rmsnorm_eps,
-                        NcclParam        tensor_para,
-                        cudaStream_t     stream,
-                        cublasMMWrapper* cublas_wrapper,
-                        IAllocator*      allocator,
-                        bool             is_free_buffer_after_forward,
-                        bool             use_fmha,
-                        int              quant_policy);
+    LlamaContextDecoder(size_t                      head_num,
+                        size_t                      kv_head_num,
+                        size_t                      size_per_head,
+                        size_t                      inter_size,
+                        size_t                      num_layer,
+                        const LlamaAttentionParams& attn_params,
+                        float                       rmsnorm_eps,
+                        NcclParam                   tensor_para,
+                        cudaStream_t                stream,
+                        cublasMMWrapper*            cublas_wrapper,
+                        IAllocator*                 allocator,
+                        bool                        is_free_buffer_after_forward,
+                        bool                        use_fmha,
+                        int                         quant_policy);
 
     ~LlamaContextDecoder() override;
 

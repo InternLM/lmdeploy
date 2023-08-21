@@ -14,29 +14,31 @@
 
 cmake_minimum_required(VERSION 3.8)
 
+find_package(CUDAToolkit REQUIRED)
+
 add_subdirectory(gemm_test)
 
 add_library(cuda_utils STATIC cuda_utils.cc)
 set_property(TARGET cuda_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cuda_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cuda_utils PUBLIC -lcudart)
+target_link_libraries(cuda_utils PUBLIC CUDA::cudart)
 
 add_library(logger STATIC logger.cc)
 set_property(TARGET logger PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET logger PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(logger PUBLIC -lcudart)
+target_link_libraries(logger PUBLIC CUDA::cudart)
 
 add_library(cublasAlgoMap STATIC cublasAlgoMap.cc)
 set_property(TARGET cublasAlgoMap PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cublasAlgoMap PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cublasAlgoMap PUBLIC -lcublas -lcudart -lcurand cuda_utils logger)
+target_link_libraries(cublasAlgoMap PUBLIC CUDA::cublas CUDA::cudart CUDA::curand cuda_utils logger)
 
 add_library(cublasMMWrapper STATIC cublasMMWrapper.cc)
 set_property(TARGET cublasMMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cublasMMWrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cublasMMWrapper PUBLIC -lcublas -lcudart -lcurand cublasAlgoMap cuda_utils logger)
+target_link_libraries(cublasMMWrapper PUBLIC CUDA::cublas CUDA::cudart CUDA::curand cublasAlgoMap cuda_utils logger)
 if (SPARSITY_SUPPORT)
-target_link_libraries(cublasMMWrapper PUBLIC -lcusparse -lcusparseLt)
+target_link_libraries(cublasMMWrapper PUBLIC CUDA::cusparse -lcusparseLt)
 endif()
 
 add_library(word_list STATIC word_list.cc)
@@ -46,7 +48,11 @@ set_property(TARGET word_list PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(nvtx_utils STATIC nvtx_utils.cc)
 set_property(TARGET nvtx_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nvtx_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(nvtx_utils PUBLIC -lnvToolsExt)
+if(${CMAKE_VERSION} VERSION_LESS "3.25")
+    target_link_libraries(nvtx_utils PUBLIC CUDA::nvToolsExt -ldl)
+else()
+    target_link_libraries(nvtx_utils PUBLIC CUDA::nvtx3 -ldl)
+endif()
 
 add_library(memory_utils STATIC memory_utils.cu)
 set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -70,13 +76,13 @@ endif()
 add_library(cublasINT8MMWrapper STATIC cublasINT8MMWrapper.cc)
 set_property(TARGET cublasINT8MMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cublasINT8MMWrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cublasINT8MMWrapper PUBLIC -lcublasLt -lcudart -lcurand cublasAlgoMap cublasMMWrapper cuda_utils logger)
+target_link_libraries(cublasINT8MMWrapper PUBLIC CUDA::cublasLt CUDA::cudart CUDA::curand cublasAlgoMap cublasMMWrapper cuda_utils logger)
 
 if(ENABLE_FP8)
 add_library(cublasFP8MMWrapper STATIC cublasFP8MMWrapper.cu)
 set_property(TARGET cublasFP8MMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cublasFP8MMWrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cublasFP8MMWrapper PUBLIC -lcublasLt -lcudart -lcurand
+target_link_libraries(cublasFP8MMWrapper PUBLIC CUDA::cublasLt CUDA::cudart CUDA::curand
                       cublasAlgoMap cublasMMWrapper nvtx_utils fp8_qgmma_1x1_utils)
 endif()
 
@@ -89,10 +95,10 @@ add_library(gemm STATIC gemm.cc)
 set_property(TARGET gemm PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET gemm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(gemm PUBLIC
-                      -lcublas -lcublasLt -lcudart -lcurand
+                      CUDA::cublas CUDA::cublasLt CUDA::cudart CUDA::curand
                       cublasAlgoMap memory_utils cuda_utils logger)
 if (SPARSITY_SUPPORT)
-    target_link_libraries(gemm PUBLIC -lcusparse -lcusparseLt)
+    target_link_libraries(gemm PUBLIC CUDA::cusparse -lcusparseLt)
 endif()
 
 add_library(cuda_fp8_utils STATIC cuda_fp8_utils.cu)

@@ -2,6 +2,7 @@
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/Request.h"

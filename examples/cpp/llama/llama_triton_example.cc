@@ -15,12 +15,15 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
 
 #include "3rdparty/INIReader.h"
+#include <chrono>
 #include <memory>
 #include <thread>
 
+#include "src/turbomind/macro.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
@@ -427,6 +430,7 @@ int main(int argc, char* argv[])
     const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
     const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
     const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
+
     std::vector<int> seq_lens(batch_size);
     // step 6: check results
     if (node_id == 0) {
@@ -473,8 +477,7 @@ int main(int argc, char* argv[])
 
     if (1) {
         // test time
-        struct timeval start, end;
-        gettimeofday(&start, NULL);
+        auto start = std::chrono::high_resolution_clock::now();
 
         const int ite = 1;
         for (int i = 0; i < ite; i++) {
@@ -497,14 +500,15 @@ int main(int argc, char* argv[])
             ft::mpi::barrier();
         }
 
-        gettimeofday(&end, NULL);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto dur = std::chrono::duration<float, std::milli>(end - start);
 
         printf("[INFO] batch_size %d beam_width %d seq_len %d"
                " FT-CPP-GPT-Triton-time %.2f ms\n",
                batch_size,
                beam_width,
                seq_lens[0],
-               ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
+               dur.count() / ite);
     }
 
     if (kUSE_MPI) {
@@ -550,7 +554,6 @@ int read_start_ids(size_t            batch_size,
         max_input_len = 0;
         return 0;
     }
-
 
     // Add padding
     for (int i = 0; i < (int)tmp_start_ids.size(); i++) {

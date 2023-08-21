@@ -28,10 +28,12 @@
 #ifdef ENABLE_FP8
 #include <cuda_fp8.h>
 #endif
-#include <cuda_profiler_api.h>
-#include <map>
+#ifdef __linux__
 #include <sys/time.h>
 #include <unistd.h>
+#endif
+#include <cuda_profiler_api.h>
+#include <map>
 #include <vector>
 
 namespace turbomind {

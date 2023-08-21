@@ -1,6 +1,13 @@
 <div align="center">
   <img src="resources/lmdeploy-logo.png" width="450"/>
 
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy-zh-cn.readthedocs.io/zh_CN/latest/)
+[![badge](https://github.com/InternLM/lmdeploy/workflows/lint/badge.svg)](https://github.com/InternLM/lmdeploy/actions)
+[![PyPI](https://img.shields.io/pypi/v/lmdeploy)](https://pypi.org/project/lmdeploy)
+[![license](https://img.shields.io/github/license/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/tree/main/LICENSE)
+[![issue resolution](https://img.shields.io/github/issues-closed-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
+[![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
+
 [English](README.md) | 简体中文
 
 </div>
@@ -13,6 +20,8 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/08\] TurboMind 支持 Qwen-7B，动态NTK-RoPE缩放，动态logN缩放
+- \[2023/08\] TurboMind 支持 Windows (tp=1)
 - \[2023/08\] TurboMind 支持 4-bit 推理，速度是 FP16 的 2.4 倍，是目前最快的开源实现🚀。部署方式请看[这里](./docs/zh_cn/w4a16.md)
 - \[2023/08\] LMDeploy 开通了 [HuggingFace Hub](https://huggingface.co/lmdeploy) ，提供开箱即用的 4-bit 模型
 - \[2023/08\] LMDeploy 支持使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法进行 4-bit 量化
@@ -211,26 +220,11 @@ python3 -m lmdeploy.lite.apis.auto_awq \
   --work_dir $WORK_DIR \             # Step 1 保存量化参数的目录
 ```
 
+[点击这里](./docs/zh_cn/w4a16.md) 查看 weight int4 用法测试结果。
+
 #### KV Cache INT8 量化
 
-首先，导出 TurboMind 格式的量化参数（KV Cache INT8 量化需要使用 `TurboMind`）
-
-> `$TURBOMIND_DIR` 为  `deploy.py` 转换得到的`workspace/triton_models/weights\` 目录
-
-```
-python3 -m lmdeploy.lite.apis.kv_qparams \
-  --work_dir $WORK_DIR \              # Step 1 保存量化参数的目录
-  --turbomind_dir $TURBOMIND_DIR \
-  --kv_sym False \                    # 对称量化或非对称量化，默认为 False
-  --num_tp 1  \                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
-```
-
-然后调整 `workspace/triton_models/weights/config.ini`
-
-- `use_context_fmha` 改为 0，表示关闭
-- `quant_policy` 设置为 4。此参数默认为 0，表示不开启
-
-这里是[量化测试结果](./docs/zh_cn/quantization.md)。
+[点击这里](./docs/zh_cn/kv_int8.md) 查看 kv int8 使用方法、实现公式和测试结果。
 
 > **Warning**<br />
 > 量化部署不支持运行时 Tensor 并发。如果希望使用 Tensor 并发，需要在 deploy 时配置 tp 参数。

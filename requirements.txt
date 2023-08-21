@@ -1,3 +1,4 @@
+accelerate
 datasets
 fire
 gradio
@@ -7,6 +8,7 @@ pybind11
 safetensors
 sentencepiece
 setuptools
+tiktoken
 torch
 transformers
 tritonclient[all]

@@ -20,39 +20,40 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/models/multi_gpu_gpt/ParallelGptDecoder.cc
 
 #include "src/turbomind/models/llama/LlamaDecoder.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 
 namespace turbomind {
 
 template<typename T>
-LlamaDecoder<T>::LlamaDecoder(size_t           head_num,
-                              size_t           kv_head_num,
-                              size_t           size_per_head,
-                              size_t           inter_size,
-                              size_t           num_layer,
-                              size_t           rotary_embedding_dim,
-                              float            rmsnorm_eps,
-                              NcclParam        tensor_para,
-                              cudaStream_t     stream,
-                              cublasMMWrapper* cublas_wrapper,
-                              IAllocator*      allocator,
-                              bool             is_free_buffer_after_forward,
-                              int              quant_policy):
+LlamaDecoder<T>::LlamaDecoder(size_t                      head_num,
+                              size_t                      kv_head_num,
+                              size_t                      size_per_head,
+                              size_t                      inter_size,
+                              size_t                      num_layer,
+                              const LlamaAttentionParams& attn_params,
+                              float                       rmsnorm_eps,
+                              NcclParam                   tensor_para,
+                              cudaStream_t                stream,
+                              cublasMMWrapper*            cublas_wrapper,
+                              IAllocator*                 allocator,
+                              bool                        is_free_buffer_after_forward,
+                              int                         quant_policy):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
     inter_size_(inter_size),
     num_layer_(num_layer),
-    rotary_embedding_dim_(rotary_embedding_dim),
     hidden_units_(head_num * size_per_head),
     rmsnorm_eps_(rmsnorm_eps),
     tensor_para_(tensor_para),
     data_type_(getTensorType<T>())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    initialize(kv_head_num, quant_policy);
+    initialize(attn_params, kv_head_num, quant_policy);
 }
 
 template<typename T>
@@ -64,15 +65,14 @@ LlamaDecoder<T>::~LlamaDecoder()
 }
 
 template<typename T>
-void LlamaDecoder<T>::initialize(size_t kv_head_num, int quant_policy)
+void LlamaDecoder<T>::initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, int quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     self_attention_layer_ = new LlamaDecoderSelfAttentionLayer<T>(head_num_,
                                                                   kv_head_num,
                                                                   size_per_head_,
-                                                                  rotary_embedding_dim_,
-                                                                  false,  // neox_rotary_style
+                                                                  attn_params,
                                                                   tensor_para_,
                                                                   stream_,
                                                                   cublas_wrapper_,

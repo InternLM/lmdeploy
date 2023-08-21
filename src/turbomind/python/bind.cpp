@@ -38,7 +38,7 @@ DLDevice getDLDevice(triton::Tensor& tensor)
         device_id = ptr_attr.device;
     }
 
-    DLDevice device{.device_id = device_id};
+    DLDevice device{kDLCPU, device_id};
 
     switch (tensor.where) {
         case triton::MEMORY_CPU:
@@ -60,7 +60,7 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
 {
     DLDevice device = getDLDevice(tensor);
 
-    DLDataType data_type{.lanes = 1};
+    DLDataType data_type{0, 0, 1};
     switch (tensor.type) {
         case triton::TYPE_BOOL:
             data_type.code = DLDataTypeCode::kDLBool;
@@ -118,16 +118,15 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
         default:
             break;
     }
-    DLTensor dl_tensor{.data        = const_cast<void*>(tensor.data),
-                       .device      = device,
-                       .ndim        = (int32_t)(tensor.shape.size()),
-                       .dtype       = data_type,
-                       .shape       = reinterpret_cast<int64_t*>(const_cast<size_t*>(tensor.shape.data())),
-                       .strides     = (int64_t*)(nullptr),
-                       .byte_offset = 0};
+    DLTensor dl_tensor{const_cast<void*>(tensor.data),
+                       device,
+                       (int32_t)(tensor.shape.size()),
+                       data_type,
+                       reinterpret_cast<int64_t*>(const_cast<size_t*>(tensor.shape.data())),
+                       (int64_t*)(nullptr),
+                       0};
 
-    return std::unique_ptr<DLManagedTensor>(
-        new DLManagedTensor{.dl_tensor = dl_tensor, .manager_ctx = nullptr, .deleter = [](DLManagedTensor*) {}});
+    return std::unique_ptr<DLManagedTensor>(new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor*) {}});
 }
 
 triton::MemoryType getMemoryType(DLDevice device)

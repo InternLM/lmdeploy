@@ -197,6 +197,36 @@ If a question does not make any sense, or is not factually coherent, explain why
         return f'{self.b_inst} {prompt} {self.e_inst} '
 
 
+@MODELS.register_module(name='qwen-7b')
+class Qwen7BChat(BaseModel):
+    """Chat template for Qwen-7B-Chat."""
+
+    def __init__(self):
+        super().__init__()
+        self.session_len = 8192
+        self.top_p = 0.5
+        self.top_k = 40
+        self.temperature = 1.0
+
+        self.im_start = '<|im_start|>'
+        self.im_end = '<|im_end|>'
+        self.system = 'You are a helpful assistant.'
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return f'{self.im_start}system\n{self.system}{self.im_end}' \
+                   f'\n{self.im_start}user\n{prompt}{self.im_end}' \
+                   f'\n{self.im_start}assistant\n'
+
+        return f'\n{self.im_start}user\n{prompt}{self.im_end}' \
+               f'\n{self.im_start}assistant\n'
+
+    @property
+    def stop_words(self):
+        """Return the stop-words' token ids."""
+        return [151645]  # <|im_end|>
+
+
 def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \

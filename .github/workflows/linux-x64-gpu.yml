@@ -1,0 +1,40 @@
+name: linux-x64-gpu
+on:
+  push:
+    paths:
+      - '.github/workflows/linux-x64-gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
+  pull_request:
+    paths:
+      - '.github/workflows/linux-x64-gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
+concurrency:
+  group: linux-x64-gpu-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  cuda-118:
+    runs-on: ubuntu-latest
+    container: openmmlab/lmdeploy-builder:cuda11.8
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Build
+        run: |
+          source /opt/conda/bin/activate
+          conda activate py38
+          mkdir build && cd build
+          bash ../generate.sh
+          make -j$(nproc) && make install

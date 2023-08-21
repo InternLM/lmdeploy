@@ -54,7 +54,7 @@ public:
             size_t                       inter_size,
             size_t                       num_layer,
             size_t                       vocab_size,
-            size_t                       rotary_embedding_dim,
+            const LlamaAttentionParams&  attn_params,
             float                        norm_eps,
             int                          max_batch_size,
             int                          max_context_token_num,
@@ -96,7 +96,8 @@ private:
 
     void internalThreadEntry(int device_id);
 
-    void initialize(size_t kv_head_num, bool use_context_fmha, int quant_policy);
+    void
+    initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, bool use_context_fmha, int quant_policy);
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
@@ -155,7 +156,6 @@ private:
     const size_t inter_size_;
     const size_t num_layer_;
     const size_t vocab_size_;
-    const size_t rotary_embedding_dim_;
     float        rmsnorm_eps_ = 1e-6f;
 
     static constexpr bool neox_rotary_style_ = false;
