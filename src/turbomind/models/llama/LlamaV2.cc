@@ -335,8 +335,8 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               cublasGemmAlgo_t(-1));
     }
     else {
-        FT_CHECK(vocab_size_ % tensor_para_.world_size_ == 0);
-        const size_t local_vocab_size = vocab_size_ / tensor_para_.world_size_;
+        FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
+        const size_t local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
                               local_vocab_size,  // n
@@ -391,7 +391,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     int local_batch_size = (int)batch_size;
 
     std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-        {"logits", {MEMORY_GPU, TYPE_FP32, {batch_size, (size_t)1, vocab_size_}, logits}},
+        {"logits", {MEMORY_GPU, TYPE_FP32, {batch_size, (size_t)1, vocab_size_padded_}, logits}},
         {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
         {"max_input_length", {MEMORY_CPU, TYPE_INT32, {1}, &max_context_len}},
         {"sequence_limit_length", {MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len}},
