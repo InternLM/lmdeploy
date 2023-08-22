@@ -113,4 +113,4 @@ curl http://{server_name}:{server_port}/v1/embeddings \
 
 2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
 
-3. When the request with the same `instace_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
+3. When the request with the same `instance_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.

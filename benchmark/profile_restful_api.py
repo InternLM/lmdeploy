@@ -201,7 +201,7 @@ def main(server_addr: str,
           f'{first_token_latency_min:.2f}s, {first_token_latency_max:.2f}s, '
           f'{first_token_latency_ave:.2f}s\n'
           f'token throughput: {token_throughput:.2f} token/s\n'
-          f'req throughput: {req_throughput} req/s\n'
+          f'req throughput: {req_throughput:.2f} req/s\n'
           f'{"-" * 50}\n')
 
 

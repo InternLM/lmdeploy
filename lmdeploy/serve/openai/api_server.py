@@ -320,10 +320,10 @@ def main(model_path: str,
 
     Args:
         model_path (str): the path of the deployed model
-        instance_num (int): number of instances of turbomind model
-        tp (int): tensor parallel
         server_name (str): host ip for serving
         server_port (int): server port
+        instance_num (int): number of instances of turbomind model
+        tp (int): tensor parallel
     """
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  instance_num=instance_num,

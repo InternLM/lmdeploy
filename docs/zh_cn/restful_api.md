@@ -114,4 +114,4 @@ curl http://{server_name}:{server_port}/v1/embeddings \
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
 
-3. 当同一个 `instace_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`
+3. 当同一个 `instance_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`
