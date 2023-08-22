@@ -3,7 +3,7 @@
 ### Launch Service
 
 ```shell
-python lmdeploy/serve/openai/api_server.py ./workspace server_name server_port
+python lmdeploy/serve/openai/api_server.py ./workspace server_name server_port --instance_num 32 --tp 1
 ```
 
 Then, the user can open http://{server_name}:{server_port}/docs for the detailed api usage.

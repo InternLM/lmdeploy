@@ -5,7 +5,7 @@
 运行脚本
 
 ```shell
-python lmdeploy/serve/openai/api_server.py ./workspace server_name server_port
+python lmdeploy/serve/openai/api_server.py ./workspace server_name server_port --instance_num 32 --tp 1
 ```
 
 然后用户可以打开 http://{server_name}:{server_port}/docs 详细查看所有的 API 及其使用方法。

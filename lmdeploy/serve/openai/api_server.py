@@ -297,10 +297,10 @@ async def create_embeddings(request: EmbeddingsRequest,
 
 
 def main(model_path: str,
-         instance_num: int = 32,
-         tp: int = 1,
          server_name: str = 'localhost',
-         server_port: int = 23333):
+         server_port: int = 23333,
+         instance_num: int = 32,
+         tp: int = 1):
     """An example to perform model inference through the command line
     interface.
 
