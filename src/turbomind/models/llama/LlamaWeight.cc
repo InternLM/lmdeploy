@@ -44,7 +44,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
     tensor_para_rank_(tensor_para_rank)
 {
     if (vocab_size_padded_ % tensor_para_size_ != 0) {
-        vocab_size_padded_ = vocab_size_padded_ + vocab_size_padded_ % tensor_para_size_;
+        vocab_size_padded_ = (vocab_size_padded_ + tensor_para_size_ - 1) / tensor_para_size_ * tensor_para_size_;
         TM_LOG_WARNING("pad vocab size from %d to %d", vocab_size_, vocab_size_padded_);
     }
     decoder_layer_weights.reserve(num_layer_);

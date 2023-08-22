@@ -93,7 +93,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TM_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
 
-    vocab_size_padded_ = vocab_size_padded_ + vocab_size_padded_ % tensor_para_.world_size_;
+    vocab_size_padded_ = (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
 
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
