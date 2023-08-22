@@ -122,20 +122,28 @@ class ModelContext:
 
 class Engine:
 
-    def __init__(self, model_path: str) -> None:
+    def __init__(self,
+                 model_path: str,
+                 scheduler_config: SchedulerConfig = None,
+                 cache_config: CacheConfig = None) -> None:
         hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-
         self.context = ModelContext()
         self.patched_model = patch(hf_model, self.context).cuda()
         hf_config = hf_model.config
 
-        scheduler_config = SchedulerConfig(4, 2048)
-        cache_config = CacheConfig(block_size=16,
-                                   num_cpu_blocks=0,
-                                   num_gpu_blocks=0)
+        if scheduler_config is None:
+            scheduler_config = SchedulerConfig(max_batches=64,
+                                               max_session_len=2048,
+                                               max_request_output_len=512)
+        if cache_config is None:
+            cache_config = CacheConfig(block_size=64,
+                                       num_cpu_blocks=0,
+                                       num_gpu_blocks=0)
         model_config = ModelConfig(hf_config.hidden_size,
                                    hf_config.num_hidden_layers,
                                    hf_config.num_attention_heads,
+                                   bos_token_id=hf_config.bos_token_id,
+                                   eos_token_id=hf_config.eos_token_id,
                                    dtype=torch.float32)
 
         self.scheduler_config = scheduler_config
@@ -210,6 +218,32 @@ class Engine:
                     past_key_values=self.cache_engine.gpu_cache,
                     position_ids=position_ids)
 
+    def stop_session(self, session_id: int):
+        self.scheduler.stop_session(session_id)
+        self.scheduler.update()
+
+    def end_session(self, session_id: int):
+        self.scheduler.end_session(session_id)
+        self.scheduler.update()
+
+    def _stoping_criteria(self, msg: SchedulerMessage, next_token_id: int):
+        # check eof
+        if next_token_id == self.model_config.eos_token_id:
+            return True
+
+        # check request_len
+        if (msg.request_output_len >=
+                self.scheduler_config.max_request_output_len):
+            return True
+
+        # check session len
+        session = self.scheduler.sessions[msg.session_id]
+        session_len = sum(block.num_tokens for block in session.logical_blocks)
+        if session_len >= self.scheduler_config.max_session_len:
+            return True
+
+        return False
+
     def step(self):
         # TODO: cache manage
 
@@ -265,17 +299,19 @@ class Engine:
 
         logits = hf_outputs['logits']
 
-        # update scheduler
-        self.scheduler.update()
-
         # gather output
         output_index = inputs['seq_length'].cumsum(0) - 1
         output_token_ids = logits.max(-1)[1]
         next_token_ids = output_token_ids[output_index]
+        next_token_ids = next_token_ids.detach().cpu().tolist()
 
-        # update message for next step
+        # update scheduler
         for token, msg in zip(next_token_ids, running):
-            msg.token_ids = token.unsqueeze(0)
+            msg.token_ids = [token]
+            msg.request_output_len += 1
+            if self._stoping_criteria(msg, token):
+                self.stop_session(msg.session_id)
+        self.scheduler.update()
 
         outputs = dict(zip(session_ids, next_token_ids))
 

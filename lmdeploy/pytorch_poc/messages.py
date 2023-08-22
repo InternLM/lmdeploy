@@ -26,8 +26,6 @@ class SchedulerSession:
         self.status: MessageStatus = MessageStatus.WAITING
         self.arrive_time: float = arrive_time
         self.history_length: int = 0
-        self.token_ids: Sequence = []
-        self.history_token_ids = []
 
     def append_tokens(self, num_tokens: int, block_size: int):
 
@@ -56,4 +54,5 @@ class SchedulerMessage:
     token_ids: Sequence
     session_id: int
     status: MessageStatus = MessageStatus.WAITING
+    request_output_len: int = 0
     meta: Any = None

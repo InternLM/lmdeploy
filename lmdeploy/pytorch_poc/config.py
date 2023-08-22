@@ -6,6 +6,7 @@ from dataclasses import dataclass
 class SchedulerConfig:
     max_batches: int
     max_session_len: int
+    max_request_output_len: int
     recompute: bool = False
 
 
@@ -21,6 +22,8 @@ class ModelConfig:
     hidden_size: int
     num_layers: int
     num_heads: int
+    bos_token_id: int
+    eos_token_id: int
     dtype: str
 
     def get_head_size(self):

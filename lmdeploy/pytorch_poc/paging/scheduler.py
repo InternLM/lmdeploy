@@ -4,7 +4,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
-from lmdeploy.pytorch_poc.block import LogicalTokenBlock, PhysicalTokenBlock
+from lmdeploy.pytorch_poc.block import PhysicalTokenBlock
 from lmdeploy.pytorch_poc.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SchedulerMessage,
                                            SchedulerSession)
@@ -75,22 +75,6 @@ class Scheduler:
             assert session_id in self.sessions
             return self.sessions[session_id]
 
-        def _add_session_logical_block(session: SchedulerSession):
-            logical_blocks = session.logical_blocks
-            if len(logical_blocks) == 0:
-                block = LogicalTokenBlock(
-                    0, block_size=self.cache_config.block_size)
-                logical_blocks.append(block)
-                block.append_tokens(1)
-            else:
-                block = logical_blocks[-1]
-                if block.is_full():
-                    block = LogicalTokenBlock(
-                        len(logical_blocks),
-                        block_size=self.cache_config.block_size)
-                    logical_blocks.append(block)
-                block.append_tokens(1)
-
         def _to_running(msg: SchedulerMessage):
             msg.status = MessageStatus.RUNNING
             running.append(msg)
@@ -120,8 +104,9 @@ class Scheduler:
                 msg.status = MessageStatus.SWAP_OUT
                 self.swapped.append(msg)
 
+        max_batches = self.scheduler_config.max_batches
         # swap in
-        while len(self.swapped) > 0:
+        while len(self.swapped) > 0 and len(running) < max_batches:
             msg = self.swapped[0]
             session = _get_session(msg)
 
@@ -134,7 +119,7 @@ class Scheduler:
                 break
 
         # check waiting list
-        while len(self.waiting) > 0:
+        while len(self.waiting) > 0 and len(running) < max_batches:
             msg = self.waiting[0]
             session = _get_session(msg)
 
