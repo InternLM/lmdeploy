@@ -5,10 +5,10 @@
 运行脚本
 
 ```shell
-python lmdeploy/serve/openai/api_server.py ./workspace server_name server_port
+python3 -m lmdeploy.serve.openai.api_server ./workspace server_name server_port --instance_num 32 --tp 1
 ```
 
-然后用户可以打开 http://{server_name}:{server_port}/docs 详细查看所有的 API 及其使用方法。
+然后用户可以打开 swagger UI: http://{server_name}:{server_port}/docs 详细查看所有的 API 及其使用方法。
 我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
@@ -109,5 +109,9 @@ curl http://{server_name}:{server_port}/v1/embeddings \
 
 ### FAQ
 
-当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。
-请添加 `"renew_session": true` 到下一次请求中。
+1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。
+   请添加 `"renew_session": true` 到下一次请求中。
+
+2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
+
+3. 当同一个 `instace_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`

@@ -3,10 +3,10 @@
 ### Launch Service
 
 ```shell
-python lmdeploy/serve/openai/api_server.py ./workspace server_name server_port
+python3 -m lmdeploy.serve.openai.api_server ./workspace server_name server_port --instance_num 32 --tp 1
 ```
 
-Then, the user can open http://{server_name}:{server_port}/docs for the detailed api usage.
+Then, the user can open the swagger UI: http://{server_name}:{server_port}/docs for the detailed api usage.
 We provide four restful api in total. Three of them are in OpenAI format. However, we recommend users try
 our own api which provides more arguments for users to modify. The performance is comparatively better.
 
@@ -108,5 +108,9 @@ curl http://{server_name}:{server_port}/v1/embeddings \
 
 ### FAQ
 
-When user got `"finish_reason":"length"` which means the session is too long to be continued.
-Please add `"renew_session": true` into the next request.
+1. When user got `"finish_reason":"length"` which means the session is too long to be continued.
+   Please add `"renew_session": true` into the next request.
+
+2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
+
+3. When the request with the same `instace_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
