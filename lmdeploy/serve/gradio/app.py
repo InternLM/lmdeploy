@@ -10,7 +10,8 @@ import gradio as gr
 
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.css import CSS
-from lmdeploy.serve.openai.api_client import get_streaming_response
+from lmdeploy.serve.openai.api_client import (get_model_list,
+                                              get_streaming_response)
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 THEME = gr.themes.Soft(
@@ -181,7 +182,10 @@ def chat_stream_restful(
             sequence_end=False):
         if finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
-                       ' Please end the session.')
+                       ' Please restart the session by reset button.')
+        if tokens < 0:
+            gr.Warning('WARNING: running on the old session.'
+                       ' Please restart the session by reset button.')
         if state_chatbot[-1][-1] is None:
             state_chatbot[-1] = (state_chatbot[-1][0], response)
         else:
@@ -276,6 +280,12 @@ def run_restful(restful_api_url: str,
         batch_size (int): batch size for running Turbomind directly
     """
     InterFace.restful_api_url = restful_api_url
+    model_names = get_model_list(f'{restful_api_url}/v1/models')
+    model_name = ''
+    if isinstance(model_names, list) and len(model_names) > 0:
+        model_name = model_names[0]
+    else:
+        raise ValueError('gradio can find a suitable model from restful-api')
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
@@ -283,7 +293,7 @@ def run_restful(restful_api_url: str,
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            chatbot = gr.Chatbot(elem_id='chatbot', label='test')
+            chatbot = gr.Chatbot(elem_id='chatbot', label=model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')
@@ -351,7 +361,10 @@ async def chat_stream_local(
         response = outputs.response
         if outputs.finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
-                       ' Please end the session.')
+                       ' Please restart the session by reset button.')
+        if outputs.generate_token_len < 0:
+            gr.Warning('WARNING: running on the old session.'
+                       ' Please restart the session by reset button.')
         if state_chatbot[-1][-1] is None:
             state_chatbot[-1] = (state_chatbot[-1][0], response)
         else:

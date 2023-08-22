@@ -107,6 +107,14 @@ curl http://{server_name}:{server_port}/v1/embeddings \
   }'
 ```
 
+### webui
+
+也可以直接用 webui 测试使用 restful-api。
+
+```shell
+python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
+```
+
 ### FAQ
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。

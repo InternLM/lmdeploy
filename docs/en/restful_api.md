@@ -106,6 +106,14 @@ curl http://{server_name}:{server_port}/v1/embeddings \
   }'
 ```
 
+### webui
+
+You can also test restful-api through webui.
+
+```shell
+python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
+```
+
 ### FAQ
 
 1. When user got `"finish_reason":"length"` which means the session is too long to be continued.

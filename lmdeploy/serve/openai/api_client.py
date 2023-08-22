@@ -6,6 +6,15 @@ import fire
 import requests
 
 
+def get_model_list(api_url: str):
+    response = requests.get(api_url)
+    if hasattr(response, 'text'):
+        model_list = json.loads(response.text)
+        model_list = model_list.pop('data', [])
+        return [item['id'] for item in model_list]
+    return None
+
+
 def get_streaming_response(prompt: str,
                            api_url: str,
                            instance_id: int,
