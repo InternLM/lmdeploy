@@ -244,7 +244,7 @@ class Engine:
 
         return False
 
-    def step(self):
+    def step(self, return_logits=False):
         # TODO: cache manage
 
         # schedule
@@ -315,7 +315,41 @@ class Engine:
 
         outputs = dict(zip(session_ids, next_token_ids))
 
-        return outputs
+        if return_logits:
+            import pdb
+            pdb.set_trace()
+            seq_length = inputs['seq_length']
+            accum_seq_length = seq_length.cumsum(0)
+            split_logits = [
+                logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
+            ]
+            logits_outputs = dict(zip(session_ids, split_logits))
+            return outputs, logits_outputs
+        else:
+            return outputs, None
+
+    def infer(self, return_logits: bool = False):
+        ret_tokens = dict()
+        ret_logits = None if not return_logits else dict()
+        while self.scheduler.has_unfinished():
+            out_tokens, out_logits = self.step(return_logits)
+            for session_id in out_tokens:
+                if session_id not in ret_tokens:
+                    ret_tokens[session_id] = []
+
+                ret_tokens[session_id].append(out_tokens[session_id])
+
+                if return_logits:
+                    if session_id not in ret_logits:
+                        ret_logits[session_id] = []
+                    ret_logits[session_id].append(out_tokens[session_id])
+
+        if return_logits:
+            for session_id in ret_logits:
+                ret_logits[session_id] = torch.cat(ret_logits[session_id],
+                                                   dim=0)
+
+        return ret_tokens, ret_logits
 
 
 class EngineInstance:
