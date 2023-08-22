@@ -153,8 +153,7 @@ def export(model_name: str,
     if _vocab_size % tp != 0:
         # Resolve https://github.com/InternLM/lmdeploy/issues/266
         # Pad tok_embeddings and output weights, making their shape divisible by TP # noqa: E501
-        _vocab_size = (_vocab_size + tp - 1) // tp * tp
-        pad_size = _vocab_size - tok_embeddings.shape[0]
+        pad_size = (_vocab_size + tp - 1) // tp * tp - _vocab_size
         # Pad weight at the bottom of dim 0
         model_params['tok_embeddings.weight'] = torch.nn.functional.pad(
             tok_embeddings, (0, 0, 0, pad_size), 'constant', 0)

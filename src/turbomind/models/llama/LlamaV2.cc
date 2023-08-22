@@ -71,6 +71,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     inter_size_(inter_size),
     num_layer_(num_layer),
     vocab_size_(vocab_size),
+    vocab_size_padded_(vocab_size),
     rmsnorm_eps_(norm_eps),
     start_id_(start_id),
     end_id_(end_id),
@@ -90,8 +91,9 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(vocab_size_ % tensor_para_.world_size_ == 0);
     TM_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
+
+    vocab_size_padded_ = vocab_size_padded_ + vocab_size_padded_ % tensor_para_.world_size_;
 
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -168,7 +170,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                    quant_policy);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
-                                                          vocab_size_,  // vocab_size_padded,
+                                                          vocab_size_padded_,
                                                           0,            // end_id, deprecated
                                                           stream_,
                                                           cublas_wrapper_,
