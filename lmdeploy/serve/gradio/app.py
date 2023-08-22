@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import threading
+import time
 from functools import partial
 from typing import Sequence
 
@@ -9,6 +10,7 @@ import gradio as gr
 
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.css import CSS
+from lmdeploy.serve.openai.api_client import get_streaming_response
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 THEME = gr.themes.Soft(
@@ -143,7 +145,179 @@ def run_server(triton_server_addr: str,
 
 # a IO interface mananing variables
 class InterFace:
-    async_engine: AsyncEngine = None
+    async_engine: AsyncEngine = None  # for run_local
+    restful_api_url: str = None  # for run_restful
+
+
+def chat_stream_restful(
+    instruction: str,
+    state_chatbot: Sequence,
+    cancel_btn: gr.Button,
+    reset_btn: gr.Button,
+    request: gr.Request,
+):
+    """Chat with AI assistant.
+
+    Args:
+        instruction (str): user's prompt
+        state_chatbot (Sequence): the chatting history
+        request (gr.Request): the request from a user
+    """
+    session_id = threading.current_thread().ident
+    if request is not None:
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+    bot_summarized_response = ''
+    state_chatbot = state_chatbot + [(instruction, None)]
+
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
+           f'{bot_summarized_response}'.strip())
+
+    for response, tokens, finish_reason in get_streaming_response(
+            instruction,
+            f'{InterFace.restful_api_url}/generate',
+            instance_id=session_id,
+            request_output_len=512,
+            sequence_start=(len(state_chatbot) == 1),
+            sequence_end=False):
+        if finish_reason == 'length':
+            gr.Warning('WARNING: exceed session max length.'
+                       ' Please end the session.')
+        if state_chatbot[-1][-1] is None:
+            state_chatbot[-1] = (state_chatbot[-1][0], response)
+        else:
+            state_chatbot[-1] = (state_chatbot[-1][0],
+                                 state_chatbot[-1][1] + response
+                                 )  # piece by piece
+        yield (state_chatbot, state_chatbot, enable_btn, disable_btn,
+               f'{bot_summarized_response}'.strip())
+
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
+           f'{bot_summarized_response}'.strip())
+
+
+def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
+                       request: gr.Request):
+    """reset the session.
+
+    Args:
+        instruction_txtbox (str): user's prompt
+        state_chatbot (Sequence): the chatting history
+        request (gr.Request): the request from a user
+    """
+    state_chatbot = []
+
+    session_id = threading.current_thread().ident
+    if request is not None:
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+    # end the session
+    for response, tokens, finish_reason in get_streaming_response(
+            '',
+            f'{InterFace.restful_api_url}/generate',
+            instance_id=session_id,
+            request_output_len=0,
+            sequence_start=False,
+            sequence_end=True):
+        pass
+
+    return (
+        state_chatbot,
+        state_chatbot,
+        gr.Textbox.update(value=''),
+    )
+
+
+def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
+                        reset_btn: gr.Button, request: gr.Request):
+    """stop the session.
+
+    Args:
+        instruction_txtbox (str): user's prompt
+        state_chatbot (Sequence): the chatting history
+        request (gr.Request): the request from a user
+    """
+    session_id = threading.current_thread().ident
+    if request is not None:
+        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+    # end the session
+    for out in get_streaming_response('',
+                                      f'{InterFace.restful_api_url}/generate',
+                                      instance_id=session_id,
+                                      request_output_len=0,
+                                      sequence_start=False,
+                                      sequence_end=False,
+                                      stop=True):
+        pass
+    time.sleep(0.5)
+    messages = []
+    for qa in state_chatbot:
+        messages.append(dict(role='user', content=qa[0]))
+        if qa[1] is not None:
+            messages.append(dict(role='assistant', content=qa[1]))
+    for out in get_streaming_response(messages,
+                                      f'{InterFace.restful_api_url}/generate',
+                                      instance_id=session_id,
+                                      request_output_len=0,
+                                      sequence_start=True,
+                                      sequence_end=False):
+        pass
+    return (state_chatbot, disable_btn, enable_btn)
+
+
+def run_restful(restful_api_url: str,
+                server_name: str = 'localhost',
+                server_port: int = 6006,
+                batch_size: int = 32):
+    """chat with AI assistant through web ui.
+
+    Args:
+        restful_api_url (str): restufl api url
+        server_name (str): the ip address of gradio server
+        server_port (int): the port of gradio server
+        batch_size (int): batch size for running Turbomind directly
+    """
+    InterFace.restful_api_url = restful_api_url
+
+    with gr.Blocks(css=CSS, theme=THEME) as demo:
+        state_chatbot = gr.State([])
+
+        with gr.Column(elem_id='container'):
+            gr.Markdown('## LMDeploy Playground')
+
+            chatbot = gr.Chatbot(elem_id='chatbot', label='test')
+            instruction_txtbox = gr.Textbox(
+                placeholder='Please input the instruction',
+                label='Instruction')
+            with gr.Row():
+                cancel_btn = gr.Button(value='Cancel', interactive=False)
+                reset_btn = gr.Button(value='Reset')
+
+        send_event = instruction_txtbox.submit(
+            chat_stream_restful,
+            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn],
+            [state_chatbot, chatbot, cancel_btn, reset_btn])
+        instruction_txtbox.submit(
+            lambda: gr.Textbox.update(value=''),
+            [],
+            [instruction_txtbox],
+        )
+        cancel_btn.click(cancel_restful_func,
+                         [state_chatbot, cancel_btn, reset_btn],
+                         [state_chatbot, cancel_btn, reset_btn],
+                         cancels=[send_event])
+
+        reset_btn.click(reset_restful_func,
+                        [instruction_txtbox, state_chatbot],
+                        [state_chatbot, chatbot, instruction_txtbox],
+                        cancels=[send_event])
+
+    print(f'server is gonna mount on: http://{server_name}:{server_port}')
+    demo.queue(concurrency_count=batch_size, max_size=100,
+               api_open=True).launch(
+                   max_threads=10,
+                   share=True,
+                   server_port=server_port,
+                   server_name=server_name,
+               )
 
 
 async def chat_stream_local(
@@ -176,8 +350,8 @@ async def chat_stream_local(
             sequence_start=(len(state_chatbot) == 1)):
         response = outputs.response
         if outputs.finish_reason == 'length':
-            raise gr.Error('WARNING: exceed session max length.'
-                           ' Please end the session.')
+            gr.Warning('WARNING: exceed session max length.'
+                       ' Please end the session.')
         if state_chatbot[-1][-1] is None:
             state_chatbot[-1] = (state_chatbot[-1][0], response)
         else:
@@ -323,20 +497,28 @@ def run(model_path_or_server: str,
         server_name: str = 'localhost',
         server_port: int = 6006,
         batch_size: int = 32,
-        tp: int = 1):
+        tp: int = 1,
+        restful_api: bool = False):
     """chat with AI assistant through web ui.
 
     Args:
         model_path_or_server (str): the path of the deployed model or the
-            tritonserver URL. The former is for directly running service with
-            gradio. The latter is for running with tritonserver
+            tritonserver URL or restful api URL. The former is for directly
+            running service with gradio. The latter is for running with
+            tritonserver by default. If the input URL is restful api. Please
+            enable another flag `restful_api`.
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
         tp (int): tensor parallel for Turbomind
+        restufl_api (bool): a flag for model_path_or_server
     """
     if ':' in model_path_or_server:
-        run_server(model_path_or_server, server_name, server_port)
+        if restful_api:
+            run_restful(model_path_or_server, server_name, server_port,
+                        batch_size)
+        else:
+            run_server(model_path_or_server, server_name, server_port)
     else:
         run_local(model_path_or_server, server_name, server_port, batch_size,
                   tp)

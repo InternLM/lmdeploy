@@ -13,7 +13,8 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            sequence_start: bool = True,
                            sequence_end: bool = True,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
+                           ignore_eos: bool = False,
+                           stop: bool = False) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
     pload = {
         'prompt': prompt,
@@ -22,7 +23,8 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'sequence_start': sequence_start,
         'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
+        'ignore_eos': ignore_eos,
+        'stop': stop
     }
     response = requests.post(api_url,
                              headers=headers,
@@ -33,9 +35,9 @@ def get_streaming_response(prompt: str,
                                      delimiter=b'\0'):
         if chunk:
             data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            finish_reason = data['finish_reason']
+            output = data.pop('text', '')
+            tokens = data.pop('tokens', 0)
+            finish_reason = data.pop('finish_reason', None)
             yield output, tokens, finish_reason
 
 

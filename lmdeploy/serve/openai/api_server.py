@@ -253,11 +253,12 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
 
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
-    - stream: whether to stream the results or not.
-    - sequence_start (bool): indicator for starting a sequence.
-    - sequence_end (bool): indicator for ending a sequence
     - instance_id: determine which instance will be called. If not specified
         with a value other than -1, using host ip directly.
+    - sequence_start (bool): indicator for starting a sequence.
+    - sequence_end (bool): indicator for ending a sequence
+    - stream: whether to stream the results or not.
+    - stop: whether to stop the session response or not.
     - request_output_len (int): output token nums
     - step (int): the offset of the k/v cache
     - top_p (float): If set to float < 1, only the smallest set of most
@@ -283,6 +284,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
         request_output_len=request.request_output_len,
         top_p=request.top_p,
         top_k=request.top_k,
+        stop=request.stop,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
