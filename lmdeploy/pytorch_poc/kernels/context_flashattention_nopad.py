@@ -14,7 +14,9 @@ def _fwd_kernel(
     V,
     sm_scale,
     B_Start_Loc,
-    B_Seqlen,  # B_LOC 内部记录每个batch 输入的真实位置， B_SEQ_len 记录当前输入的真实长度
+    B_Seqlen,
+    B_kv_start_loc,
+    B_kvlen,
     Out,
     stride_qbs,
     stride_qh,
@@ -40,7 +42,10 @@ def _fwd_kernel(
     cur_kv_head = cur_head // kv_group_num
 
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+    cur_batch_kv_len = tl.load(B_kvlen + cur_batch)
     cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
+    cur_batch_in_kv_start_index = tl.load(B_kv_start_loc + cur_batch)
+    history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
 
@@ -51,9 +56,8 @@ def _fwd_kernel(
     off_q = (cur_batch_in_all_start_index +
              offs_m[:, None]) * stride_qbs + cur_head * stride_qh + offs_d[
                  None, :] * stride_qd
-    off_k = offs_n[
-        None, :] * stride_kbs + cur_kv_head * stride_kh + offs_d[:,
-                                                                 None] * stride_kd
+    off_k = (offs_n[None, :] * stride_kbs + cur_kv_head * stride_kh +
+             offs_d[:, None] * stride_kd)
     off_v = offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh + offs_d[
         None, :] * stride_vd
 
@@ -69,20 +73,19 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    for start_n in range(0, block_mask * (start_m + 1) * BLOCK_M, BLOCK_N):
+    for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = tl.load(k_ptrs +
-                    (cur_batch_in_all_start_index + start_n) * stride_kbs,
-                    mask=(start_n + offs_n[None, :]) < cur_batch_seq_len,
+                    (cur_batch_in_kv_start_index + start_n) * stride_kbs,
+                    mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
                     other=0.0)
-        # mask = tl.load(mask_ptrs + start_n, mask=start_n + offs_n < cur_batch_end_loc, other=0.0)
-
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
-        qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk,
-                      float('-inf'))
+        # NOTE: inf - inf = nan, and nan will leads to error
+        qk = tl.where((history_len + offs_m[:, None]) >=
+                      (start_n + offs_n[None, :]), qk, float(-1e30))
 
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -102,8 +105,8 @@ def _fwd_kernel(
         acc = acc * acc_scale[:, None]
         # update acc
         v = tl.load(v_ptrs +
-                    (cur_batch_in_all_start_index + start_n) * stride_vbs,
-                    mask=(start_n + offs_n[:, None]) < cur_batch_seq_len,
+                    (cur_batch_in_kv_start_index + start_n) * stride_vbs,
+                    mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
                     other=0.0)
 
         p = p.to(v.dtype)
@@ -126,6 +129,8 @@ def context_attention_fwd(q,
                           o,
                           b_start_loc,
                           b_seq_len,
+                          b_kv_start_loc,
+                          b_kv_seq_len,
                           max_input_len,
                           BLOCK=64):
     # shape constraints
@@ -147,6 +152,8 @@ def context_attention_fwd(q,
         sm_scale,
         b_start_loc,
         b_seq_len,
+        b_kv_start_loc,
+        b_kv_seq_len,
         o,
         q.stride(0),
         q.stride(1),

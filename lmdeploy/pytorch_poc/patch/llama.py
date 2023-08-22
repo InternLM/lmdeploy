@@ -64,7 +64,6 @@ class LlamaAttention(nn.Module):
         assert not output_attentions
         origin_self = self.origin_mod
 
-        block_tables = self.context.block_tables
         history_lengths = self.context.history_lengths
 
         max_seq_len = position_ids.size(-1)
@@ -118,31 +117,40 @@ class LlamaAttention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, cos, sin, position_ids)
 
-        seq_length = position_ids[..., -1] + 1
-        state_seq_length = seq_length - seq_length.new_tensor(history_lengths)
-        state_start_loc = state_seq_length.cumsum(0)
-        state_start_loc = torch.cat(
-            [state_start_loc.new_zeros(1), state_start_loc[:-1]])
+        kv_seq_length = position_ids[..., -1] + 1
+        q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
+            history_lengths)
+        q_start_loc = q_seq_length.cumsum(0)
+        q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
         self.context.fill_cache(
             key_states,
             value_states,
-            state_start_loc,
-            state_seq_length,
+            q_start_loc,
+            q_seq_length,
             past_key_value[0],
             past_key_value[1],
         )
 
         # TODO: fix GQA
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, origin_self.num_key_value_groups)
-        value_states = repeat_kv(value_states,
-                                 origin_self.num_key_value_groups)
+        # # repeat k/v heads if n_kv_heads < n_heads
+        # key_states = repeat_kv(key_states, origin_self.num_key_value_groups)
+        # value_states = repeat_kv(value_states,
+        #                          origin_self.num_key_value_groups)
 
-        start_loc = seq_length.cumsum(0)
-        start_loc = torch.cat([start_loc.new_zeros(1), start_loc[:-1]])
         attn_output = torch.empty_like(query_states)
-        # context_attention_fwd(query_states, key_states, value_states,
-        #                       attn_output, start_loc, seq_length, max_seq_len)
+
+        block_offsets = self.context.block_offsets
+        block_size = past_key_value[0].size(1)
+        paged_attention_fwd(query_states,
+                            past_key_value[0],
+                            past_key_value[1],
+                            attn_output,
+                            block_offsets,
+                            b_start_loc=q_start_loc,
+                            b_seq_len=q_seq_length,
+                            b_kv_seq_len=kv_seq_length,
+                            max_input_len=max_seq_len,
+                            BLOCK=block_size)
         attn_output = attn_output.reshape(-1, origin_self.hidden_size)
 
         if origin_self.pretraining_tp > 1:

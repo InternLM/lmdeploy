@@ -44,6 +44,7 @@ class SamplingParam:
 class ModelContext:
     block_tables: List[BlockTable] = field(default_factory=list)
     history_lengths: List[int] = field(default_factory=list)
+    block_offsets: torch.Tensor = None
 
     def get_block_offsets(self):
         return [[block.block_id for block in block_table]
@@ -98,6 +99,25 @@ class ModelContext:
                 free_offset += 1
                 k_state = k_state[token_num:]
                 v_state = v_state[token_num:]
+
+    def __call__(self,
+                 block_tables: List[BlockTable],
+                 history_lengths: List[int],
+                 device='cuda'):
+        self.block_tables = block_tables
+        self.history_lengths = history_lengths
+
+        # make block offsets
+        block_offsets = [[block.block_id for block in block_table]
+                         for block_table in self.block_tables]
+
+        # padding zero
+        pad_sequence = torch.nn.utils.rnn.pad_sequence
+        block_offsets = [
+            torch.tensor(offset, device=device) for offset in block_offsets
+        ]
+        block_offsets = pad_sequence(block_offsets, True)
+        self.block_offsets = block_offsets
 
 
 class Engine:
@@ -230,8 +250,8 @@ class Engine:
         # inference
         with torch.no_grad():
             # setup context
-            self.context.block_tables = inputs['block_tables']
-            self.context.history_lengths = history_lengths
+            self.context(block_tables=inputs['block_tables'],
+                         history_lengths=history_lengths)
 
             # forward
             hf_outputs = self.patched_model(

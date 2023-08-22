@@ -14,7 +14,9 @@ def _fwd_kernel(
     V,
     sm_scale,
     B_Start_Loc,
-    B_Seqlen,  # B_LOC 内部记录每个batch 输入的真实位置， B_SEQ_len 记录当前输入的真实长度
+    B_Seqlen,
+    B_kvlen,
+    Block_offsets,
     Out,
     stride_qbs,
     stride_qh,
@@ -28,6 +30,7 @@ def _fwd_kernel(
     stride_obs,
     stride_oh,
     stride_od,
+    stride_boffb,
     kv_group_num,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -40,7 +43,9 @@ def _fwd_kernel(
     cur_kv_head = cur_head // kv_group_num
 
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+    cur_batch_kv_len = tl.load(B_kvlen + cur_batch)
     cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
+    history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
 
@@ -51,9 +56,8 @@ def _fwd_kernel(
     off_q = (cur_batch_in_all_start_index +
              offs_m[:, None]) * stride_qbs + cur_head * stride_qh + offs_d[
                  None, :] * stride_qd
-    off_k = offs_n[
-        None, :] * stride_kbs + cur_kv_head * stride_kh + offs_d[:,
-                                                                 None] * stride_kd
+    off_k = (offs_n[None, :] * stride_kbs + cur_kv_head * stride_kh +
+             offs_d[:, None] * stride_kd)
     off_v = offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh + offs_d[
         None, :] * stride_vd
 
@@ -62,6 +66,8 @@ def _fwd_kernel(
     k_ptrs = K + off_k
     v_ptrs = V + off_v
 
+    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
+
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
@@ -69,20 +75,23 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    for start_n in range(0, block_mask * (start_m + 1) * BLOCK_M, BLOCK_N):
+    for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+
+        start_block_id = start_n // BLOCK_N
+        b_offset = tl.load(block_offset_ptrs + start_block_id)
+
         # -- compute qk ----
-        k = tl.load(
-            k_ptrs + (cur_batch_in_all_start_index + start_n) * stride_kbs,
-            mask=(start_n + offs_n[None, :]) < cur_batch_seq_len,
-            other=0.0)
-        # mask = tl.load(mask_ptrs + start_n, mask=start_n + offs_n < cur_batch_end_loc, other=0.0)
+        k = tl.load(k_ptrs + b_offset * BLOCK_N * stride_kbs,
+                    mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
+                    other=0.0)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
-        qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk,
-                      float('-inf'))
+        # NOTE: inf - inf = nan, and nan will leads to error
+        qk = tl.where((history_len + offs_m[:, None]) >=
+                      (start_n + offs_n[None, :]), qk, float(-1e30))
 
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -101,10 +110,9 @@ def _fwd_kernel(
         acc_scale = l_i / l_i_new * alpha
         acc = acc * acc_scale[:, None]
         # update acc
-        v = tl.load(
-            v_ptrs + (cur_batch_in_all_start_index + start_n) * stride_vbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_seq_len,
-            other=0.0)
+        v = tl.load(v_ptrs + b_offset * BLOCK_N * stride_vbs,
+                    mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
+                    other=0.0)
 
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
@@ -124,10 +132,13 @@ def paged_attention_fwd(q,
                         k,
                         v,
                         o,
+                        block_offsets,
                         b_start_loc,
                         b_seq_len,
+                        b_kv_seq_len,
                         max_input_len,
                         BLOCK=64):
+
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -135,7 +146,7 @@ def paged_attention_fwd(q,
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[1]
-    kv_group_num = q.shape[1] // k.shape[1]
+    kv_group_num = q.shape[1] // k[0].shape[1]
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
@@ -147,19 +158,22 @@ def paged_attention_fwd(q,
         sm_scale,
         b_start_loc,
         b_seq_len,
+        b_kv_seq_len,
+        block_offsets,
         o,
         q.stride(0),
         q.stride(1),
         q.stride(2),
-        k.stride(0),
-        k.stride(1),
-        k.stride(2),
-        v.stride(0),
-        v.stride(1),
-        v.stride(2),
+        k[0].stride(0),
+        k[0].stride(1),
+        k[0].stride(2),
+        v[0].stride(0),
+        v[0].stride(1),
+        v[0].stride(2),
         o.stride(0),
         o.stride(1),
         o.stride(2),
+        block_offsets.stride(0),
         kv_group_num=kv_group_num,
         BLOCK_M=BLOCK,
         BLOCK_DMODEL=Lk,

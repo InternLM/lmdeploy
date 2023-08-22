@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-import torch
 import psutil
+import torch
 
 
 def get_gpu_memory(gpu: int = 0) -> int:
