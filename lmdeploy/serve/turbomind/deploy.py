@@ -154,12 +154,13 @@ def export(model_name: str,
         # Resolve https://github.com/InternLM/lmdeploy/issues/266
         # Pad tok_embeddings and output weights, making their shape divisible by TP # noqa: E501
         _vocab_size = (_vocab_size + tp - 1) // tp * tp
+        pad_size = _vocab_size - tok_embeddings.shape[0]
         # Pad weight at the bottom of dim 0
         model_params['tok_embeddings.weight'] = torch.nn.functional.pad(
-            tok_embeddings, (0, 0, 0, 1), 'constant', 0)
+            tok_embeddings, (0, 0, 0, pad_size), 'constant', 0)
         # Pad output weight at the bottom of dim 0
         model_params['output.weight'] = torch.nn.functional.pad(
-            model_params['output.weight'], (0, 0, 0, 1), 'constant', 0)
+            model_params['output.weight'], (0, 0, 0, pad_size), 'constant', 0)
 
     # reverse the splitting axes since the weights are transposed above
     for param_name, param_data in model_params.items():
