@@ -1,5 +1,6 @@
 accelerate
 datasets
+fastapi
 fire
 gradio
 mmengine
@@ -12,3 +13,4 @@ tiktoken
 torch
 transformers
 tritonclient[all]
+uvicorn

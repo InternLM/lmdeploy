@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from abc import abstractmethod
+from typing import List
+
 from mmengine import Registry
 
 MODELS = Registry('model', locations=['lmdeploy.model'])
@@ -35,6 +38,50 @@ class BaseModel:
         """
         return prompt
 
+    @staticmethod
+    def _translate_messages(messages: List):
+        """Translate messages into system, user speaking list, assistant
+        speaking list.
+
+        Args:
+            messages (List): chat history
+        Returns:
+            Turple: consists of system (str), users (List[str]),
+                assistants (List[str])
+        """
+        system = None
+        users = []
+        assistants = []
+        assert isinstance(messages, List)
+        for message in messages:
+            msg_role = message['role']
+            if msg_role == 'system':
+                system = message['content']
+            elif msg_role == 'user':
+                users.append(message['content'])
+            elif msg_role == 'assistant':
+                assistants.append(message['content'])
+            else:
+                raise ValueError(f'Unknown role: {msg_role}')
+        assistants.append(None)
+        return system, users, assistants
+
+    @abstractmethod
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template. When messages arg is a string, return
+        self.get_prompt(messages). When messages arg is a chat history, return
+        translated prompt from chat history.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages)
+        # chat history processing in derived classes
+
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
@@ -68,9 +115,30 @@ class Vicuna(BaseModel):
             str: the concatenated prompt
         """
         if sequence_start:
-            return f'{self.system} {self.user}: {prompt} {self.assistant}:'
+            return f'{self.system} {self.user}: {prompt} {self.assistant}: '
         else:
-            return f'</s>{self.user}: {prompt} {self.assistant}:'
+            return f'</s>{self.user}: {prompt} {self.assistant}: '
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = system + ' '
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.user}: {user} {self.assistant}: {assistant}</s>'
+            else:
+                ret += f'{self.user}: {user} {self.assistant}: '
+        return ret
 
 
 @MODELS.register_module(name='internlm')
@@ -115,6 +183,27 @@ class InternLMChat7B(BaseModel):
         else:
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        ret = '<BOS>'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
+                       f'{assistant}{self.eoa}'
+            else:
+                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
+        return ret
 
     @property
     def stop_words(self):
@@ -214,6 +303,29 @@ If a question does not make any sense, or is not factually coherent, explain why
                    f'{prompt} {self.e_inst} '
 
         return f'{self.b_inst} {prompt} {self.e_inst} '
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.default_sys_prompt if not system else system
+        ret = f'<BOS>{self.b_inst} {self.b_sys} {system} {self.e_sys}'
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            if i != 0:
+                ret += f'{self.b_inst} '
+            if assistant:
+                ret += f'{user} {self.e_inst} {assistant}'
+            else:
+                ret += f'{user} {self.e_inst} '
+        return ret
 
 
 @MODELS.register_module(name='qwen-7b')

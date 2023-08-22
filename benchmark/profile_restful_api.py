@@ -3,13 +3,46 @@ import multiprocessing as mp
 import os
 import random
 import time
-from typing import List
+from typing import Iterable, List
 
 import fire
 import numpy as np
+import requests
 from sentencepiece import SentencePieceProcessor
 
-from lmdeploy.serve.turbomind.chatbot import Chatbot
+from lmdeploy.utils import get_logger
+
+
+def get_streaming_response(prompt: str,
+                           api_url: str,
+                           instance_id: int,
+                           request_output_len: int,
+                           stream: bool = True,
+                           sequence_start: bool = True,
+                           sequence_end: bool = False,
+                           ignore_eos: bool = False) -> Iterable[List[str]]:
+    headers = {'User-Agent': 'Test Client'}
+    pload = {
+        'prompt': prompt,
+        'stream': stream,
+        'instance_id': instance_id,
+        'request_output_len': request_output_len,
+        'sequence_start': sequence_start,
+        'sequence_end': sequence_end,
+        'ignore_eos': ignore_eos
+    }
+    response = requests.post(api_url,
+                             headers=headers,
+                             json=pload,
+                             stream=stream)
+    for chunk in response.iter_lines(chunk_size=8192,
+                                     decode_unicode=False,
+                                     delimiter=b'\0'):
+        if chunk:
+            data = json.loads(chunk.decode('utf-8'))
+            output = data['text']
+            tokens = data['tokens']
+            yield output, tokens
 
 
 class Tokenizer:
@@ -26,24 +59,26 @@ class Tokenizer:
         return [len(token_ids) for token_ids in prompts_token_ids]
 
 
-def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
+def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
+          res_que: mp.Queue):
     stats = []
-    while not req_que.empty():
-        prompt, input_seqlen, output_seqlen = req_que.get()
-        print(f'request info: session {session_id}, '
-              f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
+    while not req_queue.empty():
+        prompt, input_seqlen, output_seqlen = req_queue.get()
+        get_logger('profile_restful_api').info(
+            f'request info: session {session_id}, '
+            f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         timestamps = []
         tokens = []
         start = time.perf_counter()
-        for status, res, token in chatbot.stream_infer(
-                session_id,
+        for res, token in get_streaming_response(
                 prompt,
+                server_addr,
+                session_id,
                 request_output_len=output_seqlen,
                 sequence_start=True,
                 sequence_end=True):
             timestamps.append(time.perf_counter())
             tokens.append(token)
-        chatbot.reset_session()
 
         first_token_latency = timestamps[1] - start
         token_latency = timestamps[-1] - timestamps[0]
@@ -52,32 +87,27 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
     res_que.put((session_id, stats))
 
 
-def warmup(tritonserver_addr: str,
+def warmup(server_addr: str,
            concurrency: int,
            output_seqlen: int,
            warmup_round: int = 1):
     print('start to warmup ...')
 
-    def _infer(_chatbot, session_id):
+    def _infer(server_addr, session_id):
         for _ in range(warmup_round):
-            for _, _, _ in _chatbot.stream_infer(
+            for _, _ in get_streaming_response(
+                    '',
+                    server_addr,
                     session_id,
-                    prompt='',
                     request_output_len=output_seqlen,
                     sequence_start=True,
                     sequence_end=True):
                 continue
-            _chatbot.reset_session()
 
     _start = time.perf_counter()
-    chatbots = [
-        Chatbot(tritonserver_addr=tritonserver_addr,
-                ignore_eos=True,
-                profile_generation=True) for _ in range(concurrency)
-    ]
     procs = []
-    for i, chatbot in enumerate(chatbots):
-        proc = mp.Process(target=_infer, args=(chatbot, i + 1))
+    for i in range(concurrency):
+        proc = mp.Process(target=_infer, args=(server_addr, i + 1))
         procs.append(proc)
         proc.start()
     for proc in procs:
@@ -127,25 +157,22 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
     return que, len(filtered_dataset)
 
 
-def main(tritonserver_addr: str,
+def main(server_addr: str,
          tokenizer_path: str,
          dataset_path: str,
          concurrency: int = 1,
          session_len: int = 2048,
          samples: int = 1000):
-    warmup(tritonserver_addr, concurrency, session_len - 1)
-    req_que, n_req = read_dataset(tokenizer_path, dataset_path, samples,
-                                  session_len)
+    api_url = server_addr + '/generate'
+    warmup(api_url, concurrency, session_len - 1)
+    req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,
+                                    session_len)
     res_que = mp.Queue()
     procs = []
     _start = time.perf_counter()
     for i in range(concurrency):
-        chatbot = Chatbot(tritonserver_addr=tritonserver_addr,
-                          display=False,
-                          profile_serving=True,
-                          ignore_eos=True)
         proc = mp.Process(target=infer,
-                          args=(chatbot, i + 1, req_que, res_que))
+                          args=(api_url, i + 1, req_queue, res_que))
         procs.append(proc)
         proc.start()
     for proc in procs:
