@@ -30,70 +30,6 @@ class VariableInterface:
 app = FastAPI()
 
 
-@app.post('/generate')
-async def generate(raw_request: Request):
-    """Generate completion for the request.
-
-    The request should be a JSON object with the following fields:
-    - prompt: the prompt to use for the generation.
-    - stream: whether to stream the results or not.
-    - instance_id: determine which instance will be called. If not specified,
-        using host ip directly.
-    - request_output_len (int): output token nums
-    - sequence_start (bool): indicator for starting a sequence
-    - sequence_end (bool): indicator for ending a sequence
-    - step (int): the offset of the k/v cache
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - temperature (float): to modulate the next token probability
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - ignore_eos (bool): indicator for ignoring eos
-    """
-    request_dict = await raw_request.json()
-    if 'instance_id' not in request_dict:
-        instance_id = int(raw_request.client.host.replace('.', ''))
-        request_dict['instance_id'] = instance_id
-    request = GenerateRequest(**request_dict)
-    generation = VariableInterface.async_engine.generate(
-        request.prompt,
-        request.instance_id,
-        stream_response=request.stream,
-        sequence_start=request.sequence_start,
-        sequence_end=request.sequence_end,
-        request_output_len=request.request_output_len,
-        top_p=request.top_p,
-        top_k=request.top_k,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos)
-
-    # Streaming case
-    async def stream_results() -> AsyncGenerator[bytes, None]:
-        async for out in generation:
-            ret = {
-                'text': out.response,
-                'tokens': out.generate_token_len,
-                'finish_reason': out.finish_reason
-            }
-            yield (json.dumps(ret) + '\0').encode('utf-8')
-
-    if request.stream:
-        return StreamingResponse(stream_results())
-    else:
-        ret = {}
-        async for out in generation:
-            ret = {
-                'text': out.response,
-                'tokens': out.generate_token_len,
-                'finish_reason': out.finish_reason
-            }
-        return JSONResponse(ret)
-
-
 def get_model_list():
     """Available models.
 
@@ -136,21 +72,38 @@ async def check_request(request) -> Optional[JSONResponse]:
 
 
 @app.post('/v1/chat/completions')
-async def chat_completions_v1(raw_request: Request):
+async def chat_completions_v1(request: ChatCompletionRequest,
+                              raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
     for the API specification.
 
-    NOTE: Currently we do not support the following features:
-        - function_call (Users should implement this by themselves)
-        - logit_bias (not supported yet)
-        - presence_penalty (replaced with repetition_penalty)
-        - frequency_penalty (replaced with repetition_penalty)
-        - n (only supports one choice)
+    The request should be a JSON object with the following fields:
+    - model: model name. Available from /v1/models.
+    - messages: string prompt or chat history in OpenAI format.
+    - temperature (float): to modulate the next token probability
+    - top_p (float): If set to float < 1, only the smallest set of most
+        probable tokens with probabilities that add up to top_p or higher
+        are kept for generation.
+    - n (int): How many chat completion choices to generate for each input
+        message. Only support one here.
+    - stream: whether to stream the results or not. Default to false.
+    - max_tokens (int): output token nums
+    - repetition_penalty (float): The parameter for repetition penalty.
+        1.0 means no penalty
+
+    Additional arguments supported by LMDeploy:
+    - renew_session (bool): Whether renew the session. Can be used when the
+        session length is exceeded.
+    - ignore_eos (bool): indicator for ignoring eos
+
+    Currently we do not support the following features:
+    - function_call (Users should implement this by themselves)
+    - logit_bias (not supported yet)
+    - presence_penalty (replaced with repetition_penalty)
+    - frequency_penalty (replaced with repetition_penalty)
     """
-    request = await raw_request.json()
-    request = ChatCompletionRequest(**request)
     instance_id = int(raw_request.client.host.replace('.', ''))
 
     error_check_ret = await check_request(request)
@@ -273,10 +226,8 @@ async def chat_completions_v1(raw_request: Request):
 
 @app.post('/v1/embeddings')
 async def create_embeddings(request: EmbeddingsRequest,
-                            model_name: str = None):
+                            raw_request: Request = None):
     """Creates embeddings for the text."""
-    if request.model is None:
-        request.model = model_name
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -294,6 +245,69 @@ async def create_embeddings(request: EmbeddingsRequest,
             completion_tokens=None,
         ),
     ).dict(exclude_none=True)
+
+
+@app.post('/generate')
+async def generate(request: GenerateRequest, raw_request: Request = None):
+    """Generate completion for the request.
+
+    The request should be a JSON object with the following fields:
+    - prompt: the prompt to use for the generation.
+    - stream: whether to stream the results or not.
+    - sequence_start (bool): indicator for starting a sequence.
+    - sequence_end (bool): indicator for ending a sequence
+    - instance_id: determine which instance will be called. If not specified
+        with a value other than -1, using host ip directly.
+    - request_output_len (int): output token nums
+    - step (int): the offset of the k/v cache
+    - top_p (float): If set to float < 1, only the smallest set of most
+        probable tokens with probabilities that add up to top_p or higher
+        are kept for generation.
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
+    - temperature (float): to modulate the next token probability
+    - repetition_penalty (float): The parameter for repetition penalty.
+        1.0 means no penalty
+    - ignore_eos (bool): indicator for ignoring eos
+    """
+    if request.instance_id == -1:
+        instance_id = int(raw_request.client.host.replace('.', ''))
+        request.instance_id = instance_id
+
+    generation = VariableInterface.async_engine.generate(
+        request.prompt,
+        request.instance_id,
+        stream_response=request.stream,
+        sequence_start=request.sequence_start,
+        sequence_end=request.sequence_end,
+        request_output_len=request.request_output_len,
+        top_p=request.top_p,
+        top_k=request.top_k,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos)
+
+    # Streaming case
+    async def stream_results() -> AsyncGenerator[bytes, None]:
+        async for out in generation:
+            ret = {
+                'text': out.response,
+                'tokens': out.generate_token_len,
+                'finish_reason': out.finish_reason
+            }
+            yield (json.dumps(ret) + '\0').encode('utf-8')
+
+    if request.stream:
+        return StreamingResponse(stream_results())
+    else:
+        ret = {}
+        async for out in generation:
+            ret = {
+                'text': out.response,
+                'tokens': out.generate_token_len,
+                'finish_reason': out.finish_reason
+            }
+        return JSONResponse(ret)
 
 
 def main(model_path: str,

@@ -62,8 +62,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
-    max_tokens: Optional[int] = None
-    stop: Optional[Union[str, List[str]]] = None
+    max_tokens: Optional[int] = 512
+    stop: Optional[bool] = False
     stream: Optional[bool] = False
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
@@ -174,8 +174,7 @@ class CompletionStreamResponse(BaseModel):
 
 class EmbeddingsRequest(BaseModel):
     """Embedding request."""
-    model: Optional[str] = None
-    engine: Optional[str] = None
+    model: str = None
     input: Union[str, List[Any]]
     user: Optional[str] = None
 
@@ -191,11 +190,11 @@ class EmbeddingsResponse(BaseModel):
 class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: str
-    instance_id: int
-    stream: bool = False
-    request_output_len: int = 512
+    instance_id: int = -1
     sequence_start: bool = True
     sequence_end: bool = False
+    stream: bool = False
+    request_output_len: int = 512
     top_p: float = 0.8
     top_k: int = 40
     temperature: float = 0.8
