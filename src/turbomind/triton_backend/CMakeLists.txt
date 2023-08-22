@@ -118,10 +118,13 @@ endif()
 
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
-target_compile_definitions(triton-turbomind-backend
-  PUBLIC
-  USE_TRITONSERVER_DATATYPE
-  BUILD_MULTI_GPU)
+target_compile_definitions(triton-turbomind-backend PUBLIC
+  USE_TRITONSERVER_DATATYPE)
+
+if (BUILD_MULTI_GPU)
+  target_compile_definitions(triton-turbomind-backend PUBLIC
+    BUILD_MULTI_GPU)
+endif ()
 
 target_include_directories(
   triton-turbomind-backend

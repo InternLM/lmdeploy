@@ -7,20 +7,28 @@
 
 namespace turbomind {
 
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 4)
+#define L2_CACHEHINT(size) ".L2::" #size "B"
+#else
+#define L2_CACHEHINT(size)
+#endif
+
 template<typename T>
 __inline__ __device__ void cp_async_cg_A(uint32_t smem_int_ptr, const T* __restrict__ src, bool mask)
 {
 #if TURBOMIND_ARCH_SM80
     constexpr int cp_size = sizeof(T);
     static_assert(cp_size == 16, "cp.async.cg requreis cp_size == 16");
+    // clang-format off
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
-                 "  @p cp.async.cg.shared.global.L2::256B [%1], [%2], %3;\n"
+                 "  @p cp.async.cg.shared.global" L2_CACHEHINT(256) " [%1], [%2], %3;\n"
                  "}\n" ::"r"((int)mask),
                  "r"(smem_int_ptr),
                  "l"(src),
                  "n"(cp_size));
+    // clang-format on
 #else
     assert(TURBOMIND_ARCH_SM80);
 #endif
@@ -32,14 +40,16 @@ __inline__ __device__ void cp_async_cg_B(uint32_t smem_int_ptr, const T* __restr
 #if TURBOMIND_ARCH_SM80
     constexpr int cp_size = sizeof(T);
     static_assert(cp_size == 16, "cp.async.cg requreis cp_size == 16");
+    // clang-format off
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
-                 "  @p cp.async.cg.shared.global.L2::128B [%1], [%2], %3;\n"
+                 "  @p cp.async.cg.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                  "}\n" ::"r"((int)mask),
                  "r"(smem_int_ptr),
                  "l"(src),
                  "n"(cp_size));
+    // clang-format on
 #else
     assert(TURBOMIND_ARCH_SM80);
 #endif
@@ -50,14 +60,16 @@ __inline__ __device__ void cp_async_ca(uint32_t smem_int_ptr, const T* __restric
 {
 #if TURBOMIND_ARCH_SM80
     constexpr int cp_size = sizeof(T);
+    // clang-format off
     asm volatile("{\n"
                  "  .reg .pred p;\n"
                  "  setp.ne.b32 p, %0, 0;\n"
-                 "  @p cp.async.ca.shared.global.L2::128B [%1], [%2], %3;\n"
+                 "  @p cp.async.ca.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                  "}\n" ::"r"((int)mask),
                  "r"(smem_int_ptr),
                  "l"(src),
                  "n"(cp_size));
+    // clang-format on
 #else
     assert(TURBOMIND_ARCH_SM80);
 #endif

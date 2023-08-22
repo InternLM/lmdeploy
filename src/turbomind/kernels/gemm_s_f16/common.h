@@ -293,10 +293,4 @@ struct Shape {
     }
 };
 
-template<int... Ns>
-Shape(std::integral_constant<int, Ns>...) -> Shape<Ns...>;
-
-template<int... Ns>
-inline constexpr Shape<Ns...> shape_c{};
-
 }  // namespace turbomind
