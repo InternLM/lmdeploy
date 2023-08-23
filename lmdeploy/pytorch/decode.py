@@ -224,6 +224,7 @@ class Engine:
                sort=True,
                max_bs: int = 1024,
                pad=True,
+               pad_token_id=2,
                return_logits=True):
         """Inference the model to compute probabilities.
 
@@ -275,7 +276,9 @@ class Engine:
             # batch of input_ids and attn_masks
             # inputs = self.tokenizer(sub_p, return_tensors='pt', padding=True)
             input_ids = [torch.tensor(p) for p in sub_p]
-            input_ids = pad_sequence(input_ids, batch_first=True)
+            input_ids = pad_sequence(input_ids,
+                                     batch_first=True,
+                                     padding_value=pad_token_id)
             input_lens = [len(p) for p in sub_p]
 
             # Dynamic batch size based on safe memory

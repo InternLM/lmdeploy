@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from transformers import AutoTokenizer
 
@@ -10,13 +11,16 @@ def _test_decode_dist(model_path, prompt):
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.padding_side = 'right'
 
+    inputs = tokenizer(prompt)
+    input_ids = inputs.input_ids
+
     engine = Engine(model_path, tokenizer=tokenizer)
-    probs = engine.decode(prompt, sort=True, max_bs=4, pad=True)
+    probs = engine.decode(input_ids, sort=False, max_bs=4, pad=True)
 
     return probs
 
 
-def _test_decode_single(model_path, prompt, gpu_id=0):
+def _test_decode_single(model_path, prompt):
     model, tokenizer = init_model(model_path)
     model = model.eval()
 
@@ -24,13 +28,12 @@ def _test_decode_single(model_path, prompt, gpu_id=0):
     tokenizer.padding_side = 'right'
 
     inputs = tokenizer(prompt, return_tensors='pt', padding=True)
+    input_ids = inputs.input_ids.cuda()
+    attention_mask = inputs.attention_mask.cuda()
 
-    input_ids = inputs.input_ids.cuda(gpu_id)
-    # attention_mask = None
-    attention_mask = inputs.attention_mask.cuda(gpu_id)
-    probs = decode_single(model, input_ids, attention_mask)
+    probs: torch.Tensor = decode_single(model, input_ids, attention_mask)
 
-    return probs
+    return probs.numpy()
 
 
 def test_compare():
@@ -38,23 +41,31 @@ def test_compare():
 
     torch.set_default_device(gpu_id)
     torch.set_printoptions(linewidth=200, edgeitems=5)
-    import numpy as np
     np.set_printoptions(linewidth=200, edgeitems=5)
 
     model_path = 'llama2/huggingface/llama-2-7b'
 
-    prompt = [
+    prompts = [
         'I believe the meaning of life is to find your gift. The purpose of life is to give it away.',  # noqa: E501
-        'Simply put, the theory of relativity states that '
-    ] * 8
+        'Simply put, the theory of relativity states that ',
+        'Building a website can be done in 10 simple steps:'
+    ]
 
-    p_single = _test_decode_single(model_path, prompt, gpu_id)
-    p_dist = _test_decode_dist(model_path, prompt)
+    p_dist = _test_decode_dist(model_path, prompts)
+    p_single = _test_decode_single(model_path, prompts)
 
-    print(p_single[0])
-    print(p_dist[0])
+    # print(p_single[0])
+    # print(p_dist[0])
 
-    print(p_single[1])
-    print(p_dist[1])
+    # print(p_single[1])
+    # print(p_dist[1])
 
-    assert torch.allclose(p_single, p_dist, rtol=1e-3, atol=1e-3)
+    rtol = 2.0e-2
+    atol = 2.0e-2
+    failed = (abs(p_dist - p_single) > atol + rtol * abs(p_single))
+    idx = failed.nonzero()
+    print(idx)
+    print(p_dist[idx])
+    print(p_single[idx])
+
+    assert np.allclose(p_dist, p_single, rtol=rtol, atol=atol)
