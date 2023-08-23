@@ -27,7 +27,7 @@ class VariableInterface:
     request_hosts = []
 
 
-app = FastAPI()
+app = FastAPI(docs_url='/')
 
 
 def get_model_list():
