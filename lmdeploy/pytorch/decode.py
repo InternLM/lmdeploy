@@ -373,7 +373,7 @@ if __name__ == '__main__':
 
     # Use test file preferentially
     if test_path:
-        with open(test_path, 'rb') as f:
+        with open(test_path, 'r') as f:
             prompts = f.readlines()
 
     prompts = [p.strip() for p in prompts]
