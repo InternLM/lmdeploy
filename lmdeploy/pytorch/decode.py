@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import argparse
+import logging
 import queue
 import warnings
 from typing import List, Optional
@@ -52,7 +54,8 @@ def avail_gpus(percentage=0.96):
 @torch.no_grad()
 def decode_single(model: PreTrainedModel,
                   input_ids: torch.Tensor,
-                  attention_mask: torch.Tensor = None):
+                  attention_mask: torch.Tensor = None,
+                  return_logits=True):
     """Decode a single batch.
 
     Args:
@@ -80,23 +83,21 @@ def decode_single(model: PreTrainedModel,
     # fp32, [bs, seq_len, vocab_size]
     logits = outputs.logits
 
-    # inplace softmax to save memory
-    # probs is logits
-    torch.softmax(logits, dim=-1, out=logits)
+    if not return_logits:
+        # inplace softmax to get probs
+        torch.softmax(logits, dim=-1, out=logits)
 
-    # Shift to fetch probabilities
-    shift_labels = input_ids[..., 1:].contiguous()
-    shift_probs = logits[..., :-1, :].contiguous()
-    probs = torch.gather(shift_probs, -1, shift_labels.unsqueeze(-1))
-
-    probs = probs.squeeze(-1)
+        # Shift to fetch probabilities
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_probs = logits[..., :-1, :].contiguous()
+        logits = torch.gather(shift_probs, -1, shift_labels.unsqueeze(-1))
 
     if attention_mask is not None:
-        probs *= attention_mask[..., 1:]
+        logits *= attention_mask[..., None]
 
-    probs = probs.cpu()
+    logits = logits.cpu()
 
-    return probs
+    return logits
 
 
 def worker_fn(model_path: str,
@@ -111,12 +112,16 @@ def worker_fn(model_path: str,
 
     while True:
         try:
-            idx, input_ids, input_lens = inq.get(timeout=1)
+            idx, args = inq.get(timeout=1)
         except queue.Empty:
             continue
 
-        if input_ids is None:
+        if idx is None:
+            print(f'Worker {gpu_id} received exit signal.')
             break
+
+        # print(args)
+        input_ids, input_lens, *args = args
 
         input_ids = input_ids.cuda(gpu_id)
         max_len = max(input_lens)
@@ -124,14 +129,14 @@ def worker_fn(model_path: str,
             f'input_ids.shape = {input_ids.shape}, max_len = {max_len}'
 
         input_lens = torch.tensor(input_lens, device=gpu_id)
-        attention_mask = torch.arange(
-            max_len, device=gpu_id)[None, :] < input_lens[:, None]
-        # attention_mask = inputs['attention_mask'].cuda(gpu_id)
+        attention_mask = \
+            torch.arange(max_len, device=gpu_id)[None, :] < input_lens[:, None]
 
         assert attention_mask.shape == input_ids.shape, \
             f'attention_mask.shape = {attention_mask.shape}'
+
         try:
-            probs = decode_single(model, input_ids, attention_mask)
+            probs = decode_single(model, input_ids, attention_mask, *args)
         except torch.cuda.OutOfMemoryError:
             warnings.warn(
                 f'OOM on GPU {gpu_id}, discard prompts at indics {idx}.')
@@ -141,6 +146,7 @@ def worker_fn(model_path: str,
 
         outq.put((idx, probs))
 
+    print(f'Exiting worker {gpu_id} ...')
     inq.close()
     outq.close()
     print(f'Worker {gpu_id} finished.')
@@ -214,14 +220,15 @@ class Engine:
                 q.get()
 
     def decode(self,
-               prompt_token_ids: List[List[int]],
+               token_ids: List[List[int]],
                sort=True,
                max_bs: int = 1024,
-               pad=True):
+               pad=True,
+               return_logits=True):
         """Inference the model to compute probabilities.
 
         Args:
-            prompts (List[List[int]]): List of list of token ids.
+            token_ids (List[List[int]]): List of list of token ids.
             sort (bool, optional): Internally sort the prompts by length to achieve better efficiency.
                 Defaults to True.
                 Note: orders of returned probabilities are always the same as the input.
@@ -229,12 +236,12 @@ class Engine:
                 Defaults to 1024.
             pad (bool, optional): Pad the prompts in every mini batch to the same length.
                 Defaults to True. Set to False to save memory.
+            return_logits (bool, optional): Return logits instead of probabilities.
 
         Returns:
-            numpy.ndarray: List of probabilities of all prompts, with prob=0 padded.
-                If pad is True
-            List[numpy.ndarray]: List of probabilities of all prompts without padding.
-                If pad is False, the result if a batch of tensor.
+            numpy.ndarray: Array of logits of shape [bsz, seqlen, vocab_size],
+                with prob=0 padded, if pad is True
+            List[numpy.ndarray]: List of logits without padding, if pad is False.
 
         Note:
             This function will accept input token_ids = [x0(=bos), x1, x2, ..., xn]
@@ -246,23 +253,23 @@ class Engine:
 
         # sort to achieve better efficiency
         if sort:
-            prompts_and_indicis = sorted(enumerate(prompt_token_ids),
-                                         key=lambda i_and_x: len(i_and_x[1]))
+            pids_and_indicis = sorted(enumerate(token_ids),
+                                      key=lambda i_and_x: len(i_and_x[1]))
         else:
-            prompts_and_indicis = list(enumerate(prompt_token_ids))
+            pids_and_indicis = list(enumerate(token_ids))
 
         left = 0
         bs = max_bs
 
-        while left < len(prompt_token_ids):
+        while left < len(token_ids):
 
             if not sort:
                 bs = max_bs
 
-            right = min(left + bs, len(prompt_token_ids))
+            right = min(left + bs, len(token_ids))
 
             # batch of prompts
-            sub_p_and_i = prompts_and_indicis[left:right]
+            sub_p_and_i = pids_and_indicis[left:right]
             idx, sub_p = zip(*sub_p_and_i)
 
             # batch of input_ids and attn_masks
@@ -283,22 +290,22 @@ class Engine:
                 input_ids = input_ids[:bs, :max(input_lens)]
 
             # Send to worker
-            self.inq.put((idx, input_ids, input_lens))
+            self.inq.put((idx, (input_ids, input_lens)))
 
             left += bs
 
             print(
-                f'Distributing prompts {right}/{len(prompt_token_ids)},'
-                f' {right/len(prompt_token_ids):.0%}',
+                f'Distributing prompts {right}/{len(token_ids)},'
+                f' {right/len(token_ids):.0%}',
                 end='\r')
 
         print()
 
         # Collect outputs from workers
-        all_probs = [None] * len(prompt_token_ids)
+        all_probs = [None] * len(token_ids)
         count = 0
 
-        while count < len(prompt_token_ids):
+        while count < len(token_ids):
             idx, probs = self.outq.get()
             for i, p in zip(idx, probs):
                 assert all_probs[i] is None
@@ -307,9 +314,11 @@ class Engine:
             count += len(idx)
             print(
                 f'Decoding and collecting outputs '
-                f'{count}/{len(prompt_token_ids)}, '
-                f'{count/len(prompt_token_ids):.0%}',
+                f'{count}/{len(token_ids)}, '
+                f'{count/len(token_ids):.0%}',
                 end='\r')
+
+        print()
 
         if pad:
             all_probs = pad_sequence(all_probs, batch_first=True)
@@ -322,6 +331,93 @@ class Engine:
     def __del__(self):
         print('Exiting engine ...')
         for _ in self.ps:
-            self.inq.put((None, None, None))
+            self.inq.put((None, None))
         for p in self.ps:
             p.join(timeout=1)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_path',
+                        default='llama2/huggingface/llama-2-7b',
+                        help='Path to HugigngFace model and tokenizer.')
+    parser.add_argument(
+        '--test_path',
+        default='',
+        help='Path to text file, with each line containing a prompt.')
+    parser.add_argument(
+        '-p',
+        '--prompts',
+        nargs='*',
+        default=[
+            'I believe the meaning of life is to find your gift.',
+            'Simply put, the theory of relativity states that',
+            'Building a website can be done in 10 simple steps:'
+        ],
+        help="Prompt in command line, please quote \"\" every sentences, "
+        'surpassed by --test_path')
+    parser.add_argument('--min_len',
+                        default=1,
+                        help='Minimum length of prompts')
+    parser.add_argument('--save-to',
+                        default='decode.out',
+                        help='Save results to this file.')
+    args = parser.parse_args()
+
+    model_path = args.model_path
+    test_path = args.test_path
+    prompts = args.prompts
+
+    logger = logging.getLogger(__name__)
+    # logging.basicConfig(level=logging.DEBUG)
+
+    # Use test file preferentially
+    if test_path:
+        with open(test_path, 'rb') as f:
+            prompts = f.readlines()
+
+    prompts = [p.strip() for p in prompts]
+
+    # Output infos
+    print(f'Model path: {model_path}')
+
+    def _format(ts, start, end):
+        if start < 0:
+            start += len(ts)
+        if end <= 0:
+            end += len(ts)
+        return '\n'.join(
+            (f'{i}\t{t}' for i, t in zip(range(start, end), ts[start:end])))
+
+    if len(prompts) > 10:
+        print('Prompts:\n' + _format(prompts, 0, 5) + '\n......\n' +
+              _format(prompts, -5, 0))
+    else:
+        print('Prompts:\n' + _format(prompts, 0, 0))
+
+    # Init Engine in backend
+    engine = Engine(model_path)
+
+    # Tokenize
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer.padding_side = 'right'
+
+    input_ids = tokenizer(prompts, padding=False)
+    input_ids: List[List[int]] = input_ids.input_ids
+
+    # Filter out too short prompts
+    input_ids = [i for i in input_ids if len(i) >= args.min_len]
+    if len(input_ids) < len(prompts):
+        logger.warning(
+            f'Filtered out {len(prompts) - len(input_ids)} prompts, '
+            f'because they are shorter than {args.min_len}.')
+
+    # Decode
+    logits = engine.decode(input_ids)
+
+    print(f'logits.shape = {logits.shape}')
+    # Save to pth
+    torch.save(logits, args.save_to)
+
+    del engine
