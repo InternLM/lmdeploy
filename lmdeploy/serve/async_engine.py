@@ -188,13 +188,11 @@ class AsyncEngine:
         sequence_start = False
         generator = await self.get_generator(instance_id)
         self.available[instance_id] = False
-        if renew_session and str(session_id) in self.steps and self.steps[str(
-                session_id)] > 0:  # renew a session
-            empty_prompt = self.model.messages2prompt('', False)
-            empty_input_ids = self.tokenizer.encode(empty_prompt)
+        if renew_session:  # renew a session
+            empty_input_ids = self.tokenizer.encode('')
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=[empty_input_ids],
-                                                  request_output_len=1,
+                                                  request_output_len=0,
                                                   sequence_start=False,
                                                   sequence_end=True):
                 pass
