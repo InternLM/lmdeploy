@@ -106,11 +106,22 @@ curl http://{server_name}:{server_port}/v1/embeddings \
   }'
 ```
 
+### CLI client
+
+There is a client script for restful api server.
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+python -m lmdeploy.serve.openai.api_client restful_api_url
+```
+
 ### webui
 
 You can also test restful-api through webui.
 
 ```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# server_name here is for gradio ui
 python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
 ```
 

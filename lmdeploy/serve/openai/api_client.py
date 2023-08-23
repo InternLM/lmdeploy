@@ -57,7 +57,7 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def main(server_name: str, server_port: int, session_id: int = 0):
+def main(restful_api_url: str, session_id: int = 0):
     nth_round = 1
     while True:
         prompt = input_prompt()
@@ -66,7 +66,7 @@ def main(server_name: str, server_port: int, session_id: int = 0):
         else:
             for output, tokens, finish_reason in get_streaming_response(
                     prompt,
-                    f'http://{server_name}:{server_port}/generate',
+                    f'{restful_api_url}/generate',
                     instance_id=session_id,
                     request_output_len=512,
                     sequence_start=(nth_round == 1),
