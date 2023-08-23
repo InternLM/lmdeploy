@@ -62,6 +62,9 @@ class Scheduler:
 
         # push message to waiting queue
         message.status = MessageStatus.WAITING
+        if message.max_request_output_len == 0:
+            message.max_request_output_len = \
+                self.scheduler_config.max_request_output_len
         self.waiting.append(message)
 
     def _schedule(self):
@@ -126,6 +129,9 @@ class Scheduler:
             enable_running = False
             if self.block_manager.get_block_table(session):
                 if self.block_manager.can_append_slot(session):
+                    msg_length = len(msg.token_ids)
+                    block_size = self.cache_config.block_size
+                    session.append_tokens(msg_length + 1, block_size)
                     self.block_manager.append_slot(session)
                     enable_running = True
             else:

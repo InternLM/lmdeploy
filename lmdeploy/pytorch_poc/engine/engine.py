@@ -1,14 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import enum
 import itertools
+import time
 from dataclasses import dataclass, field
-from typing import List
+from queue import Queue
+from threading import Thread
+from typing import Any, Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM
 
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
-from lmdeploy.pytorch_poc.messages import SchedulerMessage, SchedulerSession
+from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
+                                           SchedulerMessage, SchedulerSession)
 from lmdeploy.pytorch_poc.paging import BlockTable, Scheduler
 from lmdeploy.pytorch_poc.patch import patch
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
@@ -19,25 +24,46 @@ from .cache_engine import CacheEngine
 logger = get_logger('lmdeploy')
 
 
-class SamplingParam:
+class RequestType(enum.Enum):
+    ADD_SESSION = enum.auto()
+    ADD_MESSAGE = enum.auto()
+    STOP_SESSION = enum.auto()
+    END_SESSION = enum.auto()
+    STOP_ENGINE = enum.auto()
+    RESUME_ENGINE = enum.auto()
 
-    def __init__(self,
-                 top_p: float = 0.8,
-                 top_k: int = None,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
-                 ignore_eos: bool = False,
-                 random_seed: int = None,
-                 stop_words: List[int] = None,
-                 bad_words: List[int] = None):
-        self.top_p = top_p
-        self.top_k = top_k
-        self.temperature = temperature
-        self.repetition_penalty = repetition_penalty
-        self.ignore_eos = ignore_eos
-        self.random_seed = random_seed
-        self.stop_words = stop_words
-        self.bad_words = bad_words
+
+class ResponseType(enum.Enum):
+    SUCCESS = enum.auto()
+    FINISH = enum.auto()
+    ENGINE_STOP_ERROR = enum.auto()
+    REPEAT_ERROR = enum.auto()
+    NOT_EXIST_ERROR = enum.auto()
+
+
+@dataclass
+class Request:
+    type: RequestType
+    resp: Queue
+    req_id: int
+    data: Any = None
+
+
+@dataclass
+class Response:
+    type: ResponseType
+    req_id: int
+    data: Any = None
+    err_msg: str = ''
+
+
+@dataclass
+class InferOutput:
+    session_id: int
+    token_ids: List[int]
+    req_id: int = 0
+    finish: bool = False
+    logits: torch.Tensor = None
 
 
 @dataclass
@@ -132,26 +158,35 @@ class Engine:
         hf_config = hf_model.config
 
         if scheduler_config is None:
-            scheduler_config = SchedulerConfig(max_batches=64,
-                                               max_session_len=2048,
-                                               max_request_output_len=512)
+            scheduler_config = SchedulerConfig(
+                max_batches=64,
+                max_session_len=2048,
+                max_request_output_len=512)
         if cache_config is None:
-            cache_config = CacheConfig(block_size=64,
-                                       num_cpu_blocks=0,
-                                       num_gpu_blocks=0)
-        model_config = ModelConfig(hf_config.hidden_size,
-                                   hf_config.num_hidden_layers,
-                                   hf_config.num_attention_heads,
-                                   bos_token_id=hf_config.bos_token_id,
-                                   eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch.float32)
+            cache_config = CacheConfig(
+                block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
+        model_config = ModelConfig(
+            hf_config.hidden_size,
+            hf_config.num_hidden_layers,
+            hf_config.num_attention_heads,
+            bos_token_id=hf_config.bos_token_id,
+            eos_token_id=hf_config.eos_token_id,
+            dtype=torch.float32)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.model_config = model_config
+        self.session_len = scheduler_config.max_session_len
 
         self.init_cache_engine(model_config, cache_config)
         self.scheduler = Scheduler(scheduler_config, cache_config)
+
+        self.requests = Queue(scheduler_config.max_batches)
+
+        # create main thread
+        loop_threads = Thread(target=self.loop, daemon=True)
+        loop_threads.start()
+        self.loop_threads = loop_threads
 
     def init_cache_engine(self, model_config: ModelConfig,
                           cache_config: CacheConfig):
@@ -178,7 +213,7 @@ class Engine:
         Returns:
             EngineInstance: an instance of turbomind
         """
-        return EngineInstance(self, cuda_stream_id)
+        return EngineInstance(self)
 
     def add_session(self, session: SchedulerSession):
         self.scheduler.add_session(session)
@@ -211,12 +246,13 @@ class Engine:
 
         block_tables = self.scheduler.get_block_tables(messages)
 
-        return dict(input_ids=input_ids,
-                    seq_length=seq_length,
-                    attention_mask=attention_mask,
-                    block_tables=block_tables,
-                    past_key_values=self.cache_engine.gpu_cache,
-                    position_ids=position_ids)
+        return dict(
+            input_ids=input_ids,
+            seq_length=seq_length,
+            attention_mask=attention_mask,
+            block_tables=block_tables,
+            past_key_values=self.cache_engine.gpu_cache,
+            position_ids=position_ids)
 
     def stop_session(self, session_id: int):
         self.scheduler.stop_session(session_id)
@@ -228,12 +264,17 @@ class Engine:
 
     def _stoping_criteria(self, msg: SchedulerMessage, next_token_id: int):
         # check eof
-        if next_token_id == self.model_config.eos_token_id:
+        sampling_param = msg.sampling_param
+        if not sampling_param.ignore_eos:
+            if next_token_id == self.model_config.eos_token_id:
+                return True
+
+        if (sampling_param.stop_words is not None
+                and next_token_id in sampling_param.stop_words):
             return True
 
         # check request_len
-        if (msg.request_output_len >=
-                self.scheduler_config.max_request_output_len):
+        if (msg.request_output_len >= msg.max_request_output_len):
             return True
 
         # check session len
@@ -258,6 +299,7 @@ class Engine:
 
         sessions = self.scheduler.get_sessions(running)
         session_ids = [msg.session_id for msg in running]
+        req_ids = [msg.req_id for msg in running]
         history_lengths = [sess.history_length for sess in sessions]
 
         # swap in/out
@@ -284,8 +326,9 @@ class Engine:
         # inference
         with torch.no_grad():
             # setup context
-            self.context(block_tables=inputs['block_tables'],
-                         history_lengths=history_lengths)
+            self.context(
+                block_tables=inputs['block_tables'],
+                history_lengths=history_lengths)
 
             # forward
             hf_outputs = self.patched_model(
@@ -313,43 +356,182 @@ class Engine:
                 self.stop_session(msg.session_id)
         self.scheduler.update()
 
-        outputs = dict(zip(session_ids, next_token_ids))
+        outputs: Dict[int, InferOutput] = dict()
+        for idx in range(len(session_ids)):
+            session_id = session_ids[idx]
+            msg = running[idx]
+            out = InferOutput(
+                session_id=session_id,
+                req_id=req_ids[idx],
+                finish=(msg.status == MessageStatus.STOPPED),
+                token_ids=[next_token_ids[idx]])
+            outputs[session_id] = out
 
         if return_logits:
-            import pdb
-            pdb.set_trace()
             seq_length = inputs['seq_length']
             accum_seq_length = seq_length.cumsum(0)
             split_logits = [
                 logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
             ]
-            logits_outputs = dict(zip(session_ids, split_logits))
-            return outputs, logits_outputs
-        else:
-            return outputs, None
+
+            for idx in range(len(session_ids)):
+                outputs[session_ids[idx]].logits = split_logits[idx]
+
+        return outputs
 
     def infer(self, return_logits: bool = False):
-        ret_tokens = dict()
-        ret_logits = None if not return_logits else dict()
+        ret_tokens: Dict[int, InferOutput] = dict()
         while self.scheduler.has_unfinished():
-            out_tokens, out_logits = self.step(return_logits)
-            for session_id in out_tokens:
+            outputs = self.step(return_logits)
+            for session_id, out in outputs.items():
                 if session_id not in ret_tokens:
-                    ret_tokens[session_id] = []
+                    # TODO: check if req_id is different
+                    ret_tokens[session_id] = InferOutput(
+                        session_id=session_id, req_id=out.req_id, token_ids=[])
 
-                ret_tokens[session_id].append(out_tokens[session_id])
+                ret_tokens[session_id].token_ids += out.token_ids
 
                 if return_logits:
-                    if session_id not in ret_logits:
-                        ret_logits[session_id] = []
-                    ret_logits[session_id].append(out_tokens[session_id])
+                    if ret_tokens[session_id].logits is None:
+                        ret_tokens[session_id].logits = []
+                    ret_tokens[session_id].logits.append(out.logits)
 
         if return_logits:
-            for session_id in ret_logits:
-                ret_logits[session_id] = torch.cat(ret_logits[session_id],
-                                                   dim=0)
+            for out in ret_tokens.values():
+                out.logits = torch.cat(out.logits, dim=0)
 
-        return ret_tokens, ret_logits
+        return ret_tokens
+
+    def decode(self, prompt_token_ids: List[List[int]]):
+        assert not self.scheduler.has_unfinished()
+
+        if len(self.scheduler.sessions) > 0:
+            logger.warning(
+                'Unreleased session might leads to low performance.')
+
+        session_id = 1
+        sessions: List[SchedulerSession] = []
+        while len(sessions) < len(prompt_token_ids):
+            while session_id in self.scheduler.sessions:
+                session_id += 1
+            sess = SchedulerSession(session_id)
+            sessions.append(sess)
+            self.add_session(sess)
+
+        msgs: List[SchedulerMessage] = []
+        for token_ids, sess in zip(prompt_token_ids, sessions):
+            msg = SchedulerMessage(
+                token_ids=token_ids, session_id=sess.session_id)
+            msgs.append(msg)
+            self.scheduler.add_message(msg)
+
+        outputs = self.step(True)
+
+        logits = dict((k, out.logits) for k, out in outputs.items())
+
+        for sess in sessions:
+            self.end_session(sess.session_id)
+
+        split_logits = [logits[sess.session_id] for sess in sessions]
+        pad_sequence = torch.nn.utils.rnn.pad_sequence
+        logits = pad_sequence(split_logits, True)
+
+        return logits
+
+    def loop(self):
+
+        out_ques: Dict[int, Queue] = dict()
+
+        def _session_exist(session_id: int,
+                           req: Request,
+                           resp_if_exist: bool = False,
+                           resp_if_not_exist: bool = False):
+            if session_id in self.scheduler.sessions:
+                if resp_if_exist:
+                    req.resp.put(
+                        Response(ResponseType.REPEAT_ERROR, req_id=req.req_id))
+                return True
+            else:
+                if resp_if_not_exist:
+                    req.resp.put(
+                        Response(
+                            ResponseType.NOT_EXIST_ERROR, req_id=req.req_id))
+                return False
+
+        while True:
+            # get all requests
+            num_requests = self.requests.qsize()
+
+            if num_requests == 0 and not self.scheduler.has_unfinished():
+                time.sleep(1)
+                continue
+
+            reqs: List[Request] = []
+            tmp = num_requests
+            while tmp:
+                tmp -= 1
+                reqs.append(self.requests.get())
+
+            # gather requests
+            reqs_by_type: Dict[RequestType, Request] = dict(
+                (t, []) for t in RequestType)
+            for req in reqs:
+                reqs_by_type[req.type].append(req)
+
+            # stop engine
+            if len(reqs_by_type[RequestType.STOP_ENGINE]) > 0:
+                for v in self.out_ques.values():
+                    v.put(Response(ResponseType.ENGINE_STOP_ERROR))
+                return
+
+            # stop session
+            stop_session_reqs: List[Request] = reqs_by_type[
+                RequestType.STOP_SESSION]
+            for req in stop_session_reqs:
+                session_id = req.data['session_id']
+                if _session_exist(session_id, req, resp_if_not_exist=True):
+                    self.stop_session(session_id)
+
+            # end session
+            end_session_reqs: List[Request] = reqs_by_type[
+                RequestType.END_SESSION]
+            for req in end_session_reqs:
+                session_id = req.data['session_id']
+                if _session_exist(session_id, req, resp_if_not_exist=True):
+                    self.end_session(session_id)
+                    out_ques.pop(session_id)
+
+            # add session
+            add_session_reqs: List[Request] = reqs_by_type[
+                RequestType.ADD_SESSION]
+            for req in add_session_reqs:
+                session = req.data['session']
+                session_id = session.session_id
+                if not _session_exist(session_id, req, resp_if_exist=True):
+                    self.add_session(session)
+                    out_ques[session_id] = req.resp
+
+            # add message
+            add_msg_reqs: List[Request] = reqs_by_type[RequestType.ADD_MESSAGE]
+            for req in add_msg_reqs:
+                msg: SchedulerMessage = req.data['message']
+                session_id = msg.session_id
+                if not _session_exist(session_id, req, resp_if_not_exist=True):
+                    continue
+                else:
+                    self.add_message(msg)
+
+            # forward
+            step_tokens: Dict[int, InferOutput] = self.step()
+            for session_id, out in step_tokens.items():
+                resp_type = (
+                    ResponseType.FINISH
+                    if out.finish else ResponseType.SUCCESS)
+                out_ques[session_id].put(
+                    Response(
+                        type=resp_type,
+                        req_id=out.req_id,
+                        data=dict(token_ids=out.token_ids)))
 
 
 class EngineInstance:
@@ -360,10 +542,26 @@ class EngineInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, engine, cuda_stream_id=0):
+    def __init__(self, engine: Engine):
         self.engine = engine
-        self.patched_model = engine.patched_model
-        self.scheduler = engine.scheduler
+        self.response = Queue()
+        self.req_id = 0
+        self.session_map: Dict[int, SchedulerSession] = dict()
+
+    def _send_req(self, req_type: RequestType, data: Any):
+        self.engine.requests.put(
+            Request(
+                type=req_type,
+                resp=self.response,
+                req_id=self.req_id,
+                data=data))
+        self.req_id += 1
+
+    def _try_add_session(self, session_id: int):
+        if session_id not in self.session_map:
+            session = SchedulerSession(session_id=session_id)
+            self._send_req(RequestType.ADD_SESSION, dict(session=session))
+            self.session_map[session_id] = session
 
     def stream_infer(self,
                      session_id: int,
@@ -371,4 +569,88 @@ class EngineInstance:
                      request_output_len: int = None,
                      step: int = 0,
                      sampling_param: SamplingParam = SamplingParam()):
-        pass
+        self._try_add_session(session_id)
+        req_id = self.req_id
+        msg = SchedulerMessage(
+            token_ids=prompt_token_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            req_id=req_id,
+            sampling_param=sampling_param)
+        self._send_req(RequestType.ADD_MESSAGE, dict(message=msg))
+
+        token_ids = []
+        while True:
+            if not self.engine.loop_threads.is_alive():
+                yield (1, [], 0)
+                break
+
+            resp: Response = self.response.get()
+            if resp.req_id != req_id:
+                continue
+            if resp.type == ResponseType.SUCCESS:
+                token_ids += resp.data['token_ids']
+                yield (0, token_ids, len(token_ids))
+            elif resp.type == ResponseType.FINISH:
+                token_ids += resp.data['token_ids']
+                yield (0, token_ids, len(token_ids))
+                break
+            else:
+                yield (1, [], 0)
+                break
+
+    def infer(self,
+              session_id: int,
+              prompt_token_ids: List[int] = None,
+              request_output_len: int = None,
+              step: int = 0,
+              sampling_param: SamplingParam = SamplingParam()):
+        self._try_add_session(session_id)
+        req_id = self.req_id
+        msg = SchedulerMessage(
+            token_ids=prompt_token_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            req_id=req_id,
+            sampling_param=sampling_param)
+        self._send_req(RequestType.ADD_MESSAGE, dict(message=msg))
+
+        token_ids = []
+        status = 0
+        while True:
+            if not self.engine.loop_threads.is_alive():
+                status = 1
+                break
+
+            resp: Response = self.response.get()
+            if resp.req_id != req_id:
+                continue
+            if resp.type == ResponseType.SUCCESS:
+                token_ids += resp.data['token_ids']
+            elif resp.type == ResponseType.FINISH:
+                token_ids += resp.data['token_ids']
+                break
+            else:
+                status = 1
+                break
+
+        return (status, token_ids, len(token_ids))
+
+    def end(self, session_id: int):
+        self._send_req(RequestType.END_SESSION, dict(session_id=session_id))
+        self.session_map.pop(session_id)
+
+    def cancel(self, session_id: int):
+        self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
+
+    def decode(self, prompt_token_ids: List[List[int]]):
+        """Return logits of context decoding.
+
+        Args:
+            prompt_token_ids: token ids of a batch prompts.
+
+        Returns:
+            logits (numpy.ndarray) with shape
+                [batch, n_max_token_of_the_batch, vocab_size]
+        """
+        return self.engine.decode(prompt_token_ids)

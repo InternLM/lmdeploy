@@ -1,9 +1,30 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
-from typing import Any, Sequence
+from dataclasses import dataclass, field
+from typing import Any, List, Sequence
 
 from lmdeploy.pytorch_poc.block import LogicalTokenBlock
+
+
+class SamplingParam:
+
+    def __init__(self,
+                 top_p: float = 0.8,
+                 top_k: int = None,
+                 temperature: float = 0.8,
+                 repetition_penalty: float = 1.0,
+                 ignore_eos: bool = False,
+                 random_seed: int = None,
+                 stop_words: List[int] = None,
+                 bad_words: List[int] = None):
+        self.top_p = top_p
+        self.top_k = top_k
+        self.temperature = temperature
+        self.repetition_penalty = repetition_penalty
+        self.ignore_eos = ignore_eos
+        self.random_seed = random_seed
+        self.stop_words = stop_words
+        self.bad_words = bad_words
 
 
 class MessageStatus(enum.Enum):
@@ -54,5 +75,8 @@ class SchedulerMessage:
     token_ids: Sequence
     session_id: int
     status: MessageStatus = MessageStatus.WAITING
+    max_request_output_len: int = 0
     request_output_len: int = 0
     meta: Any = None
+    req_id: int = 0
+    sampling_param: SamplingParam = field(default_factory=SamplingParam)
