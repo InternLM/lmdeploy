@@ -9,11 +9,10 @@ RUN python3 -m pip install --no-cache-dir cmake
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
-ARG COMMIT_ID=main
+ARG VERSION=main
 
-RUN git clone --depth=1 https://github.com/InternLM/lmdeploy.git &&\
+RUN git clone --depth=1 --branch=${VERSION} https://github.com/InternLM/lmdeploy.git &&\
     cd lmdeploy &&\
-    git checkout ${COMMIT_ID} &&\
     python3 -m pip install --no-cache-dir -r requirements.txt &&\
     mkdir -p build && cd build &&\
     cmake .. \

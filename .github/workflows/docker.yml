@@ -3,6 +3,7 @@ name: publish-docker
 on:
   push:
     paths-ignore:
+      - "!.github/workflows/docker.yml"
       - ".github/**"
       - "docs/**"
       - "resources/**"
@@ -16,23 +17,33 @@ on:
 
 jobs:
   publish_docker_image:
-    runs-on: [self-hosted, linux-3090]
+    runs-on: ubuntu-latest
     environment: 'prod'
     env:
       TAG_PREFIX: "openmmlab/lmdeploy"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      - name: Get lmdeploy commit id
+      - name: Check disk space
         run: |
-          export commit_id=$(git log --format="%H" -n 1)
-          echo "commit id = $commit_id"
-          echo "COMMIT_ID=$commit_id" >> $GITHUB_ENV
+          rm -rf ${GITHUB_WORKSPACE}/.git
+          cat /proc/cpuinfo  | grep -ic proc
+          free
+          df -h
+          df . -h
+      - name: Get docker info
+        run: |
+          docker info
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push the latest Docker image
         run: |
           export TAG=$TAG_PREFIX:latest
           echo $TAG
-          docker build docker/ -t ${TAG} --build-arg COMMIT_ID=${COMMIT_ID}
+          docker build docker/ -t ${TAG} --no-cache
           docker push $TAG
           echo "TAG=${TAG}" >> $GITHUB_ENV
       - name: Push docker image with released tag
