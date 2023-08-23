@@ -418,6 +418,8 @@ if __name__ == '__main__':
 
     print(f'logits.shape = {logits.shape}')
     # Save to pth
-    torch.save(logits, args.save_to)
+    print(f'Dumping results to = {args.save_to}')
+
+    torch.save(logits, args.save_to, pickle_protocol=4)
 
     del engine
