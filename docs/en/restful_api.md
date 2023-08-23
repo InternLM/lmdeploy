@@ -121,7 +121,8 @@ You can also test restful-api through webui.
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_name here is for gradio ui
+# server_name and server_port here are for gradio ui
+# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
 python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
 ```
 

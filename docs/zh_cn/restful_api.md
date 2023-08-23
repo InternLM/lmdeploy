@@ -122,7 +122,8 @@ python -m lmdeploy.serve.openai.api_client restful_api_url
 
 ```shell
 # restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-# server_name 是用来提供 gradio ui 访问服务的
+# server_name 和 server_port 是用来提供 gradio ui 访问服务的
+# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
 python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
 ```
 
