@@ -133,6 +133,32 @@ python3 -m lmdeploy.serve.gradio.app ./workspace
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
+#### 通过 Restful API 部署服务
+
+使用下面的命令启动推理服务：
+
+```shell
+python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+```
+
+你可以通过命令行方式与推理服务进行对话：
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+python -m lmdeploy.serve.openai.api_client restful_api_url
+```
+
+也可以通过 WebUI 方式来对话：
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# server_ip and server_port here are for gradio ui
+# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
+python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+```
+
+更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。
+
 #### 通过容器部署推理服务
 
 使用下面的命令启动推理服务：

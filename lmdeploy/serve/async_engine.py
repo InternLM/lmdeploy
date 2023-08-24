@@ -3,11 +3,11 @@ import asyncio
 import dataclasses
 import os.path as osp
 import random
+from contextlib import contextmanager
 from typing import Literal, Optional
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS, BaseModel
-from lmdeploy.turbomind.tokenizer import Tokenizer
 
 
 @dataclasses.dataclass
@@ -30,6 +30,7 @@ class AsyncEngine:
     """
 
     def __init__(self, model_path, instance_num=32, tp=1) -> None:
+        from lmdeploy.turbomind.tokenizer import Tokenizer
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
@@ -46,15 +47,22 @@ class AsyncEngine:
         self.starts = [None] * instance_num
         self.steps = {}
 
+    @contextmanager
+    def safe_run(self, instance_id: int, stop: bool = False):
+        self.available[instance_id] = False
+        yield
+        self.available[instance_id] = True
+
     async def get_embeddings(self, prompt):
         prompt = self.model.get_prompt(prompt)
         input_ids = self.tokenizer.encode(prompt)
         return input_ids
 
-    async def get_generator(self, instance_id):
+    async def get_generator(self, instance_id: int, stop: bool = False):
         """Only return the model instance if it is available."""
-        while self.available[instance_id] is False:
-            await asyncio.sleep(0.1)
+        if not stop:
+            while self.available[instance_id] is False:
+                await asyncio.sleep(0.1)
         return self.generators[instance_id]
 
     async def generate(
@@ -104,43 +112,43 @@ class AsyncEngine:
         prompt = self.model.messages2prompt(messages, sequence_start)
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
-        if self.steps[str(session_id)] + len(
+        if not sequence_end and self.steps[str(session_id)] + len(
                 input_ids) >= self.tm_model.session_len:
             finish_reason = 'length'
             yield GenOut('', self.steps[str(session_id)], len(input_ids), 0,
                          finish_reason)
         else:
-            generator = await self.get_generator(instance_id)
-            self.available[instance_id] = False
-            response_size = 0
-            async for outputs in generator.async_stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    stream_output=stream_response,
-                    request_output_len=request_output_len,
-                    sequence_start=(sequence_start),
-                    sequence_end=sequence_end,
-                    step=self.steps[str(session_id)],
-                    stop=stop,
-                    top_k=top_k,
-                    top_p=top_p,
-                    temperature=temperature,
-                    repetition_penalty=repetition_penalty,
-                    ignore_eos=ignore_eos,
-                    random_seed=seed if sequence_start else None):
-                res, tokens = outputs[0]
-                # decode res
-                response = self.tokenizer.decode(res[response_size:])
-                # response, history token len, input token len, gen token len
-                yield GenOut(response, self.steps[str(session_id)],
-                             len(input_ids), tokens, finish_reason)
-                response_size = tokens
+            generator = await self.get_generator(instance_id, stop)
+            with self.safe_run(instance_id):
+                response_size = 0
+                async for outputs in generator.async_stream_infer(
+                        session_id=session_id,
+                        input_ids=[input_ids],
+                        stream_output=stream_response,
+                        request_output_len=request_output_len,
+                        sequence_start=(sequence_start),
+                        sequence_end=sequence_end,
+                        step=self.steps[str(session_id)],
+                        stop=stop,
+                        top_k=top_k,
+                        top_p=top_p,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
+                        ignore_eos=ignore_eos,
+                        random_seed=seed if sequence_start else None):
+                    res, tokens = outputs[0]
+                    # decode res
+                    response = self.tokenizer.decode(res)[response_size:]
+                    # response, history token len,
+                    # input token len, gen token len
+                    yield GenOut(response, self.steps[str(session_id)],
+                                 len(input_ids), tokens, finish_reason)
+                    response_size += len(response)
 
-            # update step
-            self.steps[str(session_id)] += len(input_ids) + tokens
-            if sequence_end:
-                self.steps[str(session_id)] = 0
-            self.available[instance_id] = True
+                # update step
+                self.steps[str(session_id)] += len(input_ids) + tokens
+                if sequence_end or stop:
+                    self.steps[str(session_id)] = 0
 
     async def generate_openai(
         self,
@@ -180,13 +188,11 @@ class AsyncEngine:
         sequence_start = False
         generator = await self.get_generator(instance_id)
         self.available[instance_id] = False
-        if renew_session and str(session_id) in self.steps and self.steps[str(
-                session_id)] > 0:  # renew a session
-            empty_prompt = self.model.messages2prompt('', False)
-            empty_input_ids = self.tokenizer.encode(empty_prompt)
+        if renew_session:  # renew a session
+            empty_input_ids = self.tokenizer.encode('')
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=[empty_input_ids],
-                                                  request_output_len=1,
+                                                  request_output_len=0,
                                                   sequence_start=False,
                                                   sequence_end=True):
                 pass

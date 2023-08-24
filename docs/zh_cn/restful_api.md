@@ -5,10 +5,10 @@
 运行脚本
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_name server_port --instance_num 32 --tp 1
+python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --instance_num 32 --tp 1
 ```
 
-然后用户可以打开 swagger UI: http://{server_name}:{server_port}/docs 详细查看所有的 API 及其使用方法。
+然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
 我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
@@ -52,15 +52,29 @@ def get_streaming_response(prompt: str,
 
 
 for output, tokens in get_streaming_response(
-        "Hi, how are you?", "http://{server_name}:{server_port}/generate", 0,
+        "Hi, how are you?", "http://{server_ip}:{server_port}/generate", 0,
         512):
     print(output, end='')
 ```
 
-### Golang/Rust
+### Java/Golang/Rust
 
-Golang 也可以建立 http 请求使用启动的服务，用户可以参考[这篇博客](https://pkg.go.dev/net/http)构建自己的客户端。
-Rust 也有许多[方法](https://blog.logrocket.com/best-rust-http-client/)构建客户端，使用服务。
+可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
+下面是一个使用示例：
+
+```shell
+$ docker run -it --rm -v ${PWD}:/local openapitools/openapi-generator-cli generate -i /local/openapi.json -g rust -o /local/rust
+
+$ ls rust/*
+rust/Cargo.toml  rust/git_push.sh  rust/README.md
+
+rust/docs:
+ChatCompletionRequest.md  EmbeddingsRequest.md  HttpValidationError.md  LocationInner.md  Prompt.md
+DefaultApi.md             GenerateRequest.md    Input.md                Messages.md       ValidationError.md
+
+rust/src:
+apis  lib.rs  models
+```
 
 ### cURL
 
@@ -69,13 +83,13 @@ cURL 也可以用于查看 API 的输出结果
 查看模型列表：
 
 ```bash
-curl http://{server_name}:{server_port}/v1/models
+curl http://{server_ip}:{server_port}/v1/models
 ```
 
 使用 generate:
 
 ```bash
-curl http://{server_name}:{server_port}/generate \
+curl http://{server_ip}:{server_port}/generate \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
@@ -88,7 +102,7 @@ curl http://{server_name}:{server_port}/generate \
 Chat Completions:
 
 ```bash
-curl http://{server_name}:{server_port}/v1/chat/completions \
+curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
@@ -99,12 +113,32 @@ curl http://{server_name}:{server_port}/v1/chat/completions \
 Embeddings:
 
 ```bash
-curl http://{server_name}:{server_port}/v1/embeddings \
+curl http://{server_ip}:{server_port}/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
     "input": "Hello world!"
   }'
+```
+
+### CLI client
+
+restful api 服务可以通过客户端测试，例如
+
+```shell
+# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
+python -m lmdeploy.serve.openai.api_client restful_api_url
+```
+
+### webui
+
+也可以直接用 webui 测试使用 restful-api。
+
+```shell
+# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
+# server_ip 和 server_port 是用来提供 gradio ui 访问服务的
+# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
+python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 ```
 
 ### FAQ

@@ -189,11 +189,12 @@ class EmbeddingsResponse(BaseModel):
 
 class GenerateRequest(BaseModel):
     """Generate request."""
-    prompt: str
+    prompt: Union[str, List[Dict[str, str]]]
     instance_id: int = -1
     sequence_start: bool = True
     sequence_end: bool = False
     stream: bool = False
+    stop: bool = False
     request_output_len: int = 512
     top_p: float = 0.8
     top_k: int = 40

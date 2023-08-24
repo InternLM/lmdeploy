@@ -133,6 +133,32 @@ python3 -m lmdeploy.serve.gradio.app ./workspace
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
 
+#### Serving with Restful API
+
+Launch inference server by:
+
+```shell
+python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+```
+
+Then, you can communicate with it by command line,
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+python -m lmdeploy.serve.openai.api_client restful_api_url
+```
+
+or webui,
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# server_ip and server_port here are for gradio ui
+# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
+python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+```
+
+Refer to [restful_api.md](docs/en/restful_api.md) for more details.
+
 #### Serving with Triton Inference Server
 
 Launch inference server by:

@@ -6,6 +6,15 @@ import fire
 import requests
 
 
+def get_model_list(api_url: str):
+    response = requests.get(api_url)
+    if hasattr(response, 'text'):
+        model_list = json.loads(response.text)
+        model_list = model_list.pop('data', [])
+        return [item['id'] for item in model_list]
+    return None
+
+
 def get_streaming_response(prompt: str,
                            api_url: str,
                            instance_id: int,
@@ -13,7 +22,8 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            sequence_start: bool = True,
                            sequence_end: bool = True,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
+                           ignore_eos: bool = False,
+                           stop: bool = False) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
     pload = {
         'prompt': prompt,
@@ -22,7 +32,8 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'sequence_start': sequence_start,
         'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
+        'ignore_eos': ignore_eos,
+        'stop': stop
     }
     response = requests.post(api_url,
                              headers=headers,
@@ -33,9 +44,9 @@ def get_streaming_response(prompt: str,
                                      delimiter=b'\0'):
         if chunk:
             data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            finish_reason = data['finish_reason']
+            output = data.pop('text', '')
+            tokens = data.pop('tokens', 0)
+            finish_reason = data.pop('finish_reason', None)
             yield output, tokens, finish_reason
 
 
@@ -46,7 +57,7 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def main(server_name: str, server_port: int, session_id: int = 0):
+def main(restful_api_url: str, session_id: int = 0):
     nth_round = 1
     while True:
         prompt = input_prompt()
@@ -55,7 +66,7 @@ def main(server_name: str, server_port: int, session_id: int = 0):
         else:
             for output, tokens, finish_reason in get_streaming_response(
                     prompt,
-                    f'http://{server_name}:{server_port}/generate',
+                    f'{restful_api_url}/generate',
                     instance_id=session_id,
                     request_output_len=512,
                     sequence_start=(nth_round == 1),
