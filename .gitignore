@@ -64,3 +64,10 @@ work_dir*/
 *.sh~
 *.pyc
 **/src/pytorch-sphinx-theme/
+
+# Outputs and logs
+*.txt
+*.log
+*.out
+*.csv
+*.pkl
