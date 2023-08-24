@@ -48,3 +48,9 @@ export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 ## 服务
 
 ## 量化
+
+### RuntimeError: \[enforce fail at inline_container.cc:337\] . unexpected pos 4566829760 vs 4566829656
+
+请检查你的硬盘空间。
+
+这个错误是因为保存权重时硬盘空间不足导致的，在量化 70B 模型时可能会遇到

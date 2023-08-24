@@ -210,7 +210,7 @@ python3 -m lmdeploy.lite.apis.calibrate \
 
 #### Weight INT4 Quantization
 
-LMDeploy uses AWQ algorithm for model weight quantization
+LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
 
 > Requires input from the $WORK_DIR of step 1, and the quantized weights will also be stored in this folder.
 
