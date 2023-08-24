@@ -147,11 +147,22 @@ def export(model_name: str,
     attn_bias = False
     inter_size = 0
 
+    tok_embeddings = model_params['tok_embeddings.weight']
+    _vocab_size, dim = tok_embeddings.shape
+    head_num = dim // size_per_head
+    if _vocab_size % tp != 0:
+        # Resolve https://github.com/InternLM/lmdeploy/issues/266
+        # Pad tok_embeddings and output weights, making their shape divisible by TP # noqa: E501
+        pad_size = (_vocab_size + tp - 1) // tp * tp - _vocab_size
+        # Pad weight at the bottom of dim 0
+        model_params['tok_embeddings.weight'] = torch.nn.functional.pad(
+            tok_embeddings, (0, 0, 0, pad_size), 'constant', 0)
+        # Pad output weight at the bottom of dim 0
+        model_params['output.weight'] = torch.nn.functional.pad(
+            model_params['output.weight'], (0, 0, 0, pad_size), 'constant', 0)
+
     # reverse the splitting axes since the weights are transposed above
     for param_name, param_data in model_params.items():
-        if param_name == 'tok_embeddings.weight':
-            _vocab_size, dim = param_data.shape
-            head_num = dim // size_per_head
         split_dim = None
         key, ext = param_name.split('.')[-2:]
         if key == 'w_qkv' and ext == 'bias':

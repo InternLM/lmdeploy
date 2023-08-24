@@ -37,11 +37,16 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
     hidden_units_(head_num * size_per_head),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
+    vocab_size_padded_(vocab_size),
     num_layer_(num_layer),
     weight_type_(weight_type),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
+    if (vocab_size_padded_ % tensor_para_size_ != 0) {
+        vocab_size_padded_ = (vocab_size_padded_ + tensor_para_size_ - 1) / tensor_para_size_ * tensor_para_size_;
+        TM_LOG_WARNING("pad vocab size from %d to %d", vocab_size_, vocab_size_padded_);
+    }
     decoder_layer_weights.reserve(num_layer_);
     for (unsigned l = 0; l < num_layer_; ++l) {
         decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(head_num,
@@ -72,9 +77,9 @@ LlamaWeight<T>::~LlamaWeight()
 template<typename T>
 void LlamaWeight<T>::mallocWeights()
 {
-    deviceMalloc((T**)&pre_decoder_embedding_table, vocab_size_ * hidden_units_);
+    deviceMalloc((T**)&pre_decoder_embedding_table, vocab_size_padded_ * hidden_units_);
     deviceMalloc((T**)&output_norm_weight, hidden_units_);
-    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_);
+    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_);
 }
 
 template<typename T>
@@ -84,14 +89,14 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
     dir_path += '/';
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,
-                      {vocab_size_ * hidden_units_},
+                      {vocab_size_padded_ * hidden_units_},
                       dir_path + "tok_embeddings.weight",
                       model_file_type);
 
     loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
 
     loadWeightFromBin(
-        (T*)post_decoder_embedding_kernel, {hidden_units_ * vocab_size_}, dir_path + "output.weight", model_file_type);
+        (T*)post_decoder_embedding_kernel, {hidden_units_ * vocab_size_padded_}, dir_path + "output.weight", model_file_type);
 
     for (unsigned layer = 0; layer < num_layer_; ++layer) {
         decoder_layer_weights[layer]->loadModel(dir_path + "layers." + std::to_string(layer), model_file_type);

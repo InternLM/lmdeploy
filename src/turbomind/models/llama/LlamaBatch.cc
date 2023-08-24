@@ -152,7 +152,7 @@ void LlamaBatch<T>::allocateBuffer(size_t batch_size, size_t session_len)
     const size_t batchxbeam = batch_size;
 
     const size_t hidden_units = llama_->hidden_units_;
-    const size_t vocab_size   = llama_->vocab_size_;
+    const size_t vocab_size   = llama_->vocab_size_padded_;
 
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
@@ -899,11 +899,11 @@ void LlamaBatch<T>::outputContextLogits(T*                      context_decoder_
 
     if (context_logits_buf_ == nullptr) {
         NcclGuard guard(llama_->tensor_para_, stream_, true);
-        context_logits_buf_ = (float*)allocator_->malloc(sizeof(float) * llama_->vocab_size_ * max_context_token_num_);
+        context_logits_buf_ = (float*)allocator_->malloc(sizeof(float) * llama_->vocab_size_padded_ * max_context_token_num_);
         const auto tp       = llama_->tensor_para_.world_size_;
         if (tp > 1) {
-            FT_CHECK(llama_->vocab_size_ % tp == 0);
-            const auto local_vocab_size = llama_->vocab_size_ / tp;
+            FT_CHECK(llama_->vocab_size_padded_ % tp == 0);
+            const auto local_vocab_size = llama_->vocab_size_padded_ / tp;
             local_context_logits_buf_ =
                 (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
         }
@@ -921,7 +921,7 @@ void LlamaBatch<T>::outputContextLogits(T*                      context_decoder_
                                              cudaMemcpyDefault,
                                              stream_));
         }
-        logits += llama_->vocab_size_ * lengths[k];
+        logits += llama_->vocab_size_padded_ * lengths[k];
     }
 }
 

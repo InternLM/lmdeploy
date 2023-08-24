@@ -156,6 +156,7 @@ private:
     const size_t inter_size_;
     const size_t num_layer_;
     const size_t vocab_size_;
+    size_t       vocab_size_padded_;
     float        rmsnorm_eps_ = 1e-6f;
 
     static constexpr bool neox_rotary_style_ = false;
