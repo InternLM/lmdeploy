@@ -34,12 +34,12 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
                                             request_output_len=output_seqlen,
                                             sequence_start=True,
                                             sequence_end=True,
-                                            ignore_eos=True):
+                                            ignore_eos=True,
+                                            stream_output=True):
             res, token = outputs[0]
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
-        # TODO: ignore first token
         first_token_latency = np.round(timestamps[0] - start, 2)
         if len(timestamps) == 1:
             token_latency = np.round(timestamps[0] - start, 2)
