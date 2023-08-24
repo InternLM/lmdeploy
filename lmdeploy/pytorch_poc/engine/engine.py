@@ -502,8 +502,9 @@ class Engine:
             add_session_reqs: List[Request] = reqs_by_type[
                 RequestType.ADD_SESSION]
             for req in add_session_reqs:
-                session = req.data['session']
-                session_id = session.session_id
+                session_id = req.data['session_id']
+                session = SchedulerSession(session_id=session_id,
+                                           arrive_time=time.time())
                 if not _session_exist(session_id, req, resp_if_exist=True):
                     self.add_session(session)
                     out_ques[session_id] = req.resp
@@ -511,7 +512,7 @@ class Engine:
             # add message
             add_msg_reqs: List[Request] = reqs_by_type[RequestType.ADD_MESSAGE]
             for req in add_msg_reqs:
-                msg: SchedulerMessage = req.data['message']
+                msg: SchedulerMessage = SchedulerMessage(**req.data)
                 session_id = msg.session_id
                 if not _session_exist(session_id, req, resp_if_not_exist=True):
                     continue
@@ -540,22 +541,22 @@ class EngineInstance:
     def __init__(self, engine: Engine):
         self.engine = engine
         self.response = Queue()
-        self.req_id = 0
-        self.session_map: Dict[int, SchedulerSession] = dict()
+        self.req_count = 0
+        self.owned_sessions: List[int] = list()
 
     def _send_req(self, req_type: RequestType, data: Any):
         self.engine.requests.put(
             Request(type=req_type,
                     resp=self.response,
-                    req_id=self.req_id,
+                    req_id=self.req_count,
                     data=data))
-        self.req_id += 1
+        self.req_count += 1
 
     def _try_add_session(self, session_id: int):
-        if session_id not in self.session_map:
-            session = SchedulerSession(session_id=session_id)
-            self._send_req(RequestType.ADD_SESSION, dict(session=session))
-            self.session_map[session_id] = session
+        if session_id not in self.owned_sessions:
+            self._send_req(RequestType.ADD_SESSION,
+                           dict(session_id=session_id))
+            self.owned_sessions.append(session_id)
 
     def stream_infer(self,
                      session_id: int,
@@ -564,13 +565,13 @@ class EngineInstance:
                      step: int = 0,
                      sampling_param: SamplingParam = SamplingParam()):
         self._try_add_session(session_id)
-        req_id = self.req_id
-        msg = SchedulerMessage(token_ids=prompt_token_ids,
-                               session_id=session_id,
-                               max_request_output_len=request_output_len,
-                               req_id=req_id,
-                               sampling_param=sampling_param)
-        self._send_req(RequestType.ADD_MESSAGE, dict(message=msg))
+        req_id = self.req_count
+        msg = dict(token_ids=prompt_token_ids,
+                   session_id=session_id,
+                   max_request_output_len=request_output_len,
+                   req_id=req_id,
+                   sampling_param=sampling_param)
+        self._send_req(RequestType.ADD_MESSAGE, msg)
 
         token_ids = []
         while True:
@@ -599,13 +600,13 @@ class EngineInstance:
               step: int = 0,
               sampling_param: SamplingParam = SamplingParam()):
         self._try_add_session(session_id)
-        req_id = self.req_id
-        msg = SchedulerMessage(token_ids=prompt_token_ids,
-                               session_id=session_id,
-                               max_request_output_len=request_output_len,
-                               req_id=req_id,
-                               sampling_param=sampling_param)
-        self._send_req(RequestType.ADD_MESSAGE, dict(message=msg))
+        req_id = self.req_count
+        msg = dict(token_ids=prompt_token_ids,
+                   session_id=session_id,
+                   max_request_output_len=request_output_len,
+                   req_id=req_id,
+                   sampling_param=sampling_param)
+        self._send_req(RequestType.ADD_MESSAGE, msg)
 
         token_ids = []
         status = 0
@@ -630,7 +631,7 @@ class EngineInstance:
 
     def end(self, session_id: int):
         self._send_req(RequestType.END_SESSION, dict(session_id=session_id))
-        self.session_map.pop(session_id)
+        self.owned_sessions.pop(session_id)
 
     def cancel(self, session_id: int):
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
