@@ -51,9 +51,9 @@ def benchmark(model_path,
 
     elapsed = time.monotonic() - start
     print(f'Decoded {total_tokens} tokens in {elapsed:.1f} seconds, '
-          f'{total_tokens / elapsed} tokens/s.')
+          f'{total_tokens / elapsed:.1f} tokens/s.')
     print(f'Decoded {len(probs)} prompts in {elapsed:.1f} seconds, '
-          f'{len(probs) / elapsed} requests/s.')
+          f'{len(probs) / elapsed:.1f} requests/s.')
 
     pkl_path = Path(save_to).with_suffix('.pkl')
 
