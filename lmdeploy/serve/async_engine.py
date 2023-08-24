@@ -138,12 +138,12 @@ class AsyncEngine:
                         random_seed=seed if sequence_start else None):
                     res, tokens = outputs[0]
                     # decode res
-                    response = self.tokenizer.decode(res[response_size:])
+                    response = self.tokenizer.decode(res)[response_size:]
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.steps[str(session_id)],
                                  len(input_ids), tokens, finish_reason)
-                    response_size = tokens
+                    response_size += len(response)
 
                 # update step
                 self.steps[str(session_id)] += len(input_ids) + tokens

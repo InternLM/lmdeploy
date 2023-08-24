@@ -3,10 +3,10 @@
 ### Launch Service
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_name server_port --instance_num 32 --tp 1
+python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --instance_num 32 --tp 1
 ```
 
-Then, the user can open the swagger UI: `http://{server_name}:{server_port}` for the detailed api usage.
+Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
 We provide four restful api in total. Three of them are in OpenAI format. However, we recommend users try
 our own api which provides more arguments for users to modify. The performance is comparatively better.
 
@@ -50,16 +50,29 @@ def get_streaming_response(prompt: str,
 
 
 for output, tokens in get_streaming_response(
-        "Hi, how are you?", "http://{server_name}:{server_port}/generate", 0,
+        "Hi, how are you?", "http://{server_ip}:{server_port}/generate", 0,
         512):
     print(output, end='')
 ```
 
-### Golang/Rust
+### Java/Golang/Rust
 
-Golang can also build a http request to use the service. You may refer
-to [the blog](https://pkg.go.dev/net/http) for details to build own client.
-Besides, Rust supports building a client in [many ways](https://blog.logrocket.com/best-rust-http-client/).
+May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/gloang client.
+Here is an example:
+
+```shell
+$ docker run -it --rm -v ${PWD}:/local openapitools/openapi-generator-cli generate -i /local/openapi.json -g rust -o /local/rust
+
+$ ls rust/*
+rust/Cargo.toml  rust/git_push.sh  rust/README.md
+
+rust/docs:
+ChatCompletionRequest.md  EmbeddingsRequest.md  HttpValidationError.md  LocationInner.md  Prompt.md
+DefaultApi.md             GenerateRequest.md    Input.md                Messages.md       ValidationError.md
+
+rust/src:
+apis  lib.rs  models
+```
 
 ### cURL
 
@@ -68,13 +81,13 @@ cURL is a tool for observing the output of the api.
 List Models:
 
 ```bash
-curl http://{server_name}:{server_port}/v1/models
+curl http://{server_ip}:{server_port}/v1/models
 ```
 
 Generate:
 
 ```bash
-curl http://{server_name}:{server_port}/generate \
+curl http://{server_ip}:{server_port}/generate \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
@@ -87,7 +100,7 @@ curl http://{server_name}:{server_port}/generate \
 Chat Completions:
 
 ```bash
-curl http://{server_name}:{server_port}/v1/chat/completions \
+curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
@@ -98,7 +111,7 @@ curl http://{server_name}:{server_port}/v1/chat/completions \
 Embeddings:
 
 ```bash
-curl http://{server_name}:{server_port}/v1/embeddings \
+curl http://{server_ip}:{server_port}/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
@@ -121,9 +134,9 @@ You can also test restful-api through webui.
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_name and server_port here are for gradio ui
+# server_ip and server_port here are for gradio ui
 # example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
+python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 ```
 
 ### FAQ

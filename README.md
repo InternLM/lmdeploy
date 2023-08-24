@@ -138,7 +138,7 @@ python3 -m lmdeploy.serve.gradio.app ./workspace
 Launch inference server by:
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_name server_port --instance_num 32 --tp 1
+python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
@@ -152,9 +152,9 @@ or webui,
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_name and server_port here are for gradio ui
+# server_ip and server_port here are for gradio ui
 # example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_name --restful_api True
+python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 ```
 
 Refer to [restful_api.md](docs/en/restful_api.md) for more details.
