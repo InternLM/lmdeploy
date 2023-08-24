@@ -57,7 +57,7 @@ for output, tokens in get_streaming_response(
 
 ### Java/Golang/Rust
 
-May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/gloang client.
+May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.
 Here is an example:
 
 ```shell
