@@ -3,6 +3,7 @@ import os
 import random
 
 import fire
+
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
 from lmdeploy.pytorch_poc.messages import SamplingParam

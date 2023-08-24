@@ -158,20 +158,19 @@ class Engine:
         hf_config = hf_model.config
 
         if scheduler_config is None:
-            scheduler_config = SchedulerConfig(
-                max_batches=64,
-                max_session_len=2048,
-                max_request_output_len=512)
+            scheduler_config = SchedulerConfig(max_batches=64,
+                                               max_session_len=2048,
+                                               max_request_output_len=512)
         if cache_config is None:
-            cache_config = CacheConfig(
-                block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
-        model_config = ModelConfig(
-            hf_config.hidden_size,
-            hf_config.num_hidden_layers,
-            hf_config.num_attention_heads,
-            bos_token_id=hf_config.bos_token_id,
-            eos_token_id=hf_config.eos_token_id,
-            dtype=torch.float32)
+            cache_config = CacheConfig(block_size=64,
+                                       num_cpu_blocks=0,
+                                       num_gpu_blocks=0)
+        model_config = ModelConfig(hf_config.hidden_size,
+                                   hf_config.num_hidden_layers,
+                                   hf_config.num_attention_heads,
+                                   bos_token_id=hf_config.bos_token_id,
+                                   eos_token_id=hf_config.eos_token_id,
+                                   dtype=torch.float32)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -246,13 +245,12 @@ class Engine:
 
         block_tables = self.scheduler.get_block_tables(messages)
 
-        return dict(
-            input_ids=input_ids,
-            seq_length=seq_length,
-            attention_mask=attention_mask,
-            block_tables=block_tables,
-            past_key_values=self.cache_engine.gpu_cache,
-            position_ids=position_ids)
+        return dict(input_ids=input_ids,
+                    seq_length=seq_length,
+                    attention_mask=attention_mask,
+                    block_tables=block_tables,
+                    past_key_values=self.cache_engine.gpu_cache,
+                    position_ids=position_ids)
 
     def stop_session(self, session_id: int):
         self.scheduler.stop_session(session_id)
@@ -326,9 +324,8 @@ class Engine:
         # inference
         with torch.no_grad():
             # setup context
-            self.context(
-                block_tables=inputs['block_tables'],
-                history_lengths=history_lengths)
+            self.context(block_tables=inputs['block_tables'],
+                         history_lengths=history_lengths)
 
             # forward
             hf_outputs = self.patched_model(
@@ -360,11 +357,10 @@ class Engine:
         for idx in range(len(session_ids)):
             session_id = session_ids[idx]
             msg = running[idx]
-            out = InferOutput(
-                session_id=session_id,
-                req_id=req_ids[idx],
-                finish=(msg.status == MessageStatus.STOPPED),
-                token_ids=[next_token_ids[idx]])
+            out = InferOutput(session_id=session_id,
+                              req_id=req_ids[idx],
+                              finish=(msg.status == MessageStatus.STOPPED),
+                              token_ids=[next_token_ids[idx]])
             outputs[session_id] = out
 
         if return_logits:
@@ -386,8 +382,9 @@ class Engine:
             for session_id, out in outputs.items():
                 if session_id not in ret_tokens:
                     # TODO: check if req_id is different
-                    ret_tokens[session_id] = InferOutput(
-                        session_id=session_id, req_id=out.req_id, token_ids=[])
+                    ret_tokens[session_id] = InferOutput(session_id=session_id,
+                                                         req_id=out.req_id,
+                                                         token_ids=[])
 
                 ret_tokens[session_id].token_ids += out.token_ids
 
@@ -420,8 +417,8 @@ class Engine:
 
         msgs: List[SchedulerMessage] = []
         for token_ids, sess in zip(prompt_token_ids, sessions):
-            msg = SchedulerMessage(
-                token_ids=token_ids, session_id=sess.session_id)
+            msg = SchedulerMessage(token_ids=token_ids,
+                                   session_id=sess.session_id)
             msgs.append(msg)
             self.scheduler.add_message(msg)
 
@@ -454,8 +451,8 @@ class Engine:
             else:
                 if resp_if_not_exist:
                     req.resp.put(
-                        Response(
-                            ResponseType.NOT_EXIST_ERROR, req_id=req.req_id))
+                        Response(ResponseType.NOT_EXIST_ERROR,
+                                 req_id=req.req_id))
                 return False
 
         while True:
@@ -524,14 +521,12 @@ class Engine:
             # forward
             step_tokens: Dict[int, InferOutput] = self.step()
             for session_id, out in step_tokens.items():
-                resp_type = (
-                    ResponseType.FINISH
-                    if out.finish else ResponseType.SUCCESS)
+                resp_type = (ResponseType.FINISH
+                             if out.finish else ResponseType.SUCCESS)
                 out_ques[session_id].put(
-                    Response(
-                        type=resp_type,
-                        req_id=out.req_id,
-                        data=dict(token_ids=out.token_ids)))
+                    Response(type=resp_type,
+                             req_id=out.req_id,
+                             data=dict(token_ids=out.token_ids)))
 
 
 class EngineInstance:
@@ -550,11 +545,10 @@ class EngineInstance:
 
     def _send_req(self, req_type: RequestType, data: Any):
         self.engine.requests.put(
-            Request(
-                type=req_type,
-                resp=self.response,
-                req_id=self.req_id,
-                data=data))
+            Request(type=req_type,
+                    resp=self.response,
+                    req_id=self.req_id,
+                    data=data))
         self.req_id += 1
 
     def _try_add_session(self, session_id: int):
@@ -571,12 +565,11 @@ class EngineInstance:
                      sampling_param: SamplingParam = SamplingParam()):
         self._try_add_session(session_id)
         req_id = self.req_id
-        msg = SchedulerMessage(
-            token_ids=prompt_token_ids,
-            session_id=session_id,
-            max_request_output_len=request_output_len,
-            req_id=req_id,
-            sampling_param=sampling_param)
+        msg = SchedulerMessage(token_ids=prompt_token_ids,
+                               session_id=session_id,
+                               max_request_output_len=request_output_len,
+                               req_id=req_id,
+                               sampling_param=sampling_param)
         self._send_req(RequestType.ADD_MESSAGE, dict(message=msg))
 
         token_ids = []
@@ -607,12 +600,11 @@ class EngineInstance:
               sampling_param: SamplingParam = SamplingParam()):
         self._try_add_session(session_id)
         req_id = self.req_id
-        msg = SchedulerMessage(
-            token_ids=prompt_token_ids,
-            session_id=session_id,
-            max_request_output_len=request_output_len,
-            req_id=req_id,
-            sampling_param=sampling_param)
+        msg = SchedulerMessage(token_ids=prompt_token_ids,
+                               session_id=session_id,
+                               max_request_output_len=request_output_len,
+                               req_id=req_id,
+                               sampling_param=sampling_param)
         self._send_req(RequestType.ADD_MESSAGE, dict(message=msg))
 
         token_ids = []

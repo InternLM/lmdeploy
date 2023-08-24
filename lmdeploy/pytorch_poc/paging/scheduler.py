@@ -49,6 +49,14 @@ class Scheduler:
                                           cache_config.num_gpu_blocks,
                                           cache_config.num_cpu_blocks)
 
+    def _set_message_status(self, message: SchedulerMessage,
+                            status: MessageStatus):
+        session_id = message.session_id
+        session = self.sessions[session_id]
+
+        message.status = status
+        session.status = status
+
     def add_session(self, session: SchedulerSession):
         assert session.session_id not in self.sessions
         self.sessions[session.session_id] = session
@@ -61,7 +69,7 @@ class Scheduler:
             f'Unknown session id {message.session_id}')
 
         # push message to waiting queue
-        message.status = MessageStatus.WAITING
+        self._set_message_status(message, MessageStatus.WAITING)
         if message.max_request_output_len == 0:
             message.max_request_output_len = \
                 self.scheduler_config.max_request_output_len
@@ -79,7 +87,7 @@ class Scheduler:
             return self.sessions[session_id]
 
         def _to_running(msg: SchedulerMessage):
-            msg.status = MessageStatus.RUNNING
+            self._set_message_status(msg, MessageStatus.RUNNING)
             running.append(msg)
 
         # check if running can be appended
@@ -92,7 +100,7 @@ class Scheduler:
             if len(session.logical_blocks) > self.block_manager.num_gpu_blocks:
                 logger.warning(f'session {session.session_id} '
                                'reach max gpu size.')
-                msg.status = MessageStatus.ABORTED
+                self._set_message_status(msg, MessageStatus.ABORTED)
                 self.aborted.append(msg)
             if self.block_manager.can_append_slot(session):
                 # append slot
@@ -104,7 +112,7 @@ class Scheduler:
                     'Can not swap out')
                 tmp_map = self.block_manager.swap_out(session)
                 swap_out_map.update(tmp_map)
-                msg.status = MessageStatus.SWAP_OUT
+                self._set_message_status(msg, MessageStatus.SWAP_OUT)
                 self.swapped.append(msg)
 
         max_batches = self.scheduler_config.max_batches
@@ -217,6 +225,10 @@ class Scheduler:
         self.waiting = _update_queue(self.waiting, MessageStatus.WAITING)
         self.running = _update_queue(self.running, MessageStatus.RUNNING)
         self.swapped = _update_queue(self.swapped, MessageStatus.SWAP_OUT)
+
+        for session_id, session in self.sessions.items():
+            if session.status == MessageStatus.ENDED:
+                session_id_to_remove.add(session_id)
 
         # remove session
         for session_id in session_id_to_remove:
