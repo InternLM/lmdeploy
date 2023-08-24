@@ -59,7 +59,7 @@ for output, tokens in get_streaming_response(
 
 ### Java/Golang/Rust
 
-可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/gloang 客户端。
+可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
 下面是一个使用示例：
 
 ```shell
