@@ -99,7 +99,7 @@ def main(model_path,
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]
                 # decode res
-                response = tokenizer.decode(res, offset=response_size)
+                response = tokenizer.decode(res.tolist(), offset=response_size)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
                 response_size = tokens

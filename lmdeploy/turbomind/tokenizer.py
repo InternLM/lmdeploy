@@ -136,8 +136,8 @@ class HuggingFaceTokenizer:
         return self._no_prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
-        if self.need_padding and tokens.size(0) and int(
-                tokens[0]) not in self.no_prefix_space_tokens:
+        if self.need_padding and len(
+                tokens) and tokens[0] not in self.no_prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
