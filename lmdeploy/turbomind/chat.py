@@ -99,10 +99,10 @@ def main(model_path,
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]
                 # decode res
-                response = tokenizer.decode(res)[response_size:]
+                response = tokenizer.decode(res, offset=response_size)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
-                response_size += len(response)
+                response_size = tokens
 
             # update step
             step += len(input_ids) + tokens

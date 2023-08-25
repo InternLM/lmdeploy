@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
-from typing import Sequence, Union
+from typing import Optional, Sequence, Union
 
 import torch
 
@@ -50,7 +50,7 @@ class SentencePieceTokenizer:
             add_eos = True
         return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
 
-    def decode(self, t: Sequence[int]):
+    def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.
 
         Args:
@@ -86,7 +86,7 @@ class HuggingFaceTokenizer:
     """
 
     def __init__(self, model_dir: str):
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer, LlamaTokenizerFast
         model_file = osp.join(model_dir, 'tokenizer.model')
         backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
         model_file_exists = osp.exists(model_file)
@@ -95,6 +95,8 @@ class HuggingFaceTokenizer:
                   'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
+        self.need_padding = isinstance(self.model, LlamaTokenizerFast)
+        self._no_prefix_space_tokens = None
         # save tokenizer.json to reuse
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
             if hasattr(self.model, 'backend_tokenizer'):
@@ -122,6 +124,24 @@ class HuggingFaceTokenizer:
         """end of the sentence token id."""
         return self.model.eos_token_id
 
+    @property
+    def no_prefix_space_tokens(self):
+        if self._no_prefix_space_tokens is None:
+            vocab = self.model.convert_ids_to_tokens(
+                list(range(self.vocab_size)))
+            self._no_prefix_space_tokens = {
+                i
+                for i, tok in enumerate(vocab) if not tok.startswith('▁')
+            }
+        return self._no_prefix_space_tokens
+
+    def _maybe_add_prefix_space(self, tokens, decoded):
+        if self.need_padding and tokens.size(0) and int(
+                tokens[0]) not in self.no_prefix_space_tokens:
+            return ' ' + decoded
+        else:
+            return decoded
+
     def encode(self, s: str):
         """Tokenize a prompt.
 
@@ -139,16 +159,23 @@ class HuggingFaceTokenizer:
             add_special_tokens = True
         return self.model.encode(s, add_special_tokens=add_special_tokens)
 
-    def decode(self, t: Sequence[int]):
+    def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.
 
         Args:
             t (List[int]): a list of token ids
+            offset (int): for incrementally decoding. Default to None, which
+                means not applied.
         Returns:
             str: text of decoding tokens
         """
         skip_special_tokens = True
-        return self.model.decode(t, skip_special_tokens=skip_special_tokens)
+        t = t[offset:] if offset else t
+        out_string = self.model.decode(t,
+                                       skip_special_tokens=skip_special_tokens)
+        if offset:
+            out_string = self._maybe_add_prefix_space(t, out_string)
+        return out_string
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
@@ -211,15 +238,17 @@ class Tokenizer:
         """
         return self.model.encode(s)
 
-    def decode(self, t: Sequence[int]):
+    def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.
 
         Args:
             t (List[int]): a list of token ids
+            offset (int): for incrementally decoding. Default to None, which
+                means not applied. Only supports HuggingFaceTokenizer now.
         Returns:
             str: text of decoding tokens
         """
-        return self.model.decode(t)
+        return self.model.decode(t, offset)
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
