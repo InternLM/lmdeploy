@@ -1002,11 +1002,16 @@ def deploy_qwen_awq(model_name: str, model_path: str, tokenizer_path: str,
         print(i)
 
         # qkv weights
-        qkv_w = get_tensor(f'transformer.h.{i}.attn.c_attn.qweight')
-        q_w, k_w, v_w = torch.split(qkv_w, qkv_w.size(-1) // 3, dim=-1)
-        q_w, k_w = permute(q_w), permute(k_w)
-        qkv_w = merge_qkv(q_w, k_w, v_w, tp, dim=2)
-        model_params[f'layers.{i}.attention.w_qkv.weight'] = qkv_w
+        qkv_qw = get_tensor(f'transformer.h.{i}.attn.c_attn.qweight')
+        q_qw, k_qw, v_qw = torch.split(qkv_qw, qkv_qw.size(-1) // 3, dim=-1)
+        q_qw, k_qw = permute(q_qw), permute(k_qw)
+
+        qkv_qz = get_tensor(f'transformer.h.{i}.attn.c_attn.qzeros')
+        q_qz, k_qz, v_qz = torch.split(qkv_qz, qkv_qz.size(-1) // 3, dim=-1)
+        q_qz, k_qz = permute(q_qz), permute(k_qz)
+
+        qkv_s = get_tensor(f'transformer.h.{i}.attn.c_attn.scales')
+        q_s, k_s, v_s = torch.split(qkv_qz, qkv_qz.size(-1) // 3, dim=-1)
 
         # qkv bias
         qkv_b = get_tensor(f'transformer.h.{i}.attn.c_attn.bias')
@@ -1016,9 +1021,32 @@ def deploy_qwen_awq(model_name: str, model_path: str, tokenizer_path: str,
         model_params[f'layers.{i}.attention.w_qkv.bias'] = qkv_b
 
         # o weights
-        o_w = get_tensor(f'transformer.h.{i}.attn.c_proj.qweight')
-        model_params[f'layers.{i}.attention.wo.weight'] = o_w
-        model_params[f'layers.{i}.attention.wo.bias'] = torch.zeros_like(q_b)
+        o_qw = get_tensor(f'transformer.h.{i}.attn.c_proj.qweight')
+        o_qz = get_tensor(f'transformer.h.{i}.attn.c_proj.qzeros')
+        o_s = get_tensor(f'transformer.h.{i}.attn.c_proj.scales')
+
+        q_qw = transpose_qk_s4(q_qw)
+        k_qw = transpose_qk_s4(k_qw)
+        q_qz = transpose_qk_s4(q_qz)
+        k_qz = transpose_qk_s4(k_qz)
+        q_s = permute(q_s)
+        k_s = permute(k_s)
+
+        qkv_qw = merge_qkv(q_qw, k_qw, v_qw, tp, dim=2)
+        qkv_qz = merge_qkv(q_qz, k_qz, v_qz, tp, dim=2)
+        qkv_s = merge_qkv(q_s, k_s, v_s, tp, dim=2)
+
+        qkv_qw, qkv_sz = convert_s4(qkv_qw, qkv_qz, qkv_s, group_size)
+
+        qkv_qw = tp_m_s4(qkv_qw, tp)
+
+        model_params[f'layers.{i}.attention.w_qkv.qweight'] = qkv_qw
+        model_params[f'layers.{i}.attention.w_qkv.scales_zeros'] = qkv_sz
+
+        o_qw, o_sz = convert_s4(o_qw, o_qz, o_s, group_size)
+
+        model_params[f'layers.{i}.attention.wo.qweight'] = o_qw
+        model_params[f'layers.{i}.attention.wo.scales_zeros'] = o_sz
 
         # ffn weights
         # ours: w2(silu(w1(x)) * w3(x))
