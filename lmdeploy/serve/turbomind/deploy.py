@@ -1004,14 +1004,16 @@ def deploy_qwen_awq(model_name: str, model_path: str, tokenizer_path: str,
         # qkv weights
         qkv_qw = get_tensor(f'transformer.h.{i}.attn.c_attn.qweight')
         q_qw, k_qw, v_qw = torch.split(qkv_qw, qkv_qw.size(-1) // 3, dim=-1)
-        q_qw, k_qw = permute(q_qw), permute(k_qw)
+        q_qw = q_qw.contiguous()
+        k_qw = k_qw.contiguous()
 
         qkv_qz = get_tensor(f'transformer.h.{i}.attn.c_attn.qzeros')
         q_qz, k_qz, v_qz = torch.split(qkv_qz, qkv_qz.size(-1) // 3, dim=-1)
-        q_qz, k_qz = permute(q_qz), permute(k_qz)
+        q_qz = q_qz.contiguous()
+        k_qz = k_qz.contiguous()
 
         qkv_s = get_tensor(f'transformer.h.{i}.attn.c_attn.scales')
-        q_s, k_s, v_s = torch.split(qkv_qz, qkv_qz.size(-1) // 3, dim=-1)
+        q_s, k_s, v_s = torch.split(qkv_s, qkv_s.size(-1) // 3, dim=-1)
 
         # qkv bias
         qkv_b = get_tensor(f'transformer.h.{i}.attn.c_attn.bias')
