@@ -90,8 +90,8 @@ Generate:
 curl http://{server_ip}:{server_port}/generate \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "internlm-chat-7b",
     "prompt": "Hello! Ho are you?",
+    "instance_id": 1,
     "sequence_start": true,
     "sequence_end": true
   }'
