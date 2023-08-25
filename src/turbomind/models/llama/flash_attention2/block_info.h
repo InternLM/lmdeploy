@@ -34,10 +34,10 @@ struct BlockInfo {
         return sum_s_k == -1 ? bidb * batch_stride : uint32_t(sum_s_k) * row_stride;
     }
 
-    const int      sum_s_q;
-    const int      sum_s_k;
-    const uint32_t actual_seqlen_q;
-    const uint32_t actual_seqlen_k;
+    const int sum_s_q;
+    const int sum_s_k;
+    const int actual_seqlen_q;
+    const int actual_seqlen_k;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -310,8 +310,16 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
         }
         cute::cp_async_fence();
 
-        flash::gemm</*A_in_regs=*/Kernel_traits::Is_Q_in_regs>(
-            acc_s, tSrQ, tSrK, tSsQ, tSsK, tiled_mma, smem_tiled_copy_Q, smem_tiled_copy_K);
+        flash::gemm</*A_in_regs=*/Kernel_traits::Is_Q_in_regs>(acc_s,
+                                                               tSrQ,
+                                                               tSrK,
+                                                               tSsQ,
+                                                               tSsK,
+                                                               tiled_mma,
+                                                               smem_tiled_copy_Q,
+                                                               smem_tiled_copy_K,
+                                                               smem_thr_copy_Q,
+                                                               smem_thr_copy_K);
 
         // Reshape acc_s from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
@@ -363,7 +371,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
             tPgP.data() = tPgP.data() + (-kBlockN);
         }
 
-        flash::gemm_A_in_regs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V);
+        flash::gemm_A_in_regs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
 
         // This check is at the end of the loop since we always have at least 1 iteration
         if (n_masking_steps > 1 && n_block <= 0) {
@@ -384,8 +392,16 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
         flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tVgV, tVsV, tKVcKV, tKVpKV);
         cute::cp_async_fence();
 
-        flash::gemm</*A_in_regs=*/Kernel_traits::Is_Q_in_regs>(
-            acc_s, tSrQ, tSrK, tSsQ, tSsK, tiled_mma, smem_tiled_copy_Q, smem_tiled_copy_K);
+        flash::gemm</*A_in_regs=*/Kernel_traits::Is_Q_in_regs>(acc_s,
+                                                               tSrQ,
+                                                               tSrK,
+                                                               tSsQ,
+                                                               tSsK,
+                                                               tiled_mma,
+                                                               smem_tiled_copy_Q,
+                                                               smem_tiled_copy_K,
+                                                               smem_thr_copy_Q,
+                                                               smem_thr_copy_K);
 
         flash::cp_async_wait<0>();
         __syncthreads();
@@ -412,7 +428,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
             flash::write_softmax_to_gmem(tOrP_copy, tPgP, gmem_tiled_copy_P);
             tPgP.data() = tPgP.data() + (-kBlockN);
         }
-        flash::gemm_A_in_regs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V);
+        flash::gemm_A_in_regs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
     }
 
     // Epilogue
@@ -446,6 +462,7 @@ inline __device__ void compute_attn_1rowblock(const Params& params, const int bi
     }
 
     copy(smem_tiled_copy_O, taccOrO, taccOsO);
+    __syncthreads();
 
     index_t row_offset_o = binfo.q_offset(params.o_batch_stride, params.o_row_stride, bidb)
                            + m_block * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
