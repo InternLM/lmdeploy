@@ -43,3 +43,6 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
 
 add_executable(llama_gemm llama_gemm.cc)
 target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)
+if (BUILD_PY_FFI)
+  install(TARGETS llama_gemm DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/bin)
+endif ()
