@@ -25,11 +25,20 @@ If you already have a workspace directory, skip this step.
 
 ### **Step Two**
 
-Get the quantization parameters.
+Get the quantization parameters by these two steps:
 
 ```bash
+# get minmax
+python3 -m lmdeploy.lite.apis.calibrate \
+  --model $HF_MODEL \
+  --calib_dataset 'c4' \             # Support c4, ptb, wikitext2, pileval
+  --calib_samples 128 \              # Number of samples in the calibration set, if the memory is not enough, it can be adjusted appropriately
+  --calib_seqlen 2048 \              # Length of a single text, if the memory is not enough, you can adjust it appropriately
+  --work_dir $WORK_DIR \             # Directory for saving quantized statistical parameters and quantized weights in Pytorch format
+
+# get quant parameters
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --work_dir /path/to/internlm-chat-7b  \             # Directory of the Hugging Face model
+  --work_dir $WORK_DIR  \                             # Directory of the last output
   --turbomind_dir workspace/trition_models/weights/ \ # Directory to save the quantization parameters
   --kv_sym False \                                    # Symmetric or asymmetric quantization, default is False
   --num_tp 1  \                                       # Number of GPUs used for Tensor parallelization, keep it consistent with deploy.py

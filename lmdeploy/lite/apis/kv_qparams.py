@@ -33,7 +33,7 @@ def _export_sym(key_stats: dict,
             kv_qparams = np.array([k_s, v_s], dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
             kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} KV scales done.')
+            print(f'Layer {layer_idx} MP {i} qparam: {k_s} \t{v_s}')
 
 
 def _export_asym(key_stats: dict,
@@ -83,13 +83,13 @@ def _export_asym(key_stats: dict,
                                   dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
             kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} KV scales&zeros done.')
+            print(f'Layer {layer_idx} MP {i} qparam: \t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}')
 
 
 def main(work_dir: str,
          turbomind_dir: str,
          kv_bits: int = 8,
-         kv_sym: bool = True,
+         kv_sym: bool = False,
          num_tp: int = 1) -> None:
     """Main function to export key and value stats.
 
@@ -100,7 +100,7 @@ def main(work_dir: str,
         kv_bits (int, optional): Number of bits for quantization.
             Defaults to 8.
         kv_sym (bool, optional): Whether to use symmetric quantizaiton.
-            Defaults to True.
+            Defaults to False.
         num_tp (int, optional): Number of tensor parallelism. Defaults to 1.
     """
 
