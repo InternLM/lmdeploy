@@ -83,7 +83,7 @@ def _export_asym(key_stats: dict,
                                   dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
             kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} qparam: \t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}')
+            print(f'Layer {layer_idx} MP {i} qparam: \t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}') # noqa: E501
 
 
 def main(work_dir: str,
