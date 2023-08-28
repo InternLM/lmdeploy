@@ -81,9 +81,10 @@ def _export_asym(key_stats: dict,
 
             kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp],
                                   dtype=np.float32)
-            out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
+            out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'
             kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} qparam: \t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}')  # noqa: E501
+            print(f'Layer {layer_idx} MP {i} qparam: '
+                  f'\t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}')
 
 
 def main(work_dir: str,
