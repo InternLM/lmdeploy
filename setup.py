@@ -120,7 +120,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
 
 
 if __name__ == '__main__':
-    lmdeploy_package_data = ['lmdeploy/bin/*']
+    lmdeploy_package_data = ['lmdeploy/bin/llama_gemm']
     setup(name='lmdeploy',
           version=get_version(),
           description='A toolset for compressing, deploying and serving LLM',

@@ -10,13 +10,9 @@ def get_llama_gemm():
 
     import lmdeploy
     lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
-    candidate_path = [
-        'bin/llama_gemm',
-        osp.join(lmdeploy_dir, 'bin', 'llama_gemm')
-    ]
-    for path in candidate_path:
-        if osp.exists(path):
-            return path
+    bin_path = osp.join(lmdeploy_dir, 'bin', 'llama_gemm')
+    assert osp.exists(bin_path), f'{bin_path} not exists'
+    return bin_path
 
 
 def main(head_num: int = 32,
