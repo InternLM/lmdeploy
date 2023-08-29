@@ -74,6 +74,8 @@ class SentencePieceTokenizer:
 
         Args:
             t (List[int]): a list of token ids
+            offset (int): for incrementally decoding. Default to None, which
+                means not applied.
         Returns:
             str: text of decoding tokens
         """
