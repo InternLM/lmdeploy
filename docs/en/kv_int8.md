@@ -39,18 +39,18 @@ python3 -m lmdeploy.lite.apis.calibrate \
 # get quant parameters
 python3 -m lmdeploy.lite.apis.kv_qparams \
   --work_dir $WORK_DIR  \                             # Directory of the last output
-  --turbomind_dir workspace/trition_models/weights/ \ # Directory to save the quantization parameters
+  --turbomind_dir workspace/triton_models/weights/ \ # Directory to save the quantization parameters
   --kv_sym False \                                    # Symmetric or asymmetric quantization, default is False
   --num_tp 1  \                                       # Number of GPUs used for Tensor parallelization, keep it consistent with deploy.py
 ```
 
 `kv_qparams` will generate fp32 scaling factors in the `weights` directory. The file format is a binary produced by `numpy.tofile`.
 
-You can also first set `turbomind_dir` to a private directory, then copy the scaling factors into `workspace/trition_models/weights/`.
+You can also first set `turbomind_dir` to a private directory, then copy the scaling factors into `workspace/triton_models/weights/`.
 
 ### **Step Three**
 
-Modify `workspace/trition_models/weights/config.ini`:
+Modify `workspace/triton_models/weights/config.ini`:
 
 - Set use_context_fmha to 0, which means turning off flashattention
 - Set quant_policy to 4. This means enabling kv_cache int8
