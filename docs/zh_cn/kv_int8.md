@@ -39,18 +39,18 @@ python3 -m lmdeploy.lite.apis.calibrate \
 # 通过 minmax 获取量化参数
 python3 -m lmdeploy.lite.apis.kv_qparams \
   --work_dir $WORK_DIR  \                             # 上一步的结果
-  --turbomind_dir workspace/trition_models/weights/ \ # 保存量化参数的目录，推理要用
+  --turbomind_dir workspace/triton_models/weights/ \ # 保存量化参数的目录，推理要用
   --kv_sym False \                                    # 对称量化或非对称量化，默认为 False
   --num_tp 1  \                                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
 
 `kv_qparams` 会在 `weights` 目录生成 fp32 缩放系数，文件格式是 `numpy.tofile` 产生的二进制。
 
-也可以先把 `turbomind_dir` 设成私有目录，再把缩放系数拷贝进 `workspace/trition_models/weights/`。
+也可以先把 `turbomind_dir` 设成私有目录，再把缩放系数拷贝进 `workspace/triton_models/weights/`。
 
 ### **第三步**
 
-修改 `workspace/trition_models/weights/config.ini`：
+修改 `workspace/triton_models/weights/config.ini`：
 
 - use_context_fmha 改为 0，表示关闭 flashattention
 - quant_policy 设置为 4。表示打开 kv_cache int8
