@@ -16,6 +16,7 @@ class SentencePieceTokenizer:
     def __init__(self, model_file: str):
         from sentencepiece import SentencePieceProcessor
         self.model = SentencePieceProcessor(model_file=model_file)
+        self._no_prefix_space_tokens = None
 
     @property
     def vocab_size(self):
@@ -31,6 +32,24 @@ class SentencePieceTokenizer:
     def eos_token_id(self):
         """end of the sentence token id."""
         return self.model.eos_id()
+
+    @property
+    def no_prefix_space_tokens(self):
+        """tokens without prefix space."""
+        if self._no_prefix_space_tokens is None:
+            vocab = self.model.IdToPiece(list(range(self.vocab_size)))
+            self._no_prefix_space_tokens = {
+                i
+                for i, tok in enumerate(vocab) if not tok.startswith('▁')
+            }
+        return self._no_prefix_space_tokens
+
+    def _maybe_add_prefix_space(self, tokens, decoded):
+        """maybe add prefix space for incremental decoding."""
+        if len(tokens) and tokens[0] not in self.no_prefix_space_tokens:
+            return ' ' + decoded
+        else:
+            return decoded
 
     def encode(self, s: str):
         """Tokenize a prompt.
@@ -60,7 +79,11 @@ class SentencePieceTokenizer:
         """
         if isinstance(t, torch.Tensor):
             t = t.tolist()
-        return self.model.Decode(t)
+        t = t[offset:]
+        out_string = self.model.Decode(t)
+        if offset:
+            out_string = self._maybe_add_prefix_space(t, out_string)
+        return out_string
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
@@ -126,6 +149,7 @@ class HuggingFaceTokenizer:
 
     @property
     def no_prefix_space_tokens(self):
+        """tokens without prefix space."""
         if self._no_prefix_space_tokens is None:
             vocab = self.model.convert_ids_to_tokens(
                 list(range(self.vocab_size)))
@@ -136,6 +160,7 @@ class HuggingFaceTokenizer:
         return self._no_prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
+        """maybe add prefix space for incremental decoding."""
         if self.need_padding and len(
                 tokens) and tokens[0] not in self.no_prefix_space_tokens:
             return ' ' + decoded
@@ -170,7 +195,7 @@ class HuggingFaceTokenizer:
             str: text of decoding tokens
         """
         skip_special_tokens = True
-        t = t[offset:] if offset else t
+        t = t[offset:]
         out_string = self.model.decode(t,
                                        skip_special_tokens=skip_special_tokens)
         if offset:
@@ -244,7 +269,7 @@ class Tokenizer:
         Args:
             t (List[int]): a list of token ids
             offset (int): for incrementally decoding. Default to None, which
-                means not applied. Only supports HuggingFaceTokenizer now.
+                means not applied.
         Returns:
             str: text of decoding tokens
         """

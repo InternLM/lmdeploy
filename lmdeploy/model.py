@@ -256,6 +256,29 @@ class Puyu(BaseModel):
         else:
             return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
 
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+            sequence_start (bool): flag to start the sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'<BOS>{system}{self.meta_instruction}{self.eosys}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.user}{user}{self.eoh}\n{self.assistant}' \
+                       f'{assistant}'
+            else:
+                ret += f'\n{self.user}{user}{self.eoh}\n{self.assistant}'
+        return ret
+
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
@@ -359,6 +382,29 @@ class Qwen7BChat(BaseModel):
 
         return f'\n{self.im_start}user\n{prompt}{self.im_end}' \
                f'\n{self.im_start}assistant\n'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'{self.im_start}system\n{system}{self.im_end}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
+                       f'\n{self.im_start}assistant\n{assistant}'
+            else:
+                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
+                       f'\n{self.im_start}assistant\n'
+        return ret
 
     @property
     def stop_words(self):
