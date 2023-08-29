@@ -7,6 +7,7 @@ from mmengine import Registry
 MODELS = Registry('model', locations=['lmdeploy.model'])
 
 
+@MODELS.register_module(name='base')
 @MODELS.register_module(name='llama')
 class BaseModel:
     """Base model."""
@@ -364,6 +365,53 @@ class Qwen7BChat(BaseModel):
     def stop_words(self):
         """Return the stop-words' token ids."""
         return [151645]  # <|im_end|>
+
+
+@MODELS.register_module(name='codellama')
+class CodeLlama(BaseModel):
+
+    def __init__(self,
+                 mode='chat',
+                 default_sys_prompt='',
+                 session_len=4096,
+                 top_p=0.9,
+                 temperature=0.6,
+                 suffix_first=False,
+                 **kwargs):
+        super().__init__(**kwargs)
+        modes = ['completion', 'infill', 'chat']
+        assert mode in modes, \
+            f'{mode} is not supported. The supported modes are: {modes}'
+        self.mode = mode
+        self.default_sys_prompt = default_sys_prompt
+        self.session_len = session_len
+        self.top_p = top_p
+        self.temperature = temperature
+        self.suffix_first = suffix_first
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if self.mode == 'completion':
+            return prompt
+        elif self.mode == 'infill':
+            return self._infill_prompt(prompt)
+        else:
+            return super().get_prompt(prompt, sequence_start)
+
+    def _infill_prompt(self, prompt):
+        prefix, suffix = prompt.split('<FILL>')
+        if self.suffix_first:
+            # format as "<PRE> <SUF>{suf} <MID> {pre}"
+            prompt = f'<BOS>▁<PRE> ▁<SUF>{suffix} ▁<MID> {prefix}'
+        else:
+            # format as "<PRE> {pre} <SUF>{suf} <MID>"
+            prompt = f'<BOS>▁<PRE> {prefix} ▁<SUF>{suffix} ▁<MID>'
+        return prompt
+
+    def stop_words(self):
+        if self.mode == 'infill':
+            return []
+        else:
+            return None
 
 
 def main(model_name: str = 'test'):
