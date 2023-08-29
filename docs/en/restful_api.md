@@ -148,11 +148,9 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 
 3. When the request with the same `instance_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
 
-4. Requests was processed one by one instead of on concurrency. If you got this, please set:
+4. Requests were previously being handled sequentially rather than concurrently. To resolve this issue,
 
-   - different instance_id for `generate` api. Or we will automatically bind it with client ip address.
-   - set `stream=true` to enable model forwarding process to be processed on concurrency
+   - kindly provide unique instance_id values when calling the `generate` API or else your requests may be associated with client IP addresses
+   - additionally, setting `stream=true` enables processing multiple requests simultaneously
 
-5. Both `generate` api and `v1/chat/completions` supports multiple rounds of dialogue. `messages` or `prompt` can be either a simple string or chat history.
-   They are both treated with multiple rounds mode. If you want to turn the mode of and manage the chat history in clients, please set `sequence_end: true` for `generate` or set
-   `renew_session: true` for `v1/chat/completions`.
+5. Both `generate` api and `v1/chat/completions` upport engaging in multiple rounds of conversation, where input `prompt` or `messages` consists of either single strings or entire chat histories.These inputs are interpreted using multi-turn dialogue modes. However, ff you want to turn the mode of and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function, or specify `renew_session: true` when making use of `v1/chat/completions`
