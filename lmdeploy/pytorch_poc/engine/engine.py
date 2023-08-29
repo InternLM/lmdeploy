@@ -9,6 +9,10 @@ from typing import Any, Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM
+from transformers.generation.logits_process import (LogitsProcessorList,
+                                                    TemperatureLogitsWarper,
+                                                    TopKLogitsWarper,
+                                                    TopPLogitsWarper)
 
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
@@ -289,7 +293,7 @@ class Engine:
         # schedule
         schedule_output = self.scheduler.schedule()
 
-        running = schedule_output.running
+        running: List[SchedulerMessage] = schedule_output.running
         swap_in_map = schedule_output.swap_in_map
         swap_out_map = schedule_output.swap_out_map
         if len(running) == 0:
@@ -340,10 +344,25 @@ class Engine:
         logits = hf_outputs['logits']
 
         # gather output
-        output_index = inputs['seq_length'].cumsum(0) - 1
-        output_token_ids = logits.max(-1)[1]
-        next_token_ids = output_token_ids[output_index]
-        next_token_ids = next_token_ids.detach().cpu().tolist()
+        sampling_params: List[SamplingParam] = [
+            msg.sampling_param for msg in running
+        ]
+        seq_length = inputs['seq_length']
+        accum_seq_length = inputs['seq_length'].cumsum(0)
+        split_logits = [
+            logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
+        ]
+
+        next_token_ids = []
+        for msg, logit, param in zip(running, split_logits, sampling_params):
+            input_ids = torch.tensor(msg.token_ids)
+            logits_processor = LogitsProcessorList([
+                TopKLogitsWarper(param.top_k),
+                TopPLogitsWarper(param.top_p),
+                TemperatureLogitsWarper(param.temperature),
+            ])
+            logit = logits_processor(input_ids, logit)
+            next_token_ids.append(logit[-1].argmax())
 
         # update scheduler
         for token, msg in zip(next_token_ids, running):
@@ -364,12 +383,6 @@ class Engine:
             outputs[session_id] = out
 
         if return_logits:
-            seq_length = inputs['seq_length']
-            accum_seq_length = seq_length.cumsum(0)
-            split_logits = [
-                logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
-            ]
-
             for idx in range(len(session_ids)):
                 outputs[session_ids[idx]].logits = split_logits[idx]
 
