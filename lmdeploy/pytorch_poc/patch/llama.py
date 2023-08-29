@@ -64,7 +64,8 @@ class LlamaAttention(nn.Module):
         assert not output_attentions
         origin_self = self.origin_mod
 
-        history_lengths = self.context.history_lengths
+        context = self.context.context
+        history_lengths = context.history_lengths
 
         max_seq_len = position_ids.size(-1)
 
@@ -122,7 +123,7 @@ class LlamaAttention(nn.Module):
             history_lengths)
         q_start_loc = q_seq_length.cumsum(0)
         q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
-        self.context.fill_cache(
+        context.fill_cache(
             key_states,
             value_states,
             q_start_loc,
@@ -139,7 +140,7 @@ class LlamaAttention(nn.Module):
 
         attn_output = torch.empty_like(query_states)
 
-        block_offsets = self.context.block_offsets
+        block_offsets = context.block_offsets
         block_size = past_key_value[0].size(1)
         paged_attention_fwd(query_states,
                             past_key_value[0],

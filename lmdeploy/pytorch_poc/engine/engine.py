@@ -2,7 +2,7 @@
 import enum
 import itertools
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from queue import Queue
 from threading import Thread
 from typing import Any, Dict, List
@@ -70,11 +70,26 @@ class InferOutput:
     logits: torch.Tensor = None
 
 
-@dataclass
 class ModelContext:
-    block_tables: List[BlockTable] = field(default_factory=list)
-    history_lengths: List[int] = field(default_factory=list)
-    block_offsets: torch.Tensor = None
+
+    def __init__(self,
+                 block_tables: List[BlockTable],
+                 history_lengths: List[int],
+                 device='cuda'):
+        self.block_tables = block_tables
+        self.history_lengths = history_lengths
+
+        # make block offsets
+        block_offsets = [[block.block_id for block in block_table]
+                         for block_table in self.block_tables]
+
+        # padding zero
+        pad_sequence = torch.nn.utils.rnn.pad_sequence
+        block_offsets = [
+            torch.tensor(offset, device=device) for offset in block_offsets
+        ]
+        block_offsets = pad_sequence(block_offsets, True)
+        self.block_offsets = block_offsets
 
     def get_block_offsets(self):
         return [[block.block_id for block in block_table]
@@ -130,25 +145,6 @@ class ModelContext:
                 k_state = k_state[token_num:]
                 v_state = v_state[token_num:]
 
-    def __call__(self,
-                 block_tables: List[BlockTable],
-                 history_lengths: List[int],
-                 device='cuda'):
-        self.block_tables = block_tables
-        self.history_lengths = history_lengths
-
-        # make block offsets
-        block_offsets = [[block.block_id for block in block_table]
-                         for block_table in self.block_tables]
-
-        # padding zero
-        pad_sequence = torch.nn.utils.rnn.pad_sequence
-        block_offsets = [
-            torch.tensor(offset, device=device) for offset in block_offsets
-        ]
-        block_offsets = pad_sequence(block_offsets, True)
-        self.block_offsets = block_offsets
-
 
 class Engine:
 
@@ -157,8 +153,7 @@ class Engine:
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None) -> None:
         hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-        self.context = ModelContext()
-        self.patched_model = patch(hf_model, self.context).cuda()
+        self.patched_model = patch(hf_model, ['context']).cuda()
         hf_config = hf_model.config
 
         if scheduler_config is None:
@@ -327,10 +322,6 @@ class Engine:
 
         # inference
         with torch.no_grad():
-            # setup context
-            self.context(block_tables=inputs['block_tables'],
-                         history_lengths=history_lengths)
-
             # forward
             hf_outputs = self.patched_model(
                 input_ids=inputs['input_ids'],
@@ -339,7 +330,9 @@ class Engine:
                 past_key_values=inputs['past_key_values'],
                 return_dict=True,
                 output_attentions=False,
-                output_hidden_states=False)
+                output_hidden_states=False,
+                context=ModelContext(block_tables=inputs['block_tables'],
+                                     history_lengths=history_lengths))
 
         logits = hf_outputs['logits']
 
