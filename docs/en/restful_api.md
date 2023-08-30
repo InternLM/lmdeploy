@@ -147,3 +147,10 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
 
 3. When the request with the same `instance_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
+
+4. Requests were previously being handled sequentially rather than concurrently. To resolve this issue,
+
+   - kindly provide unique instance_id values when calling the `generate` API or else your requests may be associated with client IP addresses
+   - additionally, setting `stream=true` enables processing multiple requests simultaneously
+
+5. Both `generate` api and `v1/chat/completions` upport engaging in multiple rounds of conversation, where input `prompt` or `messages` consists of either single strings or entire chat histories.These inputs are interpreted using multi-turn dialogue modes. However, ff you want to turn the mode of and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function, or specify `renew_session: true` when making use of `v1/chat/completions`
