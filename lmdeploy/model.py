@@ -7,8 +7,9 @@ from mmengine import Registry
 MODELS = Registry('model', locations=['lmdeploy.model'])
 
 
-@MODELS.register_module(name='base')
+@MODELS.register_module(name='internlm')
 @MODELS.register_module(name='llama')
+@MODELS.register_module(name='base')
 class BaseModel:
     """Base model."""
 
@@ -142,11 +143,11 @@ class Vicuna(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='internlm')
-class InternLM(BaseModel):
+# @MODELS.register_module(name='internlm')
+# class InternLM(BaseModel):
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
 
 
 @MODELS.register_module(name='internlm-chat-7b')
@@ -368,10 +369,10 @@ class Qwen7BChat(BaseModel):
 
 
 @MODELS.register_module(name='codellama')
-class CodeLlama(BaseModel):
+class CodeLlama(Llama2):
 
     def __init__(self,
-                 mode='chat',
+                 cap='completion',
                  default_sys_prompt='',
                  session_len=4096,
                  top_p=0.9,
@@ -379,10 +380,10 @@ class CodeLlama(BaseModel):
                  suffix_first=False,
                  **kwargs):
         super().__init__(**kwargs)
-        modes = ['completion', 'infill', 'chat']
-        assert mode in modes, \
-            f'{mode} is not supported. The supported modes are: {modes}'
-        self.mode = mode
+        caps = ['completion', 'infill', 'instruct', 'python']
+        assert cap in caps, \
+            f'{cap} is not supported. The supported modes are: {caps}'
+        self.cap = cap
         self.default_sys_prompt = default_sys_prompt
         self.session_len = session_len
         self.top_p = top_p
@@ -390,9 +391,9 @@ class CodeLlama(BaseModel):
         self.suffix_first = suffix_first
 
     def get_prompt(self, prompt, sequence_start=True):
-        if self.mode == 'completion':
+        if self.cap == 'completion':
             return prompt
-        elif self.mode == 'infill':
+        elif self.cap == 'infill':
             return self._infill_prompt(prompt)
         else:
             return super().get_prompt(prompt, sequence_start)
@@ -401,17 +402,24 @@ class CodeLlama(BaseModel):
         prefix, suffix = prompt.split('<FILL>')
         if self.suffix_first:
             # format as "<PRE> <SUF>{suf} <MID> {pre}"
-            prompt = f'<BOS>▁<PRE> ▁<SUF>{suffix} ▁<MID> {prefix}'
+            prompt = f'<BOS><PRE> <SUF>{suffix} <MID> {prefix}'
         else:
             # format as "<PRE> {pre} <SUF>{suf} <MID>"
-            prompt = f'<BOS>▁<PRE> {prefix} ▁<SUF>{suffix} ▁<MID>'
+            prompt = f'<BOS><PRE> {prefix} <SUF>{suffix} <MID>'
         return prompt
 
+    @property
     def stop_words(self):
-        if self.mode == 'infill':
+        if self.cap == 'infill':
             return []
         else:
             return None
+
+    def messages2prompt(self, messages, sequence_start=True):
+        assert self.cap == 'chat', \
+            f'codellama message2prompt only supports chat mode ' \
+            f'but got {self.cap} mode'
+        return super().messages2prompt(messages, sequence_start)
 
 
 def main(model_name: str = 'test'):
