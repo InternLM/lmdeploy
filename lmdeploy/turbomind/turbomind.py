@@ -329,6 +329,9 @@ class TurboMindInstance:
             while self.que.qsize() > 1:
                 self.que.get()
 
+            if self.que.qsize() == 0:
+                yield
+                continue
             finish, tm_outputs = self.que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)

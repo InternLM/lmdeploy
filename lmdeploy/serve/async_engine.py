@@ -136,6 +136,8 @@ class AsyncEngine:
                         repetition_penalty=repetition_penalty,
                         ignore_eos=ignore_eos,
                         random_seed=seed if sequence_start else None):
+                    if outputs is None:
+                        continue
                     res, tokens = outputs[0]
                     # decode res
                     response = self.tokenizer.decode(res)[response_size:]
