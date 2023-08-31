@@ -28,9 +28,9 @@ class Tokenizer:
 
 def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
     stats = []
-    while not req_que.empty():
-        prompt, input_seqlen, output_seqlen = req_que.get()
-        print(f'request info: session {session_id}, '
+    for prompt, input_seqlen, output_seqlen in iter(req_que.get,
+                                                    [None, None, None]):
+        print(f'session {session_id}: '
               f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         timestamps = []
         tokens = []
@@ -43,7 +43,6 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
                 sequence_end=True):
             timestamps.append(time.perf_counter())
             tokens.append(token)
-        chatbot.reset_session()
 
         first_token_latency = timestamps[1] - start
         token_latency = timestamps[-1] - timestamps[0]
@@ -87,7 +86,7 @@ def warmup(tritonserver_addr: str,
 
 
 def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
-                 session_len: int):
+                 session_len: int, que: mp.Queue):
     start = time.perf_counter()
     with open(dataset_path) as f:
         dataset = json.load(f)
@@ -119,12 +118,11 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
     if samples > 0:
         filtered_dataset = random.sample(filtered_dataset, samples)
 
-    que = mp.Queue()
     for data in filtered_dataset:
         que.put(data)
     print(f'elapsed time for filtering: '
           f'{round(time.perf_counter() - start, 2)} s')
-    return que, len(filtered_dataset)
+    return len(filtered_dataset)
 
 
 def main(tritonserver_addr: str,
@@ -134,9 +132,9 @@ def main(tritonserver_addr: str,
          session_len: int = 2048,
          samples: int = 1000):
     warmup(tritonserver_addr, concurrency, session_len - 1)
-    req_que, n_req = read_dataset(tokenizer_path, dataset_path, samples,
-                                  session_len)
+    req_que = mp.Queue()
     res_que = mp.Queue()
+
     procs = []
     _start = time.perf_counter()
     for i in range(concurrency):
@@ -148,8 +146,16 @@ def main(tritonserver_addr: str,
                           args=(chatbot, i + 1, req_que, res_que))
         procs.append(proc)
         proc.start()
+
+    # read data and put it to queue
+    n_req = read_dataset(tokenizer_path, dataset_path, samples, session_len,
+                         req_que)
+    for i in range(concurrency):
+        req_que.put([None, None, None])
+
     for proc in procs:
         proc.join()
+
     _end = time.perf_counter()
     elapsed_time = _end - _start
 
@@ -157,7 +163,8 @@ def main(tritonserver_addr: str,
     while not res_que.empty():
         session_id, _stats = res_que.get()
         print(f'\n{"-" * 50}\n'
-              f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
+              f'session {session_id} req: {len(stats)}'
+              f'stats: \n{_stats}\n{"-" * 50}\n')
         stats.append(np.array(_stats))
 
     stats = np.concatenate(stats).reshape(-1, 3)
