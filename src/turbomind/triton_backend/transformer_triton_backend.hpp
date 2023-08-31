@@ -23,7 +23,9 @@
 #include <functional>
 #include <memory>
 #include <sstream>
+#ifdef __linux__
 #include <sys/time.h>
+#endif
 #include <vector>
 
 #include "src/turbomind/utils/Tensor.h"

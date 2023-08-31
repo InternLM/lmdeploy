@@ -17,6 +17,7 @@
 #pragma once
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "stdlib.h"
+#include <cstdint>
 
 namespace turbomind {
 

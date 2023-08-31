@@ -47,7 +47,7 @@ include(FetchContent)
 FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        cc85b64cf676c45f98a17e3a47c0aafcf817f088
+  GIT_TAG        6f47420213f757831fae65c686aa471749fa8d60
 )
 
 set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
@@ -168,6 +168,7 @@ if(BUILD_PYT)
   set(TORCH_CUDA_ARCH_LIST $ENV{TORCH_CUDA_ARCH_LIST})
 endif()
 
+set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 set(CMAKE_C_FLAGS_DEBUG    "${CMAKE_C_FLAGS_DEBUG}    -Wall -O0")
 set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0")
 # set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall  --ptxas-options=-v --resource-usage")
@@ -288,6 +289,15 @@ if(BUILD_TEST)
     add_subdirectory(tests/csrc)
 endif()
 
+# install python api
+if (BUILD_PY_FFI)
+  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+endif ()
+
+if (MSVC)
+  return()
+endif ()
+
 # # Mesaure the compile time
 option(MEASURE_BUILD_TIME "Measure the build time of each module" OFF)
 if (MEASURE_BUILD_TIME)
@@ -302,8 +312,10 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:llama_fmha>
+  $<TARGET_OBJECTS:flash_attention2>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
+  $<TARGET_OBJECTS:gemm_s4_f16>
   $<TARGET_OBJECTS:TopKSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>
@@ -385,13 +397,6 @@ install(
   DESTINATION
     ${INSTALL_CONFIGDIR}
 )
-
-# install python api
-if (BUILD_PY_FFI)
-  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-endif ()
-install(TARGETS TransformerTritonBackend DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
-
 
 export(
   EXPORT

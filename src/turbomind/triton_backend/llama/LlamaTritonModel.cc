@@ -122,7 +122,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     inter_size_            = reader.GetInteger("llama", "inter_size");
     num_layer_             = reader.GetInteger("llama", "num_layer");
     vocab_size_            = reader.GetInteger("llama", "vocab_size");
-    rotary_embedding_dim_  = reader.GetInteger("llama", "rotary_embedding");
     norm_eps_              = reader.GetFloat("llama", "norm_eps");
     start_id_              = reader.GetInteger("llama", "start_id");
     end_id_                = reader.GetInteger("llama", "end_id");
@@ -133,9 +132,14 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     cache_max_entry_count_ = reader.GetInteger("llama", "cache_max_entry_count", 0);
     use_context_fmha_      = reader.GetInteger("llama", "use_context_fmha", 1);
     cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
-    prefix_cache_len_      = reader.GetInteger("llama", "prefix_cache_len", 0);
     attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
     quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
+    group_size_            = reader.GetInteger("llama", "group_size", 0);
+
+    attn_params_.rotray_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
+    attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
+    attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
+    attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
 
     handleMissingParams();
 
@@ -222,7 +226,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   inter_size_,
                                                   num_layer_,
                                                   vocab_size_,
-                                                  rotary_embedding_dim_,
+                                                  attn_params_,
                                                   norm_eps_,
                                                   max_batch_size_,
                                                   max_context_token_num_,
@@ -296,11 +300,11 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       inter_size_,
                                                                       vocab_size_,
                                                                       num_layer_,
-                                                                      weight_type_,
                                                                       attn_bias_,
+                                                                      weight_type_,
+                                                                      group_size_,
                                                                       tensor_para_size_,
-                                                                      tensor_para_rank,
-                                                                      prefix_cache_len_);
+                                                                      tensor_para_rank);
     shared_weights_[device_id]->loadModel(model_dir_);
     return;
 }
@@ -318,8 +322,8 @@ std::string LlamaTritonModel<T>::toString()
        << "\ncache_chunk_size: " << cache_chunk_size_ << "\nuse_context_fmha: " << use_context_fmha_
        << "\nstart_id: " << start_id_ << "\ntensor_para_size: " << tensor_para_size_
        << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
-       << "\nmodel_name: " << model_name_ << "\nprefix_cache_len: " << prefix_cache_len_
-       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << std::endl;
+       << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_
+       << "\ngroup_size: " << group_size_ << std::endl;
 
     return ss.str();
 }

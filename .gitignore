@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .vscode/
+.idea/
 # C extensions
 *.so
 
@@ -61,3 +62,12 @@ work_dir*/
 *.pth
 *.py~
 *.sh~
+*.pyc
+**/src/pytorch-sphinx-theme/
+
+# Outputs and logs
+*.txt
+*.log
+*.out
+*.csv
+*.pkl

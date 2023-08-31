@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import os.path as osp
 from typing import Sequence, Union
 
@@ -98,6 +99,13 @@ class HuggingFaceTokenizer:
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
             if hasattr(self.model, 'backend_tokenizer'):
                 self.model.backend_tokenizer.save(backend_tokenizer_file)
+
+        if self.model.eos_token_id is None:
+            generation_config_file = osp.join(model_dir,
+                                              'generation_config.json')
+            with open(generation_config_file, 'r') as f:
+                cfg = json.load(f)
+                self.model.eos_token_id = cfg['eos_token_id']
 
     @property
     def vocab_size(self):

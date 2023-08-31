@@ -16,15 +16,15 @@
 
 #pragma once
 
-#include <algorithm>   // min, max
-#include <assert.h>    // assert
-#include <float.h>     // FLT_MAX
-#include <iostream>    // snprintf
-#include <math.h>      // expf, log
-#include <limits>      // numeric_limits
-#include <stdlib.h>    // rand
-#include <string>      // string
-#include <vector>      // vector
+#include <algorithm>  // min, max
+#include <assert.h>   // assert
+#include <float.h>    // FLT_MAX
+#include <iostream>   // snprintf
+#include <limits>     // numeric_limits
+#include <math.h>     // expf, log
+#include <stdlib.h>   // rand
+#include <string>     // string
+#include <vector>     // vector
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -36,32 +36,37 @@
 
 using namespace turbomind;
 
-class TestFailureError : public std::exception {
+class TestFailureError: public std::exception {
 private:
     std::string msg_;
+
 public:
     explicit TestFailureError() = default;
-    explicit TestFailureError(std::string name, std::string msg = "") {
+    explicit TestFailureError(std::string name, std::string msg = "")
+    {
         msg_ = fmtstr("TEST FAIL [%s] %s", name.c_str(), msg.c_str());
     }
-    const char* what () const throw () {
+    const char* what() const throw()
+    {
         return msg_.c_str();
     }
 };
 
-#define EXPECT_TRUE(cond)                                  \
-    do { if(!(cond)) {                                     \
-        TM_LOG_ERROR("TEST FAIL [%s]: %s at %s:%d",        \
-                     __func__, #cond, __FILE__, __LINE__); \
-        throw TestFailureError(__func__);                  \
-    } } while(false)
+#define EXPECT_TRUE(cond)                                                                                              \
+    do {                                                                                                               \
+        if (!(cond)) {                                                                                                 \
+            TM_LOG_ERROR("TEST FAIL [%s]: %s at %s:%d", __func__, #cond, __FILE__, __LINE__);                          \
+            throw TestFailureError(__func__);                                                                          \
+        }                                                                                                              \
+    } while (false)
 
-#define EXPECT_FALSE(cond)                                 \
-    do { if(cond) {                                        \
-        TM_LOG_ERROR("TEST FAIL [%s]: %s at %s:%d",        \
-                     __func__, #cond, __FILE__, __LINE__); \
-        throw TestFailureError(__func__);                  \
-    } } while(false)
+#define EXPECT_FALSE(cond)                                                                                             \
+    do {                                                                                                               \
+        if (cond) {                                                                                                    \
+            TM_LOG_ERROR("TEST FAIL [%s]: %s at %s:%d", __func__, #cond, __FILE__, __LINE__);                          \
+            throw TestFailureError(__func__);                                                                          \
+        }                                                                                                              \
+    } while (false)
 
 bool almostEqual(float a, float b, float atol = 1e-5, float rtol = 1e-8)
 {
@@ -80,9 +85,11 @@ bool almostEqual(float a, float b, float atol = 1e-5, float rtol = 1e-8)
 }
 
 template<typename T>
-bool checkResult(std::string name, T* out, T*ref, size_t size, float atol, float rtol) {
-    size_t failures = 0;
-    float relative_gap = 0.0f;;
+bool checkResult(std::string name, T* out, T* ref, size_t size, float atol, float rtol)
+{
+    size_t failures     = 0;
+    float  relative_gap = 0.0f;
+    ;
 
     for (size_t i = 0; i < size; ++i) {
         // The values for the output and the reference.
@@ -109,18 +116,21 @@ bool checkResult(std::string name, T* out, T*ref, size_t size, float atol, float
     // Allow not matched up to 1% elements.
     size_t tol_failures = (size_t)(0.01 * size);
     TM_LOG_INFO("check...%6s : %-50s (failures: %.2f%% atol: %.2e rtol: %.2e rel_gap: %.2e%%)",
-                failures <= tol_failures ? "....OK" : "FAILED", name.c_str(),
-                100. * failures / size, atol, rtol, 100. * relative_gap);
+                failures <= tol_failures ? "....OK" : "FAILED",
+                name.c_str(),
+                100. * failures / size,
+                atol,
+                rtol,
+                100. * relative_gap);
     return failures <= tol_failures;
 }
 
 template<typename T>
-bool checkResult(std::string name, T* out, T* ref, size_t size,
-                 bool device_out = true, bool device_ref = false)
+bool checkResult(std::string name, T* out, T* ref, size_t size, bool device_out = true, bool device_ref = false)
 {
-    bool is_fp32 = sizeof(T) == 4;
-    float atol = is_fp32 ? 1e-4f : 1e-3f;
-    float rtol = is_fp32 ? 1e-2f : 1e-1f;
+    bool  is_fp32 = sizeof(T) == 4;
+    float atol    = is_fp32 ? 1e-4f : 1e-3f;
+    float rtol    = is_fp32 ? 1e-2f : 1e-1f;
 
     T* h_out = nullptr;
     if (device_out) {
@@ -135,7 +145,7 @@ bool checkResult(std::string name, T* out, T* ref, size_t size,
         ref = h_ref;
     }
     bool is_ok = checkResult(name, out, ref, size, atol, rtol);
-    if (h_out != nullptr){
+    if (h_out != nullptr) {
         delete[] h_out;
     }
     if (h_ref != nullptr) {
@@ -145,7 +155,8 @@ bool checkResult(std::string name, T* out, T* ref, size_t size,
 }
 
 template<typename T>
-void initRandom(T* ptr, size_t size, float minval, float maxval) {
+void initRandom(T* ptr, size_t size, float minval, float maxval)
+{
     for (size_t i = 0; i < size; ++i) {
         float val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
         val *= (maxval - minval);
@@ -153,7 +164,8 @@ void initRandom(T* ptr, size_t size, float minval, float maxval) {
     }
 }
 
-void initRandomInt(int* ptr, size_t size, int minval, int maxval) {
+void initRandomInt(int* ptr, size_t size, int minval, int maxval)
+{
     assert(minval < maxval);
     int mod = maxval - minval;
     for (size_t i = 0; i < size; ++i) {
@@ -162,7 +174,8 @@ void initRandomInt(int* ptr, size_t size, int minval, int maxval) {
 }
 
 template<typename T>
-void tile(T* x, int m, int n) {
+void tile(T* x, int m, int n)
+{
     for (int i = 1; i < m; ++i) {
         for (int j = 0; j < n; ++j) {
             x[i * n + j] = x[j];
@@ -171,7 +184,8 @@ void tile(T* x, int m, int n) {
 }
 
 template<typename T>
-void tile(T* dst, T* src, int m, int n) {
+void tile(T* dst, T* src, int m, int n)
+{
     for (int i = 1; i < m; ++i) {
         for (int j = 0; j < n; ++j) {
             dst[i * n + j] = src[j];
@@ -182,11 +196,13 @@ void tile(T* dst, T* src, int m, int n) {
 #define HALF_FLT_MAX 65504.0f
 
 template<typename T>
-bool isHalf() {
+bool isHalf()
+{
     return std::is_same<T, half>::value;
 }
 
 template<typename T>
-static inline void printMatrixWithLimit(T* ptr, int m, int k, int stride, bool is_device_ptr) {
+static inline void printMatrixWithLimit(T* ptr, int m, int k, int stride, bool is_device_ptr)
+{
     printMatrix(ptr, std::min(PRINT_LIMIT, m), std::min(PRINT_LIMIT, k), stride, is_device_ptr);
 }

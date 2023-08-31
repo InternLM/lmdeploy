@@ -19,25 +19,6 @@
 
 namespace turbomind {
 
-template<typename T>
-void invokeAddQKVBiasIA3Transpose(T*           q_buf,
-                                  T*           k_buf,
-                                  T*           v_buf,
-                                  T*           Q,
-                                  const T*     bias_Q,
-                                  T*           K,
-                                  const T*     bias_K,
-                                  T*           V,
-                                  const T*     bias_V,
-                                  const int    batch_size,
-                                  const int    seq_len,
-                                  const int    head_num,
-                                  const int    size_per_head,
-                                  const int*   ia3_tasks,
-                                  const T*     ia3_key_weights,
-                                  const T*     ia3_value_weights,
-                                  cudaStream_t stream);
-
 template<typename T, typename T_IN>
 struct MaskedSoftmaxParam {
     // Common parameters.
@@ -70,27 +51,6 @@ void invokeTransposeQKV(T*           dst,
                         cudaStream_t stream);
 
 template<typename T>
-void invokeAddQKVBiasIA3RebuildPadding(T*           Q,
-                                       const T*     bias_Q,
-                                       T*           K,
-                                       const T*     bias_K,
-                                       T*           V,
-                                       const T*     bias_V,
-                                       T*           q_buf,
-                                       T*           k_buf,
-                                       T*           v_buf,
-                                       const int    batch_size,
-                                       const int    seq_len,
-                                       const int    head_num,
-                                       const int    size_per_head,
-                                       const int    valid_word_num,
-                                       const int*   mask_offset,
-                                       const int*   ia3_tasks,
-                                       const T*     ia3_key_weights,
-                                       const T*     ia3_value_weights,
-                                       cudaStream_t stream);
-
-template<typename T>
 void invokeTransposeAttentionOutRemovePadding(T*           src,
                                               T*           dst,
                                               const int    valid_word_num,
@@ -103,36 +63,26 @@ void invokeTransposeAttentionOutRemovePadding(T*           src,
                                               const int    int8_mode,
                                               cudaStream_t stream);
 
-// Prefix Prompt Parameters
 template<typename T>
-struct PrefixPromptBatchWeightsParam {
-    const T**  d_prefix_prompt_batch    = nullptr;
-    const int* d_prefix_prompt_lengths  = nullptr;
-    const int  max_prefix_prompt_length = 0;
-    // l * 2 * hidden_units_ / tensor_para_.world_size_
-    const size_t prefix_prompt_layer_offset_per_seq = 0;
-};
-
-template<typename T>
-void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
-                                    T*                               k_buf,
-                                    T*                               v_buf,
-                                    PrefixPromptBatchWeightsParam<T> param,
-                                    T*                               QKV,
-                                    const T*                         qkv_bias,
-                                    const int*                       padding_offset,
-                                    const int*                       history_length,
-                                    const int                        batch_size,
-                                    const int                        seq_len,
-                                    const int                        token_num,
-                                    const int                        head_num,
-                                    const int                        kv_head_num,
-                                    const int                        size_per_head,
-                                    const int                        rotary_embedding_dim,
-                                    const int                        neox_rotary_style,
-                                    const float*                     scale,
-                                    const int                        int8_mode,
-                                    cudaStream_t                     stream);
+void invokeAddFusedQKVBiasTranspose(T*           q_buf,
+                                    T*           k_buf,
+                                    T*           v_buf,
+                                    T*           QKV,
+                                    const T*     qkv_bias,
+                                    const int*   padding_offset,
+                                    const int*   history_length,
+                                    const int*   input_length,
+                                    const int    batch_size,
+                                    const int    seq_len,
+                                    const int    token_num,
+                                    const int    head_num,
+                                    const int    kv_head_num,
+                                    const int    size_per_head,
+                                    const int    rotary_embedding_dim,
+                                    int          max_position_embeddings,
+                                    bool         use_dynamic_ntk,
+                                    bool         use_logn_attn,
+                                    cudaStream_t stream);
 
 template<typename T>
 void invokeTranspose4d(T*           dst,

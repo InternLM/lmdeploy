@@ -60,13 +60,6 @@ struct Multihead_attention_params_base {
     // The input Vs and the associated bias. Dimensions B x D and D, resp.
     const T *v = nullptr, *v_bias = nullptr;
 
-    // The cache for the Ks. The size must be at least B x L x D.
-    T* k_cache = nullptr;
-    // The cache for the Vs. The size must be at least B x L x D.
-    T* v_cache = nullptr;
-    // The indirections to use for cache when beam sampling.
-    const int* cache_indir = nullptr;
-
     // scales
     const float* query_weight_output_scale               = nullptr;
     const float* attention_qk_scale                      = nullptr;
@@ -108,30 +101,26 @@ struct Multihead_attention_params_base {
     // The slope per head of linear position bias to attention score (H).
     const T* linear_bias_slopes = nullptr;
 
-    const T*   ia3_key_weights   = nullptr;
-    const T*   ia3_value_weights = nullptr;
-    const int* ia3_tasks         = nullptr;
-
     const float* qkv_scale_out       = nullptr;
     const float* attention_out_scale = nullptr;
     int          int8_mode           = 0;
     float        attention_k_scale   = 0.f;
+    float        attention_k_zp      = 0.f;
     float        attention_v_scale   = 0.f;
+    float        attention_v_zp      = 0.f;
 };
 
 template<typename T>
 struct Multihead_attention_params: public Multihead_attention_params_base<T> {
-    // allows to exist attention eary
-    bool* finished = nullptr;
-
-    // required in case of masked attention with different length
-    const int* length_per_sample = nullptr;
-
-    T**    k_cache_per_sample         = nullptr;
-    T**    v_cache_per_sample         = nullptr;
-    size_t kv_cache_per_sample_offset = 0;
-    bool   k_cache_interleaved        = true;
-    int    num_kv_heads               = 0;
+    bool*      finished                   = nullptr;
+    const int* length_per_sample          = nullptr;
+    T**        k_cache_per_sample         = nullptr;
+    T**        v_cache_per_sample         = nullptr;
+    size_t     kv_cache_per_sample_offset = 0;
+    int        num_kv_heads               = 0;
+    int        max_position_embeddings    = 0;
+    bool       use_dynamic_ntk            = false;
+    bool       use_logn_attn              = false;
 };
 
 template<class T>

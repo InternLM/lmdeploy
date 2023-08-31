@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/logger.h"
@@ -330,16 +331,16 @@ loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename, std::ve
 
         size_t loaded_data_size = sizeof(T) * size;
         in.seekg(0, in.end);
+        const auto file_size_in_bytes = (size_t)in.tellg();
         in.seekg(0, in.beg);
 
         TM_LOG_DEBUG("Read " + std::to_string(loaded_data_size) + " bytes from " + filename);
         in.read((char*)host_array.data(), loaded_data_size);
 
-        size_t in_get_size = in.gcount();
-        if (in_get_size != loaded_data_size) {
-            TM_LOG_WARNING("file %s only has %ld, but request %ld, loading model fails! \n",
+        if (file_size_in_bytes != loaded_data_size) {
+            TM_LOG_WARNING("file %s has %ld, but request %ld, loading model fails!",
                            filename.c_str(),
-                           in_get_size,
+                           file_size_in_bytes,
                            loaded_data_size);
             return std::vector<T>();
         }
@@ -356,8 +357,8 @@ loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename, std::ve
         }
 
         // get slices
-        ConcateSlice slice0{.slices = {{0, dim0}}};
-        ConcateSlice slice1{.slices = {{0, dim1}}};
+        ConcateSlice slice0{{{0, dim0}}};
+        ConcateSlice slice1{{{0, dim1}}};
         if (slices.size() > 0 && slices[0].slices.size() > 0) {
             slice0 = slices[0];
         }

@@ -15,6 +15,8 @@
  */
 
 #include "src/turbomind/utils/gemm_test/gpt_gemm_func.h"
+#include "src/turbomind/macro.h"
+#include <chrono>
 
 namespace turbomind {
 
@@ -232,7 +234,6 @@ void generate_gpt_gemm_config(int   batch_size,
     cudaDataType_t computeType;
     int            startAlgo, endAlgo;
     const int      ites = 100;
-    struct timeval start, end;
 
     CublasDataType data_type;
     if (std::is_same<T, float>::value) {
@@ -332,7 +333,7 @@ void generate_gpt_gemm_config(int   batch_size,
         for (int algo = startAlgo; algo <= endAlgo; algo++) {
             cublasStatus_t status;
             cudaDeviceSynchronize();
-            gettimeofday(&start, NULL);
+            auto start = std::chrono::high_resolution_clock::now();
             for (int ite = 0; ite < ites; ++ite) {
                 if (i == 1) {
                     status = cublasGemmStridedBatchedEx(cublas_handle,
@@ -432,11 +433,12 @@ void generate_gpt_gemm_config(int   batch_size,
                 }
             }
             cudaDeviceSynchronize();
-            gettimeofday(&end, NULL);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto dur = std::chrono::duration<float, std::milli>(end - start);
             if (status == CUBLAS_STATUS_SUCCESS) {
-                printf("algo_%d costs %.3fms \n", algo, diffTime(start, end) / ites);
-                if (diffTime(start, end) / ites < exec_time) {
-                    exec_time = diffTime(start, end) / ites;
+                printf("algo_%d costs %.3fms \n", algo, dur.count() / ites);
+                if (dur.count() / ites < exec_time) {
+                    exec_time = dur.count() / ites;
                     fast_algo = algo;
                 }
             }
@@ -450,7 +452,7 @@ void generate_gpt_gemm_config(int   batch_size,
         if ((data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) || data_type == FP8_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int                ALGO_COMBINATIONS = 10000;
+            const int          ALGO_COMBINATIONS = 10000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             // for gpt, computeType & scaleType should be FP32
@@ -644,7 +646,7 @@ void generate_gpt_gemm_config(int   batch_size,
                     CHECK_CUSPARSE(
                         cusparseLtDenseDescriptorInit(&handle, &mat_C, m, n, m, alignment, CUDA_R_16F, order))
                     cudaDeviceSynchronize();
-                    gettimeofday(&start, NULL);
+                    auto start = std::chrono::high_resolution_clock::now();
                     for (int ite = 0; ite < ites; ++ite) {
                         // initializing MatDesc takes a lot of time
                         // and these descs can be stored to other place
@@ -675,10 +677,11 @@ void generate_gpt_gemm_config(int   batch_size,
                         CHECK_CUSPARSE(cusparseLtMatmulPlanDestroy(&plan))
                     }
                     cudaDeviceSynchronize();
-                    gettimeofday(&end, NULL);
-                    printf("algo_%d costs %.3fms \n", alg, diffTime(start, end) / ites);
-                    if (diffTime(start, end) < exec_time) {
-                        exec_time = diffTime(start, end);
+                    auto end = std::chrono::high_resolution_clock::now();
+                    auto dur = std::chrono::duration<float, std::milli>(end - start);
+                    printf("algo_%d costs %.3fms \n", alg, dur.count() / ites);
+                    if (dur.count() < exec_time) {
+                        exec_time = dur.count();
                         fast_algo = alg;
                     }
                 }
