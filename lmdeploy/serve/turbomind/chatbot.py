@@ -647,7 +647,7 @@ class Chatbot:
                 text = output_str[0].decode()
                 if display:
                     print(text, end='', flush=True)
-                session.response = text
+                session.response += text
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
                        output_ids.shape[-1])
             except Exception as e:
