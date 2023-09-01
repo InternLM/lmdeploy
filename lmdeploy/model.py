@@ -23,6 +23,7 @@ class BaseModel:
         self.top_k = top_k
         self.temperature = temperature
         self.repetition_penalty = repetition_penalty
+        self.stop_words = None
 
     @staticmethod
     def get_prompt(prompt, sequence_start=True):
@@ -81,11 +82,6 @@ class BaseModel:
         if isinstance(messages, str):
             return self.get_prompt(messages)
         # chat history processing in derived classes
-
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return None
 
 
 @MODELS.register_module(name='vicuna')
@@ -158,6 +154,7 @@ class InternLMChat7B(BaseModel):
                  eoh='<eoh>',
                  eoa='<eoa>',
                  assistant='<|Bot|>',
+                 stop_words=[103027, 103028],
                  **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -165,6 +162,7 @@ class InternLMChat7B(BaseModel):
         self.eoh = eoh
         self.eoa = eoa
         self.assistant = assistant
+        self.stop_words = stop_words
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -205,11 +203,6 @@ class InternLMChat7B(BaseModel):
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
         return ret
 
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return [103027, 103028]
-
 
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
@@ -239,6 +232,7 @@ class Puyu(BaseModel):
                  eosys='',
                  assistant='<|Assistant|>: ',
                  system='<|System|>: ',
+                 stop_words=[45623],
                  **kwargs):
         super().__init__(**kwargs)
         self.meta_instruction = meta_instruction
@@ -247,6 +241,7 @@ class Puyu(BaseModel):
         self.eosys = eosys
         self.assistant = assistant
         self.system = system
+        self.stop_words = stop_words
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
@@ -255,11 +250,6 @@ class Puyu(BaseModel):
                    f'{self.assistant}'
         else:
             return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
-
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return [45623]
 
 
 @MODELS.register_module(name='llama2')
@@ -340,6 +330,7 @@ class Qwen7BChat(BaseModel):
                  im_start='<|im_start|>',
                  im_end='<|im_end|>',
                  system='You are a helpful assistant.',
+                 stop_words=[151645],
                  **kwargs):
         super().__init__(**kwargs)
         self.session_len = session_len
@@ -350,6 +341,7 @@ class Qwen7BChat(BaseModel):
         self.im_start = im_start
         self.im_end = im_end
         self.system = system
+        self.stop_words = stop_words
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
@@ -359,11 +351,6 @@ class Qwen7BChat(BaseModel):
 
         return f'\n{self.im_start}user\n{prompt}{self.im_end}' \
                f'\n{self.im_start}assistant\n'
-
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return [151645]  # <|im_end|>
 
 
 def main(model_name: str = 'test'):
