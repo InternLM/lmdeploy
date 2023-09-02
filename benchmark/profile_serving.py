@@ -160,7 +160,7 @@ def main(tritonserver_addr: str,
     for i in range(concurrency):
         session_id, _stats = res_que.get()
         print(f'\n{"-" * 50}\n'
-              f'session {session_id}: processed reqs {len(stats)}, '
+              f'session {session_id}: processed reqs {len(_stats)}, '
               f'stats: \n{_stats}\n{"-" * 50}\n')
         stats.append(np.array(_stats))
 

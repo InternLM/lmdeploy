@@ -631,7 +631,8 @@ class Chatbot:
                 output_ids = output_ids[:, :, n_input_token +
                                         preseq_length:sequence_length.squeeze(
                                         )]
-                last_token_id = output_ids[-1, -1, -1]
+                last_token_id = None if output_ids.shape[
+                    -1] == 0 else output_ids[-1, -1, -1]
                 if last_token_id == eos_id:
                     session.sequence_length = session.sequence_length - 1
                     output_ids = output_ids[:, :, :-1]
@@ -652,6 +653,8 @@ class Chatbot:
                        output_ids.shape[-1])
             except Exception as e:
                 logger.error(f'catch exception: {e}')
+                logger.error(
+                    f'session {session.session_id}: prompt: {session.prompt}')
 
         # put session back to queue so that `_stream_infer` can update it in
         # `self.sessions`
