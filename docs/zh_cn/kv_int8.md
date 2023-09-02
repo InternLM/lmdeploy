@@ -25,23 +25,32 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 
 ### **第二步**
 
-获取量化参数
+通过以下 2 步，获取量化参数
 
 ```bash
+# 计算 minmax
+python3 -m lmdeploy.lite.apis.calibrate \
+  --model $HF_MODEL \
+  --calib_dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
+  --calib_samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
+  --calib_seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
+  --work_dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
+
+# 通过 minmax 获取量化参数
 python3 -m lmdeploy.lite.apis.kv_qparams \
-  --work_dir /path/to/internlm-chat-7b  \             # huggingface 模型目录
-  --turbomind_dir workspace/trition_models/weights/ \ # 保存量化参数的目录
+  --work_dir $WORK_DIR  \                             # 上一步的结果
+  --turbomind_dir workspace/triton_models/weights/ \ # 保存量化参数的目录，推理要用
   --kv_sym False \                                    # 对称量化或非对称量化，默认为 False
   --num_tp 1  \                                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
 
 `kv_qparams` 会在 `weights` 目录生成 fp32 缩放系数，文件格式是 `numpy.tofile` 产生的二进制。
 
-也可以先把 `turbomind_dir` 设成私有目录，再把缩放系数拷贝进 `workspace/trition_models/weights/`。
+也可以先把 `turbomind_dir` 设成私有目录，再把缩放系数拷贝进 `workspace/triton_models/weights/`。
 
 ### **第三步**
 
-修改 `workspace/trition_models/weights/config.ini`：
+修改 `workspace/triton_models/weights/config.ini`：
 
 - use_context_fmha 改为 0，表示关闭 flashattention
 - quant_policy 设置为 4。表示打开 kv_cache int8
