@@ -61,3 +61,12 @@ work_dir*/
 *.pth
 *.py~
 *.sh~
+
+*.out
+*.pkl
+*.csv
+*.txt
+*.log
+*.json
+*.ipynb
+*.sh
