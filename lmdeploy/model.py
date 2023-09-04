@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import List
+
 from mmengine import Registry
 
 MODELS = Registry('model', locations=['lmdeploy.model'])
@@ -33,6 +35,10 @@ class BaseModel:
     def stop_words(self):
         """Return the stop-words' token ids."""
         return None
+
+    def update_input_ids(self, input_ids: List[int]):
+        """Further modify input ids of the prompt."""
+        return input_ids
 
 
 @MODELS.register_module(name='vicuna')
@@ -204,6 +210,10 @@ class ChatGLM2(BaseModel):
         # [64790, 64792] to be prepended
         self.count += 1
         return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+
+    def update_input_ids(self, input_ids: List):
+        input_ids = [64790, 64792] + input_ids
+        return input_ids
 
 
 def main(model_name: str = 'test'):
