@@ -69,13 +69,13 @@ class LlamaAttention(nn.Module):
 
         max_seq_len = position_ids.size(-1)
 
-        if origin_self.pretraining_tp > 1:
+        if origin_self.config.pretraining_tp > 1:
             key_value_slicing = (
                 origin_self.num_key_value_heads *
-                origin_self.head_dim) // origin_self.pretraining_tp
+                origin_self.head_dim) // origin_self.config.pretraining_tp
             query_slices = origin_self.q_proj.weight.split(
                 (origin_self.num_heads * origin_self.head_dim) //
-                origin_self.pretraining_tp,
+                origin_self.config.pretraining_tp,
                 dim=0)
             key_slices = origin_self.k_proj.weight.split(key_value_slicing,
                                                          dim=0)
@@ -84,19 +84,19 @@ class LlamaAttention(nn.Module):
 
             query_states = [
                 F.linear(hidden_states, query_slices[i])
-                for i in range(origin_self.pretraining_tp)
+                for i in range(origin_self.config.pretraining_tp)
             ]
             query_states = torch.cat(query_states, dim=-1)
 
             key_states = [
                 F.linear(hidden_states, key_slices[i])
-                for i in range(origin_self.pretraining_tp)
+                for i in range(origin_self.config.pretraining_tp)
             ]
             key_states = torch.cat(key_states, dim=-1)
 
             value_states = [
                 F.linear(hidden_states, value_slices[i])
-                for i in range(origin_self.pretraining_tp)
+                for i in range(origin_self.config.pretraining_tp)
             ]
             value_states = torch.cat(value_states, dim=-1)
 
@@ -123,6 +123,14 @@ class LlamaAttention(nn.Module):
             history_lengths)
         q_start_loc = q_seq_length.cumsum(0)
         q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+
+        print('===Context Fill===')
+        print('key_states.shape', key_states.shape)
+        print('value_states.shape', value_states.shape)
+        print('q_start_loc', q_start_loc)
+        print('q_seq_length', q_seq_length)
+        print('cache_k', past_key_value[0].shape)
+
         context.fill_cache(
             key_states,
             value_states,
@@ -131,6 +139,7 @@ class LlamaAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
         )
+        print('cache_k', past_key_value[0].shape)
 
         # TODO: fix GQA
         # # repeat k/v heads if n_kv_heads < n_heads
@@ -142,6 +151,14 @@ class LlamaAttention(nn.Module):
 
         block_offsets = context.block_offsets
         block_size = past_key_value[0].size(1)
+
+        print('===Attention===')
+        print('kv_seq_length = ', kv_seq_length)
+        print('query_states.shape', query_states.shape)
+        print('max_seq_len', max_seq_len)
+        print('block_size', block_size)
+        print('block_offsets', block_offsets)
+
         paged_attention_fwd(query_states,
                             past_key_value[0],
                             past_key_value[1],
@@ -154,15 +171,16 @@ class LlamaAttention(nn.Module):
                             BLOCK=block_size)
         attn_output = attn_output.reshape(-1, origin_self.hidden_size)
 
-        if origin_self.pretraining_tp > 1:
+        if origin_self.config.pretraining_tp > 1:
             attn_output = attn_output.split(origin_self.hidden_size //
-                                            origin_self.pretraining_tp,
+                                            origin_self.config.pretraining_tp,
                                             dim=1)
             o_proj_slices = origin_self.o_proj.weight.split(
-                origin_self.hidden_size // origin_self.pretraining_tp, dim=1)
+                origin_self.hidden_size // origin_self.config.pretraining_tp,
+                dim=1)
             attn_output = sum([
                 F.linear(attn_output[i], o_proj_slices[i])
-                for i in range(origin_self.pretraining_tp)
+                for i in range(origin_self.config.pretraining_tp)
             ])
         else:
             attn_output = origin_self.o_proj(attn_output)
