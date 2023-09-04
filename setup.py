@@ -120,6 +120,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
 
 
 if __name__ == '__main__':
+    lmdeploy_package_data = ['lmdeploy/bin/llama_gemm']
     setup(name='lmdeploy',
           version=get_version(),
           description='A toolset for compressing, deploying and serving LLM',
@@ -128,6 +129,9 @@ if __name__ == '__main__':
           author='OpenMMLab',
           author_email='openmmlab@gmail.com',
           packages=find_packages(exclude=()),
+          package_data={
+              'lmdeploy': lmdeploy_package_data,
+          },
           include_package_data=True,
           install_requires=parse_requirements('requirements.txt'),
           has_ext_modules=check_ext_modules,

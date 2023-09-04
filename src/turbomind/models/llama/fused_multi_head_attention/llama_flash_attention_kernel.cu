@@ -1,9 +1,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-#include "42_fused_multi_head_attention/kernel_forward.h"
-#include "mma_accum_lambda_iterator.h"
-#include "tile_smem_loader.h"
+#include "41_fused_multi_head_attention/kernel_forward.h"
 #include <cuda_fp16.h>
 #include <cutlass/arch/arch.h>
 #include <cutlass/gemm/gemm.h>
@@ -77,19 +75,9 @@ struct LlamaAttentionKernel:
         int v_batch_seqs_offset = 0;
         int o_batch_seqs_offset = 0;
 
-        int32_t o_strideM_custom = 0;
-
         int32_t group_size = 1;
 
         float scale;
-
-        CUTLASS_HOST_DEVICE int32_t o_strideM() const
-        {
-            if (o_strideM_custom == 0)
-                return BaseParams::head_dim_value;
-            else
-                return o_strideM_custom;
-        }
 
         template<typename ptr_t>
         CUTLASS_DEVICE void
@@ -107,8 +95,8 @@ struct LlamaAttentionKernel:
             auto& query_ptr        = BaseParams::query_ptr;
             auto& key_ptr          = BaseParams::key_ptr;
             auto& value_ptr        = BaseParams::value_ptr;
-            auto& cu_seqlens_q_ptr = BaseParams::cu_seqlens_q_ptr;
-            auto& cu_seqlens_k_ptr = BaseParams::cu_seqlens_k_ptr;
+            auto& cu_seqlens_q_ptr = BaseParams::seqstart_q_ptr;
+            auto& cu_seqlens_k_ptr = BaseParams::seqstart_k_ptr;
 
             auto& output_ptr       = BaseParams::output_ptr;
             auto& output_accum_ptr = BaseParams::output_accum_ptr;
@@ -119,28 +107,27 @@ struct LlamaAttentionKernel:
             auto& num_queries    = BaseParams::num_queries;
             auto& num_keys       = BaseParams::num_keys;
 
-            auto& causal = BaseParams::causal;
-
             auto& q_strideM = BaseParams::q_strideM;
             auto& k_strideM = BaseParams::k_strideM;
             auto& v_strideM = BaseParams::v_strideM;
+            auto& o_strideM = BaseParams::o_strideM;
 
             // Everything below is only used in `advance_to_block`
             // and shouldn't use registers
             auto& q_strideH   = BaseParams::q_strideH;
             auto& k_strideH   = BaseParams::k_strideH;
             auto& v_strideH   = BaseParams::v_strideH;
-            auto& o_strideH   = BaseParams::o_strideH;
             auto& q_strideB   = BaseParams::q_strideB;
             auto& k_strideB   = BaseParams::k_strideB;
             auto& v_strideB   = BaseParams::v_strideB;
-            auto& o_strideB   = BaseParams::o_strideB;
             auto& num_batches = BaseParams::num_batches;
             auto& num_heads   = BaseParams::num_heads;
 
             auto batch_id    = blockIdx.z;
             auto head_id     = blockIdx.y;
             auto query_start = blockIdx.x * kQueriesPerBlock;
+
+            auto o_strideB = o_strideM * num_queries;
 
             auto lse_dim = ceil_div((int32_t)num_queries, kAlignLSE) * kAlignLSE;
 
@@ -203,10 +190,10 @@ struct LlamaAttentionKernel:
             query_ptr += (qq_start + query_start) * q_strideM + head_id * q_strideH;
             key_ptr += k_start * k_strideM + int64_t(head_id / group_size) * k_strideH;
             value_ptr += k_start * v_strideM + int64_t(head_id / group_size) * v_strideH;
-            output_ptr += int64_t(qo_start + query_start) * o_strideM() + head_id * o_strideH;
+            output_ptr += int64_t(qo_start + query_start) * o_strideM + head_id * head_dim_value;
 
             if (output_accum_ptr != nullptr) {
-                output_accum_ptr += int64_t(query_start) * o_strideM() + head_id * o_strideH;
+                output_accum_ptr += int64_t(query_start) * o_strideM + head_id * head_dim_value;
             }
             else {
                 // Accumulate directly in the destination buffer (eg for f32)
@@ -218,9 +205,6 @@ struct LlamaAttentionKernel:
             }
 
             num_queries -= query_start;
-            if (causal) {
-                num_keys = cutlass::fast_min(int32_t(query_start + kQueriesPerBlock), num_keys);
-            }
             num_batches = 0;  // no longer used after
 
             // Make sure the compiler knows these variables are the same on all
@@ -328,7 +312,7 @@ struct LlamaAttentionKernel:
 
         auto createOutputIter = [&](int col) -> typename MM1::OutputTileIterator {
             using OutputTileIterator = typename MM1::OutputTileIterator;
-            return OutputTileIterator(typename OutputTileIterator::Params{(int32_t)p.o_strideM()},
+            return OutputTileIterator(typename OutputTileIterator::Params{(int32_t)p.o_strideM},
                                       p.output_ptr,
                                       typename OutputTileIterator::TensorCoord{p.num_queries, p.head_dim_value},
                                       thread_id(),
@@ -338,7 +322,7 @@ struct LlamaAttentionKernel:
         auto createOutputAccumIter = [&](int col) -> typename MM1::OutputTileIteratorAccum {
             using OutputTileIteratorAccum = typename MM1::OutputTileIteratorAccum;
             return OutputTileIteratorAccum(
-                typename OutputTileIteratorAccum::Params{(int32_t)p.o_strideM()},
+                typename OutputTileIteratorAccum::Params{(int32_t)p.o_strideM},
                 p.output_accum_ptr,
                 typename OutputTileIteratorAccum::TensorCoord{p.num_queries, p.head_dim_value},
                 thread_id(),
@@ -453,28 +437,27 @@ struct LlamaAttentionKernel:
                     [&](int accum_m) {});
             }
 
-            DISPATCH_BOOL(
-                iter_key_start == 0, kIsFirst, ([&] {
-                    DISPATCH_BOOL(
-                        p.num_keys - iter_key_start >= kKeysPerBlock, kFullColumns, ([&] {
-                            // Update `mi` from accum stored in registers
-                            // Also updates `accum` with accum[i] <-
-                            // exp(accum[i] * scale
-                            // - mi)
-                            MM0::ScalingCoefsUpdater::update<kQueriesPerBlock, kFullColumns, kIsFirst, kKeepOutputInRF>(
-                                accum_o,
-                                accum,
-                                mi,
-                                m_prime,
-                                s_prime,
-                                lane_id(),
-                                thread_id(),
-                                warp_id(),
-                                p.num_keys - iter_key_start,
-                                iteratorC_tile_offset,
-                                kSupportsBias ? 1.0f : p.scale);
-                        }));
-                }));
+            DISPATCH_BOOL(iter_key_start == 0, kIsFirst, ([&] {
+                              DISPATCH_BOOL(
+                                  p.num_keys - iter_key_start >= kKeysPerBlock, kFullColumns, ([&] {
+                                      // Update `mi` from accum stored in registers
+                                      // Also updates `accum` with accum[i] <-
+                                      // exp(accum[i] * scale
+                                      // - mi)
+                                      Base::iterative_softmax<MM0::Mma::Operator::IteratorC, kFullColumns, kIsFirst>(
+                                          accum_o,
+                                          accum,
+                                          mi,
+                                          m_prime,
+                                          s_prime,
+                                          lane_id(),
+                                          thread_id(),
+                                          warp_id(),
+                                          p.num_keys - iter_key_start,
+                                          iteratorC_tile_offset,
+                                          kSupportsBias ? 1.0f : p.scale);
+                                  }));
+                          }));
 
             // Output results to shared-memory
             int  warp_idx_mn_0      = my_warp_id % (MM0::Mma::Base::WarpCount::kM * MM0::Mma::Base::WarpCount::kN);
@@ -651,13 +634,13 @@ struct LlamaAttentionKernel:
 };
 
 template<typename T, typename Attention>
-void invokeFlashAttention_impl(int                                   batch_size,
-                               int                                   head_num,
-                               int                                   key_len,
-                               int                                   seq_len,
-                               int                                   size_per_head,
-                               typename FlashAttentionOp<T>::Params& attention_params,
-                               cudaStream_t                          st)
+void invokeFlashAttention_impl(int                                          batch_size,
+                               int                                          head_num,
+                               int                                          key_len,
+                               int                                          seq_len,
+                               int                                          size_per_head,
+                               typename FlashAttentionOpImpl<T, 1>::Params& attention_params,
+                               cudaStream_t                                 st)
 {
     T*     out_ptr          = attention_params.attn_out;
     T*     query_ptr        = attention_params.query;
@@ -685,11 +668,11 @@ void invokeFlashAttention_impl(int                                   batch_size,
     // fill param
     typename Attention::Params params{};
     {
-        params.query_ptr        = (scalar_t*)(query_ptr);
-        params.key_ptr          = (scalar_t*)(key_ptr);
-        params.value_ptr        = (scalar_t*)(value_ptr);
-        params.attn_bias_ptr    = (scalar_t*)(mask_ptr);
-        params.cu_seqlens_q_ptr = cu_seqlens_q_ptr;
+        params.query_ptr      = (scalar_t*)(query_ptr);
+        params.key_ptr        = (scalar_t*)(key_ptr);
+        params.value_ptr      = (scalar_t*)(value_ptr);
+        params.attn_bias_ptr  = (scalar_t*)(mask_ptr);
+        params.seqstart_q_ptr = cu_seqlens_q_ptr;
 
         params.output_ptr       = (scalar_t*)(out_ptr);
         params.output_accum_ptr = kNeedsOutputAccumulatorBuffer ? output_accum_ptr : nullptr;
@@ -725,9 +708,7 @@ void invokeFlashAttention_impl(int                                   batch_size,
         params.v_batch_seqs_ptr    = (scalar_t**)layout_v.batch_seqs;
         params.v_batch_seqs_offset = layout_v.batch_seqs_offset;
 
-        params.o_strideH           = layout_o.stride_head;
-        params.o_strideM_custom    = layout_o.stride_seq;
-        params.o_strideB           = layout_o.stride_batch;
+        params.o_strideM           = layout_o.stride_seq;
         params.o_use_seqlens       = layout_o.use_seqlens;
         params.o_batch_seqs_ptr    = (scalar_t**)layout_o.batch_seqs;
         params.o_batch_seqs_offset = layout_o.batch_seqs_offset;
@@ -784,14 +765,14 @@ bool get_needs_accum_buffer()
 }
 
 template<typename T, int kQueriesPerBlock, int kKeysPerBlock>
-void invoke_attention_impl(bool                                  single_val_iteration,
-                           int                                   batch_size,
-                           int                                   head_num,
-                           int                                   key_len,
-                           int                                   seq_len,
-                           int                                   size_per_head,
-                           typename FlashAttentionOp<T>::Params& params,
-                           cudaStream_t                          st)
+void invoke_attention_impl(bool                                         single_val_iteration,
+                           int                                          batch_size,
+                           int                                          head_num,
+                           int                                          key_len,
+                           int                                          seq_len,
+                           int                                          size_per_head,
+                           typename FlashAttentionOpImpl<T, 1>::Params& params,
+                           cudaStream_t                                 st)
 {
     using scalar_t =
         typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
@@ -830,18 +811,34 @@ void invoke_attention_impl(bool                                  single_val_iter
 }
 
 template<typename T>
-class FlashAttentionOp<T>::impl {
+class FlashAttentionOpImpl<T, 1> {
+
+public:
+    using AttentionLayout = BaseAttentionLayout<T>;
+    using Params          = BaseAttentionParams<T>;
+
+public:
+    FlashAttentionOpImpl(int batch_size, int head_num, int key_len, int seq_len, int size_per_head);
+    ~FlashAttentionOpImpl();
+
+    int get_workspace_size() const;
+
+    void operator()(Params& params, cudaStream_t st) const;
+
+private:
+    class impl;
+    std::unique_ptr<impl> pimpl;
+};
+
+template<typename T>
+class FlashAttentionOpImpl<T, 1>::impl {
 
 private:
     static constexpr int kQueriesPerBlock = 32;
     static constexpr int kKeysPerBlock    = 128;
-    using ArchTag                         = cutlass::arch::Sm80;
     using scalar_t =
         typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
-    using SingleValueAttention = LlamaAttentionKernel<scalar_t, ArchTag, kQueriesPerBlock, kKeysPerBlock, true>;
-    using MultiValueAttention  = LlamaAttentionKernel<scalar_t, ArchTag, kQueriesPerBlock, kKeysPerBlock, false>;
-    using AttentionLayout      = typename FlashAttentionOp<T>::AttentionLayout;
-    using Params               = typename FlashAttentionOp<T>::Params;
+    using Params = typename FlashAttentionOpImpl<T, 1>::Params;
 
     int  batch_size_;
     int  head_num_;
@@ -887,29 +884,30 @@ public:
 };
 
 template<typename T>
-FlashAttentionOp<T>::FlashAttentionOp(int batch_size, int head_num, int key_len, int seq_len, int size_per_head):
-    pimpl{std::make_unique<FlashAttentionOp<T>::impl>(batch_size, head_num, key_len, seq_len, size_per_head)}
+FlashAttentionOpImpl<T, 1>::FlashAttentionOpImpl(
+    int batch_size, int head_num, int key_len, int seq_len, int size_per_head):
+    pimpl{std::make_unique<FlashAttentionOpImpl<T, 1>::impl>(batch_size, head_num, key_len, seq_len, size_per_head)}
 {
 }
 
 template<typename T>
-FlashAttentionOp<T>::~FlashAttentionOp()
+FlashAttentionOpImpl<T, 1>::~FlashAttentionOpImpl()
 {
 }
 
 template<typename T>
-int FlashAttentionOp<T>::get_workspace_size() const
+int FlashAttentionOpImpl<T, 1>::get_workspace_size() const
 {
     return pimpl->get_workspace_size();
 }
 
 template<typename T>
-void FlashAttentionOp<T>::operator()(Params& params, cudaStream_t st) const
+void FlashAttentionOpImpl<T, 1>::operator()(Params& params, cudaStream_t st) const
 {
     pimpl->operator()(params, st);
 }
 
-template class FlashAttentionOp<float>;
-template class FlashAttentionOp<half>;
+template class FlashAttentionOpImpl<float, 1>;
+template class FlashAttentionOpImpl<half, 1>;
 
 }  // namespace turbomind

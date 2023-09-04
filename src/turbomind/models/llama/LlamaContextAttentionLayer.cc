@@ -264,6 +264,7 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
 {
     //////////////////////////////////////////////
     // flash attention
+    // flash attention 2 only support half inputs
     using AttentionOp = FlashAttentionOp<T>;
     using Layout      = typename AttentionOp::AttentionLayout;
     Layout layout_q{

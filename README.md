@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/08\] TurboMind supports flash-attention2.
 - \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
 - \[2023/08\] TurboMind supports Windows (tp=1)
 - \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](./docs/en/w4a16.md) guide for detailed info
@@ -214,39 +215,9 @@ pip install deepspeed
 
 ## Quantization
 
-### Step 1. Obtain Quantization Parameters
-
-First, run the quantization script to obtain the quantization parameters.
-
-> After execution, various parameters needed for quantization will be stored in `$WORK_DIR`; these will be used in the following steps..
-
-```
-python3 -m lmdeploy.lite.apis.calibrate \
-  --model $HF_MODEL \
-  --calib_dataset 'c4' \             # Calibration dataset, supports c4, ptb, wikitext2, pileval
-  --calib_samples 128 \              # Number of samples in the calibration set, if memory is insufficient, you can appropriately reduce this
-  --calib_seqlen 2048 \              # Length of a single piece of text, if memory is insufficient, you can appropriately reduce this
-  --work_dir $WORK_DIR \             # Folder storing Pytorch format quantization statistics parameters and post-quantization weight
-
-```
-
-### Step 2. Actual Model Quantization
-
-`LMDeploy` supports INT4 quantization of weights and INT8 quantization of KV Cache. Run the corresponding script according to your needs.
-
 #### Weight INT4 Quantization
 
 LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
-
-> Requires input from the $WORK_DIR of step 1, and the quantized weights will also be stored in this folder.
-
-```
-python3 -m lmdeploy.lite.apis.auto_awq \
-  --model $HF_MODEL \
-  --w_bits 4 \                       # Bit number for weight quantization
-  --w_group_size 128 \               # Group size for weight quantization statistics
-  --work_dir $WORK_DIR \             # Directory saving quantization parameters from Step 1
-```
 
 [Click here](./docs/zh_cn/w4a16.md) to view the test results for weight int4 usage.
 
