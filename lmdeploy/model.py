@@ -143,13 +143,6 @@ class Vicuna(BaseModel):
         return ret
 
 
-# @MODELS.register_module(name='internlm')
-# class InternLM(BaseModel):
-
-#     def __init__(self, **kwargs):
-#         super().__init__(**kwargs)
-
-
 @MODELS.register_module(name='internlm-chat-7b')
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""

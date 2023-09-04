@@ -34,7 +34,7 @@ python3 -m lmdeploy.serve.turbomind.deploy codellama /the/path/of/codellama/mode
 
 # 在控制台与模型对话
 # --cap 可选择 completion, infill, instruct, python
-python3 -m lmdeploy.demo.codellama ./workspace --cap <capability>
+python3 -m lmdeploy.turbomind.chat ./workspace --cap <capability>
 ```
 
 lmdeploy 支持把代码块拷贝到控制台，务必使用"!!"结束输入。如下图所示：
