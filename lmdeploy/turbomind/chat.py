@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 import os
 import os.path as osp
 import random
-from dataclasses import dataclass
 
 import fire
 
@@ -13,7 +13,7 @@ from lmdeploy.turbomind.tokenizer import Tokenizer
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-@dataclass
+@dataclasses.dataclass
 class GenParam:
     sequence_start: bool = False
     sequence_end: bool = True
@@ -101,8 +101,8 @@ def get_gen_param(model_name, cap, nth_round, step):
 
 def main(model_path,
          session_id: int = 1,
-         cap: str = 'completion',
-         sys_instruct: str = '',
+         cap: str = 'instruct',
+         sys_instruct: str = 'Provide answers in Python',
          repetition_penalty: float = 1.0,
          tp=1,
          stream_output=True):
@@ -162,7 +162,7 @@ def main(model_path,
                     session_id=session_id,
                     input_ids=[input_ids],
                     stream_output=stream_output,
-                    *gen_param,
+                    **dataclasses.asdict(gen_param),
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
                 res, tokens = outputs[0]

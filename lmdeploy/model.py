@@ -450,7 +450,8 @@ class CodeLlama(Llama2):
     @property
     def stop_words(self):
         if self.cap == 'infill':
-            return []
+            # EOT ID
+            return [32010]
         else:
             return None
 
