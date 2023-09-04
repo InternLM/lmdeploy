@@ -1,166 +1,26 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import copy
+
 import importlib
-import math
-import re
-import sys
-import warnings
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Tuple
 
 import torch
-import torch.functional as F
 import torch.nn.functional as F
 import torch.utils.checkpoint
-from torch import Tensor, nn
-from torch.nn import CrossEntropyLoss, LayerNorm
-from torch.nn.modules.module import Module
-from torch.nn.utils import skip_init
-from transformers.generation.logits_process import LogitsProcessor
-from transformers.generation.utils import (GenerationConfig,
-                                           LogitsProcessorList, ModelOutput,
-                                           StoppingCriteriaList)
-from transformers.modeling_outputs import (BaseModelOutputWithPast,
-                                           CausalLMOutputWithPast)
-from transformers.modeling_utils import PreTrainedModel
-from transformers.models.llama.modeling_llama import rotate_half
-from transformers.utils import (HF_MODULES_CACHE,
-                                TRANSFORMERS_DYNAMIC_MODULE_NAME, logging)
+from torch import nn
+from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME, logging
 
 from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
 
 chatglm_module = importlib.import_module('.chatglm2-6b.modeling_chatglm',
                                          TRANSFORMERS_DYNAMIC_MODULE_NAME)
-ChatGLMConfig = chatglm_module.ChatGLMConfig
-GLMTransformer = chatglm_module.GLMTransformer
-ChatGLMPreTrainedModel = chatglm_module.ChatGLMPreTrainedModel
-PrefixEncoder = chatglm_module.PrefixEncoder
-Embedding = chatglm_module.Embedding
+
+apply_rotary_pos_emb = chatglm_module.apply_rotary_pos_emb
+RotaryEmbedding = chatglm_module.RotaryEmbedding
+split_tensor_along_last_dim = chatglm_module.split_tensor_along_last_dim
 
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """This is the equivalent of torch.repeat_interleave(x, dim=1,
-    repeats=n_rep).
-
-    The hidden states go from (batch, num_key_value_heads, seqlen, head_dim) to
-    (batch, num_attention_heads, seqlen, head_dim)
-    """
-    slen, num_key_value_heads, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states[:, :,
-                                  None, :].expand(slen, num_key_value_heads,
-                                                  n_rep, head_dim)
-    return hidden_states.reshape(slen, num_key_value_heads * n_rep, head_dim)
-
-
-def split_tensor_along_last_dim(
-    tensor: torch.Tensor,
-    num_partitions: int,
-    contiguous_split_chunks: bool = False,
-) -> List[torch.Tensor]:
-    """Split a tensor along its last dimension.
-
-    Arguments:
-        tensor: input tensor.
-        num_partitions: number of partitions to split the tensor
-        contiguous_split_chunks: If True, make each chunk contiguous
-                                 in memory.
-
-    Returns:
-        A list of Tensors
-    """
-    # Get the size and dimension.
-    last_dim = tensor.dim() - 1
-    last_dim_size = tensor.size()[last_dim] // num_partitions
-    # Split.
-    tensor_list = torch.split(tensor, last_dim_size, dim=last_dim)
-    # Note: torch.split does not create contiguous tensors by default.
-    if contiguous_split_chunks:
-        return tuple(chunk.contiguous() for chunk in tensor_list)
-
-    return tensor_list
-
-
-class RotaryEmbedding(nn.Module):
-
-    def __init__(self, dim, original_impl=False, device=None, dtype=None):
-        super().__init__()
-        inv_freq = 1.0 / (10000**(
-            torch.arange(0, dim, 2, device=device).to(dtype=dtype) / dim))
-        self.register_buffer('inv_freq', inv_freq)
-        self.dim = dim
-        self.original_impl = original_impl
-
-    def forward_impl(
-        self,
-        seq_len: int,
-        n_elem: int,
-        dtype: torch.dtype,
-        device: torch.device,
-        base: int = 10000,
-    ):
-        """Enhanced Transformer with Rotary Position Embedding.
-
-        Derived from: https://github.com/labmlai/annotated_deep_learning_paper_implementations/blob/master/labml_nn/
-        transformers/rope/__init__.py. MIT License:
-        https://github.com/labmlai/annotated_deep_learning_paper_implementations/blob/master/license.
-        """
-        # $\Theta = {\theta_i = 10000^{\frac{2(i-1)}{d}}, i \in [1, 2, ..., \frac{d}{2}]}$
-        theta = 1.0 / (base**(
-            torch.arange(0, n_elem, 2, dtype=dtype, device=device) / n_elem))
-
-        # Create position indexes `[0, 1, ..., seq_len - 1]`
-        seq_idx = torch.arange(seq_len, dtype=dtype, device=device)
-
-        # Calculate the product of position index and $\theta_i$
-        idx_theta = torch.outer(seq_idx, theta).float()
-
-        cache = torch.stack(
-            [torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1)
-
-        # this is to mimic the behaviour of complex32, else we will get different results
-        if dtype in (torch.float16, torch.bfloat16, torch.int8):
-            cache = cache.bfloat16(
-            ) if dtype == torch.bfloat16 else cache.half()
-        return cache
-
-    def forward(self, max_seq_len, offset=0):
-        return self.forward_impl(
-            max_seq_len,
-            self.dim,
-            dtype=self.inv_freq.dtype,
-            device=self.inv_freq.device,
-        )
-
-
-@torch.jit.script
-def apply_rotary_pos_emb(x: torch.Tensor,
-                         rope_cache: torch.Tensor) -> torch.Tensor:
-    # x: [sq, b, np, hn]
-    # print(x.size())
-    sq, b, np, hn = x.size(0), x.size(1), x.size(2), x.size(3)
-    # sq, np, hn = x.size(0), x.size(1), x.size(2)
-    rot_dim = rope_cache.shape[-2] * 2
-    x, x_pass = x[..., :rot_dim], x[..., rot_dim:]
-    # truncate to support variable sizes
-    rope_cache = rope_cache[:sq]
-    xshaped = x.reshape(sq, -1, np, rot_dim // 2, 2)
-    rope_cache = rope_cache.view(sq, -1, 1, xshaped.size(3), 2)
-    x_out2 = torch.stack(
-        [
-            xshaped[..., 0] * rope_cache[..., 0] -
-            xshaped[..., 1] * rope_cache[..., 1],
-            xshaped[..., 1] * rope_cache[..., 0] +
-            xshaped[..., 0] * rope_cache[..., 1],
-        ],
-        -1,
-    )
-    x_out2 = x_out2.flatten(3)
-    return torch.cat((x_out2, x_pass), dim=-1)
 
 
 class PatchedSelfAttention(torch.nn.Module):
@@ -404,6 +264,7 @@ class PatchedSelfAttention(torch.nn.Module):
                 use_cache,
             )
         else:
+            # print("continuous forwarding")
             return self._contiguous_batching_forward(
                 hidden_states,
                 attention_mask,
@@ -411,7 +272,3 @@ class PatchedSelfAttention(torch.nn.Module):
                 kv_cache,
                 use_cache,
             )
-
-
-def default_init(cls, *args, **kwargs):
-    return cls(*args, **kwargs)
