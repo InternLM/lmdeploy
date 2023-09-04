@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import logging
 import os
 import random
 
 import fire
+import torch
 
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
@@ -56,8 +58,9 @@ def main(
     seed = random.getrandbits(64)
     model = MODELS.get(model_name)()
 
-    while True:
-        prompt = input_prompt()
+    torch.set_default_device(0)
+    for prompt in ['你好', '晚上睡不着应该怎么办', 'exit']:
+        # prompt = input_prompt()
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
@@ -73,12 +76,14 @@ def main(
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
+            input_ids = [64790, 64792] + input_ids
+            # input_ids = torch.cat([torch.tensor([[64790, 64792]]), input_ids], dim=-1)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             sampling_param = SamplingParam(
                 top_k=40,
                 top_p=0.8,
-                temperature=0.8,
+                temperature=0.00001,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=False,
                 random_seed=seed,
@@ -104,4 +109,9 @@ def main(
 
 
 if __name__ == '__main__':
+    logging.basicConfig(filename='chatglm.log',
+                        level=logging.DEBUG,
+                        filemode='w',
+                        format='{%(pathname)s:%(lineno)d}\n  %(message)s')
+    torch.set_printoptions(linewidth=122)
     fire.Fire(main)

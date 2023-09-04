@@ -6,6 +6,10 @@ import triton.language as tl
 
 assert triton.__version__ >= '2.1.0'
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @triton.jit
 def _fwd_kernel(
@@ -145,11 +149,23 @@ def paged_attention_fwd(q,
     assert Lk in {16, 32, 64, 128}
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
-    batch, head = b_seq_len.shape[0], q.shape[1]
-    kv_group_num = q.shape[1] // k[0].shape[1]
+    # batch, head = b_seq_len.shape[0], q.shape[1]
+    # kv_group_num = q.shape[1] // k[0].shape[1]
+    batch, head = b_seq_len.shape[0], q.shape[-2]
+    kv_group_num = q.shape[-2] // k[0].shape[-2]
+
+    logger.debug('q.shape = %s', q.shape)
+    logger.debug('k.shape = %s', k.shape)
+    logger.debug('kv_group_num = %s', kv_group_num)
+    logger.debug('o.shape = %s', o.shape)
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
+    logger.debug('grid = %s', grid)
+    logger.debug('b_start_loc = %s', b_start_loc)
+    logger.debug('b_seq_len = %s', b_seq_len)
+    logger.debug('b_kv_seq_len = %s', b_kv_seq_len)
 
+    # logger.debug('o before = ', o)
     num_warps = 4 if Lk <= 64 else 8
     _fwd_kernel[grid](
         q,
@@ -161,18 +177,18 @@ def paged_attention_fwd(q,
         b_kv_seq_len,
         block_offsets,
         o,
-        q.stride(0),
-        q.stride(1),
-        q.stride(2),
-        k[0].stride(0),
-        k[0].stride(1),
-        k[0].stride(2),
-        v[0].stride(0),
-        v[0].stride(1),
-        v[0].stride(2),
-        o.stride(0),
-        o.stride(1),
-        o.stride(2),
+        q.stride(-3),
+        q.stride(-2),
+        q.stride(-1),
+        k.stride(-3),
+        k.stride(-2),
+        k.stride(-1),
+        v.stride(-3),
+        v.stride(-2),
+        v.stride(-1),
+        o.stride(-3),
+        o.stride(-2),
+        o.stride(-1),
         block_offsets.stride(0),
         kv_group_num=kv_group_num,
         BLOCK_M=BLOCK,
@@ -181,4 +197,7 @@ def paged_attention_fwd(q,
         num_warps=num_warps,
         num_stages=1,
     )
+
+    torch.cuda.synchronize()
+    logger.debug('finish attn')
     return

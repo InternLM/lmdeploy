@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import itertools
+# logger = get_logger('lmdeploy')
+import logging
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -25,7 +27,7 @@ from lmdeploy.utils import get_logger
 
 from .cache_engine import CacheEngine
 
-logger = get_logger('lmdeploy')
+logger = logging.getLogger(__name__)
 
 
 class RequestType(enum.Enum):
@@ -118,12 +120,20 @@ class ModelContext:
             free_offset = first_free_block_offsets[bid]
             token_offset = first_token_offsets[bid]
 
+            # 支持新模型的时候如果shape有些不对的可以通过assert识别
+            # 因为slice遇到shape不对也不会报错，只是返回一个空的数组
+            assert 0 <= loc <= k_states.size(0)
+            assert 0 <= loc + seq_len <= k_states.size(0)
+
             k_state = k_states[loc:loc + seq_len]
             v_state = v_states[loc:loc + seq_len]
 
             # fill remain(last non-full block)
             block_id = b_offsets[free_offset]
             fill_token_num = min(block_size - token_offset, seq_len)
+
+            assert 0 <= fill_token_num <= block_size
+
             k_caches[block_id][token_offset:token_offset +
                                fill_token_num] = k_state[:fill_token_num]
             v_caches[block_id][token_offset:token_offset +
@@ -151,10 +161,18 @@ class Engine:
     def __init__(self,
                  model_path: str,
                  scheduler_config: SchedulerConfig = None,
-                 cache_config: CacheConfig = None) -> None:
-        hf_model = AutoModelForCausalLM.from_pretrained(model_path)
+                 cache_config: CacheConfig = None,
+                 trust_remote_code=True) -> None:
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
+        hf_model.eval()  # chatglm2有 dropout
+        logger.debug('model before patch')
+        logger.debug(hf_model)
         self.patched_model = patch(hf_model, ['context']).cuda()
+        # self.patched_model = hf_model
         hf_config = hf_model.config
+        logger.debug('model after patch')
+        logger.debug(self.patched_model)
 
         if scheduler_config is None:
             scheduler_config = SchedulerConfig(max_batches=64,
@@ -164,12 +182,22 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        model_config = ModelConfig(hf_config.hidden_size,
-                                   hf_config.num_hidden_layers,
-                                   hf_config.num_attention_heads,
-                                   bos_token_id=hf_config.bos_token_id,
-                                   eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch.float32)
+        if 'chatglm' in model_path:
+            model_config = ModelConfig(hf_config.hidden_size //
+                                       hf_config.num_attention_heads *
+                                       hf_config.multi_query_group_num,
+                                       hf_config.num_layers,
+                                       hf_config.multi_query_group_num,
+                                       bos_token_id=hf_config.bos_token_id,
+                                       eos_token_id=hf_config.eos_token_id,
+                                       dtype=torch.float16)
+        else:
+            model_config = ModelConfig(hf_config.hidden_size,
+                                       hf_config.num_hidden_layers,
+                                       hf_config.num_attention_heads,
+                                       bos_token_id=hf_config.bos_token_id,
+                                       eos_token_id=hf_config.eos_token_id,
+                                       dtype=torch.float32)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -234,6 +262,23 @@ class Engine:
 
         input_ids = list(itertools.chain(*token_ids))
         input_ids = torch.tensor(input_ids).to(device)
+
+        q_start_loc = torch.tensor([0] + seq_length[:-1]).to(device)
+        q_seq_length = torch.tensor(seq_length).to(device)
+
+        logger.debug('In Make inputs')
+        logger.debug(f'q_start_loc {q_start_loc}')
+        logger.debug(f'q_seq_length {q_seq_length}')
+        # logger.debug("kv_seq_length {q_seq_length}")
+
+        past_key_values = self.cache_engine.gpu_cache
+        for i, pkv in enumerate(past_key_values):
+            past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
+
+        if input_ids.ndim == 1:
+            # chatglm need 2d input_id
+            input_ids = input_ids.unsqueeze(0)
+
         attention_mask = torch.tensor([
             seq_len * [1] + (max_seq_len - seq_len) * [0]
             for seq_len in seq_length
@@ -248,7 +293,7 @@ class Engine:
                     seq_length=seq_length,
                     attention_mask=attention_mask,
                     block_tables=block_tables,
-                    past_key_values=self.cache_engine.gpu_cache,
+                    past_key_values=past_key_values,
                     position_ids=position_ids)
 
     def stop_session(self, session_id: int):
@@ -318,7 +363,11 @@ class Engine:
                 event.wait()
 
         # make batch
+        logger.debug(f'running: {running}')
         inputs = self._make_inputs(running)
+        logger.debug(f'input_ids: {inputs["input_ids"]}')
+        logger.debug(f'position_ids: {inputs["position_ids"]}')
+        logger.debug(f'attention_mask: {inputs["attention_mask"]}')
 
         # inference
         with torch.no_grad():
@@ -335,6 +384,8 @@ class Engine:
                                      history_lengths=history_lengths))
 
         logits = hf_outputs['logits']
+        logits = logits[0]
+        logger.debug('logits.shape = %s', logits.shape)
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -349,6 +400,8 @@ class Engine:
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
+            logger.debug(f'msg = {msg}')
+            logger.debug(f'input_ids = {input_ids}')
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),
@@ -585,7 +638,8 @@ class EngineInstance:
                 yield (1, [], 0)
                 break
 
-            resp: Response = self.response.get()
+            # 看起来子线程出问题的时候有可能还是停在这里，是不是deamon的问题？
+            resp: Response = self.response.get(timeout=10)
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:

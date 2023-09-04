@@ -191,6 +191,21 @@ If a question does not make any sense, or is not factually coherent, explain why
         return f'{self.b_inst} {prompt} {self.e_inst} '
 
 
+@MODELS.register_module(name='chatglm2-6b')
+class ChatGLM2(BaseModel):
+
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def get_prompt(self, prompt, sequence_start=True):
+        # need more check
+        # https://github.com/THUDM/ChatGLM2-6B/issues/48
+        # [64790, 64792] to be prepended
+        self.count += 1
+        return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+
+
 def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \

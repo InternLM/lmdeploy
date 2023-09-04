@@ -5,6 +5,8 @@ from typing import Sequence
 
 import torch
 from addict import Addict
+from transformers.utils import (HF_MODULES_CACHE,
+                                TRANSFORMERS_DYNAMIC_MODULE_NAME)
 
 from lmdeploy.utils import get_logger
 
@@ -12,7 +14,12 @@ MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaModel'
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
+    # 动态模块路径是不固定的，有点麻烦
+    f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.SelfAttention':
+    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
+    # f"{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.ChatGLMModel":
+    # "lmdeploy.pytorch_poc.patch.chatglm2.ChatGLMModel",
 }
 
 
