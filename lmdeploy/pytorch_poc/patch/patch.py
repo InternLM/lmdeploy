@@ -12,7 +12,9 @@ MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaModel'
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
+    'transformers_modules.Baichuan-7B.modeling_baichuan.Attention':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaAttention'
 }
 
 
@@ -49,7 +51,7 @@ def _patch(model: torch.nn.Module, context: Addict):
         rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
 
     if rewrite_qualname is not None:
-        logger.debug(
+        logger.info(
             f'Rewrite module {origin_qualname} with {rewrite_qualname}.')
         cls_type = _class_from_qualname(rewrite_qualname)
 

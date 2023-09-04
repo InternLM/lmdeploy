@@ -150,9 +150,11 @@ class Engine:
 
     def __init__(self,
                  model_path: str,
+                 torch_dtype=torch.float16,
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None) -> None:
-        hf_model = AutoModelForCausalLM.from_pretrained(model_path)
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch_dtype, trust_remote_code=True)
         self.patched_model = patch(hf_model, ['context']).cuda()
         hf_config = hf_model.config
 
@@ -169,7 +171,7 @@ class Engine:
                                    hf_config.num_attention_heads,
                                    bos_token_id=hf_config.bos_token_id,
                                    eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch.float32)
+                                   dtype=torch_dtype)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -319,7 +321,16 @@ class Engine:
 
         # make batch
         inputs = self._make_inputs(running)
-
+        inputs['input_ids'] = inputs['input_ids'].reshape(
+            [-1, inputs['input_ids'].shape[-1]])
+        # for key, value in inputs.items():
+        #     if isinstance(value, torch.Tensor):
+        #         print(key, value.shape)
+        #     else:
+        #         if key == 'past_key_values':
+        #             print(key, [(i.shape, j.shape) for (i, j) in value])
+        #         else:
+        #             print(key, value)
         # inference
         with torch.no_grad():
             # forward
@@ -355,6 +366,7 @@ class Engine:
                 TemperatureLogitsWarper(param.temperature),
             ])
             logit = logits_processor(input_ids, logit)
+            logit = logit.reshape([-1, logit.shape[-1]])
             next_token_ids.append(logit[-1].argmax())
 
         # update scheduler
