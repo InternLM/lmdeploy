@@ -18,8 +18,8 @@ MODULE_MAP = {
     # 动态模块路径是不固定的，有点麻烦
     f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.SelfAttention':
     'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
-    # f"{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.ChatGLMModel":
-    # "lmdeploy.pytorch_poc.patch.chatglm2.ChatGLMModel",
+    f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.ChatGLMModel':
+    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedChatGLMModel',
 }
 
 

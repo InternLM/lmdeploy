@@ -4,9 +4,9 @@ import importlib
 from typing import Any, Optional, Tuple
 
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
 import torch.utils.checkpoint
-from torch import nn
+from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME, logging
 
 from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
@@ -17,13 +17,14 @@ chatglm_module = importlib.import_module('.chatglm2-6b.modeling_chatglm',
 apply_rotary_pos_emb = chatglm_module.apply_rotary_pos_emb
 RotaryEmbedding = chatglm_module.RotaryEmbedding
 split_tensor_along_last_dim = chatglm_module.split_tensor_along_last_dim
+ChatGLMModel = chatglm_module.ChatGLMModel
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class PatchedSelfAttention(torch.nn.Module):
+class PatchedSelfAttention(nn.Module):
     """Parallel self-attention layer abstract class.
 
     Self-attention layer takes input with size [s, b, h] and returns output of
@@ -264,7 +265,7 @@ class PatchedSelfAttention(torch.nn.Module):
                 use_cache,
             )
         else:
-            # print("continuous forwarding")
+            logger.debug('continuous forwarding')
             return self._contiguous_batching_forward(
                 hidden_states,
                 attention_mask,
@@ -272,3 +273,143 @@ class PatchedSelfAttention(torch.nn.Module):
                 kv_cache,
                 use_cache,
             )
+
+
+class PatchedChatGLMModel(nn.Module):
+
+    def __init__(self, origin_mod: nn.Module, context: Any):
+        super().__init__()
+        self.origin_mod = origin_mod
+        self.context = context
+        # for compatibility
+        self.output_layer = origin_mod.output_layer
+
+    def _contiguous_batching_forward(
+            self,
+            input_ids,
+            position_ids: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.BoolTensor] = None,
+            full_attention_mask: Optional[torch.BoolTensor] = None,
+            past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
+                                            ...]] = None,
+            inputs_embeds: Optional[torch.Tensor] = None,
+            use_cache: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None):
+        orig_self = self.origin_mod
+        output_hidden_states = (output_hidden_states
+                                if output_hidden_states is not None else
+                                orig_self.config.output_hidden_states)
+        use_cache = use_cache if use_cache is not None else orig_self.config.use_cache
+        return_dict = return_dict if return_dict is not None else orig_self.config.use_return_dict
+
+        logger.debug('')
+        logger.debug('=' * 66)
+        logger.debug('Enter GLMModel')
+        logger.debug(f'input_ids in model: {input_ids}')
+        logger.debug(f'position_ids in model: {position_ids}')
+        logger.debug(f'attention_mask in model: {attention_mask}')
+        logger.debug(f'full_attention_mask in model: {full_attention_mask}')
+
+        batch_size, seq_length = input_ids.shape
+
+        if inputs_embeds is None:
+            inputs_embeds = orig_self.embedding(input_ids)
+
+        if orig_self.pre_seq_len is not None:
+            if past_key_values is None:
+                past_key_values = orig_self.get_prompt(
+                    batch_size=batch_size,
+                    device=input_ids.device,
+                    dtype=inputs_embeds.dtype)
+            if attention_mask is not None:
+                attention_mask = torch.cat([
+                    attention_mask.new_ones(
+                        (batch_size, orig_self.pre_seq_len)), attention_mask
+                ],
+                                           dim=-1)
+
+        if past_key_values is None:
+            logger.debug(f'past_key_values[0][0].shape = None')
+        else:
+            logger.debug(
+                f'past_key_values[0][0].shape = {past_key_values[0][0].shape}')
+
+        logger.debug(
+            f'full_attention_mask in model before process: {full_attention_mask}'
+        )
+
+        # if full_attention_mask is None:
+        #     if (attention_mask is not None and not attention_mask.all()) or (past_key_values and seq_length != 1):
+        #         full_attention_mask = orig_self.get_masks(input_ids, past_key_values, padding_mask=attention_mask)
+
+        logger.debug(
+            f'full_attention_mask in model after process: {full_attention_mask}'
+        )
+
+        # Rotary positional embeddings
+        rotary_pos_emb = orig_self.rotary_pos_emb(orig_self.seq_length)
+        if position_ids is not None:
+            rotary_pos_emb = rotary_pos_emb[position_ids]
+        else:
+            rotary_pos_emb = rotary_pos_emb[None, :seq_length]
+        rotary_pos_emb = rotary_pos_emb.transpose(0, 1).contiguous()
+
+        # Run encoder.
+        hidden_states, presents, all_hidden_states, all_self_attentions = orig_self.encoder(
+            inputs_embeds,
+            full_attention_mask,
+            rotary_pos_emb=rotary_pos_emb,
+            kv_caches=past_key_values,
+            use_cache=use_cache,
+            output_hidden_states=output_hidden_states)
+
+        if not return_dict:
+            return tuple(v for v in [
+                hidden_states, presents, all_hidden_states, all_self_attentions
+            ] if v is not None)
+
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=presents,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attentions,
+        )
+
+    def forward(
+        self,
+        input_ids,
+        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.BoolTensor] = None,
+        full_attention_mask: Optional[torch.BoolTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
+                                        ...]] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        use_cache: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ):
+
+        use_origin = False
+        if use_origin:
+            return self.origin_mod(input_ids=input_ids,
+                                   position_ids=position_ids,
+                                   attention_mask=attention_mask,
+                                   full_attention_mask=full_attention_mask,
+                                   past_key_values=past_key_values,
+                                   inputs_embeds=inputs_embeds,
+                                   use_cache=use_cache,
+                                   output_hidden_states=output_hidden_states,
+                                   return_dict=return_dict)
+        else:
+            # print("continuous forwarding")
+            return self._contiguous_batching_forward(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                full_attention_mask=full_attention_mask,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict)
