@@ -154,8 +154,9 @@ class Engine:
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None) -> None:
         with LoadNoInit():
-            hf_model = AutoModelForCausalLM.from_pretrained(
-                model_path, torch_dtype=torch.float16)
+            hf_model = AutoModelForCausalLM.from_pretrained(model_path,
+                                                            torch_dtype='auto')
+
         self.patched_model = patch(hf_model, ['context', 'use_origin']).cuda()
         hf_config = hf_model.config
         hf_model.eval()
