@@ -4,7 +4,7 @@
 
 [codellama](https://github.com/facebookresearch/codellama) 支持很多种编程语言，包括 Python, C++, Java, PHP, Typescript (Javascript), C#, Bash 等等。具备代码续写、代码填空、对话、python专项等 4 种能力。
 
-它在 [HuggingFace](https://huggingface.co/codellama) 上发布了基座模型，Python模型和指令模型：
+它在 [HuggingFace](https://huggingface.co/codellama) 上发布了基座模型，Python模型和指令微调模型：
 
 | 基座模型                                                                        | Python微调模型                                                                                | 指令模型                                                                                          |
 | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -14,12 +14,11 @@
 
 模型和能力的对应关系为：
 
-| 能力       | 基座模型          | Python微调模型 | 指令模型          |
-| ---------- | ----------------- | -------------- | ----------------- |
-| 代码续写   | Y                 | Y              | Y                 |
-| 代码填空   | Y(7B,13B), N(34B) | N              | Y(7B,13B), N(34B) |
-| 对话       | N                 | N              | Y                 |
-| Python专项 | N                 | Y              | N                 |
+| 模型           | 代码续写 | 代码填空          | 对话 | Python专项 |
+| -------------- | -------- | ----------------- | ---- | ---------- |
+| 基座模型       | Y        | Y(7B,13B), N(34B) | N    | N          |
+| Python微调模型 | Y        | N                 | N    | Y          |
+| 指令微调模型   | Y        | Y(7B,13B), N(34B) | Y    | N          |
 
 ## 推理
 
@@ -33,8 +32,10 @@ python3 -m pip install lmdeploy
 python3 -m lmdeploy.serve.turbomind.deploy codellama /the/path/of/codellama/model
 
 # 在控制台与模型对话
-# --cap 可选择 completion, infill, instruct, python
+# --cap 可选择 completion, infill, instruct, python。缺省值是 instruct
 python3 -m lmdeploy.turbomind.chat ./workspace --cap <capability>
 ```
 
-lmdeploy 支持把代码块拷贝到控制台，务必使用"!!"结束输入。如下图所示：
+**注意**: lmdeploy 支持把代码块拷贝到控制台，务必使用"!!"结束输入
+
+## 服务
