@@ -14,6 +14,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
 
+from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
@@ -152,9 +153,12 @@ class Engine:
                  model_path: str,
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None) -> None:
-        hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-        self.patched_model = patch(hf_model, ['context']).cuda()
+        with LoadNoInit():
+            hf_model = AutoModelForCausalLM.from_pretrained(
+                model_path, torch_dtype=torch.float16)
+        self.patched_model = patch(hf_model, ['context', 'use_origin']).cuda()
         hf_config = hf_model.config
+        hf_model.eval()
 
         if scheduler_config is None:
             scheduler_config = SchedulerConfig(max_batches=64,
@@ -169,7 +173,7 @@ class Engine:
                                    hf_config.num_attention_heads,
                                    bos_token_id=hf_config.bos_token_id,
                                    eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch.float32)
+                                   dtype=torch.float16)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -243,6 +247,10 @@ class Engine:
         seq_length = torch.tensor(seq_length).to(device)
 
         block_tables = self.scheduler.get_block_tables(messages)
+
+        # add batch dim [bs=1, seq_len]
+        if input_ids.ndim == 1:
+            input_ids = input_ids.unsqueeze(0)
 
         return dict(input_ids=input_ids,
                     seq_length=seq_length,
@@ -331,10 +339,12 @@ class Engine:
                 return_dict=True,
                 output_attentions=False,
                 output_hidden_states=False,
+                use_origin=False,
                 context=ModelContext(block_tables=inputs['block_tables'],
                                      history_lengths=history_lengths))
 
         logits = hf_outputs['logits']
+        logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         # gather output
         sampling_params: List[SamplingParam] = [
