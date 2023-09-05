@@ -23,10 +23,14 @@ python profile_throughput.py \
 
 `profile_generation.py` perform benchmark with dummy data.
 
+```shell
+pip install nvidia-ml-py
+```
+
 ```bash
 python profile_generation.py \
- /path/to/your/model \
- --concurrency 8 --input_seqlen 0 --output_seqlen 2048
+ --model-path /path/to/your/model \
+ --concurrency 1 8 --prompt-tokens 0 512 --completion-tokens 2048 512
 ```
 
 ## profile serving
