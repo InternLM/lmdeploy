@@ -9,7 +9,6 @@ from queue import Queue
 from threading import Thread
 from typing import List
 
-import fire
 import numpy as np
 from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlDeviceGetMemoryInfo, nvmlDeviceGetName,
@@ -300,4 +299,4 @@ def main():
 
 
 if __name__ == '__main__':
-    fire.Fire(main)
+    main()
