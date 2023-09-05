@@ -1378,7 +1378,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     q = add(q, q_bias);
     k = add(k, k_bias);
 
-    float rotary_emb_base = 10000.f;
+    float rotary_emb_base = params.rotary_emb_base;
     if (params.use_dynamic_ntk) {
         // +1 because of `length_per_sample == context_length - 1`
         rotary_emb_base = rotary_embedding_get_base(params.length_per_sample[bi] + 1,

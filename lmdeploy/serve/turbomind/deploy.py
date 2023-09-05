@@ -122,6 +122,7 @@ def export(model_name: str,
            max_position_embeddings: int = 0,
            use_dynamic_ntk: int = 0,
            use_logn_attn: int = 0,
+           rope_theta: float = 10000.0,
            tokenizer_info=tokenizer_info_sp):
     """Export deploying information to a config file.
 
@@ -213,6 +214,7 @@ def export(model_name: str,
         vocab_size=_vocab_size,
         num_layer=num_layer,
         rotary_embedding=size_per_head,
+        rope_theta=rope_theta,
         inter_size=inter_size,
         norm_eps=norm_eps,
         attn_bias=int(attn_bias),
@@ -233,7 +235,8 @@ def export(model_name: str,
         # extra attention params
         max_position_embeddings=max_position_embeddings,
         use_dynamic_ntk=int(use_dynamic_ntk),
-        use_logn_attn=int(use_logn_attn)))
+        use_logn_attn=int(use_logn_attn),
+    ))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -415,6 +418,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
+            max_position_embeddings = int(
+                model_arg.get('max_position_embeddings', 0))
+            repo_scaling = bool(model_arg.get('rope_scaling', False))
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -525,8 +532,17 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, num_layer, norm_eps, kv_head_num, model_params,
-                  tokenizer_path, triton_models_path, tp)
+    return export(model_name,
+                  num_layer,
+                  norm_eps,
+                  kv_head_num,
+                  model_params,
+                  tokenizer_path,
+                  triton_models_path,
+                  tp,
+                  max_position_embeddings=max_position_embeddings,
+                  use_dynamic_ntk=repo_scaling,
+                  rope_theta=rope_theta)
 
 
 def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
@@ -569,6 +585,7 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -756,7 +773,8 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                   triton_models_path,
                   tp,
                   weight_type='int4',
-                  group_size=group_size)
+                  group_size=group_size,
+                  rope_theta=rope_theta)
 
 
 def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
@@ -797,6 +815,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
             config = json.load(f)
             num_layer = config['num_hidden_layers']
             norm_eps = config['layer_norm_epsilon']
+            rope_theta = float(config.get('rotary_emb_base', 10000.0))
             if 'num_key_value_heads' in config:
                 kv_head_num = config['num_key_value_heads']
             else:
@@ -884,6 +903,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
                   max_position_embeddings=seq_length,
                   use_dynamic_ntk=use_dynamic_ntk,
                   use_logn_attn=use_logn_attn,
+                  rope_theta=rope_theta,
                   tokenizer_info=tokenizer_info_qwen)
 
 

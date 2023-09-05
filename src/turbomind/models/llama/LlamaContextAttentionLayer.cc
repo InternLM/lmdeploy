@@ -175,6 +175,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    local_kv_head_num_,
                                    size_per_head_,
                                    params_.rotray_embedding_dim,
+                                   params_.rotary_emb_base,
                                    params_.max_position_embeddings,
                                    params_.use_dynamic_ntk,
                                    params_.use_logn_attn,
