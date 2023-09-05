@@ -276,6 +276,7 @@ def main():
                                          output_seqlen=completion_tokens,
                                          tp=args.tp)
                 output = Pool(1).map(profile_target, (model_path, ))
+                time.sleep(5)  # wait a while for releasing GPU mem
                 memory = MemoryMonitor.terminate()
                 results.append(
                     ProfileResult(model_name=output[0][0],
