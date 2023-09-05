@@ -145,8 +145,8 @@ def paged_attention_fwd(q,
     assert Lk in {16, 32, 64, 128}
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
-    batch, head = b_seq_len.shape[0], q.shape[1]
-    kv_group_num = q.shape[1] // k[0].shape[1]
+    batch, head = b_seq_len.shape[0], q.shape[-2]
+    kv_group_num = q.shape[-2] // k[0].shape[-2]
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
@@ -161,18 +161,18 @@ def paged_attention_fwd(q,
         b_kv_seq_len,
         block_offsets,
         o,
-        q.stride(0),
-        q.stride(1),
-        q.stride(2),
-        k[0].stride(0),
-        k[0].stride(1),
-        k[0].stride(2),
-        v[0].stride(0),
-        v[0].stride(1),
-        v[0].stride(2),
-        o.stride(0),
-        o.stride(1),
-        o.stride(2),
+        q.stride(-3),
+        q.stride(-2),
+        q.stride(-1),
+        k.stride(-3),
+        k.stride(-2),
+        k.stride(-1),
+        v.stride(-3),
+        v.stride(-2),
+        v.stride(-1),
+        o.stride(-3),
+        o.stride(-2),
+        o.stride(-1),
         block_offsets.stride(0),
         kv_group_num=kv_group_num,
         BLOCK_M=BLOCK,
