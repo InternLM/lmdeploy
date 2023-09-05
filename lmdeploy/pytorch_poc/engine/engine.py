@@ -1,6 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import itertools
+import json
+import os
+import os.path as osp
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -8,7 +11,9 @@ from threading import Thread
 from typing import Any, Dict, List
 
 import torch
-from transformers import AutoModelForCausalLM
+import torch.distributed as dist
+from torch import multiprocessing as mp
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
                                                     TopKLogitsWarper,
@@ -146,14 +151,79 @@ class ModelContext:
                 v_state = v_state[token_num:]
 
 
+def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
+                   in_que: mp.Queue, out_que: mp.Queue, world_size: int):
+    from accelerate import init_empty_weights
+
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group('nccl', rank=rank, world_size=world_size)
+
+    config = AutoConfig.from_pretrained(model_path)
+    torch_dtype = getattr(config, 'torch_dtype', 'float16')
+    torch_dtype = eval(f'torch.{torch_dtype}')
+    with init_empty_weights():
+        model = AutoModelForCausalLM.from_config(config, torch_dtype,
+                                                 torch_dtype)
+
+    torch_model_json_path = osp.join(model_path,
+                                     'pytorch_model.bin.index.json')
+    with open(torch_model_json_path, mode='r') as f:
+        torch_model_json = json.load(f)
+
+    weight_map = torch_model_json['weight_map']
+
+    checkpoints = list(set(weight_map.values()))
+    checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
+    patched_model = patch(  # noqa
+        model,
+        extra_args=extra_args,
+        rank=rank,
+        world_size=world_size,
+        checkpoints=checkpoints)
+
+    while True:
+        if rank == 0:
+            inputs: Dict = in_que.get()  # noqa
+
+        # output = patched_model(
+        #     input_ids=inputs['input_ids'],
+        #     position_ids=inputs['position_ids'],
+        #     attention_mask=inputs['attention_mask'],
+        #     past_key_values=inputs['past_key_values'],
+        #     return_dict=True,
+        #     output_attentions=False,
+        #     output_hidden_states=False,
+        #     context=ModelContext(
+        #         block_tables=inputs['block_tables'],
+        #         history_lengths=inputs['history_lengths']))
+
+
 class Engine:
 
     def __init__(self,
                  model_path: str,
                  scheduler_config: SchedulerConfig = None,
-                 cache_config: CacheConfig = None) -> None:
-        hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-        self.patched_model = patch(hf_model, ['context']).cuda()
+                 cache_config: CacheConfig = None,
+                 tp: int = 1) -> None:
+
+        self.tp = tp
+        config = AutoConfig.from_pretrained(model_path)
+        torch_dtype = getattr(config, 'torch_dtype', 'float16')
+        torch_dtype = eval(f'torch.{torch_dtype}')
+        self.torch_dtype = torch_dtype
+        if tp == 1:
+            hf_model = AutoModelForCausalLM.from_pretrained(
+                model_path, torch_dtype=torch_dtype)
+            self.patched_model = patch(hf_model, ['context']).cuda()
+        else:
+            from accelerate import init_empty_weights
+            config = AutoConfig.from_pretrained(model_path)
+            with init_empty_weights():
+                hf_model = AutoModelForCausalLM.from_config(config)
+
+            self.tp_model_in_que = mp.Queue(5)
+            self.tp_model_out_que = mp.Queue(5)
         hf_config = hf_model.config
 
         if scheduler_config is None:
@@ -169,7 +239,7 @@ class Engine:
                                    hf_config.num_attention_heads,
                                    bos_token_id=hf_config.bos_token_id,
                                    eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch.float32)
+                                   dtype=torch_dtype)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -185,6 +255,15 @@ class Engine:
         loop_threads = Thread(target=self.loop, daemon=True)
         loop_threads.start()
         self.loop_threads = loop_threads
+
+    def patch_model_tp(self, model_path: str, extra_args: List[str],
+                       in_que: mp.Queue, out_que: mp.Queue, world_size: int):
+        self.mp_context = mp.spawn(_tp_model_loop,
+                                   args=(model_path, extra_args, in_que,
+                                         out_que, world_size),
+                                   nprocs=world_size,
+                                   join=False,
+                                   daemon=True)
 
     def init_cache_engine(self, model_config: ModelConfig,
                           cache_config: CacheConfig):
@@ -282,6 +361,24 @@ class Engine:
 
         return False
 
+    def _model_forward(self, inputs: Dict):
+        if self.tp == 1:
+            with torch.no_grad():
+                # forward
+                return self.patched_model(
+                    input_ids=inputs['input_ids'],
+                    position_ids=inputs['position_ids'],
+                    attention_mask=inputs['attention_mask'],
+                    past_key_values=inputs['past_key_values'],
+                    return_dict=True,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                    context=ModelContext(
+                        block_tables=inputs['block_tables'],
+                        history_lengths=inputs['history_lengths']))
+        else:
+            pass
+
     def step(self, return_logits=False):
         # TODO: cache manage
 
@@ -319,20 +416,10 @@ class Engine:
 
         # make batch
         inputs = self._make_inputs(running)
+        inputs['history_lengths'] = history_lengths
 
         # inference
-        with torch.no_grad():
-            # forward
-            hf_outputs = self.patched_model(
-                input_ids=inputs['input_ids'],
-                position_ids=inputs['position_ids'],
-                attention_mask=inputs['attention_mask'],
-                past_key_values=inputs['past_key_values'],
-                return_dict=True,
-                output_attentions=False,
-                output_hidden_states=False,
-                context=ModelContext(block_tables=inputs['block_tables'],
-                                     history_lengths=history_lengths))
+        hf_outputs = self._model_forward(inputs)
 
         logits = hf_outputs['logits']
 
