@@ -421,7 +421,7 @@ class CodeLlama(Llama2):
         super().__init__(**kwargs)
         caps = ['completion', 'infill', 'instruct', 'python']
         assert cap in caps, \
-            f'{cap} is not supported. The supported modes are: {caps}'
+            f'{cap} is not supported. The supported capability are: {caps}'
         self.cap = cap
         self.default_sys_prompt = default_sys_prompt
         self.session_len = session_len
@@ -435,7 +435,7 @@ class CodeLlama(Llama2):
         elif self.cap == 'infill':
             return self._infill_prompt(prompt)
         else:
-            return super().get_prompt(prompt, sequence_start)
+            return self._get_prompt(prompt, sequence_start)
 
     def _infill_prompt(self, prompt):
         prefix, suffix = prompt.split('<FILL>')
@@ -446,6 +446,15 @@ class CodeLlama(Llama2):
             # format as "<PRE> {pre} <SUF>{suf} <MID>"
             prompt = f'<BOS><PRE> {prefix} <SUF>{suffix} <MID>'
         return prompt
+
+    def _get_prompt(self, prompt, sequence_start):
+        prompt = prompt.strip()
+        if sequence_start:
+            return f'<BOS>{self.b_inst} ' \
+                   f'{self.b_sys}{self.default_sys_prompt}{self.e_sys}' \
+                   f'{prompt} {self.e_inst}'
+
+        return f'{self.b_inst} {prompt} {self.e_inst}'
 
     @property
     def stop_words(self):

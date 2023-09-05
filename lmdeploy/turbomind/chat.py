@@ -153,8 +153,12 @@ def main(model_path,
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
-            gen_param = get_gen_param(model_name, step, nth_round, cap)
-            prompt = get_prompt(prompt, model, model_name, cap, nth_round)
+            gen_param = get_gen_param(model_name, cap, nth_round, step)
+            if prompt == 'continue' or prompt == 'cont':
+                # 'continue' and 'cont' means continually generating tokens
+                prompt = ''
+            else:
+                prompt = get_prompt(prompt, model, model_name, cap, nth_round)
             input_ids = tokenizer.encode(prompt)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
