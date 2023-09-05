@@ -74,12 +74,12 @@ def main(model_path,
             seed = random.getrandbits(64)
         else:
             print(f'session {session_id}')
-            if step >= tm_model.session_len:
+            prompt = model.get_prompt(prompt, nth_round == 1)
+            input_ids = tokenizer.encode(prompt)
+            if step + len(input_ids) >= tm_model.session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
-            prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             for outputs in generator.stream_infer(
