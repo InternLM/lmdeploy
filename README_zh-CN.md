@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/lmdeploy-logo.png" width="450"/>
+  <img src="resources/lmdeploy-logo.svg" width="450"/>
 
 [![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy-zh-cn.readthedocs.io/zh_CN/latest/)
 [![badge](https://github.com/InternLM/lmdeploy/workflows/lint/badge.svg)](https://github.com/InternLM/lmdeploy/actions)
