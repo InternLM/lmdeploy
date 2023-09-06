@@ -13,8 +13,10 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
+    'transformers_modules.Baichuan-7B.modeling_baichuan.Model':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',
     'transformers_modules.Baichuan-7B.modeling_baichuan.Attention':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaAttention'
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention'
 }
 
 

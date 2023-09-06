@@ -321,16 +321,6 @@ class Engine:
 
         # make batch
         inputs = self._make_inputs(running)
-        inputs['input_ids'] = inputs['input_ids'].reshape(
-            [-1, inputs['input_ids'].shape[-1]])
-        # for key, value in inputs.items():
-        #     if isinstance(value, torch.Tensor):
-        #         print(key, value.shape)
-        #     else:
-        #         if key == 'past_key_values':
-        #             print(key, [(i.shape, j.shape) for (i, j) in value])
-        #         else:
-        #             print(key, value)
         # inference
         with torch.no_grad():
             # forward
