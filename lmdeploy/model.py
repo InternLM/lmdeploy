@@ -219,8 +219,8 @@ class InternLMChat7B8K(InternLMChat7B):
         self.session_len = session_len
 
 
-@MODELS.register_module(name='baichuan-7b')
-class Baichuan7B(BaseModel):
+@MODELS.register_module(name='baichuan')
+class Baichuan(BaseModel):
 
     def __init__(self, repetition_penalty=1.1, **kwargs):
         super().__init__(**kwargs)

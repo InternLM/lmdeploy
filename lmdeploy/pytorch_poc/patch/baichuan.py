@@ -3,7 +3,8 @@ from typing import Any, List, Optional, Tuple, Union
 
 import torch
 from torch import nn
-from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.modeling_outputs import (BaseModelOutputWithPast,
+                                           CausalLMOutputWithPast)
 
 from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
 
@@ -71,9 +72,11 @@ class BaichuanAttention(nn.Module):
 
         kv_seq_len = max_seq_len + max(history_lengths)
         # TODO: setup past_key_value with paged attention
-        cos, sin = origin_self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin, position_ids)
+        if hasattr(origin_self,
+                   'rotary_emb'):  # baichuan-13B has no rotary_emb
+            cos, sin = origin_self.rotary_emb(value_states, seq_len=kv_seq_len)
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos, sin, position_ids)
 
         kv_seq_length = position_ids[..., -1] + 1
         q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
@@ -110,6 +113,53 @@ class BaichuanAttention(nn.Module):
             attn_weights = None
 
         return attn_output, attn_weights, past_key_value
+
+
+class BaichuanLayer(torch.nn.Module):
+
+    def __init__(self, origin_mod: nn.Module, context: Any):
+        super().__init__()
+        self.origin_mod = origin_mod
+        self.context = context
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor,
+                                                 torch.FloatTensor]]]:
+
+        residual = hidden_states
+
+        hidden_states = self.origin_mod.input_layernorm(hidden_states)
+
+        # Self Attention
+        hidden_states, self_attn_weights, present_key_value = self.origin_mod.self_attn(  # noqa
+            hidden_states=hidden_states,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+        )
+        hidden_states = residual + hidden_states
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.origin_mod.post_attention_layernorm(hidden_states)
+        hidden_states = self.origin_mod.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        outputs = (hidden_states, )
+
+        if use_cache:
+            outputs += (present_key_value, )
+
+        return outputs
 
 
 class BaichuanModel(nn.Module):
@@ -244,3 +294,56 @@ class BaichuanModel(nn.Module):
                 input_ids, attention_mask, position_ids, past_key_values,
                 inputs_embeds, use_cache, output_attentions,
                 output_hidden_states, return_dict)
+
+
+class BaichuanForCausalLM(nn.Module):
+
+    def __init__(self, origin_mod: nn.Module, context: Any):
+        super().__init__()
+        self.origin_mod = origin_mod
+        self.context = context
+
+    def forward(self,
+                input_ids: torch.LongTensor = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                past_key_values: Optional[List[torch.FloatTensor]] = None,
+                inputs_embeds: Optional[torch.FloatTensor] = None,
+                labels: Optional[torch.LongTensor] = None,
+                use_cache: Optional[bool] = None,
+                output_attentions: Optional[bool] = False,
+                output_hidden_states: Optional[bool] = False,
+                return_dict: Optional[bool] = True,
+                **kwargs) -> Union[Tuple, CausalLMOutputWithPast]:
+
+        return_dict = return_dict if return_dict is not None else self.origin_mod.config.use_return_dict  # noqa
+
+        # decoder outputs consists of
+        # (dec_features, layer_state, dec_hidden, dec_attn)
+        outputs = self.origin_mod.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=kwargs.get('position_ids', None),
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        hidden_states = outputs[0]
+        logits = self.origin_mod.lm_head(hidden_states)
+
+        loss = None
+
+        if not return_dict:
+            output = (logits, ) + outputs[1:]
+            return (loss, ) + output if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )

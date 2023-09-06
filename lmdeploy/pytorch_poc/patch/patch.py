@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
+import re
 from typing import Sequence
 
 import torch
@@ -13,11 +14,23 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
-    'transformers_modules.Baichuan-7B.modeling_baichuan.Model':
+    'transformers_modules\.(.*)\.modeling_baichuan.(.*)Model':  # noqa
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',
-    'transformers_modules.Baichuan-7B.modeling_baichuan.Attention':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention'
+    'transformers_modules\.(.*)\.modeling_baichuan.(.*)Attention':  # noqa
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',
+    'transformers_modules\.(.*)\.modeling_baichuan.BaichuanForCausalLM':  # noqa
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',
+    'transformers_modules\.(.*)\.modeling_baichuan.BaichuanLayer':  # noqa
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanLayer'
 }
+
+
+def _get_rewrite_qualname(origin_qualname: str):
+    global MODULE_MAP
+    for key, value in MODULE_MAP.items():
+        if re.search(key, origin_qualname):
+            return value
+    return None
 
 
 def _class_from_qualname(qualname):
@@ -46,11 +59,11 @@ def _patch(model: torch.nn.Module, context: Addict):
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
     origin_qualname = f'{module_name}.{class_name}'
-    rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+    rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is None:
         origin_qualname = class_name
-        rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is not None:
         logger.info(
