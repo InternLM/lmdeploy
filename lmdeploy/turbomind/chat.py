@@ -7,7 +7,7 @@ import random
 import fire
 
 from lmdeploy import turbomind as tm
-from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.model import MODELS
 from lmdeploy.turbomind.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -48,27 +48,29 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def get_prompt(prompt: str, model: BaseModel, model_name: str, cap: str,
-               nth_round: bool):
-    if model_name == 'codellama':
-        if cap == 'completion' or cap == 'python':
-            return prompt
-        elif cap == 'infill':
-            return model.get_prompt(prompt, sequence_start=True)
-        elif cap == 'instruct':
-            return model.get_prompt(prompt, nth_round == 1)
-        else:
-            assert 0, f"{model_name} model hasn't {cap} capability"
-    else:
-        if cap == 'completion':
-            return prompt
-        elif cap == 'instruct':
-            return model.get_prompt(prompt, nth_round == 1)
-        else:
-            assert 0, f"{model_name} model hasn't {cap} capability"
+# def get_prompt(prompt: str, model: BaseModel, model_name: str, cap: str,
+#                nth_round: bool):
+#     """return the decorated prompt according to the parameters."""
+#     if model_name == 'codellama':
+#         if cap == 'completion' or cap == 'python':
+#             return prompt
+#         elif cap == 'infill':
+#             return model.get_prompt(prompt, sequence_start=True)
+#         elif cap == 'instruct':
+#             return model.get_prompt(prompt, nth_round == 1)
+#         else:
+#             assert 0, f"{model_name} model hasn't {cap} capability"
+#     else:
+#         if cap == 'completion':
+#             return prompt
+#         elif cap == 'instruct':
+#             return model.get_prompt(prompt, nth_round == 1)
+#         else:
+#             assert 0, f"{model_name} model hasn't {cap} capability"
 
 
 def get_gen_param(model_name, cap, nth_round, step):
+    """return parameters used by token generation."""
     if model_name == 'codellama':
         if cap == 'instruct':
             return GenParam(
@@ -101,11 +103,11 @@ def get_gen_param(model_name, cap, nth_round, step):
 
 def main(model_path,
          session_id: int = 1,
-         cap: str = 'instruct',
-         sys_instruct: str = 'Provide answers in Python',
-         repetition_penalty: float = 1.0,
+         cap: str = 'chat',
+         sys_instruct: str = None,
          tp=1,
-         stream_output=True):
+         stream_output=True,
+         **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -113,12 +115,12 @@ def main(model_path,
         model_path (str): the path of the deployed model
         session_id (int): the identical id of a session
         cap (str): the capability of a model. For example, codellama has
-            the ability among ['completion', 'infill', 'instruct', 'python']
+            the ability among ['completion', 'infilling', 'chat', 'python']
         sys_instruct (str): the content of 'system' role, which is used by
             conversational model
-        repetition_penalty (float): parameter to penalize repetition
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
+        **kwarg (dict): other arguments for initializing model's chat template
     """
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
@@ -129,7 +131,9 @@ def main(model_path,
     step = 0
     seed = random.getrandbits(64)
     model_name = tm_model.model_name
-    model = MODELS.get(model_name)(cap=cap, default_sys_prompt=sys_instruct)
+    model = MODELS.get(model_name)(
+        cap=cap, **kwargs) if sys_instruct is None else MODELS.get(model_name)(
+            cap=cap, system=sys_instruct, **kwargs)
 
     print(f'session {session_id}')
     while True:
@@ -154,11 +158,8 @@ def main(model_path,
                       ' Please end the session.')
                 continue
             gen_param = get_gen_param(model_name, cap, nth_round, step)
-            if prompt == 'continue' or prompt == 'cont':
-                # 'continue' and 'cont' means continually generating tokens
-                prompt = ''
-            else:
-                prompt = get_prompt(prompt, model, model_name, cap, nth_round)
+            prompt = model.get_prompt(prompt, nth_round)
+            # prompt = get_prompt(prompt, model, model_name, cap, nth_round)
             input_ids = tokenizer.encode(prompt)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0

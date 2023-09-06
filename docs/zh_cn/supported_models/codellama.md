@@ -22,7 +22,7 @@
 
 ## 推理
 
-根据上述的模型和能力关系表，下载感兴趣的模型。执行如下的命令，即可在控制台和模型对话：
+根据上述的模型和能力关系表，下载感兴趣的模型。执行如下的命令，把模型权重转成 turbomind 要求的格式：
 
 ```shell
 # 安装 lmdeploy
@@ -30,12 +30,31 @@ python3 -m pip install lmdeploy
 
 # 转模型格式
 python3 -m lmdeploy.serve.turbomind.deploy codellama /the/path/of/codellama/model
+```
 
-# 在控制台与模型对话
-# --cap 可选择 completion, infill, instruct, python。缺省值是 instruct
-python3 -m lmdeploy.turbomind.chat ./workspace --cap <capability>
+接下来，可参考如下章节，在控制台与 codellama 进行交互式对话。
+
+**注意**: `lmdeploy.turbomind.chat` 支持把代码块拷贝到控制台，务必使用"!!"结束输入
+
+### 代码续写
+
+```shell
+python3 -m lmdeploy.turbomind.chat ./workspace --cap completion
 ```
 
 **注意**: lmdeploy 支持把代码块拷贝到控制台，务必使用"!!"结束输入
+
+### 代码填空
+
+```shell
+```
+
+### 对话
+
+```
+python3 -m lmdeploy.turbomind.chat ./workspace --cap insturct --sys-instruct "Provide answers in Python"
+```
+
+### Python 专项
 
 ## 服务

@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
 - \[2023/08\] TurboMind 支持 flash-attention2
 - \[2023/08\] TurboMind 支持 Qwen-7B，动态NTK-RoPE缩放，动态logN缩放
 - \[2023/08\] TurboMind 支持 Windows (tp=1)
@@ -56,11 +57,14 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 > **Note**<br />
 > W4A16 推理需要 Ampere 及以上架构的 Nvidia GPU
 
-|   模型   | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
-| :------: | :------: | :--: | :-----: | :---: | :--: |
-|  Llama   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-|  Llama2  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-| InternLM |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|    模型     | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
+| :---------: | :------: | :--: | :-----: | :---: | :--: |
+|    Llama    |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|   Llama2    |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|  InternLM   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|   QWen-7B   |   Yes    | Yes  |   Yes   |  No   |  No  |
+| Baichuan-7B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+| Code Llama  |   Yes    | Yes  |   TBD   |  TBD  |  No  |
 
 ### Pytorch
 

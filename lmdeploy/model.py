@@ -19,15 +19,16 @@ class BaseModel:
                  top_k=None,
                  temperature=0.8,
                  repetition_penalty=1.0,
+                 capability='chat',
                  **kwargs):
         self.session_len = session_len
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
         self.repetition_penalty = repetition_penalty
+        self.capability = capability
 
-    @staticmethod
-    def get_prompt(prompt, sequence_start=True):
+    def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -38,7 +39,14 @@ class BaseModel:
         Returns:
             str: the concatenated prompt
         """
-        return prompt
+        if self.capability == 'completion':
+            return prompt
+        else:
+            return self.decorate_prompt(prompt, sequence_start)
+
+    @abstractmethod
+    def decorate_prompt(self, prompt, sequence_start):
+        pass
 
     @staticmethod
     def _translate_messages(messages: List):
@@ -105,7 +113,7 @@ class Vicuna(BaseModel):
         self.user = user
         self.assistant = assistant
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -116,6 +124,8 @@ class Vicuna(BaseModel):
         Returns:
             str: the concatenated prompt
         """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'{self.system} {self.user}: {prompt} {self.assistant}: '
         else:
@@ -131,7 +141,7 @@ class Vicuna(BaseModel):
             str: the concatenated prompt
         """
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.system if not system else system
         ret = system + ' '
@@ -161,7 +171,7 @@ class InternLMChat7B(BaseModel):
         self.eoa = eoa
         self.assistant = assistant
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -172,6 +182,8 @@ class InternLMChat7B(BaseModel):
         Returns:
             str: the concatenated prompt
         """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'<BOS>{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
@@ -189,7 +201,7 @@ class InternLMChat7B(BaseModel):
             str: the concatenated prompt
         """
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         ret = '<BOS>'
         for user, assistant in zip(users, assistants):
@@ -228,22 +240,24 @@ class Puyu(BaseModel):
     AI Laboratory."""
 
     def __init__(self,
-                 meta_instruction='',
+                 system='',
                  user='<|Human|>: ',
                  eoh='',
                  eosys='',
                  assistant='<|Assistant|>: ',
-                 system='<|System|>: ',
+                 system_role='<|System|>: ',
                  **kwargs):
         super().__init__(**kwargs)
-        self.meta_instruction = meta_instruction
+        self.meta_instruction = system
         self.user = user
         self.eoh = eoh
         self.eosys = eosys
         self.assistant = assistant
-        self.system = system
+        self.system = system_role
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}\n' \
                    f'{self.user}{prompt}{self.eoh}\n' \
@@ -262,7 +276,7 @@ class Puyu(BaseModel):
             str: the concatenated prompt
         """
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.system if not system else system
         ret = f'<BOS>{system}{self.meta_instruction}{self.eosys}'
@@ -290,7 +304,7 @@ class Llama2(BaseModel):
             e_inst='[/INST]',
             b_sys='<<SYS>>\n',
             e_sys='\n<</SYS>>\n\n',
-            default_sys_prompt="""\
+            system="""\
 You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.""",  # noqa: E501
@@ -301,10 +315,10 @@ If a question does not make any sense, or is not factually coherent, explain why
         self.e_inst = e_inst
         self.b_sys = b_sys
         self.e_sys = e_sys
-        self.default_sys_prompt = default_sys_prompt
+        self.default_sys_prompt = system
         self.session_len = session_len
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -315,6 +329,8 @@ If a question does not make any sense, or is not factually coherent, explain why
         Returns:
             str: the concatenated prompt
         """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'<BOS>{self.b_inst} ' \
                    f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
@@ -332,7 +348,7 @@ If a question does not make any sense, or is not factually coherent, explain why
             str: the concatenated prompt
         """
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.default_sys_prompt if not system else system
         ret = f'<BOS>{self.b_inst} {self.b_sys} {system} {self.e_sys}'
@@ -369,7 +385,9 @@ class Qwen7BChat(BaseModel):
         self.im_end = im_end
         self.system = system
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'{self.im_start}system\n{self.system}{self.im_end}' \
                    f'\n{self.im_start}user\n{prompt}{self.im_end}' \
@@ -388,7 +406,7 @@ class Qwen7BChat(BaseModel):
             str: the concatenated prompt
         """
         if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
+            return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.system if not system else system
         ret = f'{self.im_start}system\n{system}{self.im_end}'
@@ -411,31 +429,30 @@ class Qwen7BChat(BaseModel):
 class CodeLlama(Llama2):
 
     def __init__(self,
-                 cap='completion',
-                 default_sys_prompt='',
+                 system='',
                  session_len=4096,
                  top_p=0.9,
                  temperature=0.6,
                  suffix_first=False,
                  **kwargs):
         super().__init__(**kwargs)
-        caps = ['completion', 'infill', 'instruct', 'python']
-        assert cap in caps, \
-            f'{cap} is not supported. The supported capability are: {caps}'
-        self.cap = cap
-        self.default_sys_prompt = default_sys_prompt
+        caps = ['completion', 'infilling', 'chat', 'python']
+        assert self.capability in caps, \
+            f'{self.capability} is not supported. ' \
+            f'The supported capabilities are: {caps}'
+        self.default_sys_prompt = system
         self.session_len = session_len
         self.top_p = top_p
         self.temperature = temperature
         self.suffix_first = suffix_first
 
-    def get_prompt(self, prompt, sequence_start=True):
-        if self.cap == 'completion':
-            return prompt
-        elif self.cap == 'infill':
+    def decorate_prompt(self, prompt, sequence_start=True):
+        if self.capability == 'infilling':
             return self._infill_prompt(prompt)
-        else:
+        elif self.capability == 'chat':
             return self._get_prompt(prompt, sequence_start)
+        else:  # python speicalist
+            return prompt
 
     def _infill_prompt(self, prompt):
         prefix, suffix = prompt.split('<FILL>')
@@ -458,14 +475,14 @@ class CodeLlama(Llama2):
 
     @property
     def stop_words(self):
-        if self.cap == 'infill':
+        if self.capability == 'infilling':
             # EOT ID
             return [32010]
         else:
             return None
 
     def messages2prompt(self, messages, sequence_start=True):
-        assert self.cap == 'chat', \
+        assert self.capability == 'chat', \
             f'codellama message2prompt only supports chat mode ' \
             f'but got {self.cap} mode'
         return super().messages2prompt(messages, sequence_start)
