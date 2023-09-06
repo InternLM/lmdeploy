@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from abc import abstractmethod
 from typing import List
 
 from mmengine import Registry
@@ -10,12 +11,18 @@ MODELS = Registry('model', locations=['lmdeploy.model'])
 class BaseModel:
     """Base model."""
 
-    def __init__(self):
-        self.session_len = 2048
-        self.top_p = 0.8
-        self.top_k = None
-        self.temperature = 0.8
-        self.repetition_penalty = 1.0
+    def __init__(self,
+                 session_len=2048,
+                 top_p=0.8,
+                 top_k=None,
+                 temperature=0.8,
+                 repetition_penalty=1.0,
+                 **kwargs):
+        self.session_len = session_len
+        self.top_p = top_p
+        self.top_k = top_k
+        self.temperature = temperature
+        self.repetition_penalty = repetition_penalty
 
     @staticmethod
     def get_prompt(prompt, sequence_start=True):
@@ -31,6 +38,50 @@ class BaseModel:
         """
         return prompt
 
+    @staticmethod
+    def _translate_messages(messages: List):
+        """Translate messages into system, user speaking list, assistant
+        speaking list.
+
+        Args:
+            messages (List): chat history
+        Returns:
+            Turple: consists of system (str), users (List[str]),
+                assistants (List[str])
+        """
+        system = None
+        users = []
+        assistants = []
+        assert isinstance(messages, List)
+        for message in messages:
+            msg_role = message['role']
+            if msg_role == 'system':
+                system = message['content']
+            elif msg_role == 'user':
+                users.append(message['content'])
+            elif msg_role == 'assistant':
+                assistants.append(message['content'])
+            else:
+                raise ValueError(f'Unknown role: {msg_role}')
+        assistants.append(None)
+        return system, users, assistants
+
+    @abstractmethod
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template. When messages arg is a string, return
+        self.get_prompt(messages). When messages arg is a chat history, return
+        translated prompt from chat history.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages)
+        # chat history processing in derived classes
+
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
@@ -45,11 +96,16 @@ class BaseModel:
 class Vicuna(BaseModel):
     """Chat template of vicuna model."""
 
-    def __init__(self):
-        super().__init__()
-        self.system = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """  # noqa: E501
-        self.user = 'USER'
-        self.assistant = 'ASSISTANT'
+    def __init__(
+            self,
+            system="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. """,  # noqa: E501
+            user='USER',
+            assistant='ASSISTANT',
+            **kwargs):
+        super().__init__(**kwargs)
+        self.system = system
+        self.user = user
+        self.assistant = assistant
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -63,29 +119,56 @@ class Vicuna(BaseModel):
             str: the concatenated prompt
         """
         if sequence_start:
-            return f'{self.system} {self.user}: {prompt} {self.assistant}:'
+            return f'{self.system} {self.user}: {prompt} {self.assistant}: '
         else:
-            return f'</s>{self.user}: {prompt} {self.assistant}:'
+            return f'</s>{self.user}: {prompt} {self.assistant}: '
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = system + ' '
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.user}: {user} {self.assistant}: {assistant}</s>'
+            else:
+                ret += f'{self.user}: {user} {self.assistant}: '
+        return ret
 
 
 @MODELS.register_module(name='internlm')
 class InternLM(BaseModel):
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
 @MODELS.register_module(name='internlm-chat-7b')
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""
 
-    def __init__(self):
-        super().__init__()
-        self.system = ''
-        self.user = '<|User|>'
-        self.eoh = '<eoh>'
-        self.eoa = '<eoa>'
-        self.assistant = '<|Bot|>'
+    def __init__(self,
+                 system='',
+                 user='<|User|>',
+                 eoh='<eoh>',
+                 eoa='<eoa>',
+                 assistant='<|Bot|>',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.system = system
+        self.user = user
+        self.eoh = eoh
+        self.eoa = eoa
+        self.assistant = assistant
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -105,6 +188,27 @@ class InternLMChat7B(BaseModel):
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
 
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        ret = '<BOS>'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
+                       f'{assistant}{self.eoa}'
+            else:
+                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
+        return ret
+
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
@@ -114,9 +218,17 @@ class InternLMChat7B(BaseModel):
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
 
-    def __init__(self):
-        super(InternLMChat7B8K, self).__init__()
-        self.session_len = 8192
+    def __init__(self, session_len=8192, **kwargs):
+        super(InternLMChat7B8K, self).__init__(**kwargs)
+        self.session_len = session_len
+
+
+@MODELS.register_module(name='baichuan-7b')
+class Baichuan7B(BaseModel):
+
+    def __init__(self, repetition_penalty=1.1, **kwargs):
+        super().__init__(**kwargs)
+        self.repetition_penalty = repetition_penalty
 
 
 @MODELS.register_module(name='puyu')
@@ -124,24 +236,52 @@ class Puyu(BaseModel):
     """Chat template of puyu model.This is only for internal usage in Shanghai
     AI Laboratory."""
 
-    def __init__(self):
-        super().__init__()
-        self.system = """meta instruction
-You are an AI assistant whose name is InternLM (书生·浦语).
-- 书生·浦语 is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
-- 书生·浦语 can understand and communicate fluently in the language chosen by the user such as English and 中文.
-conversation"""  # noqa: E501
-        self.user = '<|Human|>'
-        self.eoh = 'െ'
-        self.assistant = '<|Assistant|>'
+    def __init__(self,
+                 meta_instruction='',
+                 user='<|Human|>: ',
+                 eoh='',
+                 eosys='',
+                 assistant='<|Assistant|>: ',
+                 system='<|System|>: ',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.meta_instruction = meta_instruction
+        self.user = user
+        self.eoh = eoh
+        self.eosys = eosys
+        self.assistant = assistant
+        self.system = system
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
-            return f'<BOS>{self.system}\n' \
-                   f'{self.user}:{prompt}{self.eoh}\n' \
-                   f'{self.assistant}:'
+            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}\n' \
+                   f'{self.user}{prompt}{self.eoh}\n' \
+                   f'{self.assistant}'
         else:
-            return f'\n{self.user}:{prompt}{self.eoh}\n{self.assistant}:'
+            return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+            sequence_start (bool): flag to start the sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'<BOS>{system}{self.meta_instruction}{self.eosys}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.user}{user}{self.eoh}\n{self.assistant}' \
+                       f'{assistant}'
+            else:
+                ret += f'\n{self.user}{user}{self.eoh}\n{self.assistant}'
+        return ret
 
     @property
     def stop_words(self):
@@ -149,34 +289,29 @@ conversation"""  # noqa: E501
         return [45623]
 
 
-@MODELS.register_module(name='baichuan-7b')
-class Baichuan7B(BaseModel):
-
-    def __init__(self):
-        super().__init__()
-        self.repetition_penalty = 1.1
-
-
 @MODELS.register_module(name='llama2')
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
-    def __init__(self):
-        super().__init__()
-        B_INST, E_INST = '[INST]', '[/INST]'
-        B_SYS, E_SYS = '<<SYS>>\n', '\n<</SYS>>\n\n'
-
-        DEFAULT_SYSTEM_PROMPT = """\
+    def __init__(
+            self,
+            b_inst='[INST]',
+            e_inst='[/INST]',
+            b_sys='<<SYS>>\n',
+            e_sys='\n<</SYS>>\n\n',
+            default_sys_prompt="""\
 You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""  # noqa: E501
-
-        self.b_inst = B_INST
-        self.e_inst = E_INST
-        self.b_sys = B_SYS
-        self.e_sys = E_SYS
-        self.default_sys_prompt = DEFAULT_SYSTEM_PROMPT
-        self.session_len = 4096
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.""",  # noqa: E501
+            session_len=4096,
+            **kwargs):
+        super().__init__(**kwargs)
+        self.b_inst = b_inst
+        self.e_inst = e_inst
+        self.b_sys = b_sys
+        self.e_sys = e_sys
+        self.default_sys_prompt = default_sys_prompt
+        self.session_len = session_len
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -195,6 +330,90 @@ If a question does not make any sense, or is not factually coherent, explain why
                    f'{prompt} {self.e_inst} '
 
         return f'{self.b_inst} {prompt} {self.e_inst} '
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.default_sys_prompt if not system else system
+        ret = f'<BOS>{self.b_inst} {self.b_sys} {system} {self.e_sys}'
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            if i != 0:
+                ret += f'{self.b_inst} '
+            if assistant:
+                ret += f'{user} {self.e_inst} {assistant}'
+            else:
+                ret += f'{user} {self.e_inst} '
+        return ret
+
+
+@MODELS.register_module(name='qwen-7b')
+class Qwen7BChat(BaseModel):
+    """Chat template for Qwen-7B-Chat."""
+
+    def __init__(self,
+                 session_len=8192,
+                 top_p=0.5,
+                 top_k=40,
+                 temperature=1.0,
+                 im_start='<|im_start|>',
+                 im_end='<|im_end|>',
+                 system='You are a helpful assistant.',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.session_len = session_len
+        self.top_p = top_p
+        self.top_k = top_k
+        self.temperature = temperature
+
+        self.im_start = im_start
+        self.im_end = im_end
+        self.system = system
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return f'{self.im_start}system\n{self.system}{self.im_end}' \
+                   f'\n{self.im_start}user\n{prompt}{self.im_end}' \
+                   f'\n{self.im_start}assistant\n'
+
+        return f'\n{self.im_start}user\n{prompt}{self.im_end}' \
+               f'\n{self.im_start}assistant\n'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'{self.im_start}system\n{system}{self.im_end}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
+                       f'\n{self.im_start}assistant\n{assistant}'
+            else:
+                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
+                       f'\n{self.im_start}assistant\n'
+        return ret
+
+    @property
+    def stop_words(self):
+        """Return the stop-words' token ids."""
+        return [151645]  # <|im_end|>
 
 
 @MODELS.register_module(name='chatglm2-6b')

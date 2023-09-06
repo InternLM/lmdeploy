@@ -48,18 +48,18 @@ inline size_t getBitSize(WeightType type)
         case WeightType::kINT4:
             return 4;
     }
+    return 0;
 }
 
 template<typename T>
 struct LlamaDenseWeight {
-
     size_t     input_dims;
     size_t     output_dims;
     void*      kernel;
     WeightType type;
     T*         bias;
-    T*         scales;
-    T*         zeros;
+    T*         scales_and_zeros;
+    int        group_size;
 };
 
 template<typename T>
@@ -74,6 +74,7 @@ struct LlamaFfnWeight {
     LlamaDenseWeight<T> gating;
     LlamaDenseWeight<T> intermediate;
     LlamaDenseWeight<T> output;
+    LlamaDenseWeight<T> fused_gating_intermediate;
 };
 
 }  // namespace turbomind

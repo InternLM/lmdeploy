@@ -39,7 +39,7 @@ def main(
         top_p=0.8,
         temperature=0.8,
         repetition_penalty: float = 1.0,
-        tp=1,
+        tp: int = 1,
         stream_output=True):
     """An example to perform model inference through the command line
     interface.
@@ -53,7 +53,7 @@ def main(
     """
     # tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(model_path)
-    tm_model = tm.Engine(model_path)
+    tm_model = tm.Engine(model_path, tp=tp)
     generator = tm_model.create_instance()
 
     nth_round = 1

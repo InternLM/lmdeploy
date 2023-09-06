@@ -19,6 +19,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/DecoderSelfAttentionLayer.cc
 #include "src/turbomind/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -60,6 +61,9 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                                       const int    kv_head_num,
                                                       const int    size_per_head,
                                                       const int    rotary_embedding_dim,
+                                                      const int    max_position_embeddings,
+                                                      const bool   use_dynamic_ntk,
+                                                      const bool   use_logn_attn,
                                                       const int    memory_max_len,
                                                       const int*   prefix_prompt_lengths,
                                                       const int    max_prefix_prompt_length,
@@ -109,13 +113,9 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     FT_CHECK(k_cache_per_sample && v_cache_per_sample);
 
-    params.k_cache                    = reinterpret_cast<DataType*>(key_cache);
-    params.v_cache                    = reinterpret_cast<DataType*>(value_cache);
     params.k_cache_per_sample         = reinterpret_cast<DataType**>(k_cache_per_sample);
     params.v_cache_per_sample         = reinterpret_cast<DataType**>(v_cache_per_sample);
     params.kv_cache_per_sample_offset = kv_cache_per_sample_offset;
-    params.k_cache_interleaved        = false;
-    params.cache_indir                = cache_indir;
     params.batch_size                 = inference_batch_size;
     params.beam_width                 = beam_width;
     params.memory_max_len             = memory_max_len;
@@ -127,8 +127,12 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.num_heads    = head_num;
     params.num_kv_heads = kv_head_num;
 
-    params.hidden_size_per_head = size_per_head;
-    params.rotary_embedding_dim = rotary_embedding_dim;
+    params.hidden_size_per_head    = size_per_head;
+    params.rotary_embedding_dim    = rotary_embedding_dim;
+    params.max_position_embeddings = max_position_embeddings;
+    params.use_dynamic_ntk         = use_dynamic_ntk;
+    params.use_logn_attn           = use_logn_attn;
+
     // Note: keep norm factor (sqrt(K_dim)) when adopting megatron T5 structure (may adjust)
     params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * q_scaling);
 
@@ -145,15 +149,13 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     }
     params.max_input_length = max_input_len;
 
-    params.ia3_tasks         = ia3_tasks;
-    params.ia3_key_weights   = reinterpret_cast<const DataType*>(ia3_key_weights);
-    params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
-
     params.int8_mode = int8_mode;
 
     if (int8_mode & QuantPolicy::kCacheKVInt8) {
         params.attention_k_scale = attention_kv_scale[0];
-        params.attention_v_scale = attention_kv_scale[1];
+        params.attention_k_zp    = attention_kv_scale[1];
+        params.attention_v_scale = attention_kv_scale[2];
+        params.attention_v_zp    = attention_kv_scale[3];
     }
 
     PUSH_RANGE("scaled dot-product fusion");
@@ -182,8 +184,6 @@ void LlamaDecoderSelfAttentionLayer<T>::freeBuffer()
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&qkv_buf_));
         allocator_->free((void**)(&context_buf_));
-        // allocator_->free((void**)(&k_cache_buf_));
-        // allocator_->free((void**)(&v_cache_buf_));
         is_allocate_buffer_ = false;
     }
 }
@@ -260,7 +260,10 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         local_head_num_,
         local_kv_head_num_,
         size_per_head_,
-        rotary_embedding_dim_,
+        params_.rotray_embedding_dim,
+        params_.max_position_embeddings,
+        params_.use_dynamic_ntk,
+        params_.use_logn_attn,
         memory_len,
         nullptr,  // prefix_prompt_lengths
         0,        // max_prefix_prompt_length

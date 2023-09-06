@@ -20,7 +20,7 @@
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
-#elif (CUDART_VERSION >= 11050)
+#elif (CUDART_VERSION >= 11000)
 #include <cub/cub.cuh>
 #else
 #include "3rdparty/cub/cub.cuh"
@@ -28,6 +28,7 @@
 
 #include "src/turbomind/kernels/logprob_kernels.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind {

@@ -1,4 +1,6 @@
+accelerate
 datasets
+fastapi
 fire
 gradio
 mmengine
@@ -7,6 +9,9 @@ pybind11
 safetensors
 sentencepiece
 setuptools
+shortuuid
+tiktoken
 torch
 transformers
 tritonclient[all]
+uvicorn

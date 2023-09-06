@@ -149,15 +149,8 @@ def paged_attention_fwd(q,
     assert Lk in {16, 32, 64, 128}
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
-    # batch, head = b_seq_len.shape[0], q.shape[1]
-    # kv_group_num = q.shape[1] // k[0].shape[1]
     batch, head = b_seq_len.shape[0], q.shape[-2]
     kv_group_num = q.shape[-2] // k[0].shape[-2]
-
-    logger.debug('q.shape = %s', q.shape)
-    logger.debug('k.shape = %s', k.shape)
-    logger.debug('kv_group_num = %s', kv_group_num)
-    logger.debug('o.shape = %s', o.shape)
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
     logger.debug('grid = %s', grid)

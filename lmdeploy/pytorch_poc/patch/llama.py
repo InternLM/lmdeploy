@@ -2,12 +2,70 @@
 from typing import Any, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.functional as F
+import transformers
+from packaging import version
 from torch import nn
+from torch.distributed._tensor import (DeviceMesh, DTensor, Replicate, Shard,
+                                       distribute_tensor)
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.llama.modeling_llama import rotate_half
 
 from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
+
+_tp_from_config = version.parse(
+    transformers.__version__) >= version.parse('4.32')
+
+
+def _rowwise_parallelize_linear_fn(
+    module: nn.Module,
+    device_mesh: DeviceMesh,
+) -> None:
+    """
+    This function parallelizes the input :class:`nn.Linear` module in
+    :class:`RowwiseParallel` style.
+
+    Args:
+        module (:class:`nn.Module`):
+            The :class:`nn.Linear` module to be parallelized.
+        device_mesh (:class:`DeviceMesh`):
+            Object which describes the mesh topology of devices.
+
+    Returns:
+        None
+    """
+    for name, param in module.named_parameters():
+        dist_spec = ([Shard(1)] if name == 'weight' else
+                     [Replicate()]  # type: ignore[list-item]
+                     )
+        dist_param = torch.nn.Parameter(
+            distribute_tensor(param, device_mesh, dist_spec))
+        module.register_parameter(name, dist_param)
+
+
+def _colwise_parallelize_linear_fn(
+    module: nn.Module,
+    device_mesh: DeviceMesh,
+) -> None:
+    """
+    This function parallelizes the input :class:`nn.Linear` module in
+    :class:`ColwiseParallel` style.
+
+    Args:
+        module (:class:`nn.Module`):
+            The :class:`nn.Linear` module to be parallelized.
+        device_mesh (:class:`DeviceMesh`):
+            Object which describes the mesh topology of devices.
+
+    Returns:
+        None
+    """
+
+    for name, param in module.named_parameters():
+        dist_param = torch.nn.Parameter(
+            distribute_tensor(param, device_mesh, [Shard(0)]))
+        module.register_parameter(name, dist_param)
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
@@ -45,10 +103,37 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 class LlamaAttention(nn.Module):
 
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
+    @classmethod
+    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        if mod_name != '':
+            return
+
+        assert hasattr(mod, 'q_proj')
+        assert hasattr(mod, 'k_proj')
+        assert hasattr(mod, 'v_proj')
+        assert hasattr(mod, 'o_proj')
+
+        # qkv
+        _colwise_parallelize_linear_fn(mod.q_proj, device_mesh=device_mesh)
+        _colwise_parallelize_linear_fn(mod.k_proj, device_mesh=device_mesh)
+        _colwise_parallelize_linear_fn(mod.v_proj, device_mesh=device_mesh)
+
+        # o
+        _rowwise_parallelize_linear_fn(mod.o_proj, device_mesh=device_mesh)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        # return outputs
+        attn_output, attn_weights, past_key_value = outputs
+
+        local_out = attn_output.to_local()
+        dist.all_reduce(local_out)
+        attn_output = DTensor.from_local(local_out,
+                                         device_mesh=device_mesh,
+                                         placements=[Replicate()])
+
+        return attn_output, attn_weights, past_key_value
 
     def _contiguous_batching_forward(
         self,
@@ -63,19 +148,20 @@ class LlamaAttention(nn.Module):
 
         assert not output_attentions
         origin_self = self.origin_mod
+        origin_config = origin_self.config if _tp_from_config else origin_self
 
         context = self.context.context
         history_lengths = context.history_lengths
 
         max_seq_len = position_ids.size(-1)
 
-        if origin_self.config.pretraining_tp > 1:
+        if origin_config.pretraining_tp > 1:
             key_value_slicing = (
                 origin_self.num_key_value_heads *
-                origin_self.head_dim) // origin_self.config.pretraining_tp
+                origin_self.head_dim) // origin_config.pretraining_tp
             query_slices = origin_self.q_proj.weight.split(
                 (origin_self.num_heads * origin_self.head_dim) //
-                origin_self.config.pretraining_tp,
+                origin_config.pretraining_tp,
                 dim=0)
             key_slices = origin_self.k_proj.weight.split(key_value_slicing,
                                                          dim=0)
@@ -84,19 +170,19 @@ class LlamaAttention(nn.Module):
 
             query_states = [
                 F.linear(hidden_states, query_slices[i])
-                for i in range(origin_self.config.pretraining_tp)
+                for i in range(origin_config.pretraining_tp)
             ]
             query_states = torch.cat(query_states, dim=-1)
 
             key_states = [
                 F.linear(hidden_states, key_slices[i])
-                for i in range(origin_self.config.pretraining_tp)
+                for i in range(origin_config.pretraining_tp)
             ]
             key_states = torch.cat(key_states, dim=-1)
 
             value_states = [
                 F.linear(hidden_states, value_slices[i])
-                for i in range(origin_self.config.pretraining_tp)
+                for i in range(origin_config.pretraining_tp)
             ]
             value_states = torch.cat(value_states, dim=-1)
 
@@ -171,16 +257,15 @@ class LlamaAttention(nn.Module):
                             BLOCK=block_size)
         attn_output = attn_output.reshape(-1, origin_self.hidden_size)
 
-        if origin_self.config.pretraining_tp > 1:
+        if origin_config.pretraining_tp > 1:
             attn_output = attn_output.split(origin_self.hidden_size //
-                                            origin_self.config.pretraining_tp,
+                                            origin_config.pretraining_tp,
                                             dim=1)
             o_proj_slices = origin_self.o_proj.weight.split(
-                origin_self.hidden_size // origin_self.config.pretraining_tp,
-                dim=1)
+                origin_self.hidden_size // origin_config.pretraining_tp, dim=1)
             attn_output = sum([
                 F.linear(attn_output[i], o_proj_slices[i])
-                for i in range(origin_self.config.pretraining_tp)
+                for i in range(origin_config.pretraining_tp)
             ])
         else:
             attn_output = origin_self.o_proj(attn_output)
@@ -200,7 +285,7 @@ class LlamaAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
-        if hidden_states.dim() == 3:
+        if self.context.use_origin:
             return self.origin_mod(hidden_states, attention_mask, position_ids,
                                    past_key_value, output_attentions,
                                    use_cache)
@@ -208,6 +293,50 @@ class LlamaAttention(nn.Module):
             return self._contiguous_batching_forward(
                 hidden_states, attention_mask, position_ids, past_key_value,
                 output_attentions, use_cache)
+
+
+class LlamaMLP(nn.Module):
+
+    @classmethod
+    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        if mod_name != '':
+            return
+
+        assert hasattr(mod, 'gate_proj')
+        assert hasattr(mod, 'up_proj')
+        assert hasattr(mod, 'down_proj')
+
+        # gate
+        _colwise_parallelize_linear_fn(mod.gate_proj, device_mesh=device_mesh)
+
+        # up
+        _colwise_parallelize_linear_fn(mod.up_proj, device_mesh=device_mesh)
+
+        # down
+        _rowwise_parallelize_linear_fn(mod.down_proj, device_mesh=device_mesh)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs: DTensor, device_mesh: DeviceMesh):
+        # return outputs
+        local_out = outputs.to_local()
+        dist.all_reduce(local_out)
+        outputs = DTensor.from_local(local_out,
+                                     device_mesh=device_mesh,
+                                     placements=[Replicate()])
+
+        return outputs
+
+    def forward(self, x):
+
+        if isinstance(x, DTensor):
+            gate_out = self.gate_proj(x)
+            gate_out.to_local()[...] = self.act_fn(gate_out.to_local())
+            down_proj = self.down_proj(gate_out * self.up_proj(x))
+        else:
+            down_proj = self.origin_mod.forward(x)
+
+        return down_proj
 
 
 class LlamaModel(nn.Module):
@@ -316,17 +445,15 @@ class LlamaModel(nn.Module):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
 
-        use_origin = False
+        use_origin = self.context.use_origin
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError('You cannot specify both decoder_input_ids '
                              'and decoder_inputs_embeds at the same time')
         elif input_ids is not None:
-            if input_ids.dim() == 2:
-                use_origin = True
+            assert input_ids.dim() == 2
         elif inputs_embeds is not None:
-            if inputs_embeds.dim() == 3:
-                use_origin = True
+            assert inputs_embeds.dim() == 3
         else:
             raise ValueError(
                 'You have to specify '

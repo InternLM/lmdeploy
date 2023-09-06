@@ -101,7 +101,7 @@ void invokeBanBadWords(T*           logits,
                        cudaStream_t stream)
 {
     dim3 block, grid;
-    block.x = min(((bad_words_len + 32 - 1) / 32) * 32, 256UL);
+    block.x = min((unsigned long)((bad_words_len + 32 - 1) / 32) * 32, 256UL);
     grid.x  = (bad_words_len + block.x - 1) / block.x;
     grid.y  = local_batch_size * beam_width;
 

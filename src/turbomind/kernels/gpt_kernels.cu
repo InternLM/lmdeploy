@@ -17,7 +17,7 @@
 #include "src/turbomind/utils/cuda_fp8_utils.h"
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
-#elif (CUDART_VERSION >= 11050)
+#elif (CUDART_VERSION >= 11000)
 #include <cub/cub.cuh>
 #else
 #include "3rdparty/cub/cub.cuh"

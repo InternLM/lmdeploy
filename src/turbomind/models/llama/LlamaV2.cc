@@ -23,10 +23,12 @@
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -44,7 +46,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     size_t                       inter_size,
                     size_t                       num_layer,
                     size_t                       vocab_size,
-                    size_t                       rotary_embedding_dim,
+                    const LlamaAttentionParams&  attn_params,
                     float                        norm_eps,
                     int                          max_batch_size,
                     int                          max_context_token_num,
@@ -69,7 +71,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     inter_size_(inter_size),
     num_layer_(num_layer),
     vocab_size_(vocab_size),
-    rotary_embedding_dim_(rotary_embedding_dim),
+    vocab_size_padded_(vocab_size),
     rmsnorm_eps_(norm_eps),
     start_id_(start_id),
     end_id_(end_id),
@@ -89,8 +91,9 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(vocab_size_ % tensor_para_.world_size_ == 0);
     TM_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
+
+    vocab_size_padded_ = (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
 
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -115,7 +118,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                                                         cache_chunk_size,
                                                         tensor_para.rank_,
                                                         allocator);
-    initialize(kv_head_num, use_context_fmha, quant_policy);
+    initialize(attn_params, kv_head_num, use_context_fmha, quant_policy);
     start();
 }
 
@@ -130,7 +133,10 @@ LlamaV2<T>::~LlamaV2()
 }
 
 template<typename T>
-void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant_policy)
+void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
+                            size_t                      kv_head_num,
+                            bool                        use_context_fmha,
+                            int                         quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -139,7 +145,7 @@ void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant
                                                   size_per_head_,
                                                   inter_size_,
                                                   num_layer_,
-                                                  rotary_embedding_dim_,
+                                                  attn_params,
                                                   rmsnorm_eps_,
                                                   tensor_para_,
                                                   stream_,
@@ -154,7 +160,7 @@ void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant
                                    size_per_head_,
                                    inter_size_,
                                    num_layer_,
-                                   rotary_embedding_dim_,
+                                   attn_params,
                                    rmsnorm_eps_,
                                    tensor_para_,
                                    stream_,
@@ -164,7 +170,7 @@ void LlamaV2<T>::initialize(size_t kv_head_num, bool use_context_fmha, int quant
                                    quant_policy);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
-                                                          vocab_size_,  // vocab_size_padded,
+                                                          vocab_size_padded_,
                                                           0,            // end_id, deprecated
                                                           stream_,
                                                           cublas_wrapper_,
@@ -329,8 +335,8 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               cublasGemmAlgo_t(-1));
     }
     else {
-        FT_CHECK(vocab_size_ % tensor_para_.world_size_ == 0);
-        const size_t local_vocab_size = vocab_size_ / tensor_para_.world_size_;
+        FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
+        const size_t local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
                               local_vocab_size,  // n
@@ -385,7 +391,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     int local_batch_size = (int)batch_size;
 
     std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-        {"logits", {MEMORY_GPU, TYPE_FP32, {batch_size, (size_t)1, vocab_size_}, logits}},
+        {"logits", {MEMORY_GPU, TYPE_FP32, {batch_size, (size_t)1, vocab_size_padded_}, logits}},
         {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
         {"max_input_length", {MEMORY_CPU, TYPE_INT32, {1}, &max_context_len}},
         {"sequence_limit_length", {MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len}},

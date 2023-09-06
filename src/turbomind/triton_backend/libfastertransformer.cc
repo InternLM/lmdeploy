@@ -36,7 +36,7 @@
 #include <vector>
 
 #pragma GCC diagnostic push
-//#pragma GCC diagnostic ignored "-Wsign-compare"
+// #pragma GCC diagnostic ignored "-Wsign-compare"
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #pragma warning(push, 0)
 #pragma warning(pop)
@@ -52,6 +52,7 @@
 #include "triton/core/tritonbackend.h"
 
 // FT's libraries have dependency with triton's lib
+#include "src/turbomind/macro.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"

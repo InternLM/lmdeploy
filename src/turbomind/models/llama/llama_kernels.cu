@@ -2,6 +2,7 @@
 
 #include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
@@ -111,7 +112,7 @@ template<typename T>
 void invokeAddResidual(T* out, const T* in, int m, int n, cudaStream_t stream)
 {
     auto total = static_cast<size_t>(m) * n;
-    dim3 block(std::min(total, 1024UL));
+    dim3 block(std::min((unsigned long)total, 1024UL));
     dim3 grid((total + block.x - 1) / block.x);
 
     addResidual<<<grid, block, 0, stream>>>(out, in, total);
@@ -293,13 +294,21 @@ inline __device__ float2 float2div(float a, float2 b)
     return c;
 }
 
-static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale)
+inline __device__ float2 float2sub(float zp, float2 val)
+{
+    float2 ret;
+    ret.x = val.x - zp;
+    ret.y = val.y - zp;
+    return ret;
+}
+
+static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale, const float zp)
 {
     half4 dst;
-    dst.x = __float2half(value.x * scale);
-    dst.y = __float2half(value.y * scale);
-    dst.z = __float2half(value.z * scale);
-    dst.w = __float2half(value.w * scale);
+    dst.x = __float2half(value.x * scale + zp);
+    dst.y = __float2half(value.y * scale + zp);
+    dst.z = __float2half(value.z * scale + zp);
+    dst.w = __float2half(value.w * scale + zp);
     return dst;
 }
 
@@ -320,11 +329,11 @@ static inline __device__ uint32_t float4_to_char4(float x, float y, float z, flo
     asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2, %0;\n" : "+r"(dst) : "r"(b), "r"(a));
 #else
     char4 tmp;
-    tmp.x = x;
-    tmp.y = y;
-    tmp.z = z;
-    tmp.w = w;
-    dst   = reinterpret_cast<const uint32_t&>(tmp);
+    tmp.x       = x;
+    tmp.y       = y;
+    tmp.z       = z;
+    tmp.w       = w;
+    dst         = reinterpret_cast<const uint32_t&>(tmp);
 #endif
     return dst;
 }
@@ -339,7 +348,8 @@ __global__ void extend_value_cache_int8(int8_t**     v_dst,
                                         const int*   history_length,
                                         const int    max_q_len,
                                         const int    max_seq_len,
-                                        const float  v_scale)
+                                        const float  v_scale,
+                                        const float  v_zp)
 {
     const int     batch_id = blockIdx.y;
     const int     head_id  = blockIdx.z;
@@ -373,12 +383,12 @@ __global__ void extend_value_cache_int8(int8_t**     v_dst,
         const auto value  = val_src[src_idx];
         auto       to_ptr = reinterpret_cast<uint32_t*>(val_dst + dst_idx);
 
-        float2 float2_0 = float2div(v_scale, mmha::half2_to_float2(value.x));
-        float2 float2_1 = float2div(v_scale, mmha::half2_to_float2(value.y));
+        float2 float2_0 = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.x)));
+        float2 float2_1 = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.y)));
         to_ptr[0]       = float4_to_char4(float2_0.x, float2_0.y, float2_1.x, float2_1.y);
 
-        float2_0  = float2div(v_scale, mmha::half2_to_float2(value.z));
-        float2_1  = float2div(v_scale, mmha::half2_to_float2(value.w));
+        float2_0  = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.z)));
+        float2_1  = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.w)));
         to_ptr[1] = float4_to_char4(float2_0.x, float2_0.y, float2_1.x, float2_1.y);
     }
 }
@@ -415,7 +425,8 @@ void invokeExtendKVCache(T**          k_dst,
                                                                history_length,
                                                                max_q_len,
                                                                max_seq_len,
-                                                               kv_scale[0]);
+                                                               kv_scale[0],
+                                                               kv_scale[1]);
 
         extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(reinterpret_cast<int8_t**>(v_dst),
                                                                dst_offset,
@@ -426,7 +437,8 @@ void invokeExtendKVCache(T**          k_dst,
                                                                history_length,
                                                                max_q_len,
                                                                max_seq_len,
-                                                               kv_scale[1]);
+                                                               kv_scale[2],
+                                                               kv_scale[3]);
     }
     else {
         extend_value_cache<<<grid, block_sz, 0, stream>>>(k_dst,
@@ -535,7 +547,8 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
                                            const int*     seq_length,
                                            const int      max_kv_len,
                                            const int      max_seq_len,
-                                           const float    v_scale)
+                                           const float    v_scale,
+                                           const float    v_zp)
 {
     const int     batch_id = blockIdx.y;
     const int     head_id  = blockIdx.z;
@@ -568,8 +581,8 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
         const auto from_ptr = reinterpret_cast<const char4*>(val_src + src_idx);
         auto       to_ptr   = reinterpret_cast<half4*>(val_dst + dst_idx);
 
-        to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale);
-        to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale);
+        to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale, v_zp);
+        to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale, v_zp);
     }
 }
 
@@ -605,7 +618,8 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   key_length,
                                                                   max_kv_len,
                                                                   max_seq_len,
-                                                                  kv_scale[0]);
+                                                                  kv_scale[0],
+                                                                  kv_scale[1]);
 
         transpose_value_cache_int8<<<grid, block_sz, 0, stream>>>(val_cache_trans,
                                                                   reinterpret_cast<const int8_t**>(val_cache),
@@ -616,7 +630,8 @@ void invokeTransposeKVCache(T*           key_cache_trans,
                                                                   key_length,
                                                                   max_kv_len,
                                                                   max_seq_len,
-                                                                  kv_scale[1]);
+                                                                  kv_scale[2],
+                                                                  kv_scale[3]);
     }
     else {
         transpose_value_cache<<<grid, block_sz, 0, stream>>>(key_cache_trans,
@@ -708,5 +723,62 @@ void invokeGatherOutput(int*         output_ids,
     gatherOutput<<<grid_size, block_size, 0, stream>>>(
         output_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
 }
+
+#define VERSION_SWITCH(VERSION, CONST_NAME, ...)                                                                       \
+    [&] {                                                                                                              \
+        if (VERSION == 2) {                                                                                            \
+            constexpr static int CONST_NAME = 2;                                                                       \
+            return __VA_ARGS__();                                                                                      \
+        }                                                                                                              \
+        else {                                                                                                         \
+            constexpr static int CONST_NAME = 1;                                                                       \
+            return __VA_ARGS__();                                                                                      \
+        }                                                                                                              \
+    }()
+
+template<typename T>
+FlashAttentionOp<T>::FlashAttentionOp(int batch_size, int head_num, int key_len, int seq_len, int size_per_head):
+    batch_size_(batch_size), head_num_(head_num), key_len_(key_len), seq_len_(seq_len), size_per_head_(size_per_head)
+{
+#ifdef _MSC_VER
+    op_version_ = 1;
+#else
+    op_version_ = std::is_same<half, typename std::decay<T>::type>::value ? 2 : 1;
+    if (op_version_ == 2 && getSMVersion() < 80) {
+        op_version_ = 1;
+    }
+#endif
+}
+
+template<typename T>
+int FlashAttentionOp<T>::get_workspace_size() const
+{
+#ifdef _MSC_VER
+    FlashAttentionOpImpl<T, 1> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
+    return attention_op.get_workspace_size();
+#else
+    return VERSION_SWITCH(op_version_, OP_VERSION, [&]() {
+        FlashAttentionOpImpl<T, OP_VERSION> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
+        return attention_op.get_workspace_size();
+    });
+#endif
+}
+
+template<typename T>
+void FlashAttentionOp<T>::operator()(Params& params, cudaStream_t st) const
+{
+#ifdef _MSC_VER
+    FlashAttentionOpImpl<T, 1> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
+    return attention_op(params, st);
+#else
+    return VERSION_SWITCH(op_version_, OP_VERSION, [&]() {
+        FlashAttentionOpImpl<T, OP_VERSION> attention_op(batch_size_, head_num_, key_len_, seq_len_, size_per_head_);
+        return attention_op(params, st);
+    });
+#endif
+}
+
+template class FlashAttentionOp<float>;
+template class FlashAttentionOp<half>;
 
 }  // namespace turbomind

@@ -123,7 +123,7 @@ class TritonPythonModel:
         outputs = []
         for beam_tokens, beam_len in zip(tokens_batch, sequence_length):
             for tokens, _len in zip(beam_tokens, beam_len):
-                output = self.tokenizer.decode(tokens[:_len])
+                output = self.tokenizer.decode(tokens, _len)
                 output = output.encode('utf8')
                 outputs.append(output)
         return outputs
