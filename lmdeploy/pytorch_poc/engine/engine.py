@@ -19,6 +19,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
 
+from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
@@ -208,23 +209,10 @@ class Engine:
                  tp: int = 1) -> None:
 
         self.tp = tp
-        config = AutoConfig.from_pretrained(model_path)
-        torch_dtype = getattr(config, 'torch_dtype', 'float16')
+        hf_config = AutoConfig.from_pretrained(model_path)
+        torch_dtype = getattr(hf_config, 'torch_dtype', 'float16')
         torch_dtype = eval(f'torch.{torch_dtype}')
         self.torch_dtype = torch_dtype
-        if tp == 1:
-            hf_model = AutoModelForCausalLM.from_pretrained(
-                model_path, torch_dtype=torch_dtype)
-            self.patched_model = patch(hf_model, ['context']).cuda()
-        else:
-            from accelerate import init_empty_weights
-            config = AutoConfig.from_pretrained(model_path)
-            with init_empty_weights():
-                hf_model = AutoModelForCausalLM.from_config(config)
-
-            self.tp_model_in_que = mp.Queue(5)
-            self.tp_model_out_que = mp.Queue(5)
-        hf_config = hf_model.config
 
         if scheduler_config is None:
             scheduler_config = SchedulerConfig(max_batches=64,
@@ -240,6 +228,24 @@ class Engine:
                                    bos_token_id=hf_config.bos_token_id,
                                    eos_token_id=hf_config.eos_token_id,
                                    dtype=torch_dtype)
+
+        if tp == 1:
+            with LoadNoInit():
+                hf_model = AutoModelForCausalLM.from_pretrained(
+                    model_path, torch_dtype='auto')
+                hf_model.eval()
+
+            self.patched_model = patch(hf_model,
+                                       ['context', 'use_origin']).cuda()
+        else:
+
+            self.tp_model_in_que = mp.Queue(5)
+            self.tp_model_out_que = mp.Queue(5)
+
+            self.patch_model_tp(model_path, ['context', 'use_origin'],
+                                in_que=self.tp_model_in_que,
+                                out_que=self.tp_model_out_que,
+                                world_size=tp)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -323,6 +329,10 @@ class Engine:
 
         block_tables = self.scheduler.get_block_tables(messages)
 
+        # add batch dim [bs=1, seq_len]
+        if input_ids.ndim == 1:
+            input_ids = input_ids.unsqueeze(0)
+
         return dict(input_ids=input_ids,
                     seq_length=seq_length,
                     attention_mask=attention_mask,
@@ -361,8 +371,27 @@ class Engine:
 
         return False
 
-    def _model_forward(self, inputs: Dict):
+    def _model_forward(self, inputs: Dict, swap_in_map: Dict[int, int],
+                       swap_out_map: Dict[int, int]):
         if self.tp == 1:
+            # swap in/out
+            issued_cache_op = False
+            if len(swap_in_map) > 0:
+                self.cache_engine.swap_in(swap_in_map)
+                issued_cache_op = True
+            if len(swap_out_map) > 0:
+                self.cache_engine.swap_out(swap_out_map)
+                issued_cache_op = True
+
+            if issued_cache_op:
+                cache_events = self.cache_engine.events
+            else:
+                cache_events = None
+
+            if cache_events is not None:
+                for event in cache_events:
+                    event.wait()
+
             with torch.no_grad():
                 # forward
                 return self.patched_model(
@@ -373,6 +402,7 @@ class Engine:
                     return_dict=True,
                     output_attentions=False,
                     output_hidden_states=False,
+                    use_origin=False,
                     context=ModelContext(
                         block_tables=inputs['block_tables'],
                         history_lengths=inputs['history_lengths']))
@@ -396,32 +426,15 @@ class Engine:
         req_ids = [msg.req_id for msg in running]
         history_lengths = [sess.history_length for sess in sessions]
 
-        # swap in/out
-        issued_cache_op = False
-        if len(swap_in_map) > 0:
-            self.cache_engine.swap_in(swap_in_map)
-            issued_cache_op = True
-        if len(swap_out_map) > 0:
-            self.cache_engine.swap_out(swap_out_map)
-            issued_cache_op = True
-
-        if issued_cache_op:
-            cache_events = self.cache_engine.events
-        else:
-            cache_events = None
-
-        if cache_events is not None:
-            for event in cache_events:
-                event.wait()
-
         # make batch
         inputs = self._make_inputs(running)
         inputs['history_lengths'] = history_lengths
 
         # inference
-        hf_outputs = self._model_forward(inputs)
+        hf_outputs = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = hf_outputs['logits']
+        logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         # gather output
         sampling_params: List[SamplingParam] = [
