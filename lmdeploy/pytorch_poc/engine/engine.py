@@ -232,7 +232,7 @@ class Engine:
         if tp == 1:
             with LoadNoInit():
                 hf_model = AutoModelForCausalLM.from_pretrained(
-                    model_path, torch_dtype='auto')
+                    model_path, torch_dtype=torch_dtype)
                 hf_model.eval()
 
             self.patched_model = patch(hf_model,

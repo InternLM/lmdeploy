@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -14,11 +14,6 @@ from .llama import apply_rotary_pos_emb
 class BaichuanAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -29,7 +24,7 @@ class BaichuanAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
-        if hidden_states.dim() == 3:
+        if self.context.use_origin:
             return self.origin_mod(hidden_states, attention_mask, position_ids,
                                    past_key_value, output_attentions,
                                    use_cache)
@@ -117,11 +112,6 @@ class BaichuanAttention(nn.Module):
 
 class BaichuanLayer(torch.nn.Module):
 
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -163,11 +153,6 @@ class BaichuanLayer(torch.nn.Module):
 
 
 class BaichuanModel(nn.Module):
-
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
 
     def _continuous_batching_forward(
         self,
@@ -267,17 +252,15 @@ class BaichuanModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        use_origin = False
+        use_origin = self.context.use_origin
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError('You cannot specify both decoder_input_ids '
                              'and decoder_inputs_embeds at the same time')
         elif input_ids is not None:
-            if input_ids.dim() == 2:
-                use_origin = True
+            assert input_ids.dim() == 2
         elif inputs_embeds is not None:
-            if inputs_embeds.dim() == 3:
-                use_origin = True
+            assert inputs_embeds.dim() == 3
         else:
             raise ValueError(
                 'You have to specify '
@@ -297,11 +280,6 @@ class BaichuanModel(nn.Module):
 
 
 class BaichuanForCausalLM(nn.Module):
-
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
 
     def forward(self,
                 input_ids: torch.LongTensor = None,

@@ -2,8 +2,8 @@
 import importlib
 import inspect
 import re
-from typing import Dict, Sequence
 from copy import copy
+from typing import Dict, Sequence
 
 import torch
 import torch.distributed as dist
