@@ -15,6 +15,8 @@
  */
 
 #include "encoder_igemm_func.h"
+#include "src/turbomind/macro.h"
+#include <chrono>
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -83,7 +85,7 @@ int printPerfStructure(int m, int n, int k, const customMatmulPerf_t& perf, FILE
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages = 0;
+    stages                     = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -149,7 +151,7 @@ int printBatchPerfStructure(
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages = 0;
+    stages                     = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -228,10 +230,9 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // 
         cublasLtMatmulAlgoCheck(ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Ddesc, &algo, &heurResult);
     if (algoStatus == CUBLAS_STATUS_SUCCESS) {
         if (heurResult.workspaceSize <= workSpaceSizeInBytes) {
-            struct timeval start, end;
             cublasStatus_t oneRunStatus;
             cudaDeviceSynchronize();
-            gettimeofday(&start, NULL);
+            auto start = std::chrono::high_resolution_clock::now();
             for (int loop = 0; loop < repeats; loop++) {
                 oneRunStatus = cublasLtMatmul(ltHandle,
                                               operationDesc,
@@ -251,11 +252,12 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // 
                                               stream);
             }
             cudaDeviceSynchronize();
-            gettimeofday(&end, NULL);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto dur = std::chrono::duration<float, std::milli>(end - start);
             if (oneRunStatus != CUBLAS_STATUS_SUCCESS) {
                 algoStatus = oneRunStatus;
             }
-            float time = diffTime(start, end);
+            float time = dur.count();
             // For the moment only add successful findings
             if (algoStatus == CUBLAS_STATUS_SUCCESS) {
                 perfResults.algo          = algo;
@@ -352,7 +354,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -369,7 +371,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -689,7 +691,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -711,7 +713,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -1166,11 +1168,10 @@ int generate_encoder_igemm_config(
     }
     if (do_sparse_test) {
         printf("***cusparseLt Gemm Testing Begin***\n");
-        const int      spgemm_num = 3;
-        FILE*          fd;
-        int            line_count = 0;
-        const int      ites       = 100;
-        struct timeval start, end;
+        const int spgemm_num = 3;
+        FILE*     fd;
+        int       line_count = 0;
+        const int ites       = 100;
         if (!isAppend) {
             fd = fopen(SPIGEMM_CONFIG, "w+");
         }
@@ -1267,7 +1268,7 @@ int generate_encoder_igemm_config(
                     &handle, &mat_A, m, k, k, alignment, CUDA_R_8I, row_order, CUSPARSELT_SPARSITY_50_PERCENT))
                 CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_B, k, n, k, alignment, CUDA_R_8I, col_order))
                 CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &mat_C, m, n, m, alignment, CUDA_R_8I, col_order))
-                gettimeofday(&start, NULL);
+                auto start = std::chrono::high_resolution_clock::now();
                 for (int ite = 0; ite < ites; ++ite) {
                     // initializing MatDesc takes a lot of time
                     // and these descs can be stored to other place
@@ -1298,10 +1299,11 @@ int generate_encoder_igemm_config(
                     CHECK_CUSPARSE(cusparseLtMatmulPlanDestroy(&plan))
                 }
                 cudaDeviceSynchronize();
-                gettimeofday(&end, NULL);
-                printf("algo_%d costs %.3fms \n", alg, diffTime(start, end) / ites);
-                if (diffTime(start, end) < exec_time) {
-                    exec_time = diffTime(start, end);
+                auto end = std::chrono::high_resolution_clock::now();
+                auto dur = std::chrono::duration<float, std::milli>(end - start);
+                printf("algo_%d costs %.3fms \n", alg, dur.count() / ites);
+                if (dur.count() < exec_time) {
+                    exec_time = dur.count();
                     fast_algo = alg;
                 }
             }

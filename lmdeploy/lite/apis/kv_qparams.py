@@ -33,7 +33,7 @@ def _export_sym(key_stats: dict,
             kv_qparams = np.array([k_s, v_s], dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
             kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} KV scales done.')
+            print(f'Layer {layer_idx} MP {i} qparam: {k_s} \t{v_s}')
 
 
 def _export_asym(key_stats: dict,
@@ -63,7 +63,9 @@ def _export_asym(key_stats: dict,
         tp_k_max = torch.chunk(k_max, tp)
         tp_v_max = torch.chunk(v_max, tp)
         for i in range(tp):
-            # quant: q = (f - zp) / scale
+            # zp = (min+max) / 2
+            # scale = (max-min) / 255
+            # quant: q = (f-zp) / scale
             # dequant: f = q * scale + zp
             k_min = tp_k_min[i].min()
             v_min = tp_v_min[i].min()
@@ -74,17 +76,21 @@ def _export_asym(key_stats: dict,
             k_scale = (k_max - k_min) / (2**bits - 1)
             v_scale = (v_max - v_min) / (2**bits - 1)
 
-            kv_qparams = np.array([k_scale, k_min, v_scale, v_min],
+            k_zp = (k_max + k_min) / 2
+            v_zp = (v_max + v_min) / 2
+
+            kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp],
                                   dtype=np.float32)
-            out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
+            out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'
             kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} KV scales&zeros done.')
+            print(f'Layer {layer_idx} MP {i} qparam: '
+                  f'\t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}')
 
 
 def main(work_dir: str,
          turbomind_dir: str,
          kv_bits: int = 8,
-         kv_sym: bool = True,
+         kv_sym: bool = False,
          num_tp: int = 1) -> None:
     """Main function to export key and value stats.
 
@@ -95,7 +101,7 @@ def main(work_dir: str,
         kv_bits (int, optional): Number of bits for quantization.
             Defaults to 8.
         kv_sym (bool, optional): Whether to use symmetric quantizaiton.
-            Defaults to True.
+            Defaults to False.
         num_tp (int, optional): Number of tensor parallelism. Defaults to 1.
     """
 

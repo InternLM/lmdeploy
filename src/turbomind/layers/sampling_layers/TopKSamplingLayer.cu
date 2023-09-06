@@ -20,6 +20,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 

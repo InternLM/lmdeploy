@@ -80,7 +80,11 @@ def init_model(model_path: str,
     return model, tokenizer
 
 
-def accel_model(model, accel: Optional[str] = None, max_alloc=2048, tp_size=1):
+def accel_model(model,
+                accel: Optional[str] = None,
+                gpu_id=None,
+                max_alloc=2048,
+                tp_size=1):
     """Accelerate model with given accelerator.
 
     Note:
@@ -93,7 +97,8 @@ def accel_model(model, accel: Optional[str] = None, max_alloc=2048, tp_size=1):
         # No acceleration, just to cuda
         # assume single gpu single process
         # user is responsible to assign the gpu id via CUDA_VISIBLE_DEVICES # noqa: E501
-        model = model.cuda(get_local_rank())
+        gpu_id = gpu_id if gpu_id is not None else get_local_rank()
+        model = model.cuda(gpu_id)
 
     elif accel.lower() == 'deepspeed':
         # Use deepspeed inference inject fast kernel and/or tensor parallel

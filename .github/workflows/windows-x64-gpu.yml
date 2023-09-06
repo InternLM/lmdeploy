@@ -1,0 +1,60 @@
+name: windows-x64-gpu
+on:
+  push:
+    paths:
+      - '.github/workflows/windows-x64-gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-x64-gpu.yml'
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'examples/**'
+      - '3rdparty/**'
+      - 'tests/csrc/**'
+concurrency:
+  group: windows-x64-gpu-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  cuda-118:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+      - name: Install python packages
+        run: |
+          pip install pybind11 wheel
+      - uses: Jimver/cuda-toolkit@v0.2.11
+        id: cuda-toolkit
+        with:
+          cuda: '11.8.0'
+          use-github-cache: false
+      - name: Build wheel
+        run: |
+          ((Get-Content -path CMakeLists.txt -Raw) -replace '-Wall','/W0') | Set-Content CMakeLists.txt
+          $env:BUILD_TEST="ON"
+          mkdir build
+          cd build
+          ..\builder\windows\generate.ps1
+          cmake --build . --config Release -- /m /v:q
+          if (-Not $?) {
+            echo "build failed"
+            exit 1
+          }
+          cmake --install . --config Release
+          cd ..
+          rm build -Force -Recurse
+          python setup.py bdist_wheel -d build/wheel

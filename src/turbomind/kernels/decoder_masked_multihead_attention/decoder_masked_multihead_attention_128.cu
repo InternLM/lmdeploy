@@ -41,15 +41,12 @@
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// !!! Specialize the launcher for Cross attention
 template<typename T, int Dh, int Dh_MAX, typename KERNEL_PARAMS_TYPE>
 void mmha_launch_kernel(const KERNEL_PARAMS_TYPE& params, const cudaStream_t& stream)
 {
     constexpr int THREADS_PER_VALUE = threads_per_value_t<T, Dh_MAX>::value;
-    // constexpr bool DO_CROSS_ATTENTION = std::is_same<KERNEL_PARAMS_TYPE, Cross_multihead_attention_params<T>>::value;
-    const int tlength = params.timestep;
 
-    FT_CHECK(params.cache_indir == nullptr);
+    const int tlength = params.timestep;
 
     if (params.int8_mode == 4) {
         if (tlength < 32) {

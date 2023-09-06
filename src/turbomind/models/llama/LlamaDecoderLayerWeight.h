@@ -33,6 +33,7 @@ public:
                             size_t     size_per_head,
                             size_t     inter_size,
                             WeightType weight_type,
+                            int        group_size,
                             bool       attn_bias,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);

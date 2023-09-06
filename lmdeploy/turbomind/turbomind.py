@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os.path as osp
 import sys
 from configparser import ConfigParser
@@ -206,6 +207,13 @@ class TurboMindInstance:
             t = Thread(target=_func, args=(device_id, device_id == 0))
             t.start()
             self.threads[device_id] = t
+
+    async def async_stream_infer(self, *args, **kwargs):
+        """Async wrapper of self.stream_infer."""
+        for output in self.stream_infer(*args, **kwargs):
+            # Allow the pipeline add new requests into the queue.
+            await asyncio.sleep(0)
+            yield output
 
     def stream_infer(self,
                      session_id,

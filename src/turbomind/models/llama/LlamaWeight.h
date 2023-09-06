@@ -34,11 +34,11 @@ struct LlamaWeight {
                 size_t     inter_size,
                 size_t     vocab_size,
                 size_t     num_layer,
-                WeightType weight_type,
                 bool       attn_bias,
+                WeightType weight_type,
+                int        group_size,
                 size_t     tensor_para_size,
-                size_t     tensor_para_rank,
-                int        prefix_cache_len);
+                size_t     tensor_para_rank);
 
     ~LlamaWeight();
 
@@ -52,17 +52,13 @@ struct LlamaWeight {
     const T*                                 output_norm_weight{};
     const T*                                 post_decoder_embedding_kernel{};
 
-    size_t prefix_cache_len_;
-    int*   prefix_cache_token{};
-    T*     prefix_cache_key{};
-    T*     prefix_cache_value{};
-
 private:
     void mallocWeights();
 
     size_t     hidden_units_;
     size_t     inter_size_;
     size_t     vocab_size_;
+    size_t     vocab_size_padded_;
     size_t     num_layer_;
     WeightType weight_type_;
     size_t     tensor_para_size_;

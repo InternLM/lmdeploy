@@ -19,6 +19,7 @@
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/layers/sampling_layers/TopPSamplingLayer.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {

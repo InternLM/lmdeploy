@@ -17,6 +17,7 @@
 #pragma once
 
 #include "3rdparty/INIReader.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/logger.h"
 
@@ -263,11 +264,6 @@ public:
     }
     ~CudaTimer() {}
 };
-
-static double diffTime(timeval start, timeval end)
-{
-    return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001;
-}
 
 /* ***************************** common utils ****************************** */
 

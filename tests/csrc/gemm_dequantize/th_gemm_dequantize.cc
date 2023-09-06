@@ -49,12 +49,12 @@ Tensor fused_gemm_dq_helper(
     const T*          scales_ptr    = get_ptr<const T>(scales);
 
     turbomind::CutlassFpAIntBGemmRunner<T, WeightType> fused_gemm_dq_runner;
-    const int ws_bytes = fused_gemm_dq_runner.getWorkspaceSize(m, n, k);
+    const int                                          ws_bytes = fused_gemm_dq_runner.getWorkspaceSize(m, n, k);
 
     auto output_tensor = torch::empty({m, n}, torch::dtype(_st).device(torch::kCUDA).requires_grad(false));
     auto ws_tensor     = torch::empty({ws_bytes}, torch::dtype(torch::kInt8).device(torch::kCUDA).requires_grad(false));
 
-    T*   output_tensor_ptr = get_ptr<T>(output_tensor);
+    T*    output_tensor_ptr = get_ptr<T>(output_tensor);
     char* ws_ptr            = get_ptr<char>(ws_tensor);
 
     cudaEvent_t start, stop;
@@ -258,12 +258,12 @@ Tensor fused_gemm_dq_bias_act_helper(
     const T*          bias_ptr      = get_ptr<const T>(bias);
 
     turbomind::CutlassFpAIntBGemmRunner<T, WeightType> fused_gemm_dq_runner;
-    const int ws_bytes = fused_gemm_dq_runner.getWorkspaceSize(m, n, k);
+    const int                                          ws_bytes = fused_gemm_dq_runner.getWorkspaceSize(m, n, k);
 
     auto output_tensor = torch::empty({m, n}, torch::dtype(_st).device(torch::kCUDA).requires_grad(false));
     auto ws_tensor     = torch::empty({ws_bytes}, torch::dtype(torch::kInt8).device(torch::kCUDA).requires_grad(false));
 
-    T*   output_tensor_ptr = get_ptr<T>(output_tensor);
+    T*    output_tensor_ptr = get_ptr<T>(output_tensor);
     char* ws_ptr            = get_ptr<char>(ws_tensor);
 
     fused_gemm_dq_runner.gemm_bias_act(input_act_ptr,

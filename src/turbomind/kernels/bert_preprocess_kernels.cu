@@ -63,7 +63,11 @@ void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_pinned_token_num,
     h_pinned_token_num[0] = 0;
     getPaddingOffsetAndCuSeqLensKernel<<<1, 1, 0, stream>>>(
         h_pinned_token_num, tmp_mask_offset, cu_seqlens, sequence_lengths, batch_size, max_seq_len);
+#ifdef _MSC_VER
+    cudaStreamSynchronize(stream);
+#else
     while (((volatile size_t*)h_pinned_token_num)[0] == 0) {};
+#endif
     h_token_num[0] = h_pinned_token_num[0];
     sync_check_cuda_error();
 }

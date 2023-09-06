@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .vscode/
+.idea/
 # C extensions
 *.so
 
@@ -43,6 +44,7 @@ htmlcov/
 *build*/
 !builder/
 lmdeploy/lib/
+lmdeploy/bin/
 dist/
 examples/cpp/llama/*.csv
 *.npy
@@ -61,3 +63,12 @@ work_dir*/
 *.pth
 *.py~
 *.sh~
+*.pyc
+**/src/pytorch-sphinx-theme/
+
+# Outputs and logs
+*.txt
+*.log
+*.out
+*.csv
+*.pkl
