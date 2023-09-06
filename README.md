@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/lmdeploy-logo.png" width="450"/>
+  <img src="resources/lmdeploy-logo.svg" width="450"/>
 
 [![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
 [![badge](https://github.com/InternLM/lmdeploy/workflows/lint/badge.svg)](https://github.com/InternLM/lmdeploy/actions)
@@ -219,11 +219,11 @@ pip install deepspeed
 
 LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
 
-[Click here](./docs/zh_cn/w4a16.md) to view the test results for weight int4 usage.
+[Click here](./docs/en/w4a16.md) to view the test results for weight int4 usage.
 
 #### KV Cache INT8 Quantization
 
-[Click here](./docs/zh_cn/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
+[Click here](./docs/en/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
 
 > **Warning**<br />
 > runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
