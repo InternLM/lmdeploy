@@ -56,12 +56,14 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     if isinstance(old_q, DTensor):
         q_embed = DTensor.from_local(q_embed,
                                      device_mesh=old_q.device_mesh,
-                                     placements=old_q.placements)
+                                     placements=old_q.placements,
+                                     run_check=False)
 
     if isinstance(old_k, DTensor):
         k_embed = DTensor.from_local(k_embed,
                                      device_mesh=old_k.device_mesh,
-                                     placements=old_k.placements)
+                                     placements=old_k.placements,
+                                     run_check=False)
 
     return q_embed, k_embed
 
@@ -137,7 +139,8 @@ class LlamaAttention(nn.Module):
         dist.all_reduce(local_out)
         attn_output = DTensor.from_local(local_out,
                                          device_mesh=device_mesh,
-                                         placements=[Replicate()])
+                                         placements=[Replicate()],
+                                         run_check=False)
 
         return attn_output, attn_weights, past_key_value
 
@@ -310,7 +313,8 @@ class LlamaMLP(nn.Module):
         dist.all_reduce(local_out)
         outputs = DTensor.from_local(local_out,
                                      device_mesh=device_mesh,
-                                     placements=[Replicate()])
+                                     placements=[Replicate()],
+                                     run_check=False)
 
         return outputs
 
@@ -442,6 +446,7 @@ class LlamaModel(nn.Module):
                 v for v in
                 [hidden_states, next_cache, all_hidden_states, all_self_attns]
                 if v is not None)
+
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,

@@ -334,7 +334,7 @@ def _error_process(rank: int,
         from traceback import print_exc
         logger.error(f'rank[{rank}]: {e}')
         print_exc()
-        exit()
+        raise e
 
 
 class Engine:

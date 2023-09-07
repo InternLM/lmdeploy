@@ -53,10 +53,12 @@ class CacheEngine:
         else:
             return [(DTensor.from_local(k,
                                         device_mesh=self.device_mesh,
-                                        placements=[Shard(-2)]),
+                                        placements=[Shard(-2)],
+                                        run_check=False),
                      DTensor.from_local(v,
                                         device_mesh=self.device_mesh,
-                                        placements=[Shard(-2)]))
+                                        placements=[Shard(-2)],
+                                        run_check=False))
                     for k, v in self.local_gpu_cache]
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:

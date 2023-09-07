@@ -91,13 +91,12 @@ def _load_state_dict(model: torch.nn.Module,
                      state_prefix: str = ''):
     # post order
     for name, child in model.named_children():
-        loaded_child = _load_state_dict(
-            child,
-            state_dict,
-            rank,
-            world_size,
-            device_mesh=device_mesh,
-            state_prefix=f'{state_prefix}{name}.')
+        loaded_child = _load_state_dict(child,
+                                        state_dict,
+                                        rank,
+                                        world_size,
+                                        device_mesh=device_mesh,
+                                        state_prefix=f'{state_prefix}{name}.')
         if loaded_child != child:
             model.register_module(name, loaded_child)
 
@@ -128,11 +127,11 @@ def _load_state_dict(model: torch.nn.Module,
             continue
 
         if rank == 0:
-            new_param = torch.nn.Parameter(
-                state_dict[full_k], requires_grad=False).to(device)
+            new_param = torch.nn.Parameter(state_dict[full_k],
+                                           requires_grad=False).to(device)
         else:
-            new_param = torch.nn.Parameter(
-                torch.empty_like(v, device=device), requires_grad=False)
+            new_param = torch.nn.Parameter(torch.empty_like(v, device=device),
+                                           requires_grad=False)
         model.register_parameter(k, new_param)
 
     # distribute module
@@ -151,14 +150,14 @@ def _load_state_dict(model: torch.nn.Module,
 
             if hasattr(model, '_get_parallelize_plan'):
                 parallelize_plan = model._get_parallelize_plan()
-                parallelize_module(
-                    model, device_mesh, parallelize_plan=parallelize_plan)
+                parallelize_module(model,
+                                   device_mesh,
+                                   parallelize_plan=parallelize_plan)
 
             if hasattr(model, '_distribute_partition_fn'):
-                distribute_module(
-                    model,
-                    device_mesh=device_mesh,
-                    partition_fn=model._distribute_partition_fn)
+                distribute_module(model,
+                                  device_mesh=device_mesh,
+                                  partition_fn=model._distribute_partition_fn)
 
             if hasattr(model, '_distribute_input_fn'):
                 input_fn = model._distribute_input_fn
@@ -200,12 +199,11 @@ def patch(model: torch.nn.Module,
                 state_dict = None
 
             with torch.cuda.device(rank):
-                _load_state_dict(
-                    model,
-                    state_dict,
-                    rank=rank,
-                    world_size=world_size,
-                    device_mesh=device_mesh)
+                _load_state_dict(model,
+                                 state_dict,
+                                 rank=rank,
+                                 world_size=world_size,
+                                 device_mesh=device_mesh)
 
     extra_args_str = ' '.join(f'{arg}=None,' for arg in extra_args)
     context_update_str = ' '.join(f'{arg}={arg},' for arg in extra_args)
