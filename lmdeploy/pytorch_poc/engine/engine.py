@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import itertools
-import logging
 import json
+import logging
 import os
 import os.path as osp
 import time
@@ -219,7 +219,8 @@ class Engine:
                  tp: int = 1) -> None:
 
         self.tp = tp
-        hf_config = AutoConfig.from_pretrained(model_path)
+        hf_config = AutoConfig.from_pretrained(model_path,
+                                               trust_remote_code=True)
         torch_dtype = getattr(hf_config, 'torch_dtype', 'float16')
         torch_dtype = eval(f'torch.{torch_dtype}')
         self.torch_dtype = torch_dtype
@@ -247,12 +248,12 @@ class Engine:
                                        hf_config.num_attention_heads,
                                        bos_token_id=hf_config.bos_token_id,
                                        eos_token_id=hf_config.eos_token_id,
-                                       dtype=torch.float32)
+                                       dtype=torch.float16)
 
         if tp == 1:
             with LoadNoInit():
                 hf_model = AutoModelForCausalLM.from_pretrained(
-                    model_path, torch_dtype='auto')
+                    model_path, torch_dtype='auto', trust_remote_code=True)
                 hf_model.eval()
 
             self.patched_model = patch(hf_model,

@@ -7,10 +7,10 @@ from typing import Dict, Sequence
 import torch
 import torch.distributed as dist
 from addict import Addict
-from transformers.utils import (HF_MODULES_CACHE,
-                                TRANSFORMERS_DYNAMIC_MODULE_NAME)
 from torch.distributed._tensor import DeviceMesh, distribute_module
 from torch.distributed.tensor.parallel import parallelize_module
+from transformers.utils import (HF_MODULES_CACHE,
+                                TRANSFORMERS_DYNAMIC_MODULE_NAME)
 
 from lmdeploy.utils import get_logger
 
@@ -20,7 +20,7 @@ MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaModel':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP'
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
     # 动态模块路径是不固定的，有点麻烦
     f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.SelfAttention':
     'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
