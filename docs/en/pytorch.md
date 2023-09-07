@@ -8,13 +8,13 @@ This submodule allow user to chat with language model through command line, and 
 
 **Example 1**: Chat with default setting
 
-```python
+```shell
 python -m lmdeploy.pytorch.chat $PATH_TO_HF_MODEL
 ```
 
 **Example 2**: Disable sampling and chat history
 
-```python
+```shell
 python -m lmdeploy.pytorch.chat \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
     --temperature 0 --max-histroy 0
@@ -22,7 +22,7 @@ python -m lmdeploy.pytorch.chat \
 
 **Example 3**: Accelerate with deepspeed inference
 
-```python
+```shell
 python -m lmdeploy.pytorch.chat \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
     --accel deepspeed
@@ -32,7 +32,7 @@ Note: to use deepspeed, you need to install deepspeed, and if hope to accelerate
 
 **Example 4**: Tensor parallel the model on 2 GPUs
 
-```python
+```shell
 deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
     --accel deepspeed \

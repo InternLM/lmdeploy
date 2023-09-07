@@ -22,6 +22,7 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
@@ -33,17 +34,16 @@ public:
     void freeBuffer();
     void allocateBuffer(size_t batch_size, int key_len, int max_memory_len);
 
-    LlamaDecoderSelfAttentionLayer(size_t           head_num,
-                                   size_t           kv_head_num,
-                                   size_t           size_per_head,
-                                   size_t           rotary_embedding_dim,
-                                   bool             neox_rotary_style,
-                                   NcclParam        tensor_para,
-                                   cudaStream_t     stream,
-                                   cublasMMWrapper* cublas_wrapper,
-                                   IAllocator*      allocator,
-                                   bool             is_free_buffer_after_forward,
-                                   int              quant_policy):
+    LlamaDecoderSelfAttentionLayer(size_t                      head_num,
+                                   size_t                      kv_head_num,
+                                   size_t                      size_per_head,
+                                   const LlamaAttentionParams& attn_params,
+                                   NcclParam                   tensor_para,
+                                   cudaStream_t                stream,
+                                   cublasMMWrapper*            cublas_wrapper,
+                                   IAllocator*                 allocator,
+                                   bool                        is_free_buffer_after_forward,
+                                   int                         quant_policy):
         head_num_(head_num),
         kv_head_num_(kv_head_num),
         size_per_head_(size_per_head),
@@ -51,8 +51,7 @@ public:
         local_head_num_(head_num / tensor_para.world_size_),
         local_kv_head_num_(kv_head_num_ / tensor_para.world_size_),
         local_hidden_units_(hidden_units_ / tensor_para.world_size_),
-        rotary_embedding_dim_(rotary_embedding_dim),
-        neox_rotary_style_(neox_rotary_style),
+        params_(attn_params),
         tensor_para_(tensor_para),
         stream_(stream),
         linear_(cublas_wrapper, stream),
@@ -77,11 +76,10 @@ private:
     const size_t local_head_num_;
     const size_t local_kv_head_num_;
     const size_t local_hidden_units_;
-    const size_t rotary_embedding_dim_;
     const bool   is_free_buffer_after_forward_;
     const int    quant_policy_;
 
-    const bool neox_rotary_style_;
+    const LlamaAttentionParams& params_;
 
     NcclParam tensor_para_;
 
@@ -91,13 +89,6 @@ private:
 
     T* qkv_buf_     = nullptr;
     T* context_buf_ = nullptr;
-    // T*   weight_buf_  = nullptr;
-    // T* k_cache_buf_{};
-    // T* v_cache_buf_{};
-
-    // T* tmp_k_cache_buf_{};
-    // T* tmp_v_cache_buf_{};
-    // T* tmp_cache_buf_{};
 
     bool is_allocate_buffer_{};
 };

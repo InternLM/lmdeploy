@@ -26,7 +26,6 @@ class Session:
     request_id: str = ''
     histories: str = ''  # history conversations of the session
     sequence_length: int = 0  # the total generated token number in the session
-    sequence_offset: int = 0  # the new generated token offset in the session
     prompt: str = ''
     response: str = ''
     status: int = None  # status of the session
@@ -77,7 +76,8 @@ class Chatbot:
                  log_level: int = logging.INFO,
                  display: bool = False,
                  profile_generation: bool = False,
-                 profile_serving: bool = False):
+                 profile_serving: bool = False,
+                 **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
         if self.model_name == '':
@@ -85,7 +85,7 @@ class Chatbot:
         assert self.model_name in MODELS.module_dict.keys(), \
             f"'{self.model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'
-        self.model = MODELS.get(self.model_name)()
+        self.model = MODELS.get(self.model_name)(**model_kwargs)
         self._session = None
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
@@ -599,15 +599,12 @@ class Chatbot:
         Yields:
             tuple: status, text, generated token number
         """
-        session.sequence_offset = n_input_token + preseq_length
-        sentinel = n_input_token + preseq_length
         status, res, n_token = None, '', 0
         while True:
             result = res_queue.get()
             if result is None:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
-                n_token = session.sequence_length - sentinel
                 session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
@@ -630,33 +627,34 @@ class Chatbot:
                 output_ids = result.as_numpy('output_ids')
 
                 session.sequence_length = sequence_length.squeeze()
-                new_token_length = sequence_length - session.sequence_offset
-                last_token_id = output_ids[-1][-1][session.sequence_length - 1]
+                output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
+                output_ids = output_ids[:, :, n_input_token +
+                                        preseq_length:sequence_length.squeeze(
+                                        )]
+                last_token_id = None if output_ids.shape[
+                    -1] == 0 else output_ids[-1, -1, -1]
                 if last_token_id == eos_id:
                     session.sequence_length = session.sequence_length - 1
-                    new_token_length = new_token_length - 1
-
-                output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
-                new_token_length = new_token_length.reshape(
-                    (1, new_token_length.shape[-1]))
+                    output_ids = output_ids[:, :, :-1]
 
                 if profile_generation:
                     yield (StatusCode.TRITON_STREAM_ING,
                            'postprocessing is ignored during profiling '
-                           'token generation', new_token_length.squeeze())
+                           'token generation', output_ids.shape[-1])
                     continue
                 output_str = postprocess(
-                    output_ids[:, :, session.sequence_offset:],
-                    new_token_length)
-                session.sequence_offset = session.sequence_length
+                    output_ids, np.array([[n_token]], dtype=np.uint32))
+                n_token = output_ids.shape[-1]
                 text = output_str[0].decode()
                 if display:
                     print(text, end='', flush=True)
                 session.response += text
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
-                       session.sequence_offset - sentinel)
+                       output_ids.shape[-1])
             except Exception as e:
                 logger.error(f'catch exception: {e}')
+                logger.error(
+                    f'session {session.session_id}: prompt: {session.prompt}')
 
         # put session back to queue so that `_stream_infer` can update it in
         # `self.sessions`

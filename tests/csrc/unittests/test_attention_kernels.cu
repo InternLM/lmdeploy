@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-
+#include "gtest_utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include "gtest_utils.h"
 
 #include <curand.h>
 #include <sstream>
