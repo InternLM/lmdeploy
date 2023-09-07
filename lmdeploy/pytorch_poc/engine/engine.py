@@ -499,9 +499,9 @@ class Engine:
         # for i, pkv in enumerate(past_key_values):
         #     past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
 
-        if input_ids.ndim == 1:
-            # chatglm need 2d input_id
-            input_ids = input_ids.unsqueeze(0)
+        # if input_ids.ndim == 1:
+        #     # chatglm need 2d input_id
+        #     input_ids = input_ids.unsqueeze(0)
 
         attention_mask = torch.tensor([
             seq_len * [1] + (max_seq_len - seq_len) * [0]
