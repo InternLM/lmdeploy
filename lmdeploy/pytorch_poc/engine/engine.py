@@ -163,10 +163,7 @@ class ModelContext:
                 v_state = v_state[token_num:]
 
 
-def _init_cache_engine(model_config: ModelConfig,
-                       cache_config: CacheConfig,
-                       rank: int = 0,
-                       world_size: int = 1):
+def _update_cache_config(model_config: ModelConfig, cache_config: CacheConfig):
     GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
     gpu_mem = get_gpu_memory() * GPU_MEM_PERCENT
@@ -177,13 +174,6 @@ def _init_cache_engine(model_config: ModelConfig,
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
-    cache_engine = CacheEngine(cache_config,
-                               model_config,
-                               rank=rank,
-                               world_size=world_size)
-    logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
-                 f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
-    return cache_engine
 
 
 def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
@@ -218,10 +208,11 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                               world_size=world_size,
                               checkpoints=checkpoints)
 
-        cache_engine = _init_cache_engine(model_config,
-                                          cache_config,
-                                          rank=rank,
-                                          world_size=world_size)
+        _update_cache_config(model_config, cache_config)
+        cache_engine = CacheEngine(cache_config,
+                                   model_config,
+                                   rank=rank,
+                                   world_size=world_size)
     except Exception as e:
         error_code = 1
         error_type = e
@@ -235,11 +226,11 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
         all_errors = [None] * world_size
         dist.all_gather_object(all_errors, error_type)
         if rank == 0:
-            out_que.put((1, all_errors))
+            out_que.put((1, all_errors, cache_config))
         return
     else:
         if rank == 0:
-            out_que.put((0, None))
+            out_que.put((0, None, cache_config))
 
     while True:
         input_tensor_names = [
@@ -255,7 +246,7 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                                  if name in input_tensor_names)
             input_metas = dict((name, (t.shape, t.dtype))
                                for name, t in input_tensors.items())
-            input_metas['attention_mask'] = inputs['attention_mask']
+            input_metas['block_tables'] = inputs['block_tables']
             input_metas['history_lengths'] = inputs['history_lengths']
 
             objs = [input_metas, swap_in_map, swap_out_map]
@@ -281,7 +272,7 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                                                                  ]).to_local()
 
         inputs = updated_inputs
-        inputs['attention_mask'] = input_metas['attention_mask']
+        inputs['block_tables'] = input_metas['block_tables']
         inputs['history_lengths'] = input_metas['history_lengths']
 
         swap_in_map = objs[1]
@@ -310,7 +301,7 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                 input_ids=inputs['input_ids'],
                 position_ids=inputs['position_ids'],
                 attention_mask=inputs['attention_mask'],
-                past_key_values=inputs['past_key_values'],
+                past_key_values=cache_engine.gpu_cache,
                 return_dict=True,
                 output_attentions=False,
                 output_hidden_states=False,
@@ -320,8 +311,7 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                                      world_size=world_size))
 
             if rank == 0:
-                output = try_to_local(output)
-                out_que.put((0, output))
+                out_que.put((0, output['logits']))
 
 
 def _error_process(rank: int,
@@ -344,6 +334,7 @@ def _error_process(rank: int,
         from traceback import print_exc
         logger.error(f'rank[{rank}]: {e}')
         print_exc()
+        exit()
 
 
 class Engine:
@@ -388,7 +379,12 @@ class Engine:
 
             self.patched_model = patch(hf_model,
                                        ['context', 'use_origin']).cuda()
-            self.cache_engine = _init_cache_engine(model_config, cache_config)
+            _update_cache_config(model_config, cache_config)
+
+            self.cache_engine = CacheEngine(cache_config, model_config)
+            logger.debug(
+                f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+                f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
         else:
 
             mp.set_start_method('spawn')
@@ -402,10 +398,15 @@ class Engine:
                                 out_que=self.tp_model_out_que,
                                 world_size=tp)
 
-            ret_code, e = self.tp_model_out_que.get()
+            ret_code, e, cache_config = self.tp_model_out_que.get()
             if ret_code != 0:
                 logger.error(f'Init tp model failed with error: {e}')
-                raise e
+                for err in e:
+                    if err is not None:
+                        raise err
+
+            # # have to update cache on host to support scheduler
+            # _update_cache_config(model_config, cache_config)
 
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
@@ -536,7 +537,7 @@ class Engine:
 
             with torch.no_grad():
                 # forward
-                return self.patched_model(
+                output = self.patched_model(
                     input_ids=inputs['input_ids'],
                     position_ids=inputs['position_ids'],
                     attention_mask=inputs['attention_mask'],
@@ -548,6 +549,7 @@ class Engine:
                     context=ModelContext(
                         block_tables=inputs['block_tables'],
                         history_lengths=inputs['history_lengths']))
+                return output['logits']
         else:
             self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
 
@@ -580,9 +582,8 @@ class Engine:
         inputs['history_lengths'] = history_lengths
 
         # inference
-        hf_outputs = self._model_forward(inputs, swap_in_map, swap_out_map)
+        logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
-        logits = hf_outputs['logits']
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         # gather output

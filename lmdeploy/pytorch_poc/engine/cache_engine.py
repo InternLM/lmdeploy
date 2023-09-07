@@ -51,12 +51,13 @@ class CacheEngine:
         if self.world_size <= 1:
             return self.local_gpu_cache
         else:
-            return [
-                DTensor.from_local(t,
-                                   device_mesh=self.device_mesh,
-                                   placements=[Shard(-2)])
-                for t in self.local_gpu_cache
-            ]
+            return [(DTensor.from_local(k,
+                                        device_mesh=self.device_mesh,
+                                        placements=[Shard(-2)]),
+                     DTensor.from_local(v,
+                                        device_mesh=self.device_mesh,
+                                        placements=[Shard(-2)]))
+                    for k, v in self.local_gpu_cache]
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         num_heads = self.num_heads

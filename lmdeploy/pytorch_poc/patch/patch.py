@@ -20,7 +20,9 @@ MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
     'transformers.models.llama.modeling_llama.LlamaRMSNorm':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaRMSNorm'
+    'lmdeploy.pytorch_poc.patch.llama.LlamaRMSNorm',
+    'transformers.models.llama.modeling_llama.LlamaDecoderLayer':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaDecoderLayer'
 }
 
 
