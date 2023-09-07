@@ -9,8 +9,7 @@ import torch.distributed as dist
 from addict import Addict
 from torch.distributed._tensor import DeviceMesh, distribute_module
 from torch.distributed.tensor.parallel import parallelize_module
-from transformers.utils import (HF_MODULES_CACHE,
-                                TRANSFORMERS_DYNAMIC_MODULE_NAME)
+from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
 from lmdeploy.utils import get_logger
 

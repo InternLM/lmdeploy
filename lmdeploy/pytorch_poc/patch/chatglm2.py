@@ -31,28 +31,28 @@ class PatchedSelfAttention(nn.Module):
     the same size.
     """
 
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
+    # def __init__(self, origin_mod: nn.Module, context: Any):
+    #     super().__init__()
+    #     self.origin_mod = origin_mod
+    #     self.context = context
 
-    def _allocate_memory(self,
-                         inference_max_sequence_len,
-                         batch_size,
-                         device=None,
-                         dtype=None):
-        if self.multi_query_attention:
-            num_attention_heads = self.num_multi_query_groups_per_partition
-        else:
-            num_attention_heads = self.num_attention_heads_per_partition
-        return torch.empty(
-            inference_max_sequence_len,
-            batch_size,
-            num_attention_heads,
-            self.hidden_size_per_attention_head,
-            dtype=dtype,
-            device=device,
-        )
+    # def _allocate_memory(self,
+    #                      inference_max_sequence_len,
+    #                      batch_size,
+    #                      device=None,
+    #                      dtype=None):
+    #     if self.multi_query_attention:
+    #         num_attention_heads = self.num_multi_query_groups_per_partition
+    #     else:
+    #         num_attention_heads = self.num_attention_heads_per_partition
+    #     return torch.empty(
+    #         inference_max_sequence_len,
+    #         batch_size,
+    #         num_attention_heads,
+    #         self.hidden_size_per_attention_head,
+    #         dtype=dtype,
+    #         device=device,
+    #     )
 
     def _contiguous_batching_forward(
         self,
@@ -138,12 +138,12 @@ class PatchedSelfAttention(nn.Module):
             kv_seq_length = q_seq_length + history_lengths
             max_seq_len = q_seq_length.max().item()
 
-            logger.debug('===Context Fill===')
-            logger.debug('key_states.shape = %s', key_layer.shape)
-            logger.debug('value_states.shape = %s', value_layer.shape)
-            logger.debug('q_start_loc = %s', q_start_loc)
-            logger.debug('q_seq_length = %s', q_seq_length)
-            logger.debug('cache_k = %s', cache_k.shape)
+            # logger.debug('===Context Fill===')
+            # logger.debug('key_states.shape = %s', key_layer.shape)
+            # logger.debug('value_states.shape = %s', value_layer.shape)
+            # logger.debug('q_start_loc = %s', q_start_loc)
+            # logger.debug('q_seq_length = %s', q_seq_length)
+            # logger.debug('cache_k = %s', cache_k.shape)
 
             # kv length 和谁绑定在一起内聚性更好？
             context.fill_cache(
@@ -154,12 +154,12 @@ class PatchedSelfAttention(nn.Module):
                 cache_k,
                 cache_v,
             )
-            logger.debug('cache_k.shape = %s', cache_k.shape)
-            torch.cuda.synchronize()
+            # logger.debug('cache_k.shape = %s', cache_k.shape)
+            # torch.cuda.synchronize()
 
             # key_layer = torch.cat((cache_k, key_layer), dim=0)
             # value_layer = torch.cat((cache_v, value_layer), dim=0)
-        logger.debug('use cache = %s', use_cache)
+        # logger.debug('use cache = %s', use_cache)
         if use_cache:
             kv_cache = (key_layer, value_layer, q_start_loc, q_seq_length)
         else:
@@ -198,10 +198,10 @@ class PatchedSelfAttention(nn.Module):
         # core attention computation
         # ==================================
 
-        logger.debug('===Attention===')
-        logger.debug('query_states.shape = %s', query_layer.shape)
-        logger.debug('cache_k.shape = %s', cache_k.shape)
-        logger.debug('max_seq_len = %s', max_seq_len)
+        # logger.debug('===Attention===')
+        # logger.debug('query_states.shape = %s', query_layer.shape)
+        # logger.debug('cache_k.shape = %s', cache_k.shape)
+        # logger.debug('max_seq_len = %s', max_seq_len)
 
         # if attention_mask is None and query_layer.shape[2] == key_layer.shape[2]:
         #     context_layer = torch.nn.functional.scaled_dot_product_attention(query_layer, key_layer, value_layer,
@@ -220,7 +220,7 @@ class PatchedSelfAttention(nn.Module):
         block_offsets = context.block_offsets
         block_size = cache_k.size(1)
 
-        logger.debug('block_offsets %s', block_offsets)
+        # logger.debug('block_offsets %s', block_offsets)
 
         paged_attention_fwd(query_layer,
                             cache_k,
@@ -265,7 +265,7 @@ class PatchedSelfAttention(nn.Module):
                 use_cache,
             )
         else:
-            logger.debug('continuous forwarding')
+            # logger.debug('continuous forwarding')
             return self._contiguous_batching_forward(
                 hidden_states,
                 attention_mask,
@@ -277,12 +277,12 @@ class PatchedSelfAttention(nn.Module):
 
 class PatchedChatGLMModel(nn.Module):
 
-    def __init__(self, origin_mod: nn.Module, context: Any):
-        super().__init__()
-        self.origin_mod = origin_mod
-        self.context = context
-        # for compatibility
-        self.output_layer = origin_mod.output_layer
+    # def __init__(self, origin_mod: nn.Module, context: Any):
+    #     super().__init__()
+    #     self.origin_mod = origin_mod
+    #     self.context = context
+    #     # for compatibility
+    #     self.output_layer = origin_mod.output_layer
 
     def _contiguous_batching_forward(
             self,
@@ -303,13 +303,13 @@ class PatchedChatGLMModel(nn.Module):
         use_cache = use_cache if use_cache is not None else orig_self.config.use_cache
         return_dict = return_dict if return_dict is not None else orig_self.config.use_return_dict
 
-        logger.debug('')
-        logger.debug('=' * 66)
-        logger.debug('Enter GLMModel')
-        logger.debug(f'input_ids in model: {input_ids}')
-        logger.debug(f'position_ids in model: {position_ids}')
-        logger.debug(f'attention_mask in model: {attention_mask}')
-        logger.debug(f'full_attention_mask in model: {full_attention_mask}')
+        # logger.debug('')
+        # logger.debug('=' * 66)
+        # logger.debug('Enter GLMModel')
+        # logger.debug(f'input_ids in model: {input_ids}')
+        # logger.debug(f'position_ids in model: {position_ids}')
+        # logger.debug(f'attention_mask in model: {attention_mask}')
+        # logger.debug(f'full_attention_mask in model: {full_attention_mask}')
 
         batch_size, seq_length = input_ids.shape
 
@@ -329,23 +329,23 @@ class PatchedChatGLMModel(nn.Module):
                 ],
                                            dim=-1)
 
-        if past_key_values is None:
-            logger.debug(f'past_key_values[0][0].shape = None')
-        else:
-            logger.debug(
-                f'past_key_values[0][0].shape = {past_key_values[0][0].shape}')
+        # if past_key_values is None:
+        #     logger.debug(f'past_key_values[0][0].shape = None')
+        # else:
+        #     logger.debug(
+        #         f'past_key_values[0][0].shape = {past_key_values[0][0].shape}')
 
-        logger.debug(
-            f'full_attention_mask in model before process: {full_attention_mask}'
-        )
+        # logger.debug(
+        #     f'full_attention_mask in model before process: {full_attention_mask}'
+        # )
 
         # if full_attention_mask is None:
         #     if (attention_mask is not None and not attention_mask.all()) or (past_key_values and seq_length != 1):
         #         full_attention_mask = orig_self.get_masks(input_ids, past_key_values, padding_mask=attention_mask)
 
-        logger.debug(
-            f'full_attention_mask in model after process: {full_attention_mask}'
-        )
+        # logger.debug(
+        #     f'full_attention_mask in model after process: {full_attention_mask}'
+        # )
 
         # Rotary positional embeddings
         rotary_pos_emb = orig_self.rotary_pos_emb(orig_self.seq_length)

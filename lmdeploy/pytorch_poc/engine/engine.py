@@ -254,7 +254,7 @@ class Engine:
             with LoadNoInit():
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     model_path, torch_dtype='auto', trust_remote_code=True)
-                hf_model.eval()
+            hf_model.eval()
 
             self.patched_model = patch(hf_model,
                                        ['context', 'use_origin']).cuda()
