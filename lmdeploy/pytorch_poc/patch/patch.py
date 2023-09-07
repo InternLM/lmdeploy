@@ -20,6 +20,10 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
+    'transformers.models.llama.modeling_llama.LlamaRMSNorm':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaRMSNorm',
+    'transformers.models.llama.modeling_llama.LlamaDecoderLayer':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaDecoderLayer',
     # 动态模块路径是不固定的，有点麻烦
     f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.SelfAttention':
     'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
@@ -93,12 +97,13 @@ def _load_state_dict(model: torch.nn.Module,
                      state_prefix: str = ''):
     # post order
     for name, child in model.named_children():
-        loaded_child = _load_state_dict(child,
-                                        state_dict,
-                                        rank,
-                                        world_size,
-                                        device_mesh=device_mesh,
-                                        state_prefix=f'{state_prefix}{name}.')
+        loaded_child = _load_state_dict(
+            child,
+            state_dict,
+            rank,
+            world_size,
+            device_mesh=device_mesh,
+            state_prefix=f'{state_prefix}{name}.')
         if loaded_child != child:
             model.register_module(name, loaded_child)
 
@@ -117,51 +122,56 @@ def _load_state_dict(model: torch.nn.Module,
             # already initialized
             continue
 
-        in_state_dict = torch.ones(1, device=device)
         full_k = state_prefix + k
         if rank == 0:
-            if full_k not in state_dict:
-                in_state_dict = torch.zeros(1, device=device)
-
-        dist.broadcast(in_state_dict, 0)
+            objs = [full_k in state_dict]
+        else:
+            objs = [None]
+        dist.broadcast_object_list(objs, 0)
+        in_state_dict = objs[0]
 
         if not in_state_dict:
             continue
 
         if rank == 0:
-            new_param = torch.nn.Parameter(state_dict[full_k],
-                                           requires_grad=False).to(device)
+            new_param = torch.nn.Parameter(
+                state_dict[full_k], requires_grad=False).to(device)
         else:
-            new_param = torch.nn.Parameter(torch.empty_like(v, device=device),
-                                           requires_grad=False)
+            new_param = torch.nn.Parameter(
+                torch.empty_like(v, device=device), requires_grad=False)
         model.register_parameter(k, new_param)
 
     # distribute module
     if world_size > 1:
         # check if the model require dist
-        need_dist = True
+        need_dist = not getattr(model, '__tp_distributed__', False)
         for v in model.state_dict().values():
             # model has been disted or weight has not been initialized
-            if v.is_distributed() or v.is_meta:
+            if v.is_meta:
                 need_dist = False
+                break
 
         # dist
         if need_dist:
+            model.__tp_distributed__ = True
+
             if hasattr(model, '_get_parallelize_plan'):
                 parallelize_plan = model._get_parallelize_plan()
-                parallelize_module(model,
-                                   device_mesh,
-                                   parallelize_plan=parallelize_plan)
+                parallelize_module(
+                    model, device_mesh, parallelize_plan=parallelize_plan)
 
             if hasattr(model, '_distribute_partition_fn'):
-                distribute_module(model,
-                                  device_mesh=device_mesh,
-                                  partition_fn=model._distribute_partition_fn)
+                distribute_module(
+                    model,
+                    device_mesh=device_mesh,
+                    partition_fn=model._distribute_partition_fn)
 
             if hasattr(model, '_distribute_input_fn'):
                 input_fn = model._distribute_input_fn
                 model.register_forward_pre_hook(
-                    lambda _, inputs: input_fn(inputs, device_mesh))
+                    lambda _, inputs, inputs_dict: input_fn(
+                        inputs, inputs_dict, device_mesh),
+                    with_kwargs=True)
 
             if hasattr(model, '_distribute_output_fn'):
                 output_fn = model._distribute_output_fn
@@ -189,16 +199,19 @@ def patch(model: torch.nn.Module,
         device_mesh = DeviceMesh('cuda', list(range(world_size)))
         for ckpt in checkpoints:
             if rank == 0:
+                logger = get_logger('lmdeploy')
+                logger.info(f'loading checkpoint from: {ckpt}')
                 state_dict = torch.load(ckpt, map_location=f'cuda:{rank}')
             else:
                 state_dict = None
 
             with torch.cuda.device(rank):
-                _load_state_dict(model,
-                                 state_dict,
-                                 rank=rank,
-                                 world_size=world_size,
-                                 device_mesh=device_mesh)
+                _load_state_dict(
+                    model,
+                    state_dict,
+                    rank=rank,
+                    world_size=world_size,
+                    device_mesh=device_mesh)
 
     extra_args_str = ' '.join(f'{arg}=None,' for arg in extra_args)
     context_update_str = ' '.join(f'{arg}={arg},' for arg in extra_args)

@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from lmdeploy.pytorch_poc.dist_utils import try_to_local
+
 assert triton.__version__ >= '2.1.0'
 
 import logging
@@ -142,6 +144,14 @@ def paged_attention_fwd(q,
                         b_kv_seq_len,
                         max_input_len,
                         BLOCK=64):
+    q = try_to_local(q)
+    k = try_to_local(k)
+    v = try_to_local(v)
+    o = try_to_local(o)
+    block_offsets = try_to_local(block_offsets)
+    b_start_loc = try_to_local(b_start_loc)
+    b_seq_len = try_to_local(b_seq_len)
+    b_kv_seq_len = try_to_local(b_kv_seq_len)
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]

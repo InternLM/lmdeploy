@@ -3,6 +3,7 @@
 from typing import Dict, List, Tuple
 
 import torch
+from torch.distributed._tensor import DeviceMesh, DTensor, Shard
 
 from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
 
@@ -11,8 +12,18 @@ KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 class CacheEngine:
 
-    def __init__(self, cache_config: CacheConfig,
-                 model_config: ModelConfig) -> None:
+    def __init__(self,
+                 cache_config: CacheConfig,
+                 model_config: ModelConfig,
+                 rank: int = 0,
+                 world_size: int = 1,
+                 device_mesh: DeviceMesh = None) -> None:
+        self.rank = rank
+        self.world_size = world_size
+        if device_mesh is None and self.world_size > 1:
+            device_mesh = DeviceMesh('cuda', list(range(self.world_size)))
+        self.device_mesh = device_mesh
+
         self.cache_config = cache_config
         self.model_config = model_config
 
@@ -26,8 +37,8 @@ class CacheEngine:
         self.dtype = model_config.dtype
 
         # Initialize the cache.
-        self.gpu_cache = self.allocate_gpu_cache()
-        self.cpu_cache = self.allocate_cpu_cache()
+        self.local_gpu_cache = self.allocate_gpu_cache()
+        self.local_cpu_cache = self.allocate_cpu_cache()
 
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
@@ -35,24 +46,46 @@ class CacheEngine:
         # Initialize the events for stream synchronization.
         self.events = [torch.cuda.Event() for _ in range(self.num_layers)]
 
-    def get_key_block_shape(self) -> Tuple[int, int, int]:
+    @property
+    def gpu_cache(self):
+        if self.world_size <= 1:
+            return self.local_gpu_cache
+        else:
+            return [(DTensor.from_local(k,
+                                        device_mesh=self.device_mesh,
+                                        placements=[Shard(-2)]),
+                     DTensor.from_local(v,
+                                        device_mesh=self.device_mesh,
+                                        placements=[Shard(-2)]))
+                    for k, v in self.local_gpu_cache]
+
+    def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
+        num_heads = self.num_heads
+        if local:
+            assert self.num_heads % self.world_size == 0
+            num_heads = self.num_heads // self.world_size
         return (
             self.block_size,
-            self.num_heads,
+            num_heads,
             self.head_size,
         )
 
-    def get_value_block_shape(self) -> Tuple[int, int, int]:
+    def get_value_block_shape(self,
+                              local: bool = False) -> Tuple[int, int, int]:
+        num_heads = self.num_heads
+        if local:
+            assert self.num_heads % self.world_size == 0
+            num_heads = self.num_heads // self.world_size
         return (
             self.block_size,
-            self.num_heads,
+            num_heads,
             self.head_size,
         )
 
     def allocate_gpu_cache(self):
         gpu_cache: List[KVCache] = []
-        key_block_shape = self.get_key_block_shape()
-        value_block_shape = self.get_value_block_shape()
+        key_block_shape = self.get_key_block_shape(local=True)
+        value_block_shape = self.get_value_block_shape(local=True)
 
         for _ in range(self.num_layers):
             key_blocks = torch.empty(size=(self.num_gpu_blocks,
@@ -101,10 +134,10 @@ class CacheEngine:
                     event.record(stream=self.cache_stream)
 
     def swap_in(self, src_to_dst: Dict[int, int]) -> None:
-        self._swap(self.cpu_cache, self.gpu_cache, src_to_dst)
+        self._swap(self.local_cpu_cache, self.local_gpu_cache, src_to_dst)
 
     def swap_out(self, src_to_dst: Dict[int, int]) -> None:
-        self._swap(self.gpu_cache, self.cpu_cache, src_to_dst)
+        self._swap(self.local_gpu_cache, self.local_cpu_cache, src_to_dst)
 
     @staticmethod
     def get_cache_block_size(block_size: int,
