@@ -2,7 +2,6 @@
 import enum
 import itertools
 import json
-import logging
 import os
 import os.path as osp
 import time
@@ -34,8 +33,10 @@ from lmdeploy.utils import get_logger
 
 from .cache_engine import CacheEngine
 
-# logger = get_logger('lmdeploy')
-logger = logging.getLogger(__name__)
+logger = get_logger('lmdeploy')
+
+# import logging
+# logger = logging.getLogger(__name__)
 
 
 class RequestType(enum.Enum):
@@ -378,14 +379,14 @@ class Engine:
                                        hf_config.multi_query_group_num,
                                        bos_token_id=hf_config.bos_token_id,
                                        eos_token_id=hf_config.eos_token_id,
-                                       dtype=torch.float16)
+                                       dtype=torch_dtype)
         else:
             model_config = ModelConfig(hf_config.hidden_size,
                                        hf_config.num_hidden_layers,
                                        hf_config.num_attention_heads,
                                        bos_token_id=hf_config.bos_token_id,
                                        eos_token_id=hf_config.eos_token_id,
-                                       dtype=torch.float16)
+                                       dtype=torch_dtype)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -398,8 +399,8 @@ class Engine:
                     model_path, torch_dtype='auto', trust_remote_code=True)
             hf_model.eval()
 
-            self.patched_model = patch(hf_model,
-                                       ['context', 'use_origin']).cuda()
+            self.patched_model = patch(
+                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
@@ -412,7 +413,8 @@ class Engine:
             self.tp_model_in_que = mp.Queue(5)
             self.tp_model_out_que = mp.Queue(5)
 
-            self.patch_model_tp(model_path, ['context', 'use_origin'],
+            self.patch_model_tp(model_path,
+                                ['context', 'use_origin', 'q_seq_info'],
                                 model_config=model_config,
                                 cache_config=cache_config,
                                 in_que=self.tp_model_in_que,
@@ -488,14 +490,14 @@ class Engine:
         q_start_loc = torch.tensor([0] + seq_length[:-1]).to(device)
         q_seq_length = torch.tensor(seq_length).to(device)
 
-        logger.debug('In Make inputs')
-        logger.debug(f'q_start_loc {q_start_loc}')
-        logger.debug(f'q_seq_length {q_seq_length}')
+        # logger.debug('In Make inputs')
+        # logger.debug(f'q_start_loc {q_start_loc}')
+        # logger.debug(f'q_seq_length {q_seq_length}')
         # logger.debug("kv_seq_length {q_seq_length}")
 
-        past_key_values = self.cache_engine.gpu_cache
-        for i, pkv in enumerate(past_key_values):
-            past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
+        # past_key_values = self.cache_engine.gpu_cache
+        # for i, pkv in enumerate(past_key_values):
+        #     past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
 
         if input_ids.ndim == 1:
             # chatglm need 2d input_id
@@ -519,8 +521,8 @@ class Engine:
                     seq_length=seq_length,
                     attention_mask=attention_mask,
                     block_tables=block_tables,
-                    past_key_values=past_key_values,
-                    position_ids=position_ids)
+                    position_ids=position_ids,
+                    q_seq_info=(q_start_loc, q_seq_length))
 
     def stop_session(self, session_id: int):
         self.scheduler.stop_session(session_id)
@@ -587,7 +589,8 @@ class Engine:
                     use_origin=False,
                     context=ModelContext(
                         block_tables=inputs['block_tables'],
-                        history_lengths=inputs['history_lengths']))
+                        history_lengths=inputs['history_lengths']),
+                    q_seq_info=inputs['q_seq_info'])
                 return output['logits']
         else:
             self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
@@ -617,18 +620,18 @@ class Engine:
         history_lengths = [sess.history_length for sess in sessions]
 
         # make batch
-        logger.debug(f'running: {running}')
+        # logger.debug(f'running: {running}')
         inputs = self._make_inputs(running)
-        logger.debug(f'input_ids: {inputs["input_ids"]}')
-        logger.debug(f'position_ids: {inputs["position_ids"]}')
-        logger.debug(f'attention_mask: {inputs["attention_mask"]}')
+        # logger.debug(f'input_ids: {inputs["input_ids"]}')
+        # logger.debug(f'position_ids: {inputs["position_ids"]}')
+        # logger.debug(f'attention_mask: {inputs["attention_mask"]}')
         inputs['history_lengths'] = history_lengths
 
         # inference
         logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-        logger.debug('logits.shape = %s', logits.shape)
+        # logger.debug('logits.shape = %s', logits.shape)
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -643,8 +646,8 @@ class Engine:
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
-            logger.debug(f'msg = {msg}')
-            logger.debug(f'input_ids = {input_ids}')
+            # logger.debug(f'msg = {msg}')
+            # logger.debug(f'input_ids = {input_ids}')
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),

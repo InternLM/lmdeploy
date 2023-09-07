@@ -76,11 +76,11 @@ class PatchedSelfAttention(nn.Module):
 
         # input 要改回1D适应cache和attn
 
-        origin_self = self.origin_mod
+        origin_self = self
 
         context = self.context.context
         history_lengths = context.history_lengths
-        logger.debug('history_lengths = %s', history_lengths)
+        # logger.debug('history_lengths = %s', history_lengths)
 
         mixed_x_layer = origin_self.query_key_value(hidden_states)
 
@@ -131,7 +131,8 @@ class PatchedSelfAttention(nn.Module):
 
         # adjust key and value for inference
         if kv_cache is not None:
-            cache_k, cache_v, q_start_loc, q_seq_length = kv_cache
+            cache_k, cache_v = kv_cache
+            q_start_loc, q_seq_length = self.context.q_seq_info
 
             q_start_loc: torch.Tensor
             history_lengths = q_seq_length.new_tensor(history_lengths)
@@ -161,7 +162,7 @@ class PatchedSelfAttention(nn.Module):
             # value_layer = torch.cat((cache_v, value_layer), dim=0)
         # logger.debug('use cache = %s', use_cache)
         if use_cache:
-            kv_cache = (key_layer, value_layer, q_start_loc, q_seq_length)
+            kv_cache = (key_layer, value_layer)
         else:
             kv_cache = None
 
