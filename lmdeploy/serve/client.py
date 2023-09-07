@@ -19,7 +19,7 @@ def input_prompt(model_name):
 
 def main(tritonserver_addr: str,
          session_id: int = 1,
-         cap: str = 'instruct',
+         cap: str = 'chat',
          sys_instruct: str = None,
          stream_output: bool = True,
          **kwargs):
@@ -35,13 +35,14 @@ def main(tritonserver_addr: str,
         sys_instruct (str): the content of 'system' role, which is used by
             conversational model
         stream_output (bool): indicator for streaming output or not
-        **kwarg (dict): other arguments for initializing model's chat template
+        **kwargs (dict): other arguments for initializing model's chat template
     """
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')
-    kwargs.update(cap=cap, system=sys_instruct)
+    kwargs.update(capability=cap, system=sys_instruct)
     chatbot = Chatbot(tritonserver_addr,
                       log_level=log_level,
-                      display=stream_output**kwargs)
+                      display=stream_output,
+                      **kwargs)
     nth_round = 1
     while True:
         prompt = input_prompt(chatbot.model_name)
