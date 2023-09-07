@@ -60,7 +60,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 |   Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |  Llama2   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | InternLM  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan2 |       No        | Yes  |   No    |  No   |  No  |
+| Baichuan2 |       Yes       | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
 

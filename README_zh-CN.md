@@ -61,7 +61,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 |   Llama   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |  Llama2   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan2 |    No    | Yes  |   No    |  No   |  No  |
+| Baichuan2 |   Yes    | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
 
