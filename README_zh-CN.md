@@ -56,11 +56,12 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 > **Note**<br />
 > W4A16 推理需要 Ampere 及以上架构的 Nvidia GPU
 
-|   模型   | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
-| :------: | :------: | :--: | :-----: | :---: | :--: |
-|  Llama   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-|  Llama2  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-| InternLM |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|   模型    | 模型并行 | FP16 | KV INT8 | W4A16 | W8A8 |
+| :-------: | :------: | :--: | :-----: | :---: | :--: |
+|   Llama   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|  Llama2   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+| InternLM  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+| Baichuan2 |    No    | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
 

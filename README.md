@@ -55,11 +55,12 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 > **Note**<br />
 > W4A16 inference requires Nvidia GPU with Ampere architecture or above.
 
-|  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
-| :------: | :-------------: | :--: | :-----: | :---: | :--: |
-|  Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|  Llama2  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| InternLM |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Models   | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
+| :-------: | :-------------: | :--: | :-----: | :---: | :--: |
+|   Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Llama2   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| InternLM  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| Baichuan2 |       No        | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
 
