@@ -48,27 +48,6 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-# def get_prompt(prompt: str, model: BaseModel, model_name: str, cap: str,
-#                nth_round: bool):
-#     """return the decorated prompt according to the parameters."""
-#     if model_name == 'codellama':
-#         if cap == 'completion' or cap == 'python':
-#             return prompt
-#         elif cap == 'infill':
-#             return model.get_prompt(prompt, sequence_start=True)
-#         elif cap == 'instruct':
-#             return model.get_prompt(prompt, nth_round == 1)
-#         else:
-#             assert 0, f"{model_name} model hasn't {cap} capability"
-#     else:
-#         if cap == 'completion':
-#             return prompt
-#         elif cap == 'instruct':
-#             return model.get_prompt(prompt, nth_round == 1)
-#         else:
-#             assert 0, f"{model_name} model hasn't {cap} capability"
-
-
 def get_gen_param(model_name, cap, nth_round, step):
     """return parameters used by token generation."""
     if model_name == 'codellama':
@@ -131,9 +110,9 @@ def main(model_path,
     step = 0
     seed = random.getrandbits(64)
     model_name = tm_model.model_name
-    model = MODELS.get(model_name)(
-        cap=cap, **kwargs) if sys_instruct is None else MODELS.get(model_name)(
-            cap=cap, system=sys_instruct, **kwargs)
+    model = MODELS.get(model_name)(capability=cap, **kwargs) \
+        if sys_instruct is None else MODELS.get(model_name)(
+            capability=cap, system=sys_instruct, **kwargs)
 
     print(f'session {session_id}')
     while True:
@@ -159,7 +138,6 @@ def main(model_path,
                 continue
             gen_param = get_gen_param(model_name, cap, nth_round, step)
             prompt = model.get_prompt(prompt, nth_round)
-            # prompt = get_prompt(prompt, model, model_name, cap, nth_round)
             input_ids = tokenizer.encode(prompt)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0

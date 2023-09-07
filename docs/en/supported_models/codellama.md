@@ -30,21 +30,66 @@ python3 -m pip install lmdeploy
 
 # convert weight layout
 python3 -m lmdeploy.serve.turbomind.deploy codellama /the/path/of/codellama/model
-
-# interactive communicate with AI assistant in console
-# --cap is among [completion, infill, instruct, python] with default value instruct
-python3 -m lmdeploy.turbomind.chat ./workspace --cap <capability>
 ```
 
-**Note**: lmdeploy supports copying code blocks to the console. Make sure to end input with "!!".
+Then, you can communicate with codellama in consolo by following instructions in next sections
+
+**Note**:
+
+- minimum requirement of `transformers` is **v4.33.0**
+- lmdeploy supports copying code blocks to the console. But you have to press enter, input "!!" and press enter again to end the prompt. The way to input prompt for other supported models keeps unchanged, i.e., double pressing enter.
+
+### Completion
+
+```shell
+python3 -m lmdeploy.turbomind.chat ./workspace --cap completion
+```
+
+### Infilling
+
+```shell
+python3 -m lmdeploy.turbomind.chat ./workspace --cap infilling
+```
+
+The input code is supposed to have a special placeholder `<FILL>`. For example,
+
+```
+def remove_non_ascii(s: str) -> str:
+    """ <FILL>
+    return result
+```
+
+And the generated code piece by `turbomind.chat` is the one to be filled in `<FILL>`
+
+### Chat
+
+```
+python3 -m lmdeploy.turbomind.chat ./workspace --cap chat --sys-instruct "Provide answers in Python"
+```
+
+`--sys-instruct` instruction can be changed to other coding languages as long as codellama supports it
+
+### Python specialist
+
+```
+python3 -m lmdeploy.turbomind.chat ./workspace --cap python
+```
+
+Python fine-tuned model is highly recommended when 'python specialist' capability is required.
+
+## Quantization
+
+TBD
 
 ## Serving
 
-### Serving with Restful API
+**LMDeploy server only supports `chat` capabllity**. The res ones are going to be supported soon.
 
 Launch inference server by:
 
 ```shell
+# --instance_num: number of instances to performance inference, which can be viewed as max requests concurrency
+# --tp: the number of GPUs used in tensor parallelism
 python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
 ```
 
@@ -55,7 +100,7 @@ Then, you can communicate with it by command line,
 python -m lmdeploy.serve.openai.api_client restful_api_url
 ```
 
-or webui,
+or through webui after launching gradio,
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
@@ -64,10 +109,4 @@ or webui,
 python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 ```
 
-Refer to [restful_api.md](docs/en/restful_api.md) for more details.
-
-### Serving with gradio
-
-```shell
-python3 -m lmdeploy.serve.gradio.app ./workspace
-```
+Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../restful_api.md).
