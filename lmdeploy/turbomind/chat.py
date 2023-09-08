@@ -110,10 +110,11 @@ def main(model_path,
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
-            input_ids = tokenizer.encode('')
+            prompt = model.get_prompt('', nth_round == 1)
+            input_ids = tokenizer.encode(prompt)
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=[input_ids],
-                                                  request_output_len=0,
+                                                  request_output_len=512,
                                                   sequence_start=False,
                                                   sequence_end=True,
                                                   stream_output=stream_output):
