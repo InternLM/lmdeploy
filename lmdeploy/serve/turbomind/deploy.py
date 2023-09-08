@@ -532,7 +532,8 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    if model_name == 'baichuan2-7b-chat':
+    if model_name == 'baichuan2-7b':
+        # https://huggingface.co/baichuan-inc/Baichuan2-7B-Base/blob/main/modeling_baichuan.py#L507
         # https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/main/modeling_baichuan.py#L507
         model_params['output.weight'] = torch.nn.functional.normalize(
             model_params['output.weight'])

@@ -250,8 +250,8 @@ class Baichuan7B(BaseModel):
         self.repetition_penalty = repetition_penalty
 
 
-@MODELS.register_module(name='baichuan2-7b-chat')
-class Baichuan2_7BChat(BaseModel):
+@MODELS.register_module(name='baichuan2-7b')
+class Baichuan2_7B(BaseModel):
 
     def __init__(self,
                  temperature=0.3,

@@ -1390,7 +1390,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // Padded len
     const int padd_len = (params.total_padding_tokens == nullptr) ? 0 : params.total_padding_tokens[bi];
     if (params.rotary_embedding_dim > 0) {
-        apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, rotary_embedding_base, params.timestep - padd_len);
+        apply_rotary_embedding(
+            q, k, tidx, params.rotary_embedding_dim, rotary_embedding_base, params.timestep - padd_len);
     }
 
     if (params.use_logn_attn) {
