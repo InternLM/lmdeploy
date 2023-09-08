@@ -15,16 +15,14 @@ os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 @dataclasses.dataclass
 class GenParam:
+    top_p: float
+    top_k: float
+    temperature: float
+    repetition_penalty: float
     sequence_start: bool = False
-    sequence_end: bool = True
+    sequence_end: bool = False
     step: int = 0
     request_output_len: int = 512
-    # top_p, top_k, temperature, repetition_penalty are
-    # parameters for sampling
-    top_p: float = 0.8
-    top_k: float = 40
-    temperature: float = 0.8
-    repetition_penalty: float = 1.0
 
 
 def input_prompt(model_name):
@@ -48,36 +46,28 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def get_gen_param(model_name, cap, nth_round, step):
+def get_gen_param(cap,
+                  sampling_param,
+                  nth_round,
+                  step,
+                  request_output_len=512,
+                  **kwargs):
     """return parameters used by token generation."""
-    if model_name == 'codellama':
-        if cap == 'instruct':
-            return GenParam(
-                sequence_start=(nth_round == 1),
-                sequence_end=False,
-                step=step,
-                # The following parameters comes from https://huggingface.co/spaces/codellama/codellama-13b-chat # noqa: E501
-                top_p=0.9,
-                top_k=10,
-                temperature=0.1,
-                request_output_len=1024)
-        else:
-            return GenParam(
-                sequence_start=True,
-                sequence_end=True,
-                step=0,
-                # The following parameters comes from https://huggingface.co/spaces/codellama/codellama-playground # noqa: E501
-                top_p=0.9,
-                temperature=0.1 if cap == 'completion' else 0.6,
-                repetition_penalty=1.05,
-                request_output_len=256)
+    gen_param = GenParam(**dataclasses.asdict(sampling_param),
+                         request_output_len=request_output_len)
+    # Fix me later. turbomind.py doesn't support None top_k
+    if gen_param.top_k is None:
+        gen_param.top_k = 40
+
+    if cap == 'chat':
+        gen_param.sequence_start = (nth_round == 1)
+        gen_param.sequence_end = False
+        gen_param.step = step
     else:
-        if cap == 'instruct':
-            return GenParam(sequence_start=(nth_round == 1),
-                            sequence_end=False,
-                            step=step)
-        else:
-            return GenParam(sequence_start=True, sequence_end=True, step=0)
+        gen_param.sequence_start = True
+        gen_param.sequence_end = True
+        gen_param.step = 0
+    return gen_param
 
 
 def main(model_path,
@@ -136,7 +126,9 @@ def main(model_path,
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
-            gen_param = get_gen_param(model_name, cap, nth_round, step)
+
+            gen_param = get_gen_param(cap, model.sampling_param, nth_round,
+                                      step, **kwargs)
             prompt = model.get_prompt(prompt, nth_round)
             input_ids = tokenizer.encode(prompt)
             print(f'{prompt} ', end='', flush=True)

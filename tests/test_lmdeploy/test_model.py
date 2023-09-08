@@ -1,6 +1,6 @@
 import pytest
 
-from lmdeploy.model import MODELS
+from lmdeploy.model import MODELS, SamplingParam
 
 
 def test_base_model():
@@ -167,3 +167,39 @@ def test_codellama_others():
     with pytest.raises(AssertionError):
         model = MODELS.get('codellama')(capability='java')
     assert model is None
+
+
+def test_sampling_param():
+    model = MODELS.get('llama')()
+    default_sampling_param = SamplingParam()
+    assert model.sampling_param == default_sampling_param
+
+    model = MODELS.get('llama')(top_p=0.1, top_k=10)
+    assert model.sampling_param.top_p == 0.1 and \
+        model.sampling_param.top_k == 10
+    assert model.sampling_param.temperature == 0.8 and \
+        model.sampling_param.repetition_penalty == 1.0
+
+    model = MODELS.get('codellama')(capability='completion')
+    assert model.sampling_param.top_p == 0.9 and \
+        model.sampling_param.top_k is None and \
+        model.sampling_param.temperature == 0.2 and \
+        model.sampling_param.repetition_penalty == 1.0
+
+    model = MODELS.get('codellama')(capability='chat')
+    assert model.sampling_param.top_p == 0.95 and \
+        model.sampling_param.top_k is None and \
+        model.sampling_param.temperature == 0.2 and \
+        model.sampling_param.repetition_penalty == 1.0
+
+    model = MODELS.get('codellama')(capability='infilling')
+    assert model.sampling_param.top_p == 0.9 and \
+        model.sampling_param.top_k is None and \
+        model.sampling_param.temperature == 0.0 and \
+        model.sampling_param.repetition_penalty == 1.0
+
+    model = MODELS.get('codellama')(capability='python')
+    assert model.sampling_param.top_p == 0.9 and \
+        model.sampling_param.top_k is None and \
+        model.sampling_param.temperature == 0.2 and \
+        model.sampling_param.repetition_penalty == 1.0

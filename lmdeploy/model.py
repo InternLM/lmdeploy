@@ -1,10 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 from abc import abstractmethod
 from typing import List
 
 from mmengine import Registry
 
 MODELS = Registry('model', locations=['lmdeploy.model'])
+
+
+@dataclasses.dataclass
+class SamplingParam:
+    top_p: float = 0.8
+    top_k: float = None
+    temperature: float = 0.8
+    repetition_penalty: float = 1.0
 
 
 @MODELS.register_module(name='internlm')
@@ -96,6 +105,13 @@ class BaseModel:
     def stop_words(self):
         """Return the stop-words' token ids."""
         return None
+
+    @property
+    def sampling_param(self):
+        return SamplingParam(top_p=self.top_p,
+                             top_k=self.top_k,
+                             temperature=self.temperature,
+                             repetition_penalty=self.repetition_penalty)
 
 
 @MODELS.register_module(name='vicuna')
@@ -431,8 +447,6 @@ class CodeLlama(Llama2):
     def __init__(self,
                  system='',
                  session_len=4096,
-                 top_p=0.9,
-                 temperature=0.6,
                  suffix_first=False,
                  **kwargs):
         super().__init__(**kwargs)
@@ -442,9 +456,18 @@ class CodeLlama(Llama2):
             f'The supported capabilities are: {caps}'
         self.default_sys_prompt = system
         self.session_len = session_len
-        self.top_p = top_p
-        self.temperature = temperature
         self.suffix_first = suffix_first
+
+        # The following sampling parameters refers to https://github.com/facebookresearch/codellama # noqa: E501
+        if self.capability == 'completion' or self.capability == 'python':
+            self.top_p = kwargs.get('top_p', 0.9)
+            self.temperature = kwargs.get('temperature', 0.2)
+        if self.capability == 'chat':
+            self.top_p = kwargs.get('top_p', 0.95)
+            self.temperature = kwargs.get('temperature', 0.2)
+        elif self.capability == 'infilling':
+            self.top_p = kwargs.get('top_p', 0.9)
+            self.temperature = kwargs.get('temperature', 0.0)
 
     def decorate_prompt(self, prompt, sequence_start=True):
         if self.capability == 'infilling':
