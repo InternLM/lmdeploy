@@ -28,16 +28,18 @@
 
 #define MMHA_LAUNCH_KERNEL(                                                                                            \
     T, Dh, Dh_MAX, THDS_PER_KEY, THDS_PER_VALUE, THDS_PER_BLOCK, HAS_BEAMS, QUANT_POLICY, stream)                      \
+    auto   func    = &mmha::masked_multihead_attention_kernel<T,                                                       \
+                                                         Dh,                                                      \
+                                                         Dh_MAX,                                                  \
+                                                         THDS_PER_KEY,                                            \
+                                                         THDS_PER_VALUE,                                          \
+                                                         THDS_PER_BLOCK,                                          \
+                                                         HAS_BEAMS,                                               \
+                                                         QUANT_POLICY>;                                           \
     size_t smem_sz = mmha::smem_size_in_bytes<T>(params, THDS_PER_VALUE, THDS_PER_BLOCK);                              \
     dim3   grid(params.num_heads, params.batch_size);                                                                  \
-    mmha::masked_multihead_attention_kernel<T,                                                                         \
-                                            Dh,                                                                        \
-                                            Dh_MAX,                                                                    \
-                                            THDS_PER_KEY,                                                              \
-                                            THDS_PER_VALUE,                                                            \
-                                            THDS_PER_BLOCK,                                                            \
-                                            HAS_BEAMS,                                                                 \
-                                            QUANT_POLICY><<<grid, THDS_PER_BLOCK, smem_sz, stream>>>(params)
+    cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);                                  \
+    func<<<grid, THDS_PER_BLOCK, smem_sz, stream>>>(params)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
