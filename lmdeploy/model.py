@@ -227,6 +227,56 @@ class Baichuan7B(BaseModel):
         self.repetition_penalty = repetition_penalty
 
 
+@MODELS.register_module(name='baichuan2-7b-chat')
+class Baichuan2_7BChat(BaseModel):
+
+    def __init__(self,
+                 temperature=0.3,
+                 top_k=5,
+                 top_p=0.85,
+                 repetition_penalty=1.05,
+                 **kwargs):
+        super().__init__(temperature=temperature,
+                         top_k=top_k,
+                         top_p=top_p,
+                         repetition_penalty=repetition_penalty,
+                         **kwargs)
+        self.user_token = '<reserved_106>'  # id = 195
+        self.assistant_token = '<reserved_107>'  # id = 196
+
+    def get_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        return f'{self.user_token}{prompt}{self.assistant_token}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        ret = ''
+        for user, assistant in zip(users, assistants):
+            ret += f'{self.user_token}{user}{self.assistant_token}'
+            if assistant:
+                ret += f'{assistant}'
+        return ret
+
+
 @MODELS.register_module(name='puyu')
 class Puyu(BaseModel):
     """Chat template of puyu model.This is only for internal usage in Shanghai

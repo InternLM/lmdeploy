@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/09\] TurboMind supports Baichuan2-7B
 - \[2023/08\] TurboMind supports flash-attention2.
 - \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
 - \[2023/08\] TurboMind supports Windows (tp=1)
@@ -55,11 +56,12 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 > **Note**<br />
 > W4A16 inference requires Nvidia GPU with Ampere architecture or above.
 
-|  Models  | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
-| :------: | :-------------: | :--: | :-----: | :---: | :--: |
-|  Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|  Llama2  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| InternLM |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Models   | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
+| :-------: | :-------------: | :--: | :-----: | :---: | :--: |
+|   Llama   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|  Llama2   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| InternLM  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+| Baichuan2 |       Yes       | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
 
