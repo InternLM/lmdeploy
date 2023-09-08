@@ -340,8 +340,16 @@ class TurboMindInstance:
                     output_ids, seq_start, sequence_length)
             ]
             sequence_length -= seq_start.to(sequence_length.device)
-            yield [(output, l.item())
-                   for output, l in zip(output_ids, sequence_length)]
+
+            outputs = []
+            for output, len_ in zip(output_ids, sequence_length):
+                output, len_ = output, len_.item()
+                if output[-1].item() == self.eos_id:
+                    outputs.append((output[:-1], len_ - 1))
+                else:
+                    outputs.append((output, len_))
+
+            yield outputs
 
             if finish:
                 for t in self.threads:
