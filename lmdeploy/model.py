@@ -308,30 +308,32 @@ class Puyu(BaseModel):
     AI Laboratory."""
 
     def __init__(self,
+                 meta_instruction='',
                  system='',
-                 user='<|Human|>: ',
-                 eoh='',
                  eosys='',
-                 assistant='<|Assistant|>: ',
-                 system_role='<|System|>: ',
+                 user='',
+                 eoh='',
+                 assistant='',
+                 eoa='',
                  **kwargs):
         super().__init__(**kwargs)
-        self.meta_instruction = system
+        self.meta_instruction = meta_instruction
+        self.system = system
         self.user = user
-        self.eoh = eoh
-        self.eosys = eosys
         self.assistant = assistant
-        self.system = system_role
+        self.eosys = eosys
+        self.eoh = eoh
+        self.eoa = eoa
 
     def decorate_prompt(self, prompt, sequence_start=True):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}\n' \
-                   f'{self.user}{prompt}{self.eoh}\n' \
+            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}' \
+                   f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
         else:
-            return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
+            return f'{self.eoa}{self.user}{prompt}{self.eoh}{self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -350,10 +352,10 @@ class Puyu(BaseModel):
         ret = f'<BOS>{system}{self.meta_instruction}{self.eosys}'
         for user, assistant in zip(users, assistants):
             if assistant:
-                ret += f'\n{self.user}{user}{self.eoh}\n{self.assistant}' \
-                       f'{assistant}'
+                ret += f'{self.user}{user}{self.eoh}{self.assistant}' \
+                       f'{assistant}{self.eoa}'
             else:
-                ret += f'\n{self.user}{user}{self.eoh}\n{self.assistant}'
+                ret += f'{self.user}{user}{self.eoh}{self.assistant}'
         return ret
 
     @property
