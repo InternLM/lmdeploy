@@ -277,7 +277,7 @@ class BaichuanChat(BaseModel):
 
 
 @MODELS.register_module(name='baichuan2-chat')
-class Baichuan2Chat(BaseModel):
+class Baichuan2Chat(BaichuanChat):
 
     def __init__(self,
                  repetition_penalty=1.1,
@@ -294,36 +294,6 @@ class Baichuan2Chat(BaseModel):
         self.temperature = temperature
         self.top_k = top_k
         self.top_p = top_p
-
-    def get_prompt(self, prompt, sequence_start=True):
-        if sequence_start:
-            return f'{self.user_token}{prompt}{self.assistant_token}'
-        else:
-            return f'{self.user_token}{prompt}{self.assistant_token}'
-
-    def messages2prompt(self, messages, sequence_start=True):
-        """Return the prompt that is concatenated with other elements in the
-        chat template.
-
-        Args:
-            messages (str | List): user's input prompt
-            sequence_start (bool): flag to start the sequence
-        Returns:
-            str: the concatenated prompt
-        """
-        if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        system, users, assistants = self._translate_messages(messages)
-        system = '' if not system else system
-        ret = f'{system}'
-        for user, assistant in zip(users, assistants):
-            if assistant:
-                ret += f'{self.user_token}{user}{self.assistant_token}' \
-                       f'{assistant}'
-            else:
-                ret += f'{self.user_token}{user}{self.assistant_token}'
-        return ret
-
 
 @MODELS.register_module(name='puyu')
 class Puyu(BaseModel):

@@ -20,6 +20,10 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
+    'transformers.models.llama.modeling_llama.LlamaRMSNorm':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaRMSNorm',
+    'transformers.models.llama.modeling_llama.LlamaDecoderLayer':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaDecoderLayer',
     'transformers_modules\.(.*)\.modeling_baichuan.(.*)Model':  # noqa
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',
     'transformers_modules\.(.*)\.modeling_baichuan.(.*)Attention':  # noqa
@@ -128,13 +132,13 @@ def _load_state_dict(model: torch.nn.Module,
             # already initialized
             continue
 
-        in_state_dict = torch.ones(1, device=device)
         full_k = state_prefix + k
         if rank == 0:
-            if full_k not in state_dict:
-                in_state_dict = torch.zeros(1, device=device)
-
-        dist.broadcast(in_state_dict, 0)
+            objs = [full_k in state_dict]
+        else:
+            objs = [None]
+        dist.broadcast_object_list(objs, 0)
+        in_state_dict = objs[0]
 
         if not in_state_dict:
             continue
@@ -150,14 +154,17 @@ def _load_state_dict(model: torch.nn.Module,
     # distribute module
     if world_size > 1:
         # check if the model require dist
-        need_dist = True
+        need_dist = not getattr(model, '__tp_distributed__', False)
         for v in model.state_dict().values():
             # model has been disted or weight has not been initialized
-            if v.is_distributed() or v.is_meta:
+            if v.is_meta:
                 need_dist = False
+                break
 
         # dist
         if need_dist:
+            model.__tp_distributed__ = True
+
             if hasattr(model, '_get_parallelize_plan'):
                 parallelize_plan = model._get_parallelize_plan()
                 parallelize_module(model,
@@ -172,7 +179,9 @@ def _load_state_dict(model: torch.nn.Module,
             if hasattr(model, '_distribute_input_fn'):
                 input_fn = model._distribute_input_fn
                 model.register_forward_pre_hook(
-                    lambda _, inputs: input_fn(inputs, device_mesh))
+                    lambda _, inputs, inputs_dict: input_fn(
+                        inputs, inputs_dict, device_mesh),
+                    with_kwargs=True)
 
             if hasattr(model, '_distribute_output_fn'):
                 output_fn = model._distribute_output_fn
@@ -200,6 +209,8 @@ def patch(model: torch.nn.Module,
         device_mesh = DeviceMesh('cuda', list(range(world_size)))
         for ckpt in checkpoints:
             if rank == 0:
+                logger = get_logger('lmdeploy')
+                logger.info(f'loading checkpoint from: {ckpt}')
                 state_dict = torch.load(ckpt, map_location=f'cuda:{rank}')
             else:
                 state_dict = None

@@ -8,11 +8,12 @@ import time
 from dataclasses import dataclass
 from queue import Queue
 from threading import Thread
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
+from torch.distributed._tensor import DeviceMesh, Replicate, distribute_tensor
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
@@ -22,6 +23,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
+from lmdeploy.pytorch_poc.dist_utils import try_to_local
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerMessage, SchedulerSession)
 from lmdeploy.pytorch_poc.paging import BlockTable, Scheduler
@@ -81,9 +83,11 @@ class ModelContext:
     def __init__(self,
                  block_tables: List[BlockTable],
                  history_lengths: List[int],
+                 world_size: int = 1,
                  device='cuda'):
         self.block_tables = block_tables
         self.history_lengths = history_lengths
+        self.world_size = world_size
 
         # make block offsets
         block_offsets = [[block.block_id for block in block_table]
@@ -110,6 +114,13 @@ class ModelContext:
         k_caches: torch.Tensor,
         v_caches: torch.Tensor,
     ):
+        k_states = try_to_local(k_states)
+        v_states = try_to_local(v_states)
+        start_loc = try_to_local(start_loc)
+        seq_length = try_to_local(seq_length)
+        k_caches = try_to_local(k_caches)
+        v_caches = try_to_local(v_caches)
+
         block_size = k_caches.size(1)
         block_offsets = self.get_block_offsets()
 
@@ -152,52 +163,178 @@ class ModelContext:
                 v_state = v_state[token_num:]
 
 
+def _update_cache_config(model_config: ModelConfig, cache_config: CacheConfig):
+    GPU_MEM_PERCENT = 0.7
+    SWAP_SPACE = 4 * (1 << 30)
+    gpu_mem = get_gpu_memory() * GPU_MEM_PERCENT
+    cpu_mem = SWAP_SPACE
+    cache_block_size = CacheEngine.get_cache_block_size(
+        cache_config.block_size, model_config)
+    if cache_config.num_cpu_blocks == 0:
+        cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
+    if cache_config.num_gpu_blocks == 0:
+        cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
+
+
 def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
+                   model_config: ModelConfig, cache_config: CacheConfig,
                    in_que: mp.Queue, out_que: mp.Queue, world_size: int):
     from accelerate import init_empty_weights
+    device_mesh = DeviceMesh('cuda', list(range(world_size)))
 
-    os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29500'
-    dist.init_process_group('nccl', rank=rank, world_size=world_size)
+    error_code = 0
+    error_type = None
 
-    config = AutoConfig.from_pretrained(model_path)
-    torch_dtype = getattr(config, 'torch_dtype', 'float16')
-    torch_dtype = eval(f'torch.{torch_dtype}')
-    with init_empty_weights():
-        model = AutoModelForCausalLM.from_config(config, torch_dtype,
-                                                 torch_dtype)
+    try:
+        config = AutoConfig.from_pretrained(model_path)
+        torch_dtype = getattr(config, 'torch_dtype', 'float16')
+        torch_dtype = eval(f'torch.{torch_dtype}')
+        with init_empty_weights():
+            model = AutoModelForCausalLM.from_config(config,
+                                                     torch_dtype=torch_dtype)
 
-    torch_model_json_path = osp.join(model_path,
-                                     'pytorch_model.bin.index.json')
-    with open(torch_model_json_path, mode='r') as f:
-        torch_model_json = json.load(f)
+        torch_model_json_path = osp.join(model_path,
+                                         'pytorch_model.bin.index.json')
+        with open(torch_model_json_path, mode='r') as f:
+            torch_model_json = json.load(f)
 
-    weight_map = torch_model_json['weight_map']
+        weight_map = torch_model_json['weight_map']
 
-    checkpoints = list(set(weight_map.values()))
-    checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
-    patched_model = patch(  # noqa
-        model,
-        extra_args=extra_args,
-        rank=rank,
-        world_size=world_size,
-        checkpoints=checkpoints)
+        checkpoints = list(set(weight_map.values()))
+        checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
+        patched_model = patch(model,
+                              extra_args=extra_args,
+                              rank=rank,
+                              world_size=world_size,
+                              checkpoints=checkpoints)
+
+        _update_cache_config(model_config, cache_config)
+        cache_engine = CacheEngine(cache_config,
+                                   model_config,
+                                   rank=rank,
+                                   world_size=world_size)
+    except Exception as e:
+        error_code = 1
+        error_type = e
+
+    error_code = torch.tensor(error_code).cuda(rank)
+
+    dist.all_reduce(error_code)
+
+    error_code = error_code.item()
+    if error_code > 0:
+        all_errors = [None] * world_size
+        dist.all_gather_object(all_errors, error_type)
+        if rank == 0:
+            out_que.put((1, all_errors, cache_config))
+        return
+    else:
+        if rank == 0:
+            out_que.put((0, None, cache_config))
 
     while True:
-        if rank == 0:
-            inputs: Dict = in_que.get()  # noqa
+        input_tensor_names = [
+            'input_ids',
+            'seq_length',
+            'attention_mask',
+            'position_ids',
+        ]
 
-        # output = patched_model(
-        #     input_ids=inputs['input_ids'],
-        #     position_ids=inputs['position_ids'],
-        #     attention_mask=inputs['attention_mask'],
-        #     past_key_values=inputs['past_key_values'],
-        #     return_dict=True,
-        #     output_attentions=False,
-        #     output_hidden_states=False,
-        #     context=ModelContext(
-        #         block_tables=inputs['block_tables'],
-        #         history_lengths=inputs['history_lengths']))
+        if rank == 0:
+            inputs, swap_in_map, swap_out_map = in_que.get()
+            input_tensors = dict((name, t) for name, t in inputs.items()
+                                 if name in input_tensor_names)
+            input_metas = dict((name, (t.shape, t.dtype))
+                               for name, t in input_tensors.items())
+            input_metas['block_tables'] = inputs['block_tables']
+            input_metas['history_lengths'] = inputs['history_lengths']
+
+            objs = [input_metas, swap_in_map, swap_out_map]
+
+        else:
+            objs = [None, None, None]
+
+        # broadcast input shapes and dtypes
+        dist.broadcast_object_list(objs)
+
+        if rank != 0:
+            input_metas = objs[0]
+            input_tensors = dict(
+                (name, torch.empty(meta[0], dtype=meta[1]).cuda(rank))
+                for name, meta in input_metas.items()
+                if name in input_tensor_names)
+
+        updated_inputs = dict()
+        for name, t in input_tensors.items():
+            updated_inputs[name] = distribute_tensor(t,
+                                                     device_mesh=device_mesh,
+                                                     placements=[Replicate()
+                                                                 ]).to_local()
+
+        inputs = updated_inputs
+        inputs['block_tables'] = input_metas['block_tables']
+        inputs['history_lengths'] = input_metas['history_lengths']
+
+        swap_in_map = objs[1]
+        swap_out_map = objs[2]
+
+        # swap in/out
+        issued_cache_op = False
+        if len(swap_in_map) > 0:
+            cache_engine.swap_in(swap_in_map)
+            issued_cache_op = True
+        if len(swap_out_map) > 0:
+            cache_engine.swap_out(swap_out_map)
+            issued_cache_op = True
+
+        if issued_cache_op:
+            cache_events = cache_engine.events
+        else:
+            cache_events = None
+
+        if cache_events is not None:
+            for event in cache_events:
+                event.wait()
+
+        with torch.no_grad():
+            output = patched_model(
+                input_ids=inputs['input_ids'],
+                position_ids=inputs['position_ids'],
+                attention_mask=inputs['attention_mask'],
+                past_key_values=cache_engine.gpu_cache,
+                return_dict=True,
+                output_attentions=False,
+                output_hidden_states=False,
+                use_origin=False,
+                context=ModelContext(block_tables=inputs['block_tables'],
+                                     history_lengths=inputs['history_lengths'],
+                                     world_size=world_size))
+
+            if rank == 0:
+                out_que.put((0, output['logits']))
+
+
+def _error_process(rank: int,
+                   world_size: int,
+                   func: Callable,
+                   args: List = None,
+                   kwargs: Dict = None):
+    try:
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group('nccl', rank=rank, world_size=world_size)
+
+        with torch.cuda.device(rank):
+            if args is None:
+                args = tuple()
+            if kwargs is None:
+                kwargs = dict()
+            func(rank, *args, **kwargs)
+    except Exception as e:
+        from traceback import print_exc
+        logger.error(f'rank[{rank}]: {e}')
+        print_exc()
+        raise e
 
 
 class Engine:
@@ -229,6 +366,11 @@ class Engine:
                                    eos_token_id=hf_config.eos_token_id,
                                    dtype=torch_dtype)
 
+        self.scheduler_config = scheduler_config
+        self.cache_config = cache_config
+        self.model_config = model_config
+        self.session_len = scheduler_config.max_session_len
+
         if tp == 1:
             with LoadNoInit():
                 hf_model = AutoModelForCausalLM.from_pretrained(
@@ -237,22 +379,35 @@ class Engine:
 
             self.patched_model = patch(hf_model,
                                        ['context', 'use_origin']).cuda()
+            _update_cache_config(model_config, cache_config)
+
+            self.cache_engine = CacheEngine(cache_config, model_config)
+            logger.debug(
+                f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+                f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
         else:
 
+            mp.set_start_method('spawn')
             self.tp_model_in_que = mp.Queue(5)
             self.tp_model_out_que = mp.Queue(5)
 
             self.patch_model_tp(model_path, ['context', 'use_origin'],
+                                model_config=model_config,
+                                cache_config=cache_config,
                                 in_que=self.tp_model_in_que,
                                 out_que=self.tp_model_out_que,
                                 world_size=tp)
 
-        self.scheduler_config = scheduler_config
-        self.cache_config = cache_config
-        self.model_config = model_config
-        self.session_len = scheduler_config.max_session_len
+            ret_code, e, cache_config = self.tp_model_out_que.get()
+            if ret_code != 0:
+                logger.error(f'Init tp model failed with error: {e}')
+                for err in e:
+                    if err is not None:
+                        raise err
 
-        self.init_cache_engine(model_config, cache_config)
+            # # have to update cache on host to support scheduler
+            # _update_cache_config(model_config, cache_config)
+
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.requests = Queue(scheduler_config.max_batches)
@@ -263,30 +418,19 @@ class Engine:
         self.loop_threads = loop_threads
 
     def patch_model_tp(self, model_path: str, extra_args: List[str],
+                       model_config: ModelConfig, cache_config: CacheConfig,
                        in_que: mp.Queue, out_que: mp.Queue, world_size: int):
-        self.mp_context = mp.spawn(_tp_model_loop,
-                                   args=(model_path, extra_args, in_que,
-                                         out_que, world_size),
+        self.mp_context = mp.spawn(_error_process,
+                                   args=(world_size, _tp_model_loop,
+                                         (model_path, extra_args),
+                                         dict(model_config=model_config,
+                                              cache_config=cache_config,
+                                              in_que=in_que,
+                                              out_que=out_que,
+                                              world_size=world_size)),
                                    nprocs=world_size,
                                    join=False,
                                    daemon=True)
-
-    def init_cache_engine(self, model_config: ModelConfig,
-                          cache_config: CacheConfig):
-        GPU_MEM_PERCENT = 0.5
-        SWAP_SPACE = 4 * (1 << 30)
-        gpu_mem = get_gpu_memory() * GPU_MEM_PERCENT
-        cpu_mem = SWAP_SPACE
-        cache_block_size = CacheEngine.get_cache_block_size(
-            cache_config.block_size, model_config)
-        if cache_config.num_cpu_blocks == 0:
-            cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
-        if cache_config.num_gpu_blocks == 0:
-            cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
-        self.cache_engine = CacheEngine(cache_config, model_config)
-        logger.debug(
-            f'Initialize cache engine with {cache_config.num_gpu_blocks}'
-            f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -337,7 +481,6 @@ class Engine:
                     seq_length=seq_length,
                     attention_mask=attention_mask,
                     block_tables=block_tables,
-                    past_key_values=self.cache_engine.gpu_cache,
                     position_ids=position_ids)
 
     def stop_session(self, session_id: int):
@@ -394,11 +537,11 @@ class Engine:
 
             with torch.no_grad():
                 # forward
-                return self.patched_model(
+                output = self.patched_model(
                     input_ids=inputs['input_ids'],
                     position_ids=inputs['position_ids'],
                     attention_mask=inputs['attention_mask'],
-                    past_key_values=inputs['past_key_values'],
+                    past_key_values=self.cache_engine.gpu_cache,
                     return_dict=True,
                     output_attentions=False,
                     output_hidden_states=False,
@@ -406,8 +549,16 @@ class Engine:
                     context=ModelContext(
                         block_tables=inputs['block_tables'],
                         history_lengths=inputs['history_lengths']))
+                return output['logits']
         else:
-            pass
+            self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
+
+            ret_code, output = self.tp_model_out_que.get()
+            if ret_code != 0:
+                logger.error('tp forward failed.')
+                exit()
+
+            return output
 
     def step(self, return_logits=False):
         # TODO: cache manage
@@ -431,9 +582,8 @@ class Engine:
         inputs['history_lengths'] = history_lengths
 
         # inference
-        hf_outputs = self._model_forward(inputs, swap_in_map, swap_out_map)
+        logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
-        logits = hf_outputs['logits']
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         # gather output
