@@ -12,6 +12,6 @@ setuptools
 shortuuid
 tiktoken
 torch
-transformers
+transformers>=4.33.0
 tritonclient[all]
 uvicorn

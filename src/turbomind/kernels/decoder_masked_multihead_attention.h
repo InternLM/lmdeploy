@@ -121,6 +121,7 @@ struct Multihead_attention_params: public Multihead_attention_params_base<T> {
     int        max_position_embeddings    = 0;
     bool       use_dynamic_ntk            = false;
     bool       use_logn_attn              = false;
+    float      rotary_embedding_base      = 10000.0f;
 };
 
 template<class T>

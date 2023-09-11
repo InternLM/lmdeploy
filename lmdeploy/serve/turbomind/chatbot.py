@@ -149,6 +149,7 @@ class Chatbot:
         self._session.status = 1
         self._session.request_id = request_id
         self._session.response = ''
+        self.cfg.update(**kwargs)
 
         self._session.prompt = self._get_prompt(prompt, sequence_start)
         for status, res, tokens in self._stream_infer(self._session,
@@ -507,7 +508,7 @@ class Chatbot:
                 server
             session (Session): an instance of a session
             que (multiprocessing.Queue): response queue
-            cfg:
+            cfg (dict): parameters for sampling
             input_ids (numpy.ndarray): token ids of input prompt
             input_lengths (numpy.ndarray): length of input_ids
             request_output_len (int): the max number of tokens to be generated

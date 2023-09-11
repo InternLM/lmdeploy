@@ -863,6 +863,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                    int        kv_head_num,
                                                    int        size_per_head,
                                                    int        rotary_embedding_dim,
+                                                   float      rotary_embedding_base,
                                                    int        max_position_embeddings,
                                                    bool       use_dynamic_ntk,
                                                    bool       use_logn_attn)
@@ -931,14 +932,13 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     const int context_len = history_len + input_length[batch_idx];
     const int timestep    = history_len + seq_idx;
 
-    float rotary_emb_base = 10000.f;
     if (use_dynamic_ntk) {
-        rotary_emb_base = mmha::rotary_embedding_get_base(
-            context_len, max_position_embeddings, rotary_embedding_dim, rotary_emb_base);
+        rotary_embedding_base = mmha::rotary_embedding_get_base(
+            context_len, max_position_embeddings, rotary_embedding_dim, rotary_embedding_base);
     }
 
     // TODO: unused computation on k if GQA is used
-    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, rotary_emb_base, timestep);
+    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, rotary_embedding_base, timestep);
 
     if (use_logn_attn) {
         // +1 to convert to context length at the timestep
@@ -990,6 +990,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                                                              kv_head_num,              \
                                                                                              size_per_head,            \
                                                                                              rotary_embedding_dim,     \
+                                                                                             rotary_embedding_base,    \
                                                                                              max_position_embeddings,  \
                                                                                              use_dynamic_ntk,          \
                                                                                              use_logn_attn);
@@ -1010,6 +1011,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     const int    kv_head_num,
                                     const int    size_per_head,
                                     const int    rotary_embedding_dim,
+                                    float        rotary_embedding_base,
                                     int          max_position_embeddings,
                                     bool         use_dynamic_ntk,
                                     bool         use_logn_attn,
@@ -1039,6 +1041,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                                  const int    kv_head_num,                                             \
                                                  const int    size_per_head,                                           \
                                                  const int    rotary_embedding_dim,                                    \
+                                                 float        rotary_embedding_base,                                   \
                                                  int          max_position_embeddings,                                 \
                                                  bool         use_dynamic_ntk,                                         \
                                                  bool         use_logn_attn,                                           \
