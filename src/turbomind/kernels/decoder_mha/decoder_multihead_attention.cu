@@ -33,7 +33,7 @@ void LaunchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
     dim3 block(MHAType::kWarpCount * WARP_SIZE);
     dim3 grid(params.num_kv_heads, params.batch_size);
 
-    const size_t kDynamicSmemSize = MHAType::GetDynamicSmemSize(params.max_timestep);
+    const size_t kDynamicSmemSize = MHAType::GetDynamicSmemSize(0);
     std::cout << "dynamic shared memory size: " << kDynamicSmemSize << "\n";
 
     cudaFuncSetAttribute(

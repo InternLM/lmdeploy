@@ -20,7 +20,7 @@ cublasHandle_t cublas_handle{};
 cudaStream_t   cublas_stream{};
 
 template<typename T>
-void Compare(const T* c, const T* c_ref, int m, int n, bool show, float rtol, float atol)
+void Compare(const T* src, const T* ref, size_t stride, int m, int n, bool show, float rtol, float atol)
 {
     float asums{};
     float rsums{};
@@ -29,8 +29,8 @@ void Compare(const T* c, const T* c_ref, int m, int n, bool show, float rtol, fl
         float abs_diff_sum{};
         float rel_diff_sum{};
         for (int mm = 0; mm < m; ++mm) {
-            auto x = float(c[nn * m + mm]);
-            auto y = float(c_ref[nn * m + mm]);
+            auto x = float(src[nn * stride + mm]);
+            auto y = float(ref[nn * stride + mm]);
             // if (show) {
             //     std::cout << x << "\t" << y << std::endl;
             // }
@@ -52,8 +52,9 @@ void Compare(const T* c, const T* c_ref, int m, int n, bool show, float rtol, fl
               << std::endl;
 }
 
-template void Compare(const half* c, const half* c_ref, int m, int n, bool show, float rtol, float atol);
-template void Compare(const float* c, const float* c_ref, int m, int n, bool show, float rtol, float atol);
+template void Compare(const half* src, const half* ref, size_t stride, int m, int n, bool show, float rtol, float atol);
+template void
+Compare(const float* src, const float* ref, size_t stride, int m, int n, bool show, float rtol, float atol);
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
 {
@@ -212,8 +213,13 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t
     params.prefix_prompt_lengths      = 0;
     params.max_prefix_prompt_length   = 0;
     params.length_per_sample          = p.per_sample_length;  // max_input_length + current output length
-    // timestep adding max_prefix_prompt_length for shared memory size calculation and rotary embedding computation
-    params.timestep     = p.max_timestep;  // was step - 1
+
+    for (int i = 0; i < p.batch_size; ++i) {
+        params.timestep = std::max(params.timestep, p.cu_ctxlens[i + 1] - p.cu_ctxlens[i]);
+    }
+
+    std::cout << "timestep = " << params.timestep << "\n";
+
     params.num_heads    = p.num_heads;
     params.num_kv_heads = p.num_kv_heads;
 

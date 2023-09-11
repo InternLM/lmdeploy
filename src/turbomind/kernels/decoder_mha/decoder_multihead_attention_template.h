@@ -31,18 +31,17 @@ struct DecoderMultiHeadAttentionKernel {
     using VecKv      = Array<Dtype, kVecKvSize>;
     using VecKvFloat = Array<float, kVecKvSize>;
 
-    static constexpr bool kChainedKv = false;
+    static constexpr bool kUseBlockIter = true;
 
     using MapKv  = ThreadMapKv<kMaxHeadDim, kKeyPerIter, kVecKvSize, kThreadPerKey, kWarpCount>;
-    using IterKv = turbomind::Iterator<T, MapKv, SliceLen, kStages, kChainedKv>;
+    using IterKv = turbomind::Iterator<T, MapKv, SliceLen, kStages, kUseBlockIter>;
 
-    static size_t GetDynamicSmemSize(int max_timestep)
+    static size_t GetDynamicSmemSize(int)
     {
         size_t smem_kv_cache = IterKv::kSmemByteSize;
         size_t smem_kv_align = 128;
         size_t smem_qk       = sizeof(float) * kHeadPerCta * kSliceLen;
         size_t smem_pr       = sizeof(float) * kHeadPerCta * kSliceLen;
-        // size_t smem_ctrl_lut = ((max_timestep + KeyPerIter - 1) / KeyPerIter * 2 + 31) / 32 * sizeof(uint32_t);
         return smem_kv_align + smem_kv_cache + std::max(smem_qk, smem_pr);
     }
 
@@ -75,16 +74,18 @@ struct DecoderMultiHeadAttentionKernel {
     T*  k_cache_;  // [S, D]
     T*  v_cache_;  // [S, D]
 
-    Dtype*    smem_Kv_;
-    float*    smem_S_;
-    float*    smem_P_;
-    Dtype*    smem_Q_;
-    float*    smem_M_;
-    float*    smem_L_;
-    float*    smem_O_;
-    float*    smem_red_max_;
-    float*    smem_red_sum_;
-    unsigned* smem_ctrl_;
+    const void** k_cache_ptrs_;
+    const void** v_cache_ptrs_;
+
+    Dtype* smem_Kv_;
+    float* smem_S_;
+    float* smem_P_;
+    Dtype* smem_Q_;
+    float* smem_M_;
+    float* smem_L_;
+    float* smem_O_;
+    float* smem_red_max_;
+    float* smem_red_sum_;
 
     __device__ bool thread0()
     {
@@ -94,11 +95,9 @@ struct DecoderMultiHeadAttentionKernel {
     __device__ DecoderMultiHeadAttentionKernel(const ParamType& params, SharedStorage& smem, uint8_t* dsmem):
         params_(params)
     {
-        smem_Kv_ = (Dtype*)dsmem;
-        smem_S_  = (float*)(smem_Kv_ + IterKv::kSizePerTile * kStages);  // [HeadPerCta * kSliceLen]
-        // smem_P_       = (float*)(smem_S_ + kHeadPerCta * kSliceLen);          // [HeadPerCta * kSliceLen]
-        smem_P_       = smem_S_;
-        smem_ctrl_    = (unsigned*)(smem_P_ + kHeadPerCta * kSliceLen);  // [max_timestep / kKeyPerStep / 32]
+        smem_Kv_      = (Dtype*)dsmem;
+        smem_S_       = (float*)(smem_Kv_ + IterKv::kSizePerTile * kStages);  // [HeadPerCta * kSliceLen]
+        smem_P_       = smem_S_;  // ! reusing only works when S and P has same dtype
         smem_Q_       = smem.Q;
         smem_M_       = smem.M;
         smem_L_       = smem.L;
@@ -113,11 +112,22 @@ struct DecoderMultiHeadAttentionKernel {
 
         timestep_ = params_.per_sample_length[batch_idx_];
 
-        /// TODO: block level kv cache
-        k_cache_ = (T*)params_.per_sample_k_cache[batch_idx_] + params.per_sample_kv_cache_offset
-                   + head_idx_ * params_.max_seq_len * params_.size_per_head;
-        v_cache_ = (T*)params_.per_sample_v_cache[batch_idx_] + params.per_sample_kv_cache_offset
-                   + head_idx_ * params_.max_seq_len * params_.size_per_head;
+        if constexpr (kUseBlockIter) {
+            k_cache_ptrs_ = params_.k_cache_block_ptrs + params_.cu_ctxlens[batch_idx_];
+            v_cache_ptrs_ = params_.v_cache_block_ptrs + params_.cu_ctxlens[batch_idx_];
+            // if (thread0()) {
+            //     printf("%d %p %p\n",
+            //            params_.cu_ctxlens[batch_idx_],
+            //            params_.k_cache_block_ptrs,
+            //            params_.v_cache_block_ptrs);
+            // }
+        }
+        else {
+            k_cache_ = (T*)params_.per_sample_k_cache[batch_idx_] + params.per_sample_kv_cache_offset
+                       + head_idx_ * params_.max_seq_len * params_.size_per_head;
+            v_cache_ = (T*)params_.per_sample_v_cache[batch_idx_] + params.per_sample_kv_cache_offset
+                       + head_idx_ * params_.max_seq_len * params_.size_per_head;
+        }
     }
 
     // [kkkk][vvvv][kkkk][vvvv][kkkk][vvvv][k][v]
@@ -219,8 +229,21 @@ struct DecoderMultiHeadAttentionKernel {
 
         // store
         if (warp_id_ == 0) {
-            Store(&k_cache_[timestep_ * kMaxHeadDim + offset.x], frag_K);
-            Store(&v_cache_[timestep_ * kMaxHeadDim + offset.x], frag_V);
+            if constexpr (kUseBlockIter) {
+                int block_index  = timestep_ / params_.kv_cache_block_size;
+                int block_offset = timestep_ % params_.kv_cache_block_size;
+                // if (thread0()) {
+                //     printf("%d %d %p %p\n", block_index, block_offset, k_cache_ptrs_, v_cache_ptrs_);
+                // }
+                k_cache_ = (T*)k_cache_ptrs_[block_index] + head_idx_ * params_.kv_cache_block_size * kHeadDim;
+                v_cache_ = (T*)v_cache_ptrs_[block_index] + head_idx_ * params_.kv_cache_block_size * kHeadDim;
+                Store(&k_cache_[block_offset * kHeadDim + offset.x], frag_K);
+                Store(&v_cache_[block_offset * kHeadDim + offset.x], frag_V);
+            }
+            else {
+                Store(&k_cache_[timestep_ * kHeadDim + offset.x], frag_K);
+                Store(&v_cache_[timestep_ * kHeadDim + offset.x], frag_V);
+            }
         }
     }
 
@@ -274,7 +297,22 @@ struct DecoderMultiHeadAttentionKernel {
             frag_M[i] = smem_M_[i];
         }
 
-        IterKv iter_K(k_cache_, smem_Kv_, step, step + iter_length, warp_id_, lane_id_);
+        IterKv iter_K;
+
+        if constexpr (kUseBlockIter) {
+            iter_K = {k_cache_ptrs_,
+                      params_.kv_cache_block_size,
+                      head_idx_,
+                      smem_Kv_,
+                      step,
+                      step + iter_length,
+                      warp_id_,
+                      lane_id_};
+        }
+        else {
+            iter_K = {k_cache_, smem_Kv_, step, step + iter_length, warp_id_, lane_id_};
+        }
+
         PrefetchKvCache(iter_K);
         CpAsyncWait();
 
@@ -446,7 +484,23 @@ struct DecoderMultiHeadAttentionKernel {
         //     // prefetch Pr for first warp iter
         //     frag_Pr_buf[0][qi] = smem_P_[qi * kSliceLen + ti];
         // }
-        IterKv iter_V(v_cache_, smem_Kv_, step, step + iter_length, warp_id_, lane_id_);
+
+        IterKv iter_V;
+
+        if constexpr (kUseBlockIter) {
+            iter_V = {v_cache_ptrs_,
+                      params_.kv_cache_block_size,
+                      head_idx_,
+                      smem_Kv_,
+                      step,
+                      step + iter_length,
+                      warp_id_,
+                      lane_id_};
+        }
+        else {
+            iter_V = {v_cache_, smem_Kv_, step, step + iter_length, warp_id_, lane_id_};
+        }
+
         PrefetchKvCache(iter_V);
         CpAsyncWait();
 
@@ -584,8 +638,8 @@ struct DecoderMultiHeadAttentionKernel {
         State state;
 
         PRAGMA_NO_UNROLL
-        for (int step = 0; step < params_.max_timestep; step += kSliceLen) {
-            int iter_length = min(params_.max_timestep - step, kSliceLen);
+        for (int step = 0; step < timestep_; step += kSliceLen) {
+            int iter_length = min(timestep_ - step, kSliceLen);
             ComputeSlice(frag_Q, state, offset, step, iter_length);
         }
     }

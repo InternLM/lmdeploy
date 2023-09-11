@@ -24,12 +24,12 @@ T* align(T* ptr, size_t alignment)
 
 // [S/S, H, S, D] <-> [S/b, H, b, D]
 
-void TestBlocks(thrust::universal_vector<half>& linear,
-                thrust::universal_vector<half>& _blocks,
-                thrust::universal_vector<half*> _ptrs,
-                int                             head_num,
-                int                             head_dim,
-                int                             block_size)
+void TestBlocks(thrust::universal_vector<half>&  linear,
+                thrust::universal_vector<half>&  _blocks,
+                thrust::universal_vector<half*>& _ptrs,
+                int                              head_num,
+                int                              head_dim,
+                int                              block_size)
 {
     int seq_len  = linear.size() / head_num / head_dim;
     int n_blocks = (seq_len + block_size - 1) / block_size;
@@ -60,20 +60,24 @@ void TestBlocks(thrust::universal_vector<half>& linear,
     }
     cudaDeviceSynchronize();
 
-    Compare(_linear.data().get(), linear.data().get(), head_dim, head_num * seq_len);
-    exit(0);
+    // Compare(_linear.data().get(), linear.data().get(), head_dim, head_dim, head_num * seq_len);
+
+    _blocks.swap(blocks);
+    _ptrs.swap(ptrs);
 }
 
 int main(int argc, char* argv[])
 {
     DecoderMultiHeadAttentionParams<half> params{};
 
-    // constexpr int kHeadNum = 108 * 4;
-    constexpr int kHeadNum    = 32;
-    constexpr int kHeadDim    = 128;
-    constexpr int kBatchSize  = 1;
-    constexpr int kContextLen = 8192;
-    constexpr int kTestIter   = 1;
+    constexpr int kHeadNum = 108 * 6;
+    // constexpr int kHeadNum     = 32 * 4;
+    constexpr int kHeadDim     = 128;
+    constexpr int kBatchSize   = 1;
+    constexpr int kContextLen  = 8192;
+    constexpr int kSequenceLen = kContextLen + 1;
+    constexpr int kBlockSz     = 128;
+    constexpr int kTestIter    = 1;
 
     RNG rng{};
 
@@ -85,18 +89,36 @@ int main(int argc, char* argv[])
     thrust::universal_vector<int>   sequence_lengths(kBatchSize);
     thrust::universal_vector<void*> k_cache_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ptrs(kBatchSize);
+    thrust::universal_vector<int>   cu_ctxlens(kBatchSize + 1);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
     if (kContextLen) {
-        rng.GenerateNormal(k_cache.data().get(), kContextLen * kHeadNum * kHeadDim);
-        rng.GenerateNormal(v_cache.data().get(), kContextLen * kHeadNum * kHeadDim);
+        rng.GenerateNormal(k_cache.data().get(), kHeadNum * kSequenceLen * kHeadDim);
+        rng.GenerateNormal(v_cache.data().get(), kHeadNum * kSequenceLen * kHeadDim);
+
+        cudaMemset2DAsync(k_cache.data().get() + kContextLen * kHeadDim,
+                          sizeof(half) * kSequenceLen * kHeadDim,
+                          0,
+                          sizeof(half) * kHeadDim,
+                          kHeadNum);
+
+        cudaMemset2DAsync(v_cache.data().get() + kContextLen * kHeadDim,
+                          sizeof(half) * kSequenceLen * kHeadDim,
+                          0,
+                          sizeof(half) * kHeadDim,
+                          kHeadNum);
     }
 
     thrust::universal_vector<half>  k_blocks;
     thrust::universal_vector<half*> k_ptrs;
 
-    TestBlocks(k_cache, k_blocks, k_ptrs, kHeadNum, kHeadDim, 128);
+    TestBlocks(k_cache, k_blocks, k_ptrs, kHeadNum, kHeadDim, kBlockSz);
+
+    thrust::universal_vector<half>  v_blocks;
+    thrust::universal_vector<half*> v_ptrs;
+
+    TestBlocks(v_cache, v_blocks, v_ptrs, kHeadNum, kHeadDim, kBlockSz);
 
     thrust::universal_vector<half>  k_cache_ref = k_cache;
     thrust::universal_vector<half>  v_cache_ref = v_cache;
@@ -112,9 +134,10 @@ int main(int argc, char* argv[])
         v_cache_ptrs[i]     = v_cache.data().get() + i * v_cache.size() / kBatchSize;
         k_cache_ref_ptrs[i] = k_cache_ref.data().get() + i * k_cache_ref.size() / kBatchSize;
         v_cache_ref_ptrs[i] = v_cache_ref.data().get() + i * v_cache_ref.size() / kBatchSize;
+        cu_ctxlens[i + 1]   = cu_ctxlens[i] + kContextLen;
 
-        align(k_cache_ptrs[i], 256);
-        align(v_cache_ptrs[i], 256);
+        // align(k_cache_ptrs[i], 256);
+        // align(v_cache_ptrs[i], 256);
     }
 
     // getchar();
@@ -125,15 +148,19 @@ int main(int argc, char* argv[])
     params.v      = params.k + kHeadNum * kHeadDim;
     params.stride = 3 * kHeadNum * kHeadDim;
 
-    params.batch_size   = kBatchSize;
-    params.max_seq_len  = kContextLen + 1;
-    params.max_timestep = kContextLen;
+    params.batch_size  = kBatchSize;
+    params.max_seq_len = kContextLen + 1;
+    params.cu_ctxlens  = cu_ctxlens.data().get();
 
-    params.finished           = finished.data().get();
-    params.per_sample_length  = sequence_lengths.data().get();
-    params.per_sample_k_cache = k_cache_ref_ptrs.data().get();
-    params.per_sample_v_cache = v_cache_ref_ptrs.data().get();
+    printf("%d %d\n", (int)k_ptrs.size(), (int)v_ptrs.size());
+    params.k_cache_block_ptrs  = (void**)k_ptrs.data().get();
+    params.v_cache_block_ptrs  = (void**)v_ptrs.data().get();
+    params.kv_cache_block_size = kBlockSz;
 
+    params.finished                   = finished.data().get();
+    params.per_sample_length          = sequence_lengths.data().get();
+    params.per_sample_k_cache         = k_cache_ref_ptrs.data().get();
+    params.per_sample_v_cache         = v_cache_ref_ptrs.data().get();
     params.per_sample_kv_cache_offset = 0;
 
     params.num_heads     = kHeadNum;
@@ -172,26 +199,37 @@ int main(int argc, char* argv[])
         }
     }
 
+    if (1) {
+        ConvertBlocksToLinear(
+            (const half**)k_ptrs.data().get(), k_cache.data().get(), kBlockSz, kHeadNum, kHeadDim, kSequenceLen, 0);
+        ConvertBlocksToLinear(
+            (const half**)v_ptrs.data().get(), v_cache.data().get(), kBlockSz, kHeadNum, kHeadDim, kSequenceLen, 0);
+    }
+
     cudaDeviceSynchronize();
 
     if (outputs.size() > 1) {
         std::cout << "Evaluating consistency..." << std::endl;
         for (size_t i = 1; i < outputs.size(); ++i) {
-            Compare(outputs[i].data().get(), outputs[0].data().get(), kHeadDim, kHeadNum);
+            Compare(outputs[i].data().get(), outputs[0].data().get(), kHeadDim, kHeadDim, kHeadNum);
         }
     }
 
     std::cout << "---------------------------------------------------\n";
 
-    Compare(output.data().get(), output_ref.data().get(), kHeadDim, kHeadNum, 0);
+    Compare(output.data().get(), output_ref.data().get(), kHeadDim, kHeadDim, kHeadNum, 0);
 
-    Compare(v_cache.data().get() + (kContextLen - 0) * kHeadNum * kHeadDim,
-            v_cache_ref.data().get() + (kContextLen - 0) * kHeadNum * kHeadDim,
+    // [H, S, D]
+
+    Compare(k_cache.data().get() + kContextLen * kHeadDim,
+            k_cache_ref.data().get() + kContextLen * kHeadDim,
+            kSequenceLen * kHeadDim,
             kHeadDim,
             kHeadNum);
 
-    Compare(k_cache.data().get() + (kContextLen - 0) * kHeadNum * kHeadDim,
-            k_cache_ref.data().get() + (kContextLen - 0) * kHeadNum * kHeadDim,
+    Compare(v_cache.data().get() + kContextLen * kHeadDim,
+            v_cache_ref.data().get() + kContextLen * kHeadDim,
+            kSequenceLen * kHeadDim,
             kHeadDim,
             kHeadNum);
 

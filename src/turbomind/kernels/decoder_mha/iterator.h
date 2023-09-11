@@ -5,57 +5,30 @@
 
 namespace turbomind {
 
-// k0,k1,k2,v0,v1,v2,k3,k4,k5,v3,v4,v5
-
-template<int HeadDim, int ElemSize, int SliceLen>
 struct BlockIterator {
-    const void* kv_cache_[2];
-
-    static constexpr int kStride = HeadDim * ElemSize * SliceLen;
+    const void** ptrs_;
+    const void*  prefetch_;
 
     BlockIterator() = default;
 
-    __device__ BlockIterator(const void* k_cache, void* v_cache)
-    {
-        kv_cache_[0] = k_cache;
-        kv_cache_[1] = v_cache;
-    }
-
-    __device__ const void* Next()
-    {
-        // if (blockIdx.x == 0 && threadIdx.x == 0) {
-        //     printf("Next()\n");
-        // }
-        const void* ret = kv_cache_[0];
-        const void* tmp = (const uint8_t*)kv_cache_[0] + kStride;
-        kv_cache_[0]    = kv_cache_[1];
-        kv_cache_[1]    = tmp;
-        return ret;
-    }
-};
-
-struct BlockIterator2 {
-    const void*  prefetch_data_;
-    const void** block_ptrs_;
-
-    __device__ BlockIterator2(const void** block_ptrs): block_ptrs_{block_ptrs}
+    __device__ BlockIterator(const void** block_ptrs): ptrs_{block_ptrs}
     {
         // prefetch first ptr
-        prefetch_data_ = *block_ptrs_++;
+        prefetch_ = *ptrs_++;
     }
 
     __device__ const void* Next()
     {
         // return prefetched ptr
-        const void* ret = prefetch_data_;
+        const void* ret = prefetch_;
         // prefetch next ptr
-        prefetch_data_ = *block_ptrs_++;
+        prefetch_ = *ptrs_++;
 
         return ret;
     }
 };
 
-template<typename T, typename ThreadMap, int BlockLen, int Stages, bool Chained>
+template<typename T, typename ThreadMap, int BlockLen, int Stages, bool kUseBlockIter>
 struct Iterator {
 
     using ElementType = T;
@@ -67,8 +40,7 @@ struct Iterator {
     static constexpr int kSizePerTile  = ThreadMap::kS * ThreadMap::kC;
     static constexpr int kSmemByteSize = kElementSize * Stages * kSizePerTile;
 
-    BlockIterator<ThreadMap::kC, sizeof(T), BlockLen> block_iterator_;
-    // SignalIterator                                    signal_iterator_;
+    BlockIterator block_iterator_;
 
     static constexpr int kIterCount = ThreadMap::kIterS * ThreadMap::kIterC;
 
@@ -92,6 +64,11 @@ struct Iterator {
     int  offset_s_;
     bool is_valid_s_;
 
+    int block_size_;
+    int block_k_;
+
+    int head_idx_;
+
     const T* src_;
     T*       smem_;
 
@@ -101,31 +78,6 @@ struct Iterator {
     {
         T smem_[Stages][kSizePerTile];
     };
-
-    __device__
-    Iterator(void* k_cache, void* v_cache, T* smem, uint32_t* smem_signal, int seq_len, int warp_id, int lane_id):
-        block_iterator_(k_cache, v_cache)  //, signal_iterator_(smem_signal)
-    {
-        src_  = (const T*)block_iterator_.Next();
-        smem_ = smem;
-
-        int2 init_offset = ThreadMap::get_offset(warp_id, lane_id);
-
-        init_offset_ = init_offset.x + init_offset.y * ThreadMap::kC;
-
-        // printf("%d\n", init_offset.x);
-
-        src_offset_       = init_offset_;
-        dst_offset_       = init_offset_;
-        smem_read_offset_ = init_offset_;
-
-        iter_c_ = 0;
-        iter_b_ = 0;
-
-        seq_len_    = seq_len;
-        offset_s_   = init_offset.y;
-        is_valid_s_ = offset_s_ < seq_len;
-    }
 
     Iterator() = default;
 
@@ -148,6 +100,37 @@ struct Iterator {
         seq_len_    = seq_len;
         offset_s_   = init_offset_cs.y + step;
         is_valid_s_ = offset_s_ < seq_len;
+    }
+
+    __device__ Iterator(
+        const void** block_ptrs, int block_size, int head_idx, T* smem, int step, int seqlen, int warp_id, int lane_id)
+    {
+        // src_  = src;
+        int block_index = step / block_size;
+        block_size_     = block_size;
+        block_k_        = (block_index + 1) * block_size - step;  // offset to next block
+        head_idx_       = head_idx;
+
+        block_iterator_ = BlockIterator(block_ptrs + block_index);
+
+        src_ = (const T*)block_iterator_.Next() + head_idx_ * block_size_ * ThreadMap::kC;
+
+        smem_ = smem;
+
+        int2 init_offset_cs = ThreadMap::get_offset(warp_id, lane_id);
+
+        init_offset_ = init_offset_cs.x + init_offset_cs.y * ThreadMap::kC;
+
+        src_offset_       = init_offset_ + (step - block_index * block_size) * ThreadMap::kC;
+        dst_offset_       = init_offset_;
+        smem_read_offset_ = init_offset_;
+
+        iter_c_ = 0;
+        iter_b_ = 0;
+
+        seq_len_    = seqlen;
+        offset_s_   = init_offset_cs.y + step;
+        is_valid_s_ = offset_s_ < seqlen;
     }
 
     __device__ void PrefetchStage()
@@ -198,6 +181,20 @@ struct Iterator {
         offset_s_ += ThreadMap::kS - ThreadMap::kIterS * ThreadMap::kDeltaS;
 
         is_valid_s_ = offset_s_ < seq_len_;
+
+        if constexpr (kUseBlockIter) {
+            if (is_valid_s_) {
+                block_k_ -= ThreadMap::kS;
+                if (block_k_ == 0) {
+                    src_        = (const T*)block_iterator_.Next() + head_idx_ * block_size_ * ThreadMap::kC;
+                    block_k_    = block_size_;
+                    src_offset_ = init_offset_;
+                }
+            }
+            // if (blockIdx.x == 0 && threadIdx.x == 0) {
+            //     printf("%d %d %d\n", offset_s_, src_offset_ / ThreadMap::kC, block_k_);
+            // }
+        }
 
         // if (init_offset_ / ThreadMap::kC == 0) {
         //     int k = dst_offset_ / (ThreadMap::kS * ThreadMap::kC);
@@ -298,8 +295,8 @@ struct Iterator {
         //            (int)mask);
         // }
 
-        // CpAsync(smem_ + dst_offset_, src_ + src_offset_, mask);
-        Copy(smem_ + dst_offset_, src_ + src_offset_, mask);
+        CpAsync(smem_ + dst_offset_, src_ + src_offset_, mask);
+        // Copy(smem_ + dst_offset_, src_ + src_offset_, mask);
     }
 
     __device__ void Load(AccessType (&frag)[ThreadMap::kIterC])

@@ -9,7 +9,8 @@
 namespace turbomind {
 
 template<typename T>
-void Compare(const T* c, const T* c_ref, int m, int n, bool show = false, float rtol = 1e-2, float atol = 1e-4);
+void Compare(
+    const T* src, const T* ref, size_t stride, int m, int n, bool show = false, float rtol = 1e-2, float atol = 1e-4);
 
 void LoadBinary(const std::string& path, size_t size, void* dst);
 

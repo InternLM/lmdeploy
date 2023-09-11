@@ -41,7 +41,6 @@ __device__ void ConvertBlockSize(const T** src_block_ptrs,
 
         uint4 data = __ldg(reinterpret_cast<const uint4*>(src_block + src_block_offset));
 
-        // __stcg(reinterpret_cast<uint4*>(dst_block + dst_block_offset), data);
         *reinterpret_cast<uint4*>(dst_block + dst_block_offset) = data;
     }
 }
