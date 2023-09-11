@@ -295,6 +295,7 @@ class Baichuan2Chat(BaichuanChat):
         self.top_k = top_k
         self.top_p = top_p
 
+
 @MODELS.register_module(name='puyu')
 class Puyu(BaseModel):
     """Chat template of puyu model.This is only for internal usage in Shanghai
