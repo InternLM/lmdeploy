@@ -234,8 +234,8 @@ class ProfileResult:
 def parse_args():
     parser = argparse.ArgumentParser(description='Regression Test')
     parser.add_argument('--model-path',
-                        nargs='+',
-                        help='benchmark test model paths')
+                        type=str,
+                        help='benchmark test model path')
     parser.add_argument('--concurrency',
                         nargs='+',
                         type=int,
@@ -262,39 +262,37 @@ def parse_args():
 def main():
     args = parse_args()
     results: List[ProfileResult] = []
-    for model_path in args.model_path:
-        for batch in args.concurrency:
-            for prompt_tokens, completion_tokens in zip(
-                    args.prompt_tokens, args.completion_tokens):
-                MemoryMonitor.start()
-                from functools import partial
-                from multiprocessing import Pool
-                profile_target = partial(profile_throughput,
-                                         concurrency=batch,
-                                         input_seqlen=prompt_tokens,
-                                         output_seqlen=completion_tokens,
-                                         tp=args.tp)
-                output = Pool(1).map(profile_target, (model_path, ))
-                time.sleep(5)  # wait a while for releasing GPU mem
-                memory = MemoryMonitor.terminate()
-                results.append(
-                    ProfileResult(model_name=output[0][0],
-                                  batch=batch,
-                                  prompt_tokens=prompt_tokens,
-                                  completion_tokens=completion_tokens,
-                                  throughput=output[0][1],
-                                  memory=memory))
+    for batch in args.concurrency:
+        for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
+                                                    args.completion_tokens):
+            MemoryMonitor.start()
+            from functools import partial
+            from multiprocessing import Pool
+            profile_target = partial(profile_throughput,
+                                     concurrency=batch,
+                                     input_seqlen=prompt_tokens,
+                                     output_seqlen=completion_tokens,
+                                     tp=args.tp)
+            output = Pool(1).map(profile_target, (args.model_path, ))
+            time.sleep(5)  # wait a while for releasing GPU mem
+            memory = MemoryMonitor.terminate()
+            results.append(
+                ProfileResult(model_name=output[0][0],
+                              batch=batch,
+                              prompt_tokens=prompt_tokens,
+                              completion_tokens=completion_tokens,
+                              throughput=output[0][1],
+                              memory=memory))
     with open('profile_generation.csv', 'w') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
-            'model_name', 'batch', 'prompt_tokens', 'completion_tokens',
+            'batch', 'prompt_tokens', 'completion_tokens',
             'throughput(token/s)', 'memory(GB)'
         ])
         for re in results:
             writer.writerow([
-                re.model_name, re.batch, re.prompt_tokens,
-                re.completion_tokens, f'{re.throughput:.2f}',
-                f'{re.memory:.2f}'
+                re.batch, re.prompt_tokens, re.completion_tokens,
+                f'{re.throughput:.2f}', f'{re.memory:.2f}'
             ])
 
 
