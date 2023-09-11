@@ -396,7 +396,8 @@ class Chatbot:
         # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
         # detailed explanation about turbomind's stop_words
         stop_words = [
-            self.preprocess(stop_word)[0][0][0] for stop_word in stop_words
+            int(self.preprocess(stop_word)[0][0][0])
+            for stop_word in stop_words
         ]
         assert isinstance(stop_words, List) and \
                all(isinstance(elem, int) for elem in stop_words), \
