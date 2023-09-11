@@ -1378,19 +1378,20 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     q = add(q, q_bias);
     k = add(k, k_bias);
 
-    float rotary_emb_base = 10000.f;
+    float rotary_embedding_base = params.rotary_embedding_base;
     if (params.use_dynamic_ntk) {
         // +1 because of `length_per_sample == context_length - 1`
-        rotary_emb_base = rotary_embedding_get_base(params.length_per_sample[bi] + 1,
-                                                    params.max_position_embeddings,
-                                                    params.rotary_embedding_dim,
-                                                    rotary_emb_base);
+        rotary_embedding_base = rotary_embedding_get_base(params.length_per_sample[bi] + 1,
+                                                          params.max_position_embeddings,
+                                                          params.rotary_embedding_dim,
+                                                          rotary_embedding_base);
     }
 
     // Padded len
     const int padd_len = (params.total_padding_tokens == nullptr) ? 0 : params.total_padding_tokens[bi];
     if (params.rotary_embedding_dim > 0) {
-        apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, rotary_emb_base, params.timestep - padd_len);
+        apply_rotary_embedding(
+            q, k, tidx, params.rotary_embedding_dim, rotary_embedding_base, params.timestep - padd_len);
     }
 
     if (params.use_logn_attn) {

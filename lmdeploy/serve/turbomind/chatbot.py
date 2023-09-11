@@ -149,6 +149,7 @@ class Chatbot:
         self._session.status = 1
         self._session.request_id = request_id
         self._session.response = ''
+        self.cfg.update(**kwargs)
 
         self._session.prompt = self._get_prompt(prompt, sequence_start)
         for status, res, tokens in self._stream_infer(self._session,
@@ -396,7 +397,7 @@ class Chatbot:
         # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
         # detailed explanation about turbomind's stop_words
         stop_words = [
-            int(self.preprocess(stop_word)[0][0][0])
+            int(self.preprocess(stop_word)[0][0][-1])
             for stop_word in stop_words
         ]
         assert isinstance(stop_words, List) and \
@@ -514,7 +515,7 @@ class Chatbot:
                 server
             session (Session): an instance of a session
             que (multiprocessing.Queue): response queue
-            cfg:
+            cfg (dict): parameters for sampling
             input_ids (numpy.ndarray): token ids of input prompt
             input_lengths (numpy.ndarray): length of input_ids
             request_output_len (int): the max number of tokens to be generated
@@ -606,14 +607,12 @@ class Chatbot:
         Yields:
             tuple: status, text, generated token number
         """
-        offset = n_input_token + preseq_length
         status, res, n_token = None, '', 0
         while True:
             result = res_queue.get()
             if result is None:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
-                n_token = session.sequence_length - offset
                 session.status = StatusCode.TRITON_STREAM_END
                 break
             if 'errcode' in result:
@@ -636,32 +635,34 @@ class Chatbot:
                 output_ids = result.as_numpy('output_ids')
 
                 session.sequence_length = sequence_length.squeeze()
-                sequence_length = sequence_length - offset
-                last_token_id = output_ids[-1][-1][session.sequence_length - 1]
+                output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
+                output_ids = output_ids[:, :, n_input_token +
+                                        preseq_length:sequence_length.squeeze(
+                                        )]
+                last_token_id = None if output_ids.shape[
+                    -1] == 0 else output_ids[-1, -1, -1]
                 if last_token_id == eos_id:
                     session.sequence_length = session.sequence_length - 1
-                    sequence_length = sequence_length - 1
-
-                output_ids = output_ids.reshape((1, 1, output_ids.shape[-1]))
-                sequence_length = sequence_length.reshape(
-                    (1, sequence_length.shape[-1]))
+                    output_ids = output_ids[:, :, :-1]
 
                 if profile_generation:
                     yield (StatusCode.TRITON_STREAM_ING,
                            'postprocessing is ignored during profiling '
-                           'token generation', sequence_length.squeeze())
+                           'token generation', output_ids.shape[-1])
                     continue
-                output_str = postprocess(output_ids[:, :, offset:],
-                                         sequence_length)
+                output_str = postprocess(
+                    output_ids, np.array([[n_token]], dtype=np.uint32))
+                n_token = output_ids.shape[-1]
                 text = output_str[0].decode()
                 if display:
-                    new_text = text[len(session.response):]
-                    print(new_text, end='', flush=True)
-                session.response = text
+                    print(text, end='', flush=True)
+                session.response += text
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
-                       sequence_length.squeeze())
+                       output_ids.shape[-1])
             except Exception as e:
                 logger.error(f'catch exception: {e}')
+                logger.error(
+                    f'session {session.session_id}: prompt: {session.prompt}')
 
         # put session back to queue so that `_stream_infer` can update it in
         # `self.sessions`

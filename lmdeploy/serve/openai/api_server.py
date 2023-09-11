@@ -278,7 +278,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     generation = VariableInterface.async_engine.generate(
         request.prompt,
         request.instance_id,
-        stream_response=request.stream,
+        stream_response=True,  # always use stream to enable batching
         sequence_start=request.sequence_start,
         sequence_end=request.sequence_end,
         request_output_len=request.request_output_len,
@@ -303,12 +303,14 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
         return StreamingResponse(stream_results())
     else:
         ret = {}
+        text = ''
+        tokens = 0
+        finish_reason = None
         async for out in generation:
-            ret = {
-                'text': out.response,
-                'tokens': out.generate_token_len,
-                'finish_reason': out.finish_reason
-            }
+            text += out.response
+            tokens += out.generate_token_len
+            finish_reason = out.finish_reason
+        ret = {'text': text, 'tokens': tokens, 'finish_reason': finish_reason}
         return JSONResponse(ret)
 
 

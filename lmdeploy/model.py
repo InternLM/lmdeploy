@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
 from abc import abstractmethod
 from typing import List
 
@@ -7,7 +8,17 @@ from mmengine import Registry
 MODELS = Registry('model', locations=['lmdeploy.model'])
 
 
+@dataclasses.dataclass
+class SamplingParam:
+    top_p: float = 0.8
+    top_k: float = None
+    temperature: float = 0.8
+    repetition_penalty: float = 1.0
+
+
+@MODELS.register_module(name='internlm')
 @MODELS.register_module(name='llama')
+@MODELS.register_module(name='base')
 class BaseModel:
     """Base model."""
 
@@ -17,16 +28,18 @@ class BaseModel:
                  top_k=None,
                  temperature=0.8,
                  repetition_penalty=1.0,
+                 capability='chat',
+                 stop_words=None,
                  **kwargs):
         self.session_len = session_len
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
         self.repetition_penalty = repetition_penalty
-        self.stop_words = None
+        self.stop_words = stop_words
+        self.capability = capability
 
-    @staticmethod
-    def get_prompt(prompt, sequence_start=True):
+    def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -37,7 +50,14 @@ class BaseModel:
         Returns:
             str: the concatenated prompt
         """
-        return prompt
+        if self.capability == 'completion':
+            return prompt
+        else:
+            return self.decorate_prompt(prompt, sequence_start)
+
+    @abstractmethod
+    def decorate_prompt(self, prompt, sequence_start):
+        pass
 
     @staticmethod
     def _translate_messages(messages: List):
@@ -83,6 +103,13 @@ class BaseModel:
             return self.get_prompt(messages)
         # chat history processing in derived classes
 
+    @property
+    def sampling_param(self):
+        return SamplingParam(top_p=self.top_p,
+                             top_k=self.top_k,
+                             temperature=self.temperature,
+                             repetition_penalty=self.repetition_penalty)
+
 
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):
@@ -99,7 +126,7 @@ class Vicuna(BaseModel):
         self.user = user
         self.assistant = assistant
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -110,6 +137,8 @@ class Vicuna(BaseModel):
         Returns:
             str: the concatenated prompt
         """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'{self.system} {self.user}: {prompt} {self.assistant}: '
         else:
@@ -137,13 +166,6 @@ class Vicuna(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='internlm')
-class InternLM(BaseModel):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-
 @MODELS.register_module(name='internlm-chat-7b')
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""
@@ -164,7 +186,7 @@ class InternLMChat7B(BaseModel):
         self.assistant = assistant
         self.stop_words = stop_words
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -175,6 +197,8 @@ class InternLMChat7B(BaseModel):
         Returns:
             str: the concatenated prompt
         """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'<BOS>{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
@@ -220,37 +244,115 @@ class Baichuan7B(BaseModel):
         self.repetition_penalty = repetition_penalty
 
 
+@MODELS.register_module(name='baichuan2-7b')
+class Baichuan2_7B(BaseModel):
+
+    def __init__(self,
+                 temperature=0.3,
+                 top_k=5,
+                 top_p=0.85,
+                 repetition_penalty=1.05,
+                 **kwargs):
+        super().__init__(temperature=temperature,
+                         top_k=top_k,
+                         top_p=top_p,
+                         repetition_penalty=repetition_penalty,
+                         **kwargs)
+        self.user_token = '<reserved_106>'  # id = 195
+        self.assistant_token = '<reserved_107>'  # id = 196
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        return f'{self.user_token}{prompt}{self.assistant_token}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        ret = ''
+        for user, assistant in zip(users, assistants):
+            ret += f'{self.user_token}{user}{self.assistant_token}'
+            if assistant:
+                ret += f'{assistant}'
+        return ret
+
+
 @MODELS.register_module(name='puyu')
 class Puyu(BaseModel):
     """Chat template of puyu model.This is only for internal usage in Shanghai
     AI Laboratory."""
 
-    def __init__(
-            self,
-            meta_instruction='',
-            user='<|Human|>: ',
-            eoh='',
-            eosys='',
-            assistant='<|Assistant|>: ',
-            system='<|System|>: ',
-            stop_words: List[str] = None,  # set to None for protection
-            **kwargs):
+    def __init__(self,
+                 meta_instruction='',
+                 system='',
+                 eosys='',
+                 user='',
+                 eoh='',
+                 assistant='',
+                 eoa='',
+                 stop_words=None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.meta_instruction = meta_instruction
-        self.user = user
-        self.eoh = eoh
-        self.eosys = eosys
-        self.assistant = assistant
         self.system = system
+        self.user = user
+        self.assistant = assistant
         self.stop_words = stop_words
+        self.eosys = eosys
+        self.eoh = eoh
+        self.eoa = eoa
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}\n' \
-                   f'{self.user}{prompt}{self.eoh}\n' \
+            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}' \
+                   f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
         else:
-            return f'\n{self.user}{prompt}{self.eoh}\n{self.assistant}'
+            return f'{self.eoa}{self.user}{prompt}{self.eoh}{self.assistant}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+            sequence_start (bool): flag to start the sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'<BOS>{system}{self.meta_instruction}{self.eosys}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.user}{user}{self.eoh}{self.assistant}' \
+                       f'{assistant}{self.eoa}'
+            else:
+                ret += f'{self.user}{user}{self.eoh}{self.assistant}'
+        return ret
 
 
 @MODELS.register_module(name='llama2')
@@ -263,7 +365,7 @@ class Llama2(BaseModel):
             e_inst='[/INST]',
             b_sys='<<SYS>>\n',
             e_sys='\n<</SYS>>\n\n',
-            default_sys_prompt="""\
+            system="""\
 You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.""",  # noqa: E501
@@ -274,10 +376,10 @@ If a question does not make any sense, or is not factually coherent, explain why
         self.e_inst = e_inst
         self.b_sys = b_sys
         self.e_sys = e_sys
-        self.default_sys_prompt = default_sys_prompt
+        self.default_sys_prompt = system
         self.session_len = session_len
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
 
@@ -288,6 +390,8 @@ If a question does not make any sense, or is not factually coherent, explain why
         Returns:
             str: the concatenated prompt
         """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'<BOS>{self.b_inst} ' \
                    f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
@@ -344,7 +448,9 @@ class Qwen7BChat(BaseModel):
         self.system = system
         self.stop_words = stop_words
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'{self.im_start}system\n{self.system}{self.im_end}' \
                    f'\n{self.im_start}user\n{prompt}{self.im_end}' \
@@ -352,6 +458,95 @@ class Qwen7BChat(BaseModel):
 
         return f'\n{self.im_start}user\n{prompt}{self.im_end}' \
                f'\n{self.im_start}assistant\n'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'{self.im_start}system\n{system}{self.im_end}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
+                       f'\n{self.im_start}assistant\n{assistant}'
+            else:
+                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
+                       f'\n{self.im_start}assistant\n'
+        return ret
+
+
+@MODELS.register_module(name='codellama')
+class CodeLlama(Llama2):
+
+    def __init__(self,
+                 system='',
+                 session_len=4096,
+                 suffix_first=False,
+                 stop_words=None,
+                 **kwargs):
+        super().__init__(**kwargs)
+        caps = ['completion', 'infilling', 'chat', 'python']
+        assert self.capability in caps, \
+            f'{self.capability} is not supported. ' \
+            f'The supported capabilities are: {caps}'
+        self.default_sys_prompt = system
+        self.session_len = session_len
+        self.suffix_first = suffix_first
+        self.stop_words = stop_words
+
+        # The following sampling parameters refers to https://github.com/facebookresearch/codellama # noqa: E501
+        if self.capability == 'completion' or self.capability == 'python':
+            self.top_p = kwargs.get('top_p', 0.9)
+            self.temperature = kwargs.get('temperature', 0.2)
+        if self.capability == 'chat':
+            self.top_p = kwargs.get('top_p', 0.95)
+            self.temperature = kwargs.get('temperature', 0.2)
+        elif self.capability == 'infilling':
+            self.top_p = kwargs.get('top_p', 0.9)
+            self.temperature = kwargs.get('temperature', 0.0)
+            if self.stop_words is None:
+                self.stop_words = '<EOT>'
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        if self.capability == 'infilling':
+            return self._infill_prompt(prompt)
+        elif self.capability == 'chat':
+            return self._get_prompt(prompt, sequence_start)
+        else:  # python speicalist
+            return prompt
+
+    def _infill_prompt(self, prompt):
+        prefix, suffix = prompt.split('<FILL>')
+        if self.suffix_first:
+            # format as "<PRE> <SUF>{suf} <MID> {pre}"
+            prompt = f'<BOS><PRE> <SUF>{suffix} <MID> {prefix}'
+        else:
+            # format as "<PRE> {pre} <SUF>{suf} <MID>"
+            prompt = f'<BOS><PRE> {prefix} <SUF>{suffix} <MID>'
+        return prompt
+
+    def _get_prompt(self, prompt, sequence_start):
+        prompt = prompt.strip()
+        if sequence_start:
+            return f'<BOS>{self.b_inst} ' \
+                   f'{self.b_sys}{self.default_sys_prompt}{self.e_sys}' \
+                   f'{prompt} {self.e_inst}'
+
+        return f'{self.b_inst} {prompt} {self.e_inst}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        assert self.capability == 'chat', \
+            f'codellama message2prompt only supports chat mode ' \
+            f'but got {self.cap} mode'
+        return super().messages2prompt(messages, sequence_start)
 
 
 def main(model_name: str = 'test'):

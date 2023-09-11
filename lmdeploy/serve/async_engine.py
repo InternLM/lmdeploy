@@ -112,7 +112,7 @@ class AsyncEngine:
         prompt = self.model.messages2prompt(messages, sequence_start)
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
-        if not sequence_end and self.steps[str(session_id)] + len(
+        if self.steps[str(session_id)] + len(
                 input_ids) >= self.tm_model.session_len:
             finish_reason = 'length'
             yield GenOut('', self.steps[str(session_id)], len(input_ids), 0,
@@ -138,12 +138,13 @@ class AsyncEngine:
                         random_seed=seed if sequence_start else None):
                     res, tokens = outputs[0]
                     # decode res
-                    response = self.tokenizer.decode(res)[response_size:]
+                    response = self.tokenizer.decode(res.tolist(),
+                                                     offset=response_size)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.steps[str(session_id)],
                                  len(input_ids), tokens, finish_reason)
-                    response_size += len(response)
+                    response_size = tokens
 
                 # update step
                 self.steps[str(session_id)] += len(input_ids) + tokens
@@ -229,7 +230,8 @@ class AsyncEngine:
                     random_seed=seed if sequence_start else None):
                 res, tokens = outputs[0]
                 # decode res
-                response = self.tokenizer.decode(res[response_size:])
+                response = self.tokenizer.decode(res.tolist(),
+                                                 offset=response_size)
                 # response, history token len, input token len, gen token len
                 yield GenOut(response, self.steps[str(session_id)],
                              len(input_ids), tokens, finish_reason)

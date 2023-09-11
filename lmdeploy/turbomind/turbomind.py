@@ -30,7 +30,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     assert isinstance(stop_words, List) and \
            all(isinstance(elem, str) for elem in stop_words), \
            f'stop_words must be a list but got {type(stop_words)}'
-    stop_words = [tokenizer.encode(stop_word)[0] for stop_word in stop_words]
+    stop_words = [tokenizer.encode(stop_word)[-1] for stop_word in stop_words]
     assert isinstance(stop_words, List) and all(
         isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
     # each id in stop_words represents a stop word
@@ -346,8 +346,16 @@ class TurboMindInstance:
                     output_ids, seq_start, sequence_length)
             ]
             sequence_length -= seq_start.to(sequence_length.device)
-            yield [(output, l.item())
-                   for output, l in zip(output_ids, sequence_length)]
+
+            outputs = []
+            for output, len_ in zip(output_ids, sequence_length):
+                output, len_ = output, len_.item()
+                if output[-1].item() == self.eos_id:
+                    outputs.append((output[:-1], len_ - 1))
+                else:
+                    outputs.append((output, len_))
+
+            yield outputs
 
             if finish:
                 for t in self.threads:
