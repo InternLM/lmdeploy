@@ -211,11 +211,30 @@ class LlamaAttention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, cos, sin, position_ids)
 
-        kv_seq_length = position_ids[..., -1] + 1
-        q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
-            history_lengths)
-        q_start_loc = q_seq_length.cumsum(0)
-        q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+        # kv_seq_length = position_ids[..., -1] + 1
+        # q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
+        #     history_lengths)
+        # q_start_loc = q_seq_length.cumsum(0)
+        # q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+
+
+        # # print('===Context Fill===')
+        # # print('key_states.shape', key_states.shape)
+        # # print('value_states.shape', value_states.shape)
+        # print('q_start_loc', q_start_loc)
+        # print('q_seq_length', q_seq_length)
+        # print('kv_seq_length', kv_seq_length)
+        # # print('cache_k', past_key_value[0].shape)
+
+        q_start_loc, q_seq_length = self.context.q_seq_info
+
+        history_lengths = q_seq_length.new_tensor(history_lengths)
+        kv_seq_length = q_seq_length + history_lengths
+
+        # print('q_start_loc', q_start_loc)
+        # print('q_seq_length', q_seq_length)
+        # print('kv_seq_length', kv_seq_length)
+
         context.fill_cache(
             key_states,
             value_states,
@@ -224,6 +243,7 @@ class LlamaAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
         )
+        # print('cache_k', past_key_value[0].shape)
 
         # TODO: fix GQA
         # # repeat k/v heads if n_kv_heads < n_heads
@@ -235,6 +255,14 @@ class LlamaAttention(nn.Module):
 
         block_offsets = context.block_offsets
         block_size = past_key_value[0].size(1)
+
+        # print('===Attention===')
+        # print('kv_seq_length = ', kv_seq_length)
+        # print('query_states.shape', query_states.shape)
+        # print('max_seq_len', max_seq_len)
+        # print('block_size', block_size)
+        # print('block_offsets', block_offsets)
+
         paged_attention_fwd(query_states,
                             past_key_value[0],
                             past_key_value[1],
