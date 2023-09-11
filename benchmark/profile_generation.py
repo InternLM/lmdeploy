@@ -2,6 +2,8 @@
 # import multiprocessing as mp
 import argparse
 import csv
+import logging
+import os
 import os.path as osp
 import time
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlDeviceGetMemoryInfo, nvmlDeviceGetName,
                     nvmlDeviceGetPowerState, nvmlDeviceGetTemperature,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
+from tqdm import tqdm
 
 from lmdeploy.turbomind import Tokenizer, TurboMind
 
@@ -240,7 +243,7 @@ def parse_args():
                         nargs='+',
                         type=int,
                         help='how many requests launched concurrently',
-                        default=[1, 8, 32, 64])
+                        default=[1, 8, 16, 32])
     parser.add_argument(
         '--prompt-tokens',
         nargs='+',
@@ -255,16 +258,25 @@ def parse_args():
                         'correspondence with prompt-tokens',
                         default=[512, 512, 1024, 1024])
     parser.add_argument('--tp', type=int, help='Tensor parallel', default=1)
+    parser.add_argument('--dst-csv',
+                        type=str,
+                        help='Where to save the result.',
+                        default='profile_generation.csv')
+    parser.add_argument('--log-level',
+                        help='set log level',
+                        default='INFO',
+                        choices=list(logging._nameToLevel.keys()))
     args = parser.parse_args()
     return args
 
 
 def main():
     args = parse_args()
+    os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
-    for batch in args.concurrency:
-        for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
-                                                    args.completion_tokens):
+    for batch in tqdm(args.concurrency):
+        for prompt_tokens, completion_tokens in tqdm(
+                zip(args.prompt_tokens, args.completion_tokens)):
             MemoryMonitor.start()
             from functools import partial
             from multiprocessing import Pool
@@ -283,7 +295,7 @@ def main():
                               completion_tokens=completion_tokens,
                               throughput=output[0][1],
                               memory=memory))
-    with open('profile_generation.csv', 'w') as csvfile:
+    with open(args.dst_csv, 'w') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
             'batch', 'prompt_tokens', 'completion_tokens',
