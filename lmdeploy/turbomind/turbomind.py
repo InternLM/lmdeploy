@@ -14,6 +14,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.model import MODELS
+from lmdeploy.turbomind import Tokenizer
 from lmdeploy.utils import get_logger
 
 # TODO: find another way import _turbomind
@@ -22,14 +23,16 @@ sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
 
-def _stop_words(stop_words: List[int]):
+def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     """return list of stop-words to numpy.ndarray."""
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
-           all(isinstance(elem, int) for elem in stop_words), \
+           all(isinstance(elem, str) for elem in stop_words), \
            f'stop_words must be a list but got {type(stop_words)}'
-
+    stop_words = [tokenizer.encode(stop_word)[0] for stop_word in stop_words]
+    assert isinstance(stop_words, List) and all(
+        isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
     # each id in stop_words represents a stop word
     # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
     # detailed explanation about fastertransformer's stop_words
@@ -106,7 +109,10 @@ class TurboMind:
             self.model_name = parser.get(section_name, 'model_name')
             data_type = parser.get(section_name, 'weight_type')
         model = MODELS.get(self.model_name)()
-        self.stop_words = _stop_words(model.stop_words)
+        tokenizer_model_path = osp.join(model_path, 'triton_models',
+                                        'tokenizer')
+        tokenizer = Tokenizer(tokenizer_model_path)
+        self.stop_words = _stop_words(model.stop_words, tokenizer)
 
         # params
         self.node_id = node_id

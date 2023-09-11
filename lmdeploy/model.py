@@ -154,7 +154,7 @@ class InternLMChat7B(BaseModel):
                  eoh='<eoh>',
                  eoa='<eoa>',
                  assistant='<|Bot|>',
-                 stop_words=[103027, 103028],
+                 stop_words=['<eoa>'],
                  **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -225,15 +225,16 @@ class Puyu(BaseModel):
     """Chat template of puyu model.This is only for internal usage in Shanghai
     AI Laboratory."""
 
-    def __init__(self,
-                 meta_instruction='',
-                 user='<|Human|>: ',
-                 eoh='',
-                 eosys='',
-                 assistant='<|Assistant|>: ',
-                 system='<|System|>: ',
-                 stop_words=[45623],
-                 **kwargs):
+    def __init__(
+            self,
+            meta_instruction='',
+            user='<|Human|>: ',
+            eoh='',
+            eosys='',
+            assistant='<|Assistant|>: ',
+            system='<|System|>: ',
+            stop_words: List[str] = None,  # set to None for protection
+            **kwargs):
         super().__init__(**kwargs)
         self.meta_instruction = meta_instruction
         self.user = user
@@ -330,7 +331,7 @@ class Qwen7BChat(BaseModel):
                  im_start='<|im_start|>',
                  im_end='<|im_end|>',
                  system='You are a helpful assistant.',
-                 stop_words=[151645],
+                 stop_words=['<|im_end|>'],
                  **kwargs):
         super().__init__(**kwargs)
         self.session_len = session_len
