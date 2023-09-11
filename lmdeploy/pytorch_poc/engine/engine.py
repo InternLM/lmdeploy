@@ -494,17 +494,6 @@ class Engine:
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
-
-        # logger.debug('In Make inputs')
-        # logger.debug(f'q_start_loc {q_start_loc}')
-        # logger.debug(f'q_seq_length {q_seq_length}')
-        # logger.debug("kv_seq_length {q_seq_length}")
-
-        # past_key_values = self.cache_engine.gpu_cache
-        # for i, pkv in enumerate(past_key_values):
-        #     past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
-
-
         return dict(input_ids=input_ids,
                     seq_length=seq_length,
                     attention_mask=attention_mask,
