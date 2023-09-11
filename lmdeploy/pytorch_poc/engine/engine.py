@@ -35,9 +35,6 @@ from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')
 
-# import logging
-# logger = logging.getLogger(__name__)
-
 
 class RequestType(enum.Enum):
     ADD_SESSION = enum.auto()
@@ -138,8 +135,6 @@ class ModelContext:
             free_offset = first_free_block_offsets[bid]
             token_offset = first_token_offsets[bid]
 
-            # 支持新模型的时候如果shape有些不对的可以通过assert识别
-            # 因为slice遇到shape不对也不会报错，只是返回一个空的数组
             assert 0 <= loc <= k_states.size(0)
             assert 0 <= loc + seq_len <= k_states.size(0)
 
@@ -604,7 +599,6 @@ class Engine:
         logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-        # logger.debug('logits.shape = %s', logits.shape)
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -619,8 +613,6 @@ class Engine:
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
-            # logger.debug(f'msg = {msg}')
-            # logger.debug(f'input_ids = {input_ids}')
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),
