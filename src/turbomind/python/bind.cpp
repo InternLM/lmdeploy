@@ -4,6 +4,7 @@
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
+#include "src/turbomind/utils/pycb_utils.h"
 #include <cuda_runtime.h>
 #include <memory>
 #include <pybind11/functional.h>
@@ -329,7 +330,18 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "register_callback",
             [](AbstractTransformerModelInstance* self, triton_stream_cb_t cb, py::object ctx) {
-                self->registerCallback(cb, ctx.ptr());
+                auto callback = [=](std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> outputs,
+                                    void*                                                            ctx) {
+                    thread_local PyGILState_STATE gstate;
+                    if (ft::is_first_in_batch()) {
+                        gstate = PyGILState_Ensure();
+                    }
+                    cb(outputs, ctx);
+                    if (ft::is_last_in_batch()) {
+                        PyGILState_Release(gstate);
+                    }
+                };
+                self->registerCallback(callback, ctx.ptr());
             },
             "callback"_a,
             "context"_a = nullptr)

@@ -109,3 +109,6 @@ add_library(tensor STATIC Tensor.cc)
 set_property(TARGET tensor PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET tensor PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(tensor PUBLIC cuda_utils logger)
+
+add_library(pycb_utils STATIC pycb_utils.cc)
+set_property(TARGET pycb_utils PROPERTY POSITION_INDEPENDENT_CODE ON)
