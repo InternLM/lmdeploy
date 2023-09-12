@@ -25,7 +25,7 @@ MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaDecoderLayer':
     'lmdeploy.pytorch_poc.patch.llama.LlamaDecoderLayer',
     'transformers_modules\.(.*)\.modeling_baichuan.(.*)Model':  # noqa
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers_modules\.(.*)\.modeling_baichuan.(.*)Attention':  # noqa
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',
     'transformers_modules\.(.*)\.modeling_baichuan.BaichuanForCausalLM':  # noqa
