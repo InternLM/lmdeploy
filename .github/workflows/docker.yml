@@ -26,7 +26,13 @@ jobs:
         uses: actions/checkout@v3
       - name: Check disk space
         run: |
+          df -h
+          ls /opt/hostedtoolcache
           rm -rf ${GITHUB_WORKSPACE}/.git
+          rm -rf  /opt/hostedtoolcache/go
+          rm -rf  /opt/hostedtoolcache/node
+          rm -rf  /opt/hostedtoolcache/Ruby
+          rm -rf  /opt/hostedtoolcache/CodeQL
           cat /proc/cpuinfo  | grep -ic proc
           free
           df -h
