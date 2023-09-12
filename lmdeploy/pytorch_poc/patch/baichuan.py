@@ -69,6 +69,8 @@ class BaichuanAttention(nn.Module):
         if hasattr(origin_self,
                    'rotary_emb'):  # baichuan-13B has no rotary_emb
             cos, sin = origin_self.rotary_emb(value_states, seq_len=kv_seq_len)
+            cos = cos.to(value_states.dtype)  # baichuan2 hard-coded it float32
+            sin = sin.to(value_states.dtype)
             query_states, key_states = apply_rotary_pos_emb(
                 query_states, key_states, cos, sin, position_ids)
 
@@ -102,7 +104,6 @@ class BaichuanAttention(nn.Module):
         attn_output = attn_output.reshape(-1, origin_self.hidden_size)
 
         attn_output = origin_self.o_proj(attn_output)
-
         if not output_attentions:
             attn_weights = None
 
