@@ -330,18 +330,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "register_callback",
             [](AbstractTransformerModelInstance* self, triton_stream_cb_t cb, py::object ctx) {
-                auto callback = [=](std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> outputs,
-                                    void*                                                            ctx) {
-                    thread_local PyGILState_STATE gstate;
-                    if (ft::is_first_in_batch()) {
-                        gstate = PyGILState_Ensure();
-                    }
-                    cb(outputs, ctx);
-                    if (ft::is_last_in_batch()) {
-                        PyGILState_Release(gstate);
-                    }
-                };
-                self->registerCallback(callback, ctx.ptr());
+                self->registerCallback(cb, ctx.ptr());
             },
             "callback"_a,
             "context"_a = nullptr)
@@ -356,13 +345,25 @@ PYBIND11_MODULE(_turbomind, m)
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
+                auto gil_control = [state = PyGILState_STATE{}](int op) mutable {
+                    if (op) {
+                        state = PyGILState_Ensure();
+                    }
+                    else {
+                        PyGILState_Release(state);
+                    }
+                };
                 if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
-                    return std::make_shared<LlamaTritonModel<half>>(
+                    auto model = std::make_shared<LlamaTritonModel<half>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                    model->setFfiLock(gil_control);
+                    return model;
                 }
                 else {
-                    return std::make_shared<LlamaTritonModel<float>>(
+                    auto model = std::make_shared<LlamaTritonModel<float>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                    model->setFfiLock(gil_control);
+                    return model;
                 }
             },
             "model_dir"_a,

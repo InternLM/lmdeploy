@@ -940,12 +940,18 @@ void LlamaBatch<T>::finish()
 
     check_cuda_error(cudaStreamSynchronize(stream_));
 
+    if (rank_ == 0 && llama_->ffi_lock_) {
+        llama_->ffi_lock_(1);
+    }
     for (int i = 0; i < batch_size_; ++i) {
         FT_CHECK(requests_[i] != nullptr);
         if (requests_[i]->stream_cb && rank_ == 0) {
             set_batch_info(i, batch_size_);
             requests_[i]->stream_cb(&requests_[i]->outputs[rank_].get());
         }
+    }
+    if (rank_ == 0 && llama_->ffi_lock_) {
+        llama_->ffi_lock_(0);
     }
 
     if (debug_ && rank_ == 0) {
