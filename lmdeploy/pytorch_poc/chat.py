@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 import os
 import random
 
 import fire
-import torch
 
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
@@ -35,9 +33,6 @@ def main(
         model_path,
         model_name: str,  # can not get model_name from hf model
         session_id: int = 1,
-        top_k=40,
-        top_p=0.8,
-        temperature=0.8,
         repetition_penalty: float = 1.0,
         tp: int = 1,
         stream_output=True):
@@ -61,9 +56,8 @@ def main(
     seed = random.getrandbits(64)
     model = MODELS.get(model_name)()
 
-    torch.set_default_device(0)
-    for prompt in ['你好', '晚上睡不着应该怎么办', 'exit']:
-        # prompt = input_prompt()
+    while True:
+        prompt = input_prompt()
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
@@ -79,13 +73,12 @@ def main(
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
-            input_ids = model.update_input_ids(input_ids)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             sampling_param = SamplingParam(
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
+                top_k=40,
+                top_p=0.8,
+                temperature=0.8,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=False,
                 random_seed=seed,
@@ -111,9 +104,4 @@ def main(
 
 
 if __name__ == '__main__':
-    logging.basicConfig(filename='chatglm.log',
-                        level=logging.DEBUG,
-                        filemode='w',
-                        format='{%(pathname)s:%(lineno)d}\n  %(message)s')
-    torch.set_printoptions(linewidth=122)
     fire.Fire(main)

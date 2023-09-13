@@ -72,5 +72,3 @@ work_dir*/
 *.out
 *.csv
 *.pkl
-*.json
-*.ipynb

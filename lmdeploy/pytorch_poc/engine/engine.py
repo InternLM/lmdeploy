@@ -35,9 +35,6 @@ from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')
 
-# import logging
-# logger = logging.getLogger(__name__)
-
 
 class RequestType(enum.Enum):
     ADD_SESSION = enum.auto()
@@ -654,18 +651,13 @@ class Engine:
         history_lengths = [sess.history_length for sess in sessions]
 
         # make batch
-        # logger.debug(f'running: {running}')
         inputs = self._make_inputs(running)
-        # logger.debug(f'input_ids: {inputs["input_ids"]}')
-        # logger.debug(f'position_ids: {inputs["position_ids"]}')
-        # logger.debug(f'attention_mask: {inputs["attention_mask"]}')
         inputs['history_lengths'] = history_lengths
 
         # inference
         logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-        # logger.debug('logits.shape = %s', logits.shape)
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -681,8 +673,6 @@ class Engine:
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
-            # logger.debug(f'msg = {msg}')
-            # logger.debug(f'input_ids = {input_ids}')
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),
@@ -930,8 +920,7 @@ class EngineInstance:
                 yield (1, [], 0)
                 break
 
-            # 看起来子线程出问题的时候有可能还是停在这里，是不是deamon的问题？
-            resp: Response = self.response.get(timeout=10)
+            resp: Response = self.response.get()
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:

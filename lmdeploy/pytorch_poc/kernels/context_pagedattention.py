@@ -8,10 +8,6 @@ from lmdeploy.pytorch_poc.dist_utils import try_to_local
 
 assert triton.__version__ >= '2.1.0'
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 
 @triton.jit
 def _fwd_kernel(
@@ -163,12 +159,7 @@ def paged_attention_fwd(q,
     kv_group_num = q.shape[-2] // k[0].shape[-2]
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
-    logger.debug('grid = %s', grid)
-    logger.debug('b_start_loc = %s', b_start_loc)
-    logger.debug('b_seq_len = %s', b_seq_len)
-    logger.debug('b_kv_seq_len = %s', b_kv_seq_len)
 
-    # logger.debug('o before = ', o)
     num_warps = 4 if Lk <= 64 else 8
     _fwd_kernel[grid](
         q,
@@ -201,6 +192,4 @@ def paged_attention_fwd(q,
         num_stages=1,
     )
 
-    torch.cuda.synchronize()
-    logger.debug('finish attn')
     return
