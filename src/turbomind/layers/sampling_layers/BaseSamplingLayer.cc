@@ -45,10 +45,10 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
         reinterpret_cast<bool*>(allocator_->reMalloc(skip_decode_buf_, sizeof(bool) * batch_size, false));
 
     // host buffers.
-    temperature_        = new float[batch_size];
-    repetition_penalty_ = new float[batch_size];
-    min_lengths_        = new int[batch_size];
-    skip_decode_        = new bool[batch_size];
+    temperature_        = (float*)std::realloc((void*)temperature_, batch_size * sizeof(float));
+    repetition_penalty_ = (float*)std::realloc((void*)repetition_penalty_, batch_size * sizeof(float));
+    min_lengths_        = (int*)std::realloc((void*)min_lengths_, batch_size * sizeof(int));
+    skip_decode_        = (bool*)std::realloc((void*)skip_decode_, batch_size * sizeof(bool));
 
     is_allocate_buffer_ = true;
 }
@@ -65,10 +65,10 @@ void BaseSamplingLayer<T>::freeBuffer()
         allocator_->free((void**)(&min_lengths_buf_));
         allocator_->free((void**)(&runtime_logits_buf_));
         allocator_->free((void**)(&skip_decode_buf_));
-        delete[] temperature_;
-        delete[] repetition_penalty_;
-        delete[] min_lengths_;
-        delete[] skip_decode_;
+        std::free(temperature_);
+        std::free(repetition_penalty_);
+        std::free(min_lengths_);
+        std::free(skip_decode_);
         is_allocate_buffer_ = false;
     }
 }
