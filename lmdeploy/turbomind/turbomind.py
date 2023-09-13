@@ -344,7 +344,7 @@ class TurboMindInstance:
             outputs = []
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
-                if output[-1].item() == self.eos_id:
+                if len(output) > 0 and output[-1].item() == self.eos_id:
                     outputs.append((output[:-1], len_ - 1))
                 else:
                     outputs.append((output, len_))
