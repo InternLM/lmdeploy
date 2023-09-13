@@ -191,5 +191,4 @@ def paged_attention_fwd(q,
         num_warps=num_warps,
         num_stages=1,
     )
-
     return
