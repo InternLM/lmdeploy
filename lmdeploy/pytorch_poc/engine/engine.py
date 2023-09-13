@@ -944,7 +944,7 @@ class EngineInstance:
 
     def end(self, session_id: int):
         self._send_req(RequestType.END_SESSION, dict(session_id=session_id))
-        self.owned_sessions.pop(session_id)
+        self.owned_sessions.remove(session_id)
 
     def cancel(self, session_id: int):
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))

@@ -2,20 +2,20 @@
 from typing import Callable, Optional, Sequence, Tuple
 
 import torch
-from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
 from torch import Tensor
+
+from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
 
 
 def rotate_half(x: Tensor):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
+    x1 = x[..., :x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(
-    q: Tensor, k: Tensor, cos: Tensor, sin: Tensor, position_ids: Tensor
-):
+def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
+                         position_ids: Tensor):
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
     cos = cos.to(q.device)
@@ -58,18 +58,16 @@ def fill_kv_cache(
         free_offset = first_free_block_offsets[bid]
         token_offset = first_token_offsets[bid]
 
-        k_state = k_states[loc : loc + seq_len]
-        v_state = v_states[loc : loc + seq_len]
+        k_state = k_states[loc:loc + seq_len]
+        v_state = v_states[loc:loc + seq_len]
 
         # fill remain(last non-full block)
         block_id = b_offsets[free_offset]
         fill_token_num = min(block_size - token_offset, seq_len)
-        k_caches[block_id][token_offset : token_offset + fill_token_num] = k_state[
-            :fill_token_num
-        ]
-        v_caches[block_id][token_offset : token_offset + fill_token_num] = v_state[
-            :fill_token_num
-        ]
+        k_caches[block_id][token_offset:token_offset +
+                           fill_token_num] = k_state[:fill_token_num]
+        v_caches[block_id][token_offset:token_offset +
+                           fill_token_num] = v_state[:fill_token_num]
 
         # update offset
         seq_len = seq_len - fill_token_num
@@ -115,8 +113,7 @@ def attention_forward_with_paged_attention(
 
     if rotary_emb_fn is not None:
         query_states, key_states, value_states = rotary_emb_fn(
-            query_states, key_states, value_states
-        )
+            query_states, key_states, value_states)
 
     kv_seq_length = position_ids[..., -1] + 1
     q_seq_length = kv_seq_length - kv_seq_length.new_tensor(history_lengths)
