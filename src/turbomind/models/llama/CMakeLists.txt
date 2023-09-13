@@ -39,7 +39,6 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         nccl_utils
         cuda_utils
         logger
-        pycb_utils
         llama_fmha)
 
 if (NOT MSVC)
