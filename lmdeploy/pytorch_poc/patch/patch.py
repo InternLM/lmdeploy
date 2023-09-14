@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
+import re
 from copy import copy
 from typing import Dict, Sequence
 
@@ -19,7 +20,23 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
+    'modeling_baichuan.(.*)Model':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
+    'modeling_baichuan.(.*)Attention':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
+    'modeling_baichuan.BaichuanForCausalLM':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',  # noqa
+    'modeling_baichuan.BaichuanLayer':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanLayer',  # noqa
 }
+
+
+def _get_rewrite_qualname(origin_qualname: str):
+    global MODULE_MAP
+    for key, value in MODULE_MAP.items():
+        if re.search(key, origin_qualname):
+            return value
+    return None
 
 
 def _class_from_qualname(qualname):
@@ -48,19 +65,18 @@ def _patch(model: torch.nn.Module, context: Addict):
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
     origin_qualname = f'{module_name}.{class_name}'
-    # full qualname
-    rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+    rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is None:
         # class name only
         origin_qualname = class_name
-        rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is None:
         # name with first module
         mod_name = module_name[module_name.rfind('.') + 1:]
         origin_qualname = f'{mod_name}.{class_name}'
-        rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is not None:
         logger.debug(

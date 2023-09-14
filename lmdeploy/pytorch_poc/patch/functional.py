@@ -86,6 +86,7 @@ def fill_kv_cache(
             v_state = v_state[token_num:]
 
 
+@torch.no_grad()
 def attention_forward_with_paged_attention(
     hidden_states: Tensor,
     history_lengths: Sequence,
