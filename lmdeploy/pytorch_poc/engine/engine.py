@@ -386,7 +386,9 @@ class Engine:
         if tp == 1:
             with LoadNoInit():
                 hf_model = AutoModelForCausalLM.from_pretrained(
-                    model_path, torch_dtype='auto', trust_remote_code=True)
+                    model_path,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=True)
                 hf_model.eval()
 
             self.patched_model = patch(
@@ -494,7 +496,6 @@ class Engine:
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
-
         # logger.debug('In Make inputs')
         # logger.debug(f'q_start_loc {q_start_loc}')
         # logger.debug(f'q_seq_length {q_seq_length}')
@@ -503,7 +504,6 @@ class Engine:
         # past_key_values = self.cache_engine.gpu_cache
         # for i, pkv in enumerate(past_key_values):
         #     past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
-
 
         return dict(input_ids=input_ids,
                     seq_length=seq_length,
@@ -638,6 +638,7 @@ class Engine:
                 TemperatureLogitsWarper(param.temperature),
             ])
             logit = logits_processor(input_ids, logit)
+            logit = logit.reshape([-1, logit.shape[-1]])
             next_token_ids.append(logit[-1].argmax())
 
         # update scheduler
