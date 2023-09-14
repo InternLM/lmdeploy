@@ -95,10 +95,12 @@ struct BaseAttentionParams {
     T*                     key;
     T*                     val;
     T*                     mask;
-    float*                 out_accum    = nullptr;
-    int*                   cu_seqlens_q = nullptr;
-    int*                   cu_seqlens_k = nullptr;
-    size_t                 group_size   = 1;
+    float*                 out_accum       = nullptr;
+    int*                   cu_seqlens_q    = nullptr;
+    int*                   cu_seqlens_k    = nullptr;
+    int*                   actual_seqlen_q = nullptr;
+    int*                   actual_seqlen_k = nullptr;
+    size_t                 group_size      = 1;
     BaseAttentionLayout<T> layout_q;
     BaseAttentionLayout<T> layout_k;
     BaseAttentionLayout<T> layout_v;

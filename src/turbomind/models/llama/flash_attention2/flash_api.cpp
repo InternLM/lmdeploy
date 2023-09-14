@@ -121,6 +121,9 @@ public:
         fwd_params.cu_seqlens_q = params.cu_seqlens_q;
         fwd_params.cu_seqlens_k = params.cu_seqlens_k;
 
+        fwd_params.actual_seqlen_q = params.actual_seqlen_q;
+        fwd_params.actual_seqlen_k = params.actual_seqlen_k;
+
         fwd_params.blockmask = reinterpret_cast<void*>(params.mask);
 
         fwd_params.is_bf16   = false;

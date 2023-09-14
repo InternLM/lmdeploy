@@ -72,6 +72,10 @@ struct Flash_fwd_params: public Qkv_params {
     int* __restrict__ cu_seqlens_q;
     int* __restrict__ cu_seqlens_k;
 
+    // array of length b with actual length of each sequence
+    int* __restrict__ actual_seqlen_q;
+    int* __restrict__ actual_seqlen_k;
+
     void* __restrict__ blockmask;
 
     bool is_bf16;

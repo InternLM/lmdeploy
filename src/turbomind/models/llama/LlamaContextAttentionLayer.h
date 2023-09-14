@@ -72,6 +72,7 @@ public:
                                  size_t cache_layer_offset,
                                  T*     attention_mask,
                                  int*   cu_seqlens,
+                                 int*   context_lengths,
                                  int    batch_size,
                                  int    max_q_len,
                                  int    max_k_len,
