@@ -219,12 +219,81 @@ class InternLMChat7B8K(InternLMChat7B):
         self.session_len = session_len
 
 
-@MODELS.register_module(name='baichuan-7b')
-class Baichuan7B(BaseModel):
+@MODELS.register_module(name='baichuan')
+class Baichuan(BaseModel):
 
     def __init__(self, repetition_penalty=1.1, **kwargs):
         super().__init__(**kwargs)
         self.repetition_penalty = repetition_penalty
+
+
+@MODELS.register_module(name='baichuan-chat')
+class BaichuanChat(BaseModel):
+
+    def __init__(self,
+                 repetition_penalty=1.1,
+                 user_token='<reserved_102>',
+                 assistant_token='<reserved_103>',
+                 temperature=0.3,
+                 top_k=5,
+                 top_p=0.85,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.repetition_penalty = repetition_penalty
+        self.user_token = user_token
+        self.assistant_token = assistant_token
+        self.temperature = temperature
+        self.top_k = top_k
+        self.top_p = top_p
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return f'{self.user_token}{prompt}{self.assistant_token}'
+        else:
+            return f'{self.user_token}{prompt}{self.assistant_token}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+            sequence_start (bool): flag to start the sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = '' if not system else system
+        ret = f'{system}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.user_token}{user}{self.assistant_token}' \
+                       f'{assistant}'
+            else:
+                ret += f'{self.user_token}{user}{self.assistant_token}'
+        return ret
+
+
+@MODELS.register_module(name='baichuan2-chat')
+class Baichuan2Chat(BaichuanChat):
+
+    def __init__(self,
+                 repetition_penalty=1.1,
+                 user_token='<reserved_106>',
+                 assistant_token='<reserved_107>',
+                 temperature=0.3,
+                 top_k=5,
+                 top_p=0.85,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.repetition_penalty = repetition_penalty
+        self.user_token = user_token
+        self.assistant_token = assistant_token
+        self.temperature = temperature
+        self.top_k = top_k
+        self.top_p = top_p
 
 
 @MODELS.register_module(name='puyu')
