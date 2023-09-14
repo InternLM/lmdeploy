@@ -57,9 +57,10 @@ def create_error_response(status: HTTPStatus, message: str):
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
     """
-    return JSONResponse(ErrorResponse(message=message,
-                                      type='invalid_request_error').dict(),
-                        status_code=status.value)
+    return JSONResponse(
+        ErrorResponse(message=message,
+                      type='invalid_request_error',
+                      code=status.value).dict())
 
 
 async def check_request(request) -> Optional[JSONResponse]:
