@@ -381,7 +381,9 @@ class Engine:
         if tp == 1:
             with LoadNoInit():
                 hf_model = AutoModelForCausalLM.from_pretrained(
-                    model_path, torch_dtype='auto', trust_remote_code=True)
+                    model_path,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=True)
                 hf_model.eval()
 
             self.patched_model = patch(
@@ -619,6 +621,7 @@ class Engine:
                 TemperatureLogitsWarper(param.temperature),
             ])
             logit = logits_processor(input_ids, logit)
+            logit = logit.reshape([-1, logit.shape[-1]])
             next_token_ids.append(logit[-1].argmax())
 
         # update scheduler
