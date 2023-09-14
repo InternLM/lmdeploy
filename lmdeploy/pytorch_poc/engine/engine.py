@@ -135,12 +135,18 @@ class ModelContext:
             free_offset = first_free_block_offsets[bid]
             token_offset = first_token_offsets[bid]
 
+            assert 0 <= loc <= k_states.size(0)
+            assert 0 <= loc + seq_len <= k_states.size(0)
+
             k_state = k_states[loc:loc + seq_len]
             v_state = v_states[loc:loc + seq_len]
 
             # fill remain(last non-full block)
             block_id = b_offsets[free_offset]
             fill_token_num = min(block_size - token_offset, seq_len)
+
+            assert 0 <= fill_token_num <= block_size
+
             k_caches[block_id][token_offset:token_offset +
                                fill_token_num] = k_state[:fill_token_num]
             v_caches[block_id][token_offset:token_offset +
@@ -380,8 +386,8 @@ class Engine:
                     trust_remote_code=True)
                 hf_model.eval()
 
-            self.patched_model = patch(hf_model,
-                                       ['context', 'use_origin']).cuda()
+            self.patched_model = patch(
+                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
@@ -394,7 +400,8 @@ class Engine:
             self.tp_model_in_que = mp.Queue(5)
             self.tp_model_out_que = mp.Queue(5)
 
-            self.patch_model_tp(model_path, ['context', 'use_origin'],
+            self.patch_model_tp(model_path,
+                                ['context', 'use_origin', 'q_seq_info'],
                                 model_config=model_config,
                                 cache_config=cache_config,
                                 in_que=self.tp_model_in_que,
@@ -466,6 +473,10 @@ class Engine:
 
         input_ids = list(itertools.chain(*token_ids))
         input_ids = torch.tensor(input_ids).to(device)
+
+        q_start_loc = torch.tensor([0] + seq_length[:-1]).to(device)
+        q_seq_length = torch.tensor(seq_length).to(device)
+
         attention_mask = torch.tensor([
             seq_len * [1] + (max_seq_len - seq_len) * [0]
             for seq_len in seq_length
@@ -484,7 +495,8 @@ class Engine:
                     seq_length=seq_length,
                     attention_mask=attention_mask,
                     block_tables=block_tables,
-                    position_ids=position_ids)
+                    position_ids=position_ids,
+                    q_seq_info=(q_start_loc, q_seq_length))
 
     def stop_session(self, session_id: int):
         self.scheduler.stop_session(session_id)
@@ -551,7 +563,8 @@ class Engine:
                     use_origin=False,
                     context=ModelContext(
                         block_tables=inputs['block_tables'],
-                        history_lengths=inputs['history_lengths']))
+                        history_lengths=inputs['history_lengths']),
+                    q_seq_info=inputs['q_seq_info'])
                 return output['logits']
         else:
             self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))

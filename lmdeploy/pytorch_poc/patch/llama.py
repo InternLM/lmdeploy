@@ -211,11 +211,11 @@ class LlamaAttention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, cos, sin, position_ids)
 
-        kv_seq_length = position_ids[..., -1] + 1
-        q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
-            history_lengths)
-        q_start_loc = q_seq_length.cumsum(0)
-        q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+        q_start_loc, q_seq_length = self.context.q_seq_info
+
+        history_lengths = q_seq_length.new_tensor(history_lengths)
+        kv_seq_length = q_seq_length + history_lengths
+
         context.fill_cache(
             key_states,
             value_states,
@@ -235,6 +235,7 @@ class LlamaAttention(nn.Module):
 
         block_offsets = context.block_offsets
         block_size = past_key_value[0].size(1)
+
         paged_attention_fwd(query_states,
                             past_key_value[0],
                             past_key_value[1],
