@@ -19,9 +19,9 @@ public:
         FT_CHECK(count == 1);
     }
 
-    Barrier(const Barrier&)                = delete;
-    Barrier& operator=(const Barrier&)     = delete;
-    Barrier(Barrier&&) noexcept            = delete;
+    Barrier(const Barrier&) = delete;
+    Barrier& operator=(const Barrier&) = delete;
+    Barrier(Barrier&&) noexcept        = delete;
     Barrier& operator=(Barrier&&) noexcept = delete;
 
     void wait() {}
@@ -39,9 +39,9 @@ public:
         pthread_barrier_init(&barrier_, nullptr, count);
     }
 
-    Barrier(const Barrier&)                = delete;
-    Barrier& operator=(const Barrier&)     = delete;
-    Barrier(Barrier&&) noexcept            = delete;
+    Barrier(const Barrier&) = delete;
+    Barrier& operator=(const Barrier&) = delete;
+    Barrier(Barrier&&) noexcept        = delete;
     Barrier& operator=(Barrier&&) noexcept = delete;
 
     void wait()
