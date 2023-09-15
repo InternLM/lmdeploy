@@ -55,7 +55,7 @@ class BaseModel:
 
     @abstractmethod
     def decorate_prompt(self, prompt, sequence_start):
-        pass
+        return prompt
 
     @staticmethod
     def _translate_messages(messages: List):
@@ -176,8 +176,8 @@ class InternLMChat7B(BaseModel):
     def __init__(self,
                  system='',
                  user='<|User|>',
-                 eoh='<eoh>',
-                 eoa='<eoa>',
+                 eoh='',
+                 eoa='',
                  assistant='<|Bot|>',
                  **kwargs):
         super().__init__(**kwargs)
@@ -231,7 +231,7 @@ class InternLMChat7B(BaseModel):
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
-        return [103027, 103028]
+        return [103028]
 
 
 @MODELS.register_module(name='internlm-chat-7b-8k')
