@@ -1,10 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
 from typing import Callable, Optional, Sequence, Tuple
 
 import torch
 from torch import Tensor
+from torch import distributed as dist
 
-from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
+from lmdeploy.pytorch_poc.kernels import (biased_paged_attention_fwd,
+                                          paged_attention_fwd)
 
 
 def rotate_half(x: Tensor):
@@ -86,6 +89,46 @@ def fill_kv_cache(
             v_state = v_state[token_num:]
 
 
+def generate_batched_mask(q_lens,
+                          k_lens,
+                          max_q_len: int = None,
+                          max_k_len: int = None,
+                          device='cuda'):
+    if max_q_len is None:
+        max_q_len = max(q_lens)
+
+    if max_k_len is None:
+        max_k_len = max(k_lens)
+
+    q_range = torch.arange(max_q_len).to(device)
+    k_range = torch.arange(max_k_len).to(device)
+
+    cross = q_range.unsqueeze(1) + k_range.unsqueeze(0)
+    cross = cross.unsqueeze(0)
+
+    threshold = k_lens.view(-1, 1, 1)
+    return torch.where(cross < threshold, 1, 0).to(device)
+
+
+def get_slopes(n_heads: int):
+    n = 2**math.floor(math.log2(n_heads))
+    m_0 = 2.0**(-8.0 / n)
+    m = torch.pow(m_0, torch.arange(1, 1 + n))
+    if n < n_heads:
+        m_hat_0 = 2.0**(-4.0 / n)
+        m_hat = torch.pow(m_hat_0, torch.arange(1, 1 + 2 * (n_heads - n), 2))
+        m = torch.cat([m, m_hat])
+
+    return m
+
+
+@torch.no_grad()
+def get_alibi_biases(n_heads: int, mask: torch.Tensor):
+    m = get_slopes(n_heads).to(mask.device)
+    distance = mask.cumsum(dim=-1)
+    return distance * m[:, None, None]
+
+
 @torch.no_grad()
 def attention_forward_with_paged_attention(
     hidden_states: Tensor,
@@ -96,17 +139,29 @@ def attention_forward_with_paged_attention(
     head_dim: int,
     position_ids: torch.LongTensor,
     past_key_value: Tuple[Tensor],
-    q_proj: Callable,
-    k_proj: Callable,
-    v_proj: Callable,
-    o_proj: Callable,
+    q_proj: Optional[Callable] = None,
+    k_proj: Optional[Callable] = None,
+    v_proj: Optional[Callable] = None,
+    qkv_proj: Optional[Callable] = None,
+    o_proj: Optional[Callable] = None,
     rotary_emb_fn: Optional[Callable] = None,
+    bias_type: str = 'default',
 ) -> Tensor:
     max_seq_len = position_ids.size(-1)
 
-    query_states = q_proj(hidden_states)
-    key_states = k_proj(hidden_states)
-    value_states = v_proj(hidden_states)
+    if qkv_proj is not None:
+        assert q_proj is None
+        assert k_proj is None
+        assert v_proj is None
+        query_states, key_states, value_states = qkv_proj(hidden_states)
+    else:
+        assert qkv_proj is None
+        assert q_proj is not None
+        assert k_proj is not None
+        assert v_proj is not None
+        query_states = q_proj(hidden_states)
+        key_states = k_proj(hidden_states)
+        value_states = v_proj(hidden_states)
 
     query_states = query_states.view(-1, num_heads, head_dim)
     key_states = key_states.view(-1, num_kv_heads, head_dim)
@@ -134,21 +189,58 @@ def attention_forward_with_paged_attention(
 
     block_size = past_key_value[0].size(1)
 
-    paged_attention_fwd(
-        query_states,
-        past_key_value[0],
-        past_key_value[1],
-        attn_output,
-        block_offsets,
-        b_start_loc=q_start_loc,
-        b_seq_len=q_seq_length,
-        b_kv_seq_len=kv_seq_length,
-        max_input_len=max_seq_len,
-        BLOCK=block_size,
-    )
+    bias_type = bias_type.lower()
+    if bias_type == 'default':
+        paged_attention_fwd(
+            query_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_output,
+            block_offsets,
+            b_start_loc=q_start_loc,
+            b_seq_len=q_seq_length,
+            b_kv_seq_len=kv_seq_length,
+            max_input_len=max_seq_len,
+            BLOCK=block_size,
+        )
+    else:
+        bias = None
+        if bias_type == 'alibi':
+            mask = generate_batched_mask(q_seq_length,
+                                         kv_seq_length,
+                                         device=query_states.device)
+            if dist.is_initialized():
+                slope_multi = dist.get_world_size()
+                slope_start = num_heads * dist.get_rank()
+            else:
+                slope_multi = 1
+                slope_start = 0
+            slope = get_slopes(num_heads *
+                               slope_multi)[slope_start:slope_start +
+                                            num_heads].to(mask.device)
+            distance = mask.cumsum(-1)
+            bias = distance.unsqueeze(1) * slope[None, :, None, None]
+            for head_id in range(num_heads):
+                bias[:, head_id][mask == 0] = -1e30
+        else:
+            raise ValueError(f'Unknown bias type: {bias_type}')
+        biased_paged_attention_fwd(
+            query_states,
+            past_key_value[0],
+            past_key_value[1],
+            bias,
+            attn_output,
+            block_offsets,
+            b_start_loc=q_start_loc,
+            b_seq_len=q_seq_length,
+            b_kv_seq_len=kv_seq_length,
+            max_input_len=max_seq_len,
+            BLOCK=block_size,
+        )
     hidden_size = num_heads * head_dim
     attn_output = attn_output.reshape(-1, hidden_size)
 
-    attn_output = o_proj(attn_output)
+    if o_proj is not None:
+        attn_output = o_proj(attn_output)
 
     return attn_output

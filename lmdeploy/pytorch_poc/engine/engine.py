@@ -84,11 +84,13 @@ class ModelContext:
         self,
         block_offsets: List[List[int]],
         history_lengths: List[int],
+        position_ids: torch.Tensor,
         world_size: int = 1,
         device='cuda',
     ):
         self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
+        self.position_ids = position_ids
         self.world_size = world_size
 
         # padding zero
@@ -329,6 +331,7 @@ def _tp_model_loop(
                 context=ModelContext(
                     block_offsets=inputs['block_offsets'],
                     history_lengths=inputs['history_lengths'],
+                    position_ids=inputs['position_ids'],
                     world_size=world_size,
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
@@ -602,6 +605,7 @@ class Engine:
                     context=ModelContext(
                         block_offsets=inputs['block_offsets'],
                         history_lengths=inputs['history_lengths'],
+                        position_ids=inputs['position_ids'],
                     ),
                     q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
                 )

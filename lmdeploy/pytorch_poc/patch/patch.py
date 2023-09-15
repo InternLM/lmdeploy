@@ -22,7 +22,9 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
     'modeling_baichuan.(.*)Model':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
-    'modeling_baichuan.(.*)Attention':
+    'modeling_baichuan.Attention':
+    'lmdeploy.pytorch_poc.patch.baichuan.Attention',  # noqa
+    'modeling_baichuan.BaichuanAttention':
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
     'modeling_baichuan.BaichuanForCausalLM':
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',  # noqa
