@@ -7,7 +7,7 @@ def test_base_model():
     model = MODELS.get('llama')()
     assert model is not None
     assert model.capability == 'chat'
-    assert model.get_prompt('test') is None
+    assert model.get_prompt('test') == 'test'
     assert model.stop_words is None
 
     model = MODELS.get('internlm')(capability='completion')
@@ -72,7 +72,7 @@ def test_baichuan():
 
     model = MODELS.get('baichuan-7b')(capability='chat')
     _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt is None
+    assert _prompt == prompt
 
 
 def test_llama2():
