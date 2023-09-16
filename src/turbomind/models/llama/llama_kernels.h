@@ -83,9 +83,9 @@ struct BaseAttentionLayout {
     int  stride_batch;
     int  stride_seq;
     int  stride_head;
-    bool use_seqlens       = false;
-    int  batch_seqs_offset = 0;
-    T**  batch_seqs        = nullptr;
+    bool use_seqlens          = false;
+    size_t  batch_seqs_offset = 0;
+    T**  batch_seqs           = nullptr;
 };
 
 template<typename T>
@@ -95,10 +95,12 @@ struct BaseAttentionParams {
     T*                     key;
     T*                     val;
     T*                     mask;
-    float*                 out_accum    = nullptr;
-    int*                   cu_seqlens_q = nullptr;
-    int*                   cu_seqlens_k = nullptr;
-    size_t                 group_size   = 1;
+    float*                 out_accum       = nullptr;
+    int*                   cu_seqlens_q    = nullptr;
+    int*                   cu_seqlens_k    = nullptr;
+    int*                   actual_seqlen_q = nullptr;
+    int*                   actual_seqlen_k = nullptr;
+    size_t                 group_size      = 1;
     BaseAttentionLayout<T> layout_q;
     BaseAttentionLayout<T> layout_k;
     BaseAttentionLayout<T> layout_v;

@@ -130,7 +130,7 @@ static inline void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 
     params.hidden_size_per_head    = size_per_head;
     params.rotary_embedding_dim    = rotary_embedding_dim;
-    params.rotary_embedding_base         = rotary_embedding_base;
+    params.rotary_embedding_base   = rotary_embedding_base;
     params.max_position_embeddings = max_position_embeddings;
     params.use_dynamic_ntk         = use_dynamic_ntk;
     params.use_logn_attn           = use_logn_attn;

@@ -55,7 +55,7 @@ class BaseModel:
 
     @abstractmethod
     def decorate_prompt(self, prompt, sequence_start):
-        pass
+        return prompt
 
     @staticmethod
     def _translate_messages(messages: List):
@@ -176,8 +176,8 @@ class InternLMChat7B(BaseModel):
     def __init__(self,
                  system='',
                  user='<|User|>',
-                 eoh='<eoh>',
-                 eoa='<eoa>',
+                 eoh='',
+                 eoa='',
                  assistant='<|Bot|>',
                  **kwargs):
         super().__init__(**kwargs)
@@ -231,19 +231,22 @@ class InternLMChat7B(BaseModel):
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
-        return [103027, 103028]
+        return [103028]
 
 
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
+    """Chat template and generation parameters of InternLM-Chat-7B-8K."""
 
-    def __init__(self, session_len=8192, **kwargs):
+    def __init__(self, session_len=8192, repetition_penalty=1.02, **kwargs):
         super(InternLMChat7B8K, self).__init__(**kwargs)
         self.session_len = session_len
+        self.repetition_penalty = repetition_penalty
 
 
 @MODELS.register_module(name='baichuan-7b')
 class Baichuan7B(BaseModel):
+    """Generation parameters of Baichuan-7B base model."""
 
     def __init__(self, repetition_penalty=1.1, **kwargs):
         super().__init__(**kwargs)
@@ -252,6 +255,8 @@ class Baichuan7B(BaseModel):
 
 @MODELS.register_module(name='baichuan2-7b')
 class Baichuan2_7B(BaseModel):
+    """Chat template and generation parameters of Baichuan2-7B-Base and
+    Baichuan2-7B-Chat models."""
 
     def __init__(self,
                  temperature=0.3,
