@@ -276,13 +276,13 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
                     int(size_per_head_),
                     int(max_seq_len * size_per_head_),
                     false,
-                    int(cache_layer_offset),
+                    cache_layer_offset,
                     key_cache_ptrs};
     Layout layout_v{int(local_head_num_ * max_seq_len * size_per_head_),
                     int(size_per_head_),
                     int(max_seq_len * size_per_head_),
                     false,
-                    int(cache_layer_offset),
+                    cache_layer_offset,
                     val_cache_ptrs};
     Layout layout_o{
         int(local_head_num_ * max_q_len * size_per_head_),
