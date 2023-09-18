@@ -157,6 +157,7 @@ def profile_throughput(model_path: str,
 class MemoryMonitor:
     from multiprocessing import Manager
     max_mem = Manager().Value('f', 0)  # GB
+    device_count = Manager().Value('f', 0)
 
     @staticmethod
     def nvidia_info():
@@ -199,6 +200,7 @@ class MemoryMonitor:
         info = cls.nvidia_info()
         max_mem = 0
         mem_start = 0
+        cls.device_count.value = len(info['gpus'])
         for used_total in info['gpus']:
             mem_start += used_total['used']
         while True:
@@ -230,8 +232,11 @@ class ProfileResult:
     batch: int
     prompt_tokens: int
     completion_tokens: int
-    throughput: float
-    memory: float
+    throughput_per_proc: float
+    throughput_per_node: float
+    mem_per_proc: float
+    mem_per_gpu: float
+    mem_per_node: float
 
 
 def parse_args():
@@ -288,23 +293,31 @@ def main():
             output = Pool(1).map(profile_target, (args.model_path, ))
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
+            device_count = MemoryMonitor.device_count.value
             results.append(
                 ProfileResult(model_name=output[0][0],
                               batch=batch,
                               prompt_tokens=prompt_tokens,
                               completion_tokens=completion_tokens,
-                              throughput=output[0][1],
-                              memory=memory))
+                              throughput_per_proc=output[0][1],
+                              throughput_per_node=output[0][1] / args.tp *
+                              device_count,
+                              mem_per_proc=memory,
+                              mem_per_gpu=memory / args.tp,
+                              mem_per_node=memory / args.tp * device_count))
     with open(args.dst_csv, 'w') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
             'batch', 'prompt_tokens', 'completion_tokens',
-            'throughput(token/s)', 'memory(GB)'
+            'throughput_per_proc(token/s)', 'throughput_per_node(token/s)',
+            'mem_per_proc(GB)', 'mem_per_gpu(GB)', 'mem_per_node(GB)'
         ])
         for re in results:
             writer.writerow([
                 re.batch, re.prompt_tokens, re.completion_tokens,
-                f'{re.throughput:.2f}', f'{re.memory:.2f}'
+                f'{re.throughput_per_proc:.2f}',
+                f'{re.throughput_per_node:.2f}', f'{re.mem_per_proc:.2f}',
+                f'{re.mem_per_gpu:.2f}', f'{re.mem_per_node:.2f}'
             ])
 
 
