@@ -63,6 +63,11 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     void handleMissingParams();
 
+    void setFfiLock(ffi_api_lock_ctrl_t func)
+    {
+        ffi_lock_ = func;
+    }
+
     std::string toString() override;
     int         getTensorParaSize() override;
     int         getPipelineParaSize() override;
@@ -112,4 +117,6 @@ private:
 
     std::string model_name_;
     std::string model_dir_;
+
+    ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
 };
