@@ -84,7 +84,7 @@ struct BaseAttentionLayout {
     int  stride_seq;
     int  stride_head;
     bool use_seqlens       = false;
-    int  batch_seqs_offset = 0;
+    size_t  batch_seqs_offset = 0;
     T**  batch_seqs        = nullptr;
 };
 
