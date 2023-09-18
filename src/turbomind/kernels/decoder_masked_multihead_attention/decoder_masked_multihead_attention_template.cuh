@@ -1422,8 +1422,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             // Trigger the stores to global memory.
             if (Dh == Dh_MAX || co < Dh / QK_ELTS_IN_16B) {
 
-                int offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh + tlength_circ * Dh
-                             + co * QK_ELTS_IN_16B + ci;
+                size_t offset = params.kv_cache_per_sample_offset + kvhi * params.memory_max_len * Dh
+                                + tlength_circ * Dh + co * QK_ELTS_IN_16B + ci;
 
                 if (!QUANT_POLICY) {
                     *reinterpret_cast<Qk_vec_m*>(&params.k_cache_per_sample[bi][offset]) =
