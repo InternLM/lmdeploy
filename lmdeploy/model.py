@@ -234,6 +234,14 @@ class InternLMChat7B(BaseModel):
         return [103028]
 
 
+@MODELS.register_module(name='internlm-chat-20b')
+class InternLMChat20B(InternLMChat7B):
+    """Chat template and generation parameters of InternLM-Chat-20B."""
+
+    def __init__(self, **kwargs):
+        super(InternLMChat20B, self).__init__(**kwargs)
+
+
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
     """Chat template and generation parameters of InternLM-Chat-7B-8K."""
