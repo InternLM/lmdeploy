@@ -151,7 +151,7 @@ def profile_throughput(model_path: str,
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
           f'throughput: {throughput:.2f} token/s\n{"-" * 50}')
-    return tm_model.model_name, throughput
+    return tm_model.model_name, throughput, tm_model.gpu_count
 
 
 class MemoryMonitor:
@@ -291,20 +291,21 @@ def main():
                                      output_seqlen=completion_tokens,
                                      tp=args.tp)
             output = Pool(1).map(profile_target, (args.model_path, ))
+            model_name, throughput_per_proc, tp = output[0]
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
             device_count = MemoryMonitor.device_count.value
             results.append(
-                ProfileResult(model_name=output[0][0],
+                ProfileResult(model_name=model_name,
                               batch=batch,
                               prompt_tokens=prompt_tokens,
                               completion_tokens=completion_tokens,
-                              throughput_per_proc=output[0][1],
-                              throughput_per_node=output[0][1] / args.tp *
+                              throughput_per_proc=throughput_per_proc,
+                              throughput_per_node=throughput_per_proc / tp *
                               device_count,
                               mem_per_proc=memory,
-                              mem_per_gpu=memory / args.tp,
-                              mem_per_node=memory / args.tp * device_count))
+                              mem_per_gpu=memory / tp,
+                              mem_per_node=memory / tp * device_count))
     with open(args.dst_csv, 'w') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
