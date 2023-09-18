@@ -80,12 +80,12 @@ void invokeMyCopyInt(int* dst, const int* src, size_t count, cudaStream_t st);
 
 template<typename T>
 struct BaseAttentionLayout {
-    int  stride_batch;
-    int  stride_seq;
-    int  stride_head;
-    bool use_seqlens       = false;
-    size_t  batch_seqs_offset = 0;
-    T**  batch_seqs        = nullptr;
+    int    stride_batch;
+    int    stride_seq;
+    int    stride_head;
+    bool   use_seqlens       = false;
+    size_t batch_seqs_offset = 0;
+    T**    batch_seqs        = nullptr;
 };
 
 template<typename T>
