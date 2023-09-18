@@ -25,8 +25,8 @@ struct Qkv_params {
     // batched ptr inputs.
     void** __restrict__ k_batched_ptr = nullptr;
     void** __restrict__ v_batched_ptr = nullptr;
-    size_t k_batched_offset              = 0;
-    size_t v_batched_offset              = 0;
+    size_t k_batched_offset           = 0;
+    size_t v_batched_offset           = 0;
 
     // The stride between rows of the Q, K and V matrices.
     index_t q_batch_stride;
