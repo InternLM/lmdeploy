@@ -654,6 +654,7 @@ class Engine:
         ]
         seq_length = inputs['seq_length']
         accum_seq_length = inputs['seq_length'].cumsum(0)
+        logits = logits.cuda()
         split_logits = [
             logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
         ]

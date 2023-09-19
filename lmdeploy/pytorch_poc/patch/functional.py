@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 from torch import distributed as dist
 
-from lmdeploy.pytorch_poc.kernels import (biased_paged_attention_fwd,
+from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
                                           paged_attention_fwd)
 
 
@@ -103,28 +103,35 @@ def generate_batched_mask(q_lens,
     q_range = torch.arange(max_q_len).to(device)
     k_range = torch.arange(max_k_len).to(device)
 
-    cross = q_range.unsqueeze(1) + k_range.unsqueeze(0)
+    cross = k_range.unsqueeze(0) - q_range.unsqueeze(1)
     cross = cross.unsqueeze(0)
 
-    threshold = k_lens.view(-1, 1, 1)
-    return torch.where(cross < threshold, 1, 0).to(device)
+    threshold = (k_lens - q_lens).view(-1, 1, 1)
+    mask = torch.where(cross <= threshold, 1, 0).to(device)
+    for idx, q_len in enumerate(q_lens):
+        mask[idx, q_len:, :] = 0
+    return mask
 
 
-def get_slopes(n_heads: int):
-    n = 2**math.floor(math.log2(n_heads))
-    m_0 = 2.0**(-8.0 / n)
-    m = torch.pow(m_0, torch.arange(1, 1 + n))
-    if n < n_heads:
-        m_hat_0 = 2.0**(-4.0 / n)
-        m_hat = torch.pow(m_hat_0, torch.arange(1, 1 + 2 * (n_heads - n), 2))
-        m = torch.cat([m, m_hat])
+def get_slopes(n):
 
-    return m
+    def _get_interleave_power_of_2(n):
+        start = 2**(-(2**-(math.log2(n) - 3)))
+        ratio = start
+        return [start * ratio**i for i in range(n)]
+
+    if math.log2(n).is_integer():
+        return _get_interleave_power_of_2(n)
+    else:
+        closest_power_of_2 = 2**math.floor(math.log2(n))
+        return (
+            _get_interleave_power_of_2(closest_power_of_2) +
+            get_slopes(2 * closest_power_of_2)[0::2][:n - closest_power_of_2])
 
 
 @torch.no_grad()
 def get_alibi_biases(n_heads: int, mask: torch.Tensor):
-    m = get_slopes(n_heads).to(mask.device)
+    m = torch.tensor(get_slopes(n_heads)).to(mask.device)
     distance = mask.cumsum(dim=-1)
     return distance * m[:, None, None]
 
@@ -204,43 +211,33 @@ def attention_forward_with_paged_attention(
             BLOCK=block_size,
         )
     else:
-        bias = None
         if bias_type == 'alibi':
-            mask = generate_batched_mask(q_seq_length,
-                                         kv_seq_length,
-                                         device=query_states.device)
+            num_heads_full = num_heads
+            head_offset = 0
             if dist.is_initialized():
-                slope_multi = dist.get_world_size()
-                slope_start = num_heads * dist.get_rank()
-            else:
-                slope_multi = 1
-                slope_start = 0
-            slope = get_slopes(num_heads *
-                               slope_multi)[slope_start:slope_start +
-                                            num_heads].to(mask.device)
-            distance = mask.cumsum(-1)
-            bias = distance.unsqueeze(1) * slope[None, :, None, None]
-            for head_id in range(num_heads):
-                bias[:, head_id][mask == 0] = -1e30
+                world_size = dist.get_world_size()
+                rank = dist.get_rank()
+                num_heads_full = num_heads * world_size
+                head_offset = num_heads * rank
+            alibi_paged_attention_fwd(
+                query_states,
+                past_key_value[0],
+                past_key_value[1],
+                attn_output,
+                block_offsets,
+                b_start_loc=q_start_loc,
+                b_seq_len=q_seq_length,
+                b_kv_seq_len=kv_seq_length,
+                max_input_len=max_seq_len,
+                head_offset=head_offset,
+                num_heads=num_heads_full,
+                BLOCK=block_size,
+            )
         else:
             raise ValueError(f'Unknown bias type: {bias_type}')
-        biased_paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            bias,
-            attn_output,
-            block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
-            BLOCK=block_size,
-        )
     hidden_size = num_heads * head_dim
     attn_output = attn_output.reshape(-1, hidden_size)
 
     if o_proj is not None:
         attn_output = o_proj(attn_output)
-
     return attn_output

@@ -20,16 +20,16 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
-    'modeling_baichuan.(.*)Model':
+    'modeling_baichuan.Model':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
+    'modeling_baichuan.BaichuanModel':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',  # noqa
     'modeling_baichuan.Attention':
     'lmdeploy.pytorch_poc.patch.baichuan.Attention',  # noqa
     'modeling_baichuan.BaichuanAttention':
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
-    'modeling_baichuan.BaichuanForCausalLM':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',  # noqa
-    'modeling_baichuan.BaichuanLayer':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanLayer',  # noqa
+    'modeling_baichuan.MLP':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
 }
 
 

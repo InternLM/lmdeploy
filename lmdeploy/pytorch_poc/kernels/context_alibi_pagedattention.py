@@ -3,8 +3,46 @@
 import torch
 import triton
 import triton.language as tl
+import math
 
-assert triton.__version__ >= '2.1.0'
+
+assert triton.__version__ >= "2.1.0"
+
+LOG2 = math.log(2)
+
+
+@triton.jit
+def tl_pow(a, b):
+    return tl.exp(b * tl.log(a))
+
+
+@triton.jit
+def tl_2pow(b):
+    return tl.exp(b * LOG2)
+
+
+@triton.jit
+def tl_log2(a):
+    return tl.log(a) / LOG2
+
+
+@triton.jit
+def _get_interleave_power_of_2(i, n):
+    start = -tl_2pow(3 - tl_log2(n))
+    start = tl_2pow(start)
+    ratio = start
+    return start * tl_pow(ratio, i)
+
+
+@triton.jit
+def get_slope(i, n):
+    closest_power_of_2 = tl_2pow(tl_log2(n).to(tl.int32))
+    if i < closest_power_of_2:
+        return _get_interleave_power_of_2(i, closest_power_of_2)
+    else:
+        return _get_interleave_power_of_2(
+            (i - closest_power_of_2) * 2, 2 * closest_power_of_2
+        )
 
 
 @triton.jit
@@ -12,8 +50,6 @@ def _fwd_kernel(
     Q,
     K,
     V,
-    Bias,
-    Head_scale,
     sm_scale,
     B_Start_Loc,
     B_Seqlen,
@@ -29,14 +65,12 @@ def _fwd_kernel(
     stride_vbs,
     stride_vh,
     stride_vd,
-    stride_biasbs,
-    stride_biash,
-    stride_biasq,
-    stride_biask,
     stride_obs,
     stride_oh,
     stride_od,
     stride_boffb,
+    head_offset,
+    num_heads,
     kv_group_num,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -51,33 +85,42 @@ def _fwd_kernel(
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_kv_len = tl.load(B_kvlen + cur_batch)
     cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
+    history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
+    head_slope = get_slope(
+        cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32)
+    )
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
-             cur_head * stride_qh + offs_d[None, :] * stride_qd)
-    off_k = (offs_n[None, :] * stride_kbs + cur_kv_head * stride_kh +
-             offs_d[:, None] * stride_kd)
-    off_v = (offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh +
-             offs_d[None, :] * stride_vd)
-    off_bias = (cur_batch * stride_biasbs + cur_head * stride_biash +
-                offs_m[:, None] * stride_biasq +
-                offs_n[None, :] * stride_biask)
+    off_q = (
+        (cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs
+        + cur_head * stride_qh
+        + offs_d[None, :] * stride_qd
+    )
+    off_k = (
+        offs_n[None, :] * stride_kbs
+        + cur_kv_head * stride_kh
+        + offs_d[:, None] * stride_kd
+    )
+    off_v = (
+        offs_n[:, None] * stride_vbs
+        + cur_kv_head * stride_vh
+        + offs_d[None, :] * stride_vd
+    )
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
     k_ptrs = K + off_k
     v_ptrs = V + off_v
-    bias_ptrs = Bias + off_bias
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
     # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
 
@@ -100,13 +143,15 @@ def _fwd_kernel(
         qk += tl.dot(q, k)
         qk *= sm_scale
 
-        bias = tl.load(
-            bias_ptrs + start_n,
-            mask=(start_n + offs_n[None, :]) < cur_batch_kv_len
-            and (offs_m[:, None] < cur_batch_seq_len),
-            other=-1e30,
-        )
+        mask = start_n + offs_n[None, :]
+        bias = mask.to(tl.float32) * head_slope
         qk += bias
+        # NOTE: inf - inf = nan, and nan will leads to error
+        qk = tl.where(
+            (history_len + offs_m[:, None]) >= mask,
+            qk,
+            float(-1e30),
+        )
 
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -137,42 +182,40 @@ def _fwd_kernel(
         l_i = l_i_new
         m_i = m_i_new
     # initialize pointers to output
-    off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs +
-             cur_head * stride_oh + offs_d[None, :] * stride_od)
+    off_o = (
+        (cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs
+        + cur_head * stride_oh
+        + offs_d[None, :] * stride_od
+    )
     out_ptrs = Out + off_o
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
 
 @torch.no_grad()
-def biased_paged_attention_fwd(
+def alibi_paged_attention_fwd(
     q,
     k,
     v,
-    bias,
-    head_scale,
     o,
     block_offsets,
     b_start_loc,
     b_seq_len,
     b_kv_seq_len,
     max_input_len,
+    head_offset=0,
+    num_heads=-1,
     BLOCK=64,
 ):
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128}
-    assert bias.dtype == torch.float32
-
-    if bias.dim() == 2:
-        bias = bias.unsqueeze(0)
-
-    if bias.dim() == 3:
-        bias = bias.unsqueeze(1)
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[-2]
     kv_group_num = q.shape[-2] // k[0].shape[-2]
+    if num_heads <= 0:
+        num_heads = head
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
@@ -181,7 +224,6 @@ def biased_paged_attention_fwd(
         q,
         k,
         v,
-        bias,
         sm_scale,
         b_start_loc,
         b_seq_len,
@@ -197,14 +239,12 @@ def biased_paged_attention_fwd(
         v.stride(-3),
         v.stride(-2),
         v.stride(-1),
-        bias.stride(-4),
-        bias.stride(-3),
-        bias.stride(-2),
-        bias.stride(-1),
         o.stride(-3),
         o.stride(-2),
         o.stride(-1),
         block_offsets.stride(0),
+        head_offset=head_offset,
+        num_heads=num_heads,
         kv_group_num=kv_group_num,
         BLOCK_M=BLOCK,
         BLOCK_DMODEL=Lk,
