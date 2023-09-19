@@ -177,7 +177,7 @@ class InternLMChat7B(BaseModel):
                  system='',
                  user='<|User|>',
                  eoh='',
-                 eoa='',
+                 eoa='<eoa>',
                  assistant='<|Bot|>',
                  **kwargs):
         super().__init__(**kwargs)
@@ -223,7 +223,7 @@ class InternLMChat7B(BaseModel):
         for user, assistant in zip(users, assistants):
             if assistant:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
-                       f'{assistant}{self.eoa}'
+                       f'{assistant}{self.eoa}\n'
             else:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
         return ret
