@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
+import logging
 import re
 from copy import copy
 from typing import Dict, Sequence
@@ -13,7 +14,6 @@ from torch.distributed._tensor import DeviceMesh
 from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
-import logging
 logger = logging.getLogger()
 
 MODULE_MAP = {
@@ -31,6 +31,23 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',  # noqa
     'modeling_baichuan.BaichuanLayer':
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanLayer',  # noqa
+    # Falcon Models in transformer / on hub
+    'transformers.models.falcon.modeling_falcon.FalconAttention':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
+    'transformers.models.falcon.modeling_falcon.FalconModel':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
+    'transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
+    'modelling_RW.Attention':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
+    'modelling_RW.RWModel':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
+    'modelling_RW.RotaryEmbedding':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
+    # 'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
+    # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconForCausalLM',
+    # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
+    # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconDecoderLayer',
 }
 
 

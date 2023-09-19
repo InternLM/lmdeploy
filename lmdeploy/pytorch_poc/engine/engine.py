@@ -399,14 +399,30 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        model_config = ModelConfig(
-            hf_config.hidden_size,
-            hf_config.num_hidden_layers,
-            hf_config.num_attention_heads,
-            bos_token_id=hf_config.bos_token_id,
-            eos_token_id=hf_config.eos_token_id,
-            dtype=torch_dtype,
-        )
+        if 'falcon' in model_path:
+            if hf_config.multi_query:
+                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+                kv_head = 1
+            else:
+                kv_dim = hf_config.hidden_size,
+                kv_head = hf_config.num_attention_heads
+            model_config = ModelConfig(
+                kv_dim,
+                hf_config.num_hidden_layers,
+                kv_head,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
+        else:
+            model_config = ModelConfig(
+                hf_config.hidden_size,
+                hf_config.num_hidden_layers,
+                hf_config.num_attention_heads,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -422,7 +438,9 @@ class Engine:
                 hf_model.eval()
 
             self.patched_model = patch(
-                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
+                hf_model,
+                ['context', 'use_origin', 'q_seq_info', 'position_ids'
+                 ]).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)

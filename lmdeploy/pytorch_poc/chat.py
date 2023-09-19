@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+import logging
 import os
 import random
 
@@ -100,7 +100,7 @@ def main(
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     prompt_token_ids=input_ids,
-                    request_output_len=20,
+                    request_output_len=60,
                     step=step,
                     sampling_param=sampling_param):
                 status, res, tokens = outputs
