@@ -139,7 +139,7 @@ class Scheduler:
                 if self.block_manager.can_append_slot(session):
                     msg_length = len(msg.token_ids)
                     block_size = self.cache_config.block_size
-                    session.append_tokens(msg_length + 1, block_size)
+                    session.append_tokens(msg_length, block_size)
                     self.block_manager.append_slot(session)
                     enable_running = True
             else:
@@ -147,7 +147,7 @@ class Scheduler:
                     # update logical blocks of session
                     msg_length = len(msg.token_ids)
                     block_size = self.cache_config.block_size
-                    session.append_tokens(msg_length + 1, block_size)
+                    session.append_tokens(msg_length, block_size)
 
                     # allocate session memory
                     self.block_manager.allocate(session)
