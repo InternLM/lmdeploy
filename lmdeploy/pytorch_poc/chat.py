@@ -45,7 +45,7 @@ def main(
     interface.
 
     Args:
-        model_path (str): the path of the deployed model
+        model_path (str): the huggingface model path
         session_id (int): the identical id of a session
         repetition_penalty (float): parameter to penalize repetition
         tp (int): GPU number used in tensor parallelism

@@ -1,16 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
+import re
 from copy import copy
 from typing import Dict, Sequence
 
 import torch
 import torch.distributed as dist
 from addict import Addict
-from torch.distributed._tensor import DeviceMesh, distribute_module
-from torch.distributed.tensor.parallel import parallelize_module
-from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
+from torch.distributed._tensor import DeviceMesh
 
+from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
 MODULE_MAP = {
@@ -20,16 +20,25 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
-    'transformers.models.llama.modeling_llama.LlamaRMSNorm':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaRMSNorm',
-    'transformers.models.llama.modeling_llama.LlamaDecoderLayer':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaDecoderLayer',
-    # 动态模块路径是不固定的，有点麻烦
-    f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.SelfAttention':
-    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
-    f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.chatglm2-6b.modeling_chatglm.ChatGLMModel':
-    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedChatGLMModel',
+    'modeling_baichuan.Model':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
+    'modeling_baichuan.BaichuanModel':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',  # noqa
+    'modeling_baichuan.Attention':
+    'lmdeploy.pytorch_poc.patch.baichuan.Attention',  # noqa
+    'modeling_baichuan.BaichuanAttention':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
+    'modeling_baichuan.MLP':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
 }
+
+
+def _get_rewrite_qualname(origin_qualname: str):
+    global MODULE_MAP
+    for key, value in MODULE_MAP.items():
+        if re.search(key, origin_qualname):
+            return value
+    return None
 
 
 def _class_from_qualname(qualname):
@@ -58,11 +67,18 @@ def _patch(model: torch.nn.Module, context: Addict):
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
     origin_qualname = f'{module_name}.{class_name}'
-    rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+    rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is None:
+        # class name only
         origin_qualname = class_name
-        rewrite_qualname = MODULE_MAP.get(origin_qualname, None)
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
+
+    if rewrite_qualname is None:
+        # name with first module
+        mod_name = module_name[module_name.rfind('.') + 1:]
+        origin_qualname = f'{mod_name}.{class_name}'
+        rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is not None:
         logger.debug(
@@ -86,15 +102,29 @@ def _patch(model: torch.nn.Module, context: Addict):
         model = copy(model)
         model.__class__ = new_type
 
+        if hasattr(model, '_update_model_fn'):
+            model._update_model_fn()
+
     return model
 
 
-def _load_state_dict(model: torch.nn.Module,
-                     state_dict: Dict[str, torch.Tensor] = None,
-                     rank: int = 0,
-                     world_size: int = 1,
-                     device_mesh: DeviceMesh = None,
-                     state_prefix: str = ''):
+def _update_model(model: torch.nn.Module):
+    # recursive over children
+    for _, child in model.named_children():
+        _update_model(child)
+
+    if hasattr(model, '_update_model_fn'):
+        model._update_model_fn()
+
+
+def _load_state_dict(
+    model: torch.nn.Module,
+    state_dict: Dict[str, torch.Tensor] = None,
+    rank: int = 0,
+    world_size: int = 1,
+    device_mesh: DeviceMesh = None,
+    state_prefix: str = '',
+):
     # post order
     for name, child in model.named_children():
         loaded_child = _load_state_dict(
@@ -103,7 +133,8 @@ def _load_state_dict(model: torch.nn.Module,
             rank,
             world_size,
             device_mesh=device_mesh,
-            state_prefix=f'{state_prefix}{name}.')
+            state_prefix=f'{state_prefix}{name}.',
+        )
         if loaded_child != child:
             model.register_module(name, loaded_child)
 
@@ -113,7 +144,6 @@ def _load_state_dict(model: torch.nn.Module,
     # init model on device
     device = torch.device(f'cuda:{rank}')
     for k, v in model_state_dict.items():
-
         if '.' in k:
             # only process weight that directly owned by module
             continue
@@ -134,11 +164,11 @@ def _load_state_dict(model: torch.nn.Module,
             continue
 
         if rank == 0:
-            new_param = torch.nn.Parameter(
-                state_dict[full_k], requires_grad=False).to(device)
+            new_param = torch.nn.Parameter(state_dict[full_k],
+                                           requires_grad=False).to(device)
         else:
-            new_param = torch.nn.Parameter(
-                torch.empty_like(v, device=device), requires_grad=False)
+            new_param = torch.nn.Parameter(torch.empty_like(v, device=device),
+                                           requires_grad=False)
         model.register_parameter(k, new_param)
 
     # distribute module
@@ -155,23 +185,23 @@ def _load_state_dict(model: torch.nn.Module,
         if need_dist:
             model.__tp_distributed__ = True
 
-            if hasattr(model, '_get_parallelize_plan'):
-                parallelize_plan = model._get_parallelize_plan()
-                parallelize_module(
-                    model, device_mesh, parallelize_plan=parallelize_plan)
-
             if hasattr(model, '_distribute_partition_fn'):
-                distribute_module(
+                partition_module(
                     model,
                     device_mesh=device_mesh,
-                    partition_fn=model._distribute_partition_fn)
+                    func=model._distribute_partition_fn,
+                    to_local=True,
+                )
+            else:
+                replicate_module(model, device_mesh=device_mesh)
 
             if hasattr(model, '_distribute_input_fn'):
                 input_fn = model._distribute_input_fn
                 model.register_forward_pre_hook(
                     lambda _, inputs, inputs_dict: input_fn(
                         inputs, inputs_dict, device_mesh),
-                    with_kwargs=True)
+                    with_kwargs=True,
+                )
 
             if hasattr(model, '_distribute_output_fn'):
                 output_fn = model._distribute_output_fn
@@ -181,11 +211,13 @@ def _load_state_dict(model: torch.nn.Module,
     return model
 
 
-def patch(model: torch.nn.Module,
-          extra_args: Sequence[str] = None,
-          rank: int = 0,
-          world_size: int = 1,
-          checkpoints: Sequence[str] = None):
+def patch(
+    model: torch.nn.Module,
+    extra_args: Sequence[str] = None,
+    rank: int = 0,
+    world_size: int = 1,
+    checkpoints: Sequence[str] = None,
+):
     if extra_args is None:
         extra_args = []
 
@@ -211,8 +243,10 @@ def patch(model: torch.nn.Module,
                     state_dict,
                     rank=rank,
                     world_size=world_size,
-                    device_mesh=device_mesh)
+                    device_mesh=device_mesh,
+                )
 
+    _update_model(model)
     extra_args_str = ' '.join(f'{arg}=None,' for arg in extra_args)
     context_update_str = ' '.join(f'{arg}={arg},' for arg in extra_args)
 
