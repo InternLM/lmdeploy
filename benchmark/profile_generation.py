@@ -34,7 +34,8 @@ def infer(model, session_id: int, input_ids: str, output_seqlen: int,
                                             request_output_len=output_seqlen,
                                             sequence_start=True,
                                             sequence_end=True,
-                                            ignore_eos=True):
+                                            ignore_eos=True,
+                                            stream_output=True):
             res, token = outputs[0]
             timestamps.append(time.perf_counter())
             tokens.append(token)
@@ -151,7 +152,8 @@ def profile_throughput(model_path: str,
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
           f'throughput: {throughput:.2f} token/s\n{"-" * 50}')
-    return tm_model.model_name, throughput, tm_model.gpu_count
+    return tm_model.model_name, first_token_latency_ave, throughput, \
+        tm_model.gpu_count
 
 
 class MemoryMonitor:
@@ -232,6 +234,7 @@ class ProfileResult:
     batch: int
     prompt_tokens: int
     completion_tokens: int
+    first_token_latency: float
     throughput_per_proc: float
     throughput_per_node: float
     mem_per_proc: float
@@ -291,7 +294,8 @@ def main():
                                      output_seqlen=completion_tokens,
                                      tp=args.tp)
             output = Pool(1).map(profile_target, (args.model_path, ))
-            model_name, throughput_per_proc, tp = output[0]
+            model_name, first_token_latency, throughput_per_proc, tp = output[
+                0]
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
             device_count = MemoryMonitor.device_count.value
@@ -300,6 +304,7 @@ def main():
                               batch=batch,
                               prompt_tokens=prompt_tokens,
                               completion_tokens=completion_tokens,
+                              first_token_latency=first_token_latency,
                               throughput_per_proc=throughput_per_proc,
                               throughput_per_node=throughput_per_proc / tp *
                               device_count,
@@ -316,6 +321,7 @@ def main():
         for re in results:
             writer.writerow([
                 re.batch, re.prompt_tokens, re.completion_tokens,
+                f'{re.first_token_latency:.3f}',
                 f'{re.throughput_per_proc:.2f}',
                 f'{re.throughput_per_node:.2f}', f'{re.mem_per_proc:.2f}',
                 f'{re.mem_per_gpu:.2f}', f'{re.mem_per_node:.2f}'

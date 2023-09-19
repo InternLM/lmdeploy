@@ -17,6 +17,7 @@ def sample_requests(
     tokenizer: Tokenizer,
 ) -> List[Tuple[str, int, int]]:
     # Load the dataset.
+    print('load test data...')
     with open(dataset_path) as f:
         dataset = json.load(f)
     # Filter out the conversations with less than 2 turns.
@@ -27,9 +28,19 @@ def sample_requests(
 
     # Tokenize the prompts and completions.
     prompts = [prompt for prompt, _ in dataset]
+    start = time.perf_counter()
     prompt_token_ids = tokenizer(prompts).input_ids
+    end = time.perf_counter()
+    print(f'tokenizer encode prompts cost: {end-start} s, '
+          f'len(prompts): {len(prompts)}')
+
     completions = [completion for _, completion in dataset]
+    start = time.perf_counter()
     completion_token_ids = tokenizer(completions).input_ids
+    end = time.perf_counter()
+    print(f'tokenizer encode completions cost: {end-start} s, '
+          f'len(prompts): {len(completions)}')
+
     tokenized_dataset = []
     for i in range(len(dataset)):
         output_len = len(completion_token_ids[i])
@@ -49,6 +60,7 @@ def sample_requests(
 
     # Sample the requests.
     sampled_requests = random.sample(filtered_dataset, num_requests)
+    print('load test data successfully')
     return sampled_requests
 
 
@@ -114,6 +126,42 @@ class Engine:
         return end - start
 
 
+def warmup(model, tokenizer, concurrency: int, warmup_round: int = 2):
+    print('start to warmup ...')
+
+    # make up a prompt that can be tokenized into {input_seqlen} tokens
+    prompt = 'hi ' * 128
+    input_ids = tokenizer.encode(prompt)
+
+    def _infer(model, session_id):
+        chatbot = model.create_instance()
+        for _ in range(warmup_round):
+            for _ in chatbot.stream_infer(session_id,
+                                          input_ids=input_ids,
+                                          request_output_len=512,
+                                          sequence_start=True,
+                                          sequence_end=True,
+                                          ignore_eos=True):
+                continue
+
+    _start = time.perf_counter()
+    procs = []
+    for i in range(concurrency):
+        proc = Thread(target=_infer, args=(model, i + 1))
+        procs.append(proc)
+        proc.start()
+
+    try:
+        for proc in procs:
+            proc.join()
+    except Exception:
+        for proc in procs:
+            proc.stop()
+        exit(1)
+    _end = time.perf_counter()
+    print(f'end warmup, elapsed time: {round(_end - _start, 2)}s')
+
+
 def main(dataset: str,
          model_path: str,
          concurrency: int = 1,
@@ -122,6 +170,8 @@ def main(dataset: str,
 
     engine = Engine(model_path, tp=tp)
     tokenizer = engine.tokenizer
+    print('load model successfully')
+    warmup(engine.tm_model, tokenizer, concurrency)
 
     requests = sample_requests(dataset, num_prompts, tokenizer)
 
