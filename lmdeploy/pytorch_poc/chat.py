@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
+
 import os
 import random
 
@@ -39,11 +39,11 @@ def main(
         session_id: int = 1,
         top_k=40,
         top_p=0.8,
-        temperature=0.00000008,
+        temperature=0.8,
         repetition_penalty: float = 1.0,
         tp: int = 1,
-        trust_remote_code=True,
-        stream_output=True):
+        stream_output=True,
+        trust_remote_code=True):
     """An example to perform model inference through the command line
     interface.
 

@@ -3,7 +3,7 @@
 from typing import Dict, List, Tuple
 
 import torch
-from torch.distributed._tensor import DeviceMesh, DTensor, Shard
+from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
 
@@ -12,12 +12,14 @@ KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 class CacheEngine:
 
-    def __init__(self,
-                 cache_config: CacheConfig,
-                 model_config: ModelConfig,
-                 rank: int = 0,
-                 world_size: int = 1,
-                 device_mesh: DeviceMesh = None) -> None:
+    def __init__(
+        self,
+        cache_config: CacheConfig,
+        model_config: ModelConfig,
+        rank: int = 0,
+        world_size: int = 1,
+        device_mesh: DeviceMesh = None,
+    ) -> None:
         self.rank = rank
         self.world_size = world_size
         if device_mesh is None and self.world_size > 1:
@@ -48,18 +50,7 @@ class CacheEngine:
 
     @property
     def gpu_cache(self):
-        if self.world_size <= 1:
-            return self.local_gpu_cache
-        else:
-            return [(DTensor.from_local(k,
-                                        device_mesh=self.device_mesh,
-                                        placements=[Shard(-2)],
-                                        run_check=False),
-                     DTensor.from_local(v,
-                                        device_mesh=self.device_mesh,
-                                        placements=[Shard(-2)],
-                                        run_check=False))
-                    for k, v in self.local_gpu_cache]
+        return self.local_gpu_cache
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         num_heads = self.num_heads
@@ -90,14 +81,16 @@ class CacheEngine:
         value_block_shape = self.get_value_block_shape(local=True)
 
         for _ in range(self.num_layers):
-            key_blocks = torch.empty(size=(self.num_gpu_blocks,
-                                           *key_block_shape),
-                                     dtype=self.dtype,
-                                     device='cuda')
-            value_blocks = torch.empty(size=(self.num_gpu_blocks,
-                                             *value_block_shape),
-                                       dtype=self.dtype,
-                                       device='cuda')
+            key_blocks = torch.empty(
+                size=(self.num_gpu_blocks, *key_block_shape),
+                dtype=self.dtype,
+                device='cuda',
+            )
+            value_blocks = torch.empty(
+                size=(self.num_gpu_blocks, *value_block_shape),
+                dtype=self.dtype,
+                device='cuda',
+            )
             gpu_cache.append((key_blocks, value_blocks))
         return gpu_cache
 
@@ -110,14 +103,16 @@ class CacheEngine:
         pin_memory = True
 
         for _ in range(self.num_layers):
-            key_blocks = torch.empty(size=(self.num_cpu_blocks,
-                                           *key_block_shape),
-                                     dtype=self.dtype,
-                                     pin_memory=pin_memory)
-            value_blocks = torch.empty(size=(self.num_cpu_blocks,
-                                             *value_block_shape),
-                                       dtype=self.dtype,
-                                       pin_memory=pin_memory)
+            key_blocks = torch.empty(
+                size=(self.num_cpu_blocks, *key_block_shape),
+                dtype=self.dtype,
+                pin_memory=pin_memory,
+            )
+            value_blocks = torch.empty(
+                size=(self.num_cpu_blocks, *value_block_shape),
+                dtype=self.dtype,
+                pin_memory=pin_memory,
+            )
             cpu_cache.append((key_blocks, value_blocks))
         return cpu_cache
 

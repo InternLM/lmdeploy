@@ -27,7 +27,7 @@ from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
 from lmdeploy.pytorch_poc.dist_utils import try_to_local
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerMessage, SchedulerSession)
-from lmdeploy.pytorch_poc.paging import BlockTable, Scheduler
+from lmdeploy.pytorch_poc.paging import Scheduler
 from lmdeploy.pytorch_poc.patch import patch
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
 from lmdeploy.utils import get_logger
@@ -83,18 +83,16 @@ class InferOutput:
 
 class ModelContext:
 
-    def __init__(self,
-                 block_tables: List[BlockTable],
-                 history_lengths: List[int],
-                 world_size: int = 1,
-                 device='cuda'):
-        self.block_tables = block_tables
+    def __init__(
+        self,
+        block_offsets: List[List[int]],
+        history_lengths: List[int],
+        world_size: int = 1,
+        device='cuda',
+    ):
+        self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
         self.world_size = world_size
-
-        # make block offsets
-        block_offsets = [[block.block_id for block in block_table]
-                         for block_table in self.block_tables]
 
         # padding zero
         pad_sequence = torch.nn.utils.rnn.pad_sequence
@@ -105,8 +103,7 @@ class ModelContext:
         self.block_offsets = block_offsets
 
     def get_block_offsets(self):
-        return [[block.block_id for block in block_table]
-                for block_table in self.block_tables]
+        return self.block_offsets
 
     def fill_cache(
         self,
@@ -135,7 +132,7 @@ class ModelContext:
         v_caches = try_to_local(v_caches)
 
         block_size = k_caches.size(1)
-        block_offsets = self.get_block_offsets()
+        block_offsets = self.block_offsets_list
 
         history_lengths = torch.tensor(self.history_lengths)
         first_free_block_offsets = history_lengths // block_size
@@ -148,8 +145,6 @@ class ModelContext:
             free_offset = first_free_block_offsets[bid]
             token_offset = first_token_offsets[bid]
 
-            # 支持新模型的时候如果shape有些不对的可以通过assert识别
-            # 因为slice遇到shape不对也不会报错，只是返回一个空的数组
             assert 0 <= loc <= k_states.size(0)
             assert 0 <= loc + seq_len <= k_states.size(0)
 
@@ -184,10 +179,13 @@ class ModelContext:
                 v_state = v_state[token_num:]
 
 
-def _update_cache_config(model_config: ModelConfig, cache_config: CacheConfig):
+def _update_cache_config(model_config: ModelConfig,
+                         cache_config: CacheConfig,
+                         gpu_id: int = 0):
     GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
-    gpu_mem = get_gpu_memory() * GPU_MEM_PERCENT
+    reserved_mem = torch.cuda.memory_reserved(gpu_id)
+    gpu_mem = (get_gpu_memory(gpu_id) - reserved_mem) * GPU_MEM_PERCENT
     cpu_mem = SWAP_SPACE
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config)
@@ -197,22 +195,36 @@ def _update_cache_config(model_config: ModelConfig, cache_config: CacheConfig):
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
 
 
-def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
-                   model_config: ModelConfig, cache_config: CacheConfig,
-                   in_que: mp.Queue, out_que: mp.Queue, world_size: int):
+def _get_torch_dtype(config: Any, default: str = 'float16'):
+    torch_dtype = getattr(config, 'torch_dtype', default)
+    return eval(f'torch.{torch_dtype}')
+
+
+def _tp_model_loop(rank: int,
+                   model_path: str,
+                   extra_args: List[str],
+                   model_config: ModelConfig,
+                   cache_config: CacheConfig,
+                   in_que: mp.Queue,
+                   out_que: mp.Queue,
+                   world_size: int,
+                   trust_remote_code=True):
     from accelerate import init_empty_weights
+
     device_mesh = DeviceMesh('cuda', list(range(world_size)))
 
     error_code = 0
     error_type = None
 
     try:
-        config = AutoConfig.from_pretrained(model_path)
-        torch_dtype = getattr(config, 'torch_dtype', 'float16')
-        torch_dtype = eval(f'torch.{torch_dtype}')
+        config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
+        torch_dtype = _get_torch_dtype(config)
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(config,
-                                                     torch_dtype=torch_dtype)
+            model = AutoModelForCausalLM.from_config(
+                config,
+                torch_dtype=torch_dtype,
+                trust_remote_code=trust_remote_code)
 
         torch_model_json_path = osp.join(model_path,
                                          'pytorch_model.bin.index.json')
@@ -223,11 +235,13 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
 
         checkpoints = list(set(weight_map.values()))
         checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
-        patched_model = patch(model,
-                              extra_args=extra_args,
-                              rank=rank,
-                              world_size=world_size,
-                              checkpoints=checkpoints)
+        patched_model = patch(
+            model,
+            extra_args=extra_args,
+            rank=rank,
+            world_size=world_size,
+            checkpoints=checkpoints,
+        )
 
         _update_cache_config(model_config, cache_config)
         cache_engine = CacheEngine(cache_config,
@@ -259,6 +273,7 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
             'seq_length',
             'attention_mask',
             'position_ids',
+            'q_start_loc',
         ]
 
         if rank == 0:
@@ -267,11 +282,10 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                                  if name in input_tensor_names)
             input_metas = dict((name, (t.shape, t.dtype))
                                for name, t in input_tensors.items())
-            input_metas['block_tables'] = inputs['block_tables']
+            input_metas['block_offsets'] = inputs['block_offsets']
             input_metas['history_lengths'] = inputs['history_lengths']
 
             objs = [input_metas, swap_in_map, swap_out_map]
-
         else:
             objs = [None, None, None]
 
@@ -280,10 +294,9 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
 
         if rank != 0:
             input_metas = objs[0]
-            input_tensors = dict(
-                (name, torch.empty(meta[0], dtype=meta[1]).cuda(rank))
-                for name, meta in input_metas.items()
-                if name in input_tensor_names)
+            input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1]))
+                                 for name, meta in input_metas.items()
+                                 if name in input_tensor_names)
 
         updated_inputs = dict()
         for name, t in input_tensors.items():
@@ -293,7 +306,7 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                                                                  ]).to_local()
 
         inputs = updated_inputs
-        inputs['block_tables'] = input_metas['block_tables']
+        inputs['block_offsets'] = input_metas['block_offsets']
         inputs['history_lengths'] = input_metas['history_lengths']
 
         swap_in_map = objs[1]
@@ -327,25 +340,29 @@ def _tp_model_loop(rank: int, model_path: str, extra_args: List[str],
                 output_attentions=False,
                 output_hidden_states=False,
                 use_origin=False,
-                context=ModelContext(block_tables=inputs['block_tables'],
-                                     history_lengths=inputs['history_lengths'],
-                                     world_size=world_size))
+                context=ModelContext(
+                    block_offsets=inputs['block_offsets'],
+                    history_lengths=inputs['history_lengths'],
+                    world_size=world_size,
+                ),
+                q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
+            )
 
             if rank == 0:
-                out_que.put((0, output['logits']))
+                out_que.put((0, output['logits'].cpu()))
 
 
-def _error_process(rank: int,
-                   world_size: int,
-                   func: Callable,
-                   args: List = None,
-                   kwargs: Dict = None):
+def _start_tp_process(rank: int,
+                      world_size: int,
+                      func: Callable,
+                      args: List = None,
+                      kwargs: Dict = None):
     try:
         os.environ['MASTER_ADDR'] = '127.0.0.1'
         os.environ['MASTER_PORT'] = '29500'
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
 
-        with torch.cuda.device(rank):
+        with torch.cuda.device(rank), torch.no_grad():
             if args is None:
                 args = tuple()
             if kwargs is None:
@@ -353,6 +370,7 @@ def _error_process(rank: int,
             func(rank, *args, **kwargs)
     except Exception as e:
         from traceback import print_exc
+
         logger.error(f'rank[{rank}]: {e}')
         print_exc()
         raise e
@@ -370,8 +388,7 @@ class Engine:
         self.tp = tp
         hf_config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
-        torch_dtype = getattr(hf_config, 'torch_dtype', 'float16')
-        torch_dtype = eval(f'torch.{torch_dtype}')
+        torch_dtype = _get_torch_dtype(hf_config)
         self.torch_dtype = torch_dtype
 
         if scheduler_config is None:
@@ -382,26 +399,14 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        if 'falcon' in model_path:
-            if hf_config.multi_query:
-                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
-                kv_head = 1
-            else:
-                kv_dim = hf_config.hidden_size,
-                kv_head = hf_config.num_attention_heads
-            model_config = ModelConfig(kv_dim,
-                                       hf_config.num_hidden_layers,
-                                       kv_head,
-                                       bos_token_id=hf_config.bos_token_id,
-                                       eos_token_id=hf_config.eos_token_id,
-                                       dtype=torch_dtype)
-        else:
-            model_config = ModelConfig(hf_config.hidden_size,
-                                       hf_config.num_hidden_layers,
-                                       hf_config.num_attention_heads,
-                                       bos_token_id=hf_config.bos_token_id,
-                                       eos_token_id=hf_config.eos_token_id,
-                                       dtype=torch_dtype)
+        model_config = ModelConfig(
+            hf_config.hidden_size,
+            hf_config.num_hidden_layers,
+            hf_config.num_attention_heads,
+            bos_token_id=hf_config.bos_token_id,
+            eos_token_id=hf_config.eos_token_id,
+            dtype=torch_dtype,
+        )
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -417,9 +422,7 @@ class Engine:
                 hf_model.eval()
 
             self.patched_model = patch(
-                hf_model,
-                ['context', 'use_origin', 'q_seq_info', 'position_ids'
-                 ]).cuda()
+                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
@@ -427,18 +430,19 @@ class Engine:
                 f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                 f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
         else:
-
             mp.set_start_method('spawn')
             self.tp_model_in_que = mp.Queue(5)
             self.tp_model_out_que = mp.Queue(5)
 
-            self.patch_model_tp(model_path,
-                                ['context', 'use_origin', 'q_seq_info'],
-                                model_config=model_config,
-                                cache_config=cache_config,
-                                in_que=self.tp_model_in_que,
-                                out_que=self.tp_model_out_que,
-                                world_size=tp)
+            self.patch_model_tp(
+                model_path,
+                ['context', 'use_origin', 'q_seq_info'],
+                model_config=model_config,
+                cache_config=cache_config,
+                in_que=self.tp_model_in_que,
+                out_que=self.tp_model_out_que,
+                world_size=tp,
+            )
 
             ret_code, e, cache_config = self.tp_model_out_que.get()
             if ret_code != 0:
@@ -459,20 +463,34 @@ class Engine:
         loop_threads.start()
         self.loop_threads = loop_threads
 
-    def patch_model_tp(self, model_path: str, extra_args: List[str],
-                       model_config: ModelConfig, cache_config: CacheConfig,
-                       in_que: mp.Queue, out_que: mp.Queue, world_size: int):
-        self.mp_context = mp.spawn(_error_process,
-                                   args=(world_size, _tp_model_loop,
-                                         (model_path, extra_args),
-                                         dict(model_config=model_config,
-                                              cache_config=cache_config,
-                                              in_que=in_que,
-                                              out_que=out_que,
-                                              world_size=world_size)),
-                                   nprocs=world_size,
-                                   join=False,
-                                   daemon=True)
+    def patch_model_tp(
+        self,
+        model_path: str,
+        extra_args: List[str],
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        in_que: mp.Queue,
+        out_que: mp.Queue,
+        world_size: int,
+    ):
+        self.mp_context = mp.spawn(
+            _start_tp_process,
+            args=(
+                world_size,
+                _tp_model_loop,
+                (model_path, extra_args),
+                dict(
+                    model_config=model_config,
+                    cache_config=cache_config,
+                    in_que=in_que,
+                    out_que=out_que,
+                    world_size=world_size,
+                ),
+            ),
+            nprocs=world_size,
+            join=False,
+            daemon=True,
+        )
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -491,7 +509,6 @@ class Engine:
         self.scheduler.add_message(message)
 
     def _make_inputs(self, messages: List[SchedulerMessage], device='cuda'):
-
         sessions = self.scheduler.get_sessions(messages)
         history_lengths = [sess.history_length for sess in sessions]
 
@@ -507,7 +524,6 @@ class Engine:
         input_ids = torch.tensor(input_ids).to(device)
 
         q_start_loc = torch.tensor([0] + seq_length[:-1]).to(device)
-        q_seq_length = torch.tensor(seq_length).to(device)
 
         attention_mask = torch.tensor([
             seq_len * [1] + (max_seq_len - seq_len) * [0]
@@ -518,26 +534,21 @@ class Engine:
         seq_length = torch.tensor(seq_length).to(device)
 
         block_tables = self.scheduler.get_block_tables(messages)
+        block_offsets = [[block.block_id for block in block_table]
+                         for block_table in block_tables]
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
-        # logger.debug('In Make inputs')
-        # logger.debug(f'q_start_loc {q_start_loc}')
-        # logger.debug(f'q_seq_length {q_seq_length}')
-        # logger.debug("kv_seq_length {q_seq_length}")
-
-        # past_key_values = self.cache_engine.gpu_cache
-        # for i, pkv in enumerate(past_key_values):
-        #     past_key_values[i] = pkv[:2] + (q_start_loc, q_seq_length)
-
-        return dict(input_ids=input_ids,
-                    seq_length=seq_length,
-                    attention_mask=attention_mask,
-                    block_tables=block_tables,
-                    position_ids=position_ids,
-                    q_seq_info=(q_start_loc, q_seq_length))
+        return dict(
+            input_ids=input_ids,
+            seq_length=seq_length,
+            attention_mask=attention_mask,
+            block_offsets=block_offsets,
+            position_ids=position_ids,
+            q_start_loc=q_start_loc,
+        )
 
     def stop_session(self, session_id: int):
         self.scheduler.stop_session(session_id)
@@ -559,7 +570,7 @@ class Engine:
             return True
 
         # check request_len
-        if (msg.request_output_len >= msg.max_request_output_len):
+        if msg.request_output_len >= msg.max_request_output_len:
             return True
 
         # check session len
@@ -605,12 +616,16 @@ class Engine:
                     output_hidden_states=False,
                     use_origin=False,
                     context=ModelContext(
-                        block_tables=inputs['block_tables'],
-                        history_lengths=inputs['history_lengths']),
-                    q_seq_info=inputs['q_seq_info'])
+                        block_offsets=inputs['block_offsets'],
+                        history_lengths=inputs['history_lengths'],
+                    ),
+                    q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
+                )
                 return output['logits']
+
         else:
-            self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
+            with torch.no_grad():
+                self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
 
             ret_code, output = self.tp_model_out_que.get()
             if ret_code != 0:
@@ -684,16 +699,17 @@ class Engine:
         for idx in range(len(session_ids)):
             session_id = session_ids[idx]
             msg = running[idx]
-            out = InferOutput(session_id=session_id,
-                              req_id=req_ids[idx],
-                              finish=(msg.status == MessageStatus.STOPPED),
-                              token_ids=[next_token_ids[idx]])
+            out = InferOutput(
+                session_id=session_id,
+                req_id=req_ids[idx],
+                finish=(msg.status == MessageStatus.STOPPED),
+                token_ids=[next_token_ids[idx]],
+            )
             outputs[session_id] = out
 
         if return_logits:
             for idx in range(len(session_ids)):
                 outputs[session_ids[idx]].logits = split_logits[idx]
-
         return outputs
 
     def infer(self, return_logits: bool = False):
@@ -757,13 +773,14 @@ class Engine:
         return logits
 
     def loop(self):
-
         out_ques: Dict[int, Queue] = dict()
 
-        def _session_exist(session_id: int,
-                           req: Request,
-                           resp_if_exist: bool = False,
-                           resp_if_not_exist: bool = False):
+        def _session_exist(
+            session_id: int,
+            req: Request,
+            resp_if_exist: bool = False,
+            resp_if_not_exist: bool = False,
+        ):
             if session_id in self.scheduler.sessions:
                 if resp_if_exist:
                     req.resp.put(
@@ -843,12 +860,16 @@ class Engine:
             # forward
             step_tokens: Dict[int, InferOutput] = self.step()
             for session_id, out in step_tokens.items():
-                resp_type = (ResponseType.FINISH
-                             if out.finish else ResponseType.SUCCESS)
+                if out.finish:
+                    resp_type = ResponseType.FINISH
+                else:
+                    resp_type = ResponseType.SUCCESS
                 out_ques[session_id].put(
-                    Response(type=resp_type,
-                             req_id=out.req_id,
-                             data=dict(token_ids=out.token_ids)))
+                    Response(
+                        type=resp_type,
+                        req_id=out.req_id,
+                        data=dict(token_ids=out.token_ids),
+                    ))
 
 
 class EngineInstance:
@@ -879,19 +900,23 @@ class EngineInstance:
                            dict(session_id=session_id))
             self.owned_sessions.append(session_id)
 
-    def stream_infer(self,
-                     session_id: int,
-                     prompt_token_ids: List[int] = None,
-                     request_output_len: int = None,
-                     step: int = 0,
-                     sampling_param: SamplingParam = SamplingParam()):
+    def stream_infer(
+            self,
+            session_id: int,
+            prompt_token_ids: List[int] = None,
+            request_output_len: int = None,
+            step: int = 0,
+            sampling_param: SamplingParam = SamplingParam(),
+    ):
         self._try_add_session(session_id)
         req_id = self.req_count
-        msg = dict(token_ids=prompt_token_ids,
-                   session_id=session_id,
-                   max_request_output_len=request_output_len,
-                   req_id=req_id,
-                   sampling_param=sampling_param)
+        msg = dict(
+            token_ids=prompt_token_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            req_id=req_id,
+            sampling_param=sampling_param,
+        )
         self._send_req(RequestType.ADD_MESSAGE, msg)
 
         token_ids = []
@@ -914,19 +939,23 @@ class EngineInstance:
                 yield (1, [], 0)
                 break
 
-    def infer(self,
-              session_id: int,
-              prompt_token_ids: List[int] = None,
-              request_output_len: int = None,
-              step: int = 0,
-              sampling_param: SamplingParam = SamplingParam()):
+    def infer(
+            self,
+            session_id: int,
+            prompt_token_ids: List[int] = None,
+            request_output_len: int = None,
+            step: int = 0,
+            sampling_param: SamplingParam = SamplingParam(),
+    ):
         self._try_add_session(session_id)
         req_id = self.req_count
-        msg = dict(token_ids=prompt_token_ids,
-                   session_id=session_id,
-                   max_request_output_len=request_output_len,
-                   req_id=req_id,
-                   sampling_param=sampling_param)
+        msg = dict(
+            token_ids=prompt_token_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            req_id=req_id,
+            sampling_param=sampling_param,
+        )
         self._send_req(RequestType.ADD_MESSAGE, msg)
 
         token_ids = []
@@ -952,7 +981,7 @@ class EngineInstance:
 
     def end(self, session_id: int):
         self._send_req(RequestType.END_SESSION, dict(session_id=session_id))
-        self.owned_sessions.pop(session_id)
+        self.owned_sessions.remove(session_id)
 
     def cancel(self, session_id: int):
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
