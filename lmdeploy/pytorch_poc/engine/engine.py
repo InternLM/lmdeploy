@@ -2,6 +2,7 @@
 import enum
 import itertools
 import json
+import logging
 import os
 import os.path as osp
 import time
@@ -33,10 +34,9 @@ from lmdeploy.utils import get_logger
 
 from .cache_engine import CacheEngine
 
-logger = get_logger('lmdeploy')
+# logger = get_logger('lmdeploy')
 
-# import logging
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RequestType(enum.Enum):
@@ -117,6 +117,16 @@ class ModelContext:
         k_caches: torch.Tensor,
         v_caches: torch.Tensor,
     ):
+        """Fill current key/value to cache.
+
+        Args:
+            k_states (torch.Tensor): [packed_seq_len, head, dim]
+            v_states (torch.Tensor): [packed_seq_len, head, dim]
+            start_loc (torch.Tensor): [bs]
+            seq_length (torch.Tensor): [bs]
+            k_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+            v_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+        """
         k_states = try_to_local(k_states)
         v_states = try_to_local(v_states)
         start_loc = try_to_local(start_loc)
@@ -354,11 +364,12 @@ class Engine:
                  model_path: str,
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None,
-                 tp: int = 1) -> None:
+                 tp: int = 1,
+                 trust_remote_code=True) -> None:
 
         self.tp = tp
-        hf_config = AutoConfig.from_pretrained(model_path,
-                                               trust_remote_code=True)
+        hf_config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = getattr(hf_config, 'torch_dtype', 'float16')
         torch_dtype = eval(f'torch.{torch_dtype}')
         self.torch_dtype = torch_dtype
@@ -371,12 +382,26 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        model_config = ModelConfig(hf_config.hidden_size,
-                                   hf_config.num_hidden_layers,
-                                   hf_config.num_attention_heads,
-                                   bos_token_id=hf_config.bos_token_id,
-                                   eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch_dtype)
+        if 'falcon' in model_path:
+            if hf_config.multi_query:
+                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+                kv_head = 1
+            else:
+                kv_dim = hf_config.hidden_size,
+                kv_head = hf_config.num_attention_heads
+            model_config = ModelConfig(kv_dim,
+                                       hf_config.num_hidden_layers,
+                                       kv_head,
+                                       bos_token_id=hf_config.bos_token_id,
+                                       eos_token_id=hf_config.eos_token_id,
+                                       dtype=torch_dtype)
+        else:
+            model_config = ModelConfig(hf_config.hidden_size,
+                                       hf_config.num_hidden_layers,
+                                       hf_config.num_attention_heads,
+                                       bos_token_id=hf_config.bos_token_id,
+                                       eos_token_id=hf_config.eos_token_id,
+                                       dtype=torch_dtype)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -388,11 +413,13 @@ class Engine:
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     model_path,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=True)
+                    trust_remote_code=trust_remote_code)
                 hf_model.eval()
 
             self.patched_model = patch(
-                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
+                hf_model,
+                ['context', 'use_origin', 'q_seq_info', 'position_ids'
+                 ]).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
@@ -422,7 +449,7 @@ class Engine:
 
             # # have to update cache on host to support scheduler
             # _update_cache_config(model_config, cache_config)
-
+        logger.debug(self.patched_model)
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.requests = Queue(scheduler_config.max_batches)
@@ -564,6 +591,8 @@ class Engine:
                 for event in cache_events:
                     event.wait()
 
+            logger.debug(f"inputs['input_ids'] = {inputs['input_ids']}")
+            logger.debug(f"inputs['position_ids'] = {inputs['position_ids']}")
             with torch.no_grad():
                 # forward
                 output = self.patched_model(
@@ -615,7 +644,7 @@ class Engine:
         logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-        # logger.debug('logits.shape = %s', logits.shape)
+        # logger.debug('logits = %s', logits)
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -631,7 +660,8 @@ class Engine:
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
             # logger.debug(f'msg = {msg}')
-            # logger.debug(f'input_ids = {input_ids}')
+            logger.debug(f'input_ids = {input_ids}')
+            logger.debug(f'logit = {logit}')
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),
@@ -641,6 +671,7 @@ class Engine:
             logit = logit.reshape([-1, logit.shape[-1]])
             next_token_ids.append(logit[-1].argmax())
 
+        logger.debug(f'next_token_ids = {next_token_ids}')
         # update scheduler
         for token, msg in zip(next_token_ids, running):
             msg.token_ids = [token]

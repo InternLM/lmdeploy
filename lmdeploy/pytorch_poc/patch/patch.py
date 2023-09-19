@@ -13,6 +13,9 @@ from torch.distributed.tensor.parallel import parallelize_module
 
 from lmdeploy.utils import get_logger
 
+import logging
+logger = logging.getLogger()
+
 MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
@@ -32,6 +35,23 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',
     'transformers_modules\.(.*)\.modeling_baichuan.BaichuanLayer':  # noqa
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanLayer',
+    # Falcon Models in transformer / on hub
+    'transformers.models.falcon.modeling_falcon.FalconAttention':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
+    'transformers.models.falcon.modeling_falcon.FalconModel':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
+    'transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
+    '(.*)\.modelling_RW.Attention':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
+    '(.*)\.modelling_RW.RWModel':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
+    '(.*)\.modelling_RW.RotaryEmbedding':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
+    # 'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
+    # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconForCausalLM',
+    # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
+    # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconDecoderLayer',
 }
 
 
@@ -57,7 +77,7 @@ def _class_from_qualname(qualname):
 
 def _patch(model: torch.nn.Module, context: Addict):
     global MODULE_MAP
-    logger = get_logger('lmdeploy')
+    # logger = get_logger('lmdeploy')
 
     # recursive over children
     for name, child in model.named_children():
@@ -71,6 +91,9 @@ def _patch(model: torch.nn.Module, context: Addict):
     origin_qualname = f'{module_name}.{class_name}'
     rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
+    global logger
+    # logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
+
     if rewrite_qualname is None:
         origin_qualname = class_name
         rewrite_qualname = _get_rewrite_qualname(origin_qualname)
@@ -79,6 +102,7 @@ def _patch(model: torch.nn.Module, context: Addict):
         logger.debug(
             f'Rewrite module {origin_qualname} with {rewrite_qualname}.')
         cls_type = _class_from_qualname(rewrite_qualname)
+        new_class_name = cls_type.__name__
 
         # directly return origin model is not cool
         # origin model would be registered as a submodule
@@ -93,7 +117,7 @@ def _patch(model: torch.nn.Module, context: Addict):
 
         attrs = dict(cls_type.__dict__)
         attrs.update(dict(context=context, origin_mod=get_origin_mod))
-        new_type = type(class_name, (type(model), ), attrs)
+        new_type = type(new_class_name, (type(model), ), attrs)
         model = copy(model)
         model.__class__ = new_type
 
