@@ -111,6 +111,16 @@ class ModelContext:
         k_caches: torch.Tensor,
         v_caches: torch.Tensor,
     ):
+        """Fill current key/value to cache.
+
+        Args:
+            k_states (torch.Tensor): [packed_seq_len, head, dim]
+            v_states (torch.Tensor): [packed_seq_len, head, dim]
+            start_loc (torch.Tensor): [bs]
+            seq_length (torch.Tensor): [bs]
+            k_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+            v_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+        """
         k_states = try_to_local(k_states)
         v_states = try_to_local(v_states)
         start_loc = try_to_local(start_loc)
@@ -187,16 +197,15 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
     return eval(f'torch.{torch_dtype}')
 
 
-def _tp_model_loop(
-    rank: int,
-    model_path: str,
-    extra_args: List[str],
-    model_config: ModelConfig,
-    cache_config: CacheConfig,
-    in_que: mp.Queue,
-    out_que: mp.Queue,
-    world_size: int,
-):
+def _tp_model_loop(rank: int,
+                   model_path: str,
+                   extra_args: List[str],
+                   model_config: ModelConfig,
+                   cache_config: CacheConfig,
+                   in_que: mp.Queue,
+                   out_que: mp.Queue,
+                   world_size: int,
+                   trust_remote_code=True):
     from accelerate import init_empty_weights
 
     device_mesh = DeviceMesh('cuda', list(range(world_size)))
@@ -205,12 +214,14 @@ def _tp_model_loop(
     error_type = None
 
     try:
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(config)
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(config,
-                                                     torch_dtype=torch_dtype,
-                                                     trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(
+                config,
+                torch_dtype=torch_dtype,
+                trust_remote_code=trust_remote_code)
 
         torch_model_json_path = osp.join(model_path,
                                          'pytorch_model.bin.index.json')
@@ -364,16 +375,16 @@ def _start_tp_process(rank: int,
 
 class Engine:
 
-    def __init__(
-        self,
-        model_path: str,
-        scheduler_config: SchedulerConfig = None,
-        cache_config: CacheConfig = None,
-        tp: int = 1,
-    ) -> None:
+    def __init__(self,
+                 model_path: str,
+                 scheduler_config: SchedulerConfig = None,
+                 cache_config: CacheConfig = None,
+                 tp: int = 1,
+                 trust_remote_code=True) -> None:
+
         self.tp = tp
-        hf_config = AutoConfig.from_pretrained(model_path,
-                                               trust_remote_code=True)
+        hf_config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(hf_config)
         self.torch_dtype = torch_dtype
 
@@ -404,7 +415,7 @@ class Engine:
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     model_path,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=True)
+                    trust_remote_code=trust_remote_code)
                 hf_model.eval()
 
             self.patched_model = patch(
