@@ -15,7 +15,8 @@ namespace turbomind {
 template<typename T>
 class LlamaLinear {
 public:
-    enum Type {
+    enum Type
+    {
         kGemm,
         kFusedSiluFfn
     };
