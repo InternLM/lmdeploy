@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 import os
 import random
 
 import fire
-import torch
 
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
@@ -12,8 +10,6 @@ from lmdeploy.pytorch_poc.messages import SamplingParam
 from lmdeploy.turbomind.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
-
-logger = logging.getLogger()
 
 
 def input_prompt():
@@ -68,8 +64,8 @@ def main(
     seed = random.getrandbits(64)
     model = MODELS.get(model_name)()
 
-    for prompt in ['Write a poem about Valencia.', 'exit']:
-        # prompt = input_prompt()
+    while True:
+        prompt = input_prompt()
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
@@ -85,7 +81,6 @@ def main(
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
-            input_ids = model.update_input_ids(input_ids)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             sampling_param = SamplingParam(
@@ -119,9 +114,4 @@ def main(
 
 
 if __name__ == '__main__':
-    logging.basicConfig(filename='chat-llama.log',
-                        level=logging.DEBUG,
-                        filemode='w',
-                        format='{%(pathname)s:%(lineno)d}\n  %(message)s')
-    torch.set_printoptions(linewidth=122)
     fire.Fire(main)

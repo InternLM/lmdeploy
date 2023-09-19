@@ -14,8 +14,6 @@ from torch.distributed._tensor import DeviceMesh
 from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
-logger = logging.getLogger()
-
 MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
@@ -73,7 +71,7 @@ def _class_from_qualname(qualname):
 
 def _patch(model: torch.nn.Module, context: Addict):
     global MODULE_MAP
-    # logger = get_logger('lmdeploy')
+    logger = get_logger('lmdeploy')
 
     # recursive over children
     for name, child in model.named_children():
@@ -87,9 +85,6 @@ def _patch(model: torch.nn.Module, context: Addict):
     origin_qualname = f'{module_name}.{class_name}'
     rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
-    global logger
-    # logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
-
     if rewrite_qualname is None:
         # class name only
         origin_qualname = class_name
@@ -102,8 +97,6 @@ def _patch(model: torch.nn.Module, context: Addict):
         rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     if rewrite_qualname is not None:
-        logger.debug(
-            f'Rewrite module {origin_qualname} with {rewrite_qualname}.')
         cls_type = _class_from_qualname(rewrite_qualname)
         new_class_name = cls_type.__name__
 

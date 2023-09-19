@@ -87,11 +87,6 @@ class BaseModel:
         """Return the stop-words' token ids."""
         return None
 
-    def update_input_ids(self, input_ids: List[int]):
-        """Further modify input ids of the prompt."""
-        return input_ids
-
-
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):
     """Chat template of vicuna model."""
@@ -487,17 +482,7 @@ class Qwen7BChat(BaseModel):
 
 @MODELS.register_module(name='falcon')
 class Falcon(BaseModel):
-
-    def __init__(self):
-        super().__init__()
-
-    def get_prompt(self, prompt, sequence_start=True):
-        return prompt
-
-    def update_input_ids(self, input_ids: List):
-        # input_ids = [64790, 64792] + input_ids
-        return input_ids
-
+    pass
 
 def main(model_name: str = 'test'):
     assert model_name in MODELS.module_dict.keys(), \
