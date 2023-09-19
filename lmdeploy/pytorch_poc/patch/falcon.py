@@ -216,17 +216,17 @@ class PatchedFalconAttention(nn.Module):
             # attn_output = attn_output.permute(0, 2, 1, 3)
             # attn_output = attn_output.reshape(batch_size, query_length, self.num_heads * self.head_dim)
 
-            logger.debug(f'query_layer_ = {query_layer.shape}\n%s',
-                         query_layer)
-            logger.debug('block_offsets = \n%s', block_offsets)
-            logger.debug(
-                f'key_layer filled in  = {past_key[block_offsets[0].item()].shape}\n%s',
-                past_key[block_offsets[0].item()])
-            logger.debug(
-                f'value_layer filled in  = {past_value[block_offsets[0].item()].shape}\n%s',
-                past_value[block_offsets[0].item()])
-            logger.debug(f'q_start_loc =\n {q_start_loc}')
-            logger.debug(f'q_seq_length =\n {q_seq_length}')
+            # logger.debug(f'query_layer_ = {query_layer.shape}\n%s',
+            #              query_layer)
+            # logger.debug('block_offsets = \n%s', block_offsets)
+            # logger.debug(
+            #     f'key_layer filled in  = {past_key[block_offsets[0].item()].shape}\n%s',
+            #     past_key[block_offsets[0].item()])
+            # logger.debug(
+            #     f'value_layer filled in  = {past_value[block_offsets[0].item()].shape}\n%s',
+            #     past_value[block_offsets[0].item()])
+            # logger.debug(f'q_start_loc =\n {q_start_loc}')
+            # logger.debug(f'q_seq_length =\n {q_seq_length}')
 
             paged_attention_fwd(query_layer,
                                 past_key,
