@@ -30,6 +30,10 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
     'modeling_baichuan.MLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
+    'modeling_chatglm.SelfAttention':
+    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
+    'modeling_chatglm.ChatGLMModel':
+    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedChatGLMModel',
 }
 
 
