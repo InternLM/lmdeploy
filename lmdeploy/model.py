@@ -55,7 +55,7 @@ class BaseModel:
 
     @abstractmethod
     def decorate_prompt(self, prompt, sequence_start):
-        pass
+        return prompt
 
     @staticmethod
     def _translate_messages(messages: List):
@@ -169,6 +169,7 @@ class Vicuna(BaseModel):
         return ret
 
 
+@MODELS.register_module(name='internlm-chat')
 @MODELS.register_module(name='internlm-chat-7b')
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""
@@ -176,7 +177,7 @@ class InternLMChat7B(BaseModel):
     def __init__(self,
                  system='',
                  user='<|User|>',
-                 eoh='<eoh>',
+                 eoh='',
                  eoa='<eoa>',
                  assistant='<|Bot|>',
                  **kwargs):
@@ -223,7 +224,7 @@ class InternLMChat7B(BaseModel):
         for user, assistant in zip(users, assistants):
             if assistant:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
-                       f'{assistant}{self.eoa}'
+                       f'{assistant}{self.eoa}\n'
             else:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
         return ret
@@ -231,19 +232,33 @@ class InternLMChat7B(BaseModel):
     @property
     def stop_words(self):
         """Return the stop-words' token ids."""
-        return [103027, 103028]
+        return [103028]
 
 
+@MODELS.register_module(name='internlm-chat-20b')
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
+    """Chat template and generation parameters of InternLM-Chat-7B-8K and
+    InternLM-Chat-20B models."""
 
     def __init__(self, session_len=8192, **kwargs):
         super(InternLMChat7B8K, self).__init__(**kwargs)
         self.session_len = session_len
 
 
+@MODELS.register_module(name='internlm-20b')
+class InternLMBaseModel20B(BaseModel):
+    """Generation parameters of InternLM-20B-Base model."""
+
+    def __init__(self, session_len=4096, capability='completion', **kwargs):
+        super().__init__(session_len=session_len,
+                         capability=capability,
+                         **kwargs)
+
+
 @MODELS.register_module(name='baichuan-7b')
 class Baichuan7B(BaseModel):
+    """Generation parameters of Baichuan-7B base model."""
 
     def __init__(self, repetition_penalty=1.1, **kwargs):
         super().__init__(**kwargs)
@@ -252,6 +267,8 @@ class Baichuan7B(BaseModel):
 
 @MODELS.register_module(name='baichuan2-7b')
 class Baichuan2_7B(BaseModel):
+    """Chat template and generation parameters of Baichuan2-7B-Base and
+    Baichuan2-7B-Chat models."""
 
     def __init__(self,
                  temperature=0.3,
