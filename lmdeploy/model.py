@@ -169,6 +169,7 @@ class Vicuna(BaseModel):
         return ret
 
 
+@MODELS.register_module(name='internlm-chat')
 @MODELS.register_module(name='internlm-chat-7b')
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""
