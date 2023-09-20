@@ -84,11 +84,13 @@ class ModelContext:
         self,
         block_offsets: List[List[int]],
         history_lengths: List[int],
+        position_ids: torch.Tensor,
         world_size: int = 1,
         device='cuda',
     ):
         self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
+        self.position_ids = position_ids
         self.world_size = world_size
 
         # padding zero
@@ -340,6 +342,7 @@ def _tp_model_loop(rank: int,
                 context=ModelContext(
                     block_offsets=inputs['block_offsets'],
                     history_lengths=inputs['history_lengths'],
+                    position_ids=inputs['position_ids'],
                     world_size=world_size,
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
@@ -441,6 +444,7 @@ class Engine:
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
+            logger.debug(
                 f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                 f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
         else:
@@ -467,6 +471,7 @@ class Engine:
 
             # # have to update cache on host to support scheduler
             # _update_cache_config(model_config, cache_config)
+
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.requests = Queue(scheduler_config.max_batches)
@@ -629,6 +634,7 @@ class Engine:
                     context=ModelContext(
                         block_offsets=inputs['block_offsets'],
                         history_lengths=inputs['history_lengths'],
+                        position_ids=inputs['position_ids'],
                     ),
                     q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
                 )
@@ -677,6 +683,7 @@ class Engine:
         ]
         seq_length = inputs['seq_length']
         accum_seq_length = inputs['seq_length'].cumsum(0)
+        logits = logits.cuda()
         split_logits = [
             logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
         ]

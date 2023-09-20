@@ -57,8 +57,6 @@ def main(
                          trust_remote_code=trust_remote_code)
     generator = tm_model.create_instance()
 
-    torch.set_default_device(0)
-
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
@@ -91,7 +89,6 @@ def main(
                 ignore_eos=False,
                 random_seed=seed,
             )
-            logger.debug(f'input_ids = {input_ids}')
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     prompt_token_ids=input_ids,
@@ -100,7 +97,6 @@ def main(
                     sampling_param=sampling_param):
                 status, res, tokens = outputs
                 # decode res
-                logger.debug(res)
                 response = tokenizer.decode(res)[response_size:]
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
@@ -114,4 +110,6 @@ def main(
 
 
 if __name__ == '__main__':
+    # import torch
+    # torch.set_default_device(0)
     fire.Fire(main)

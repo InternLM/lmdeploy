@@ -322,7 +322,7 @@ class PatchedFalconAttention(nn.Module):
         output_attentions: bool = False,
     ):
 
-        position_ids = self.context.position_ids
+        position_ids = self.context.context.position_ids
         use_origin = False
         if use_origin:
             return self.origin_mod(hidden_states, alibi, attention_mask,
