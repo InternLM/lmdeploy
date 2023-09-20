@@ -3,6 +3,7 @@
 import torch
 import triton
 import triton.language as tl
+from torch import Tensor
 
 from lmdeploy.pytorch_poc.dist_utils import try_to_local
 
@@ -55,13 +56,12 @@ def _fwd_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    off_q = (cur_batch_in_all_start_index +
-             offs_m[:, None]) * stride_qbs + cur_head * stride_qh + offs_d[
-                 None, :] * stride_qd
+    off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
+             cur_head * stride_qh + offs_d[None, :] * stride_qd)
     off_k = (offs_n[None, :] * stride_kbs + cur_kv_head * stride_kh +
              offs_d[:, None] * stride_kd)
-    off_v = offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh + offs_d[
-        None, :] * stride_vd
+    off_v = (offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh +
+             offs_d[None, :] * stride_vd)
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
@@ -84,16 +84,21 @@ def _fwd_kernel(
         b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         # -- compute qk ----
-        k = tl.load(k_ptrs + b_offset * BLOCK_N * stride_kbs,
-                    mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
-                    other=0.0)
+        k = tl.load(
+            k_ptrs + b_offset * BLOCK_N * stride_kbs,
+            mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
+            other=0.0,
+        )
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
         # NOTE: inf - inf = nan, and nan will leads to error
-        qk = tl.where((history_len + offs_m[:, None]) >=
-                      (start_n + offs_n[None, :]), qk, float(-1e30))
+        qk = tl.where(
+            (history_len + offs_m[:, None]) >= (start_n + offs_n[None, :]),
+            qk,
+            float(-1e30),
+        )
 
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -112,9 +117,11 @@ def _fwd_kernel(
         acc_scale = l_i / l_i_new * alpha
         acc = acc * acc_scale[:, None]
         # update acc
-        v = tl.load(v_ptrs + b_offset * BLOCK_N * stride_vbs,
-                    mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
-                    other=0.0)
+        v = tl.load(
+            v_ptrs + b_offset * BLOCK_N * stride_vbs,
+            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
+            other=0.0,
+        )
 
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
@@ -122,24 +129,39 @@ def _fwd_kernel(
         l_i = l_i_new
         m_i = m_i_new
     # initialize pointers to output
-    off_o = (cur_batch_in_all_start_index +
-             offs_m[:, None]) * stride_obs + cur_head * stride_oh + offs_d[
-                 None, :] * stride_od
+    off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs +
+             cur_head * stride_oh + offs_d[None, :] * stride_od)
     out_ptrs = Out + off_o
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
 
 @torch.no_grad()
-def paged_attention_fwd(q,
-                        k,
-                        v,
-                        o,
-                        block_offsets,
-                        b_start_loc,
-                        b_seq_len,
-                        b_kv_seq_len,
-                        max_input_len,
-                        BLOCK=64):
+def paged_attention_fwd(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    o: Tensor,
+    block_offsets: Tensor,
+    b_start_loc: Tensor,
+    b_seq_len: Tensor,
+    b_kv_seq_len: Tensor,
+    max_input_len: int,
+    BLOCK: int = 64,
+):
+    """Paged Attention forward.
+
+    Args:
+        q (Tensor): Query state.
+        k (Tensor): Key state caches.
+        v (Tensor): Value state caches.
+        o (Tensor): Output state.
+        block_offsets (Tensor): The block offset of key and value.
+        b_start_loc (Tensor): Start token location of each data in batch.
+        b_seq_len (Tensor): Query length for each data in batch.
+        b_kv_seq_len (Tensor): Key/Value length for each data in batch.
+        max_input_len (int): The max input length.
+        BLOCK (int): The kernel block size.
+    """
     q = try_to_local(q)
     k = try_to_local(k)
     v = try_to_local(v)

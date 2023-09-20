@@ -1,19 +1,29 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Callable
+from typing import Callable, Union
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.distributed._tensor import (DeviceMesh, DTensor, Replicate, Shard,
                                        distribute_tensor)
 
 
-def try_to_local(tensor):
+def try_to_local(tensor: Union[Tensor, DTensor]):
+    """Try to convert DTensor to Tensor.
+
+    Args:
+        tensor (Tensor|DTensor): Tensor to convert.
+    """
     if isinstance(tensor, DTensor):
         tensor = tensor.to_local()
     return tensor
 
 
 def module_to_local(module: nn.Module):
+    """convert all DTensor parameters to Tensor parameters in module.
+
+    Args:
+        module (Module): Module to convert.
+    """
     for name, mod in module.named_children():
         module_to_local(mod)
 
@@ -77,8 +87,24 @@ def colwise_parallelize_linear_fn(module: nn.Module,
         module.register_parameter(name, dist_param)
 
 
-def _partition_module(mod_name: str, prefix: str, module: nn.Module,
-                      device_mesh: DeviceMesh, func: Callable):
+def _partition_module(
+    mod_name: str,
+    prefix: str,
+    module: nn.Module,
+    device_mesh: DeviceMesh,
+    func: Callable,
+):
+    """partition module.
+
+    Parameters in module won't be force Replicated.
+
+    Args:
+        mod_name (str): module name.
+        prefix (str): Parameter prefix.
+        module (Module): Module to be partitioned.
+        device_mesh (DeviceMesh): The device mesh.
+        func (Callable): partition callback
+    """
     for name, mod in module.named_children():
         child_name = f'{prefix}{name}'
         _partition_module(child_name,
@@ -94,6 +120,16 @@ def partition_module(module: nn.Module,
                      device_mesh: DeviceMesh,
                      func: Callable,
                      to_local: bool = False):
+    """partition module.
+
+    Parameters in module won't be force Replicated.
+
+    Args:
+        module (Module): Module to be partitioned.
+        device_mesh (DeviceMesh): The device mesh.
+        func (Callable): partition callback.
+        to_local (bool): Convert all DTensor parameters to Tensor parameters.
+    """
     _partition_module('',
                       '',
                       module=module,
@@ -105,6 +141,12 @@ def partition_module(module: nn.Module,
 
 
 def replicate_module(model: nn.Module, device_mesh: DeviceMesh):
+    """Replicate all parameters in module.
+
+    Args:
+        model (Module): Module to perform replicate.
+        device_mesh (DeviceMesh): The distribution device mesh.
+    """
     for name, param in model.named_parameters(recurse=False):
         param = distribute_tensor(param,
                                   device_mesh=device_mesh,

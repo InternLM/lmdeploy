@@ -23,7 +23,6 @@ from transformers.generation.logits_process import (LogitsProcessorList,
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
-from lmdeploy.pytorch_poc.dist_utils import try_to_local
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerMessage, SchedulerSession)
 from lmdeploy.pytorch_poc.paging import Scheduler
@@ -37,6 +36,8 @@ logger = get_logger('lmdeploy')
 
 
 class RequestType(enum.Enum):
+    """Request type."""
+
     ADD_SESSION = enum.auto()
     ADD_MESSAGE = enum.auto()
     STOP_SESSION = enum.auto()
@@ -46,6 +47,8 @@ class RequestType(enum.Enum):
 
 
 class ResponseType(enum.Enum):
+    """Response type."""
+
     SUCCESS = enum.auto()
     FINISH = enum.auto()
     ENGINE_STOP_ERROR = enum.auto()
@@ -55,6 +58,8 @@ class ResponseType(enum.Enum):
 
 @dataclass
 class Request:
+    """Request."""
+
     type: RequestType
     resp: Queue
     req_id: int
@@ -63,6 +68,8 @@ class Request:
 
 @dataclass
 class Response:
+    """Response."""
+
     type: ResponseType
     req_id: int
     data: Any = None
@@ -71,6 +78,8 @@ class Response:
 
 @dataclass
 class InferOutput:
+    """The output of the model inference."""
+
     session_id: int
     token_ids: List[int]
     req_id: int = 0
@@ -79,6 +88,18 @@ class InferOutput:
 
 
 class ModelContext:
+    """context of Model.
+
+    patched model might need extra information to perform inference.
+    This dataclass provide these infos and tools.
+
+    Args:
+        block_offsets (List[List[int]]): The block offsets of each layers.
+        history_lengths (List[int]): The history length of the caches.
+        position_ids (Tensor): The position ids of the input tokens.
+        world_size (int): The distribution world size.
+        device (str): The device of the tensors.
+    """
 
     def __init__(
         self,
@@ -102,75 +123,20 @@ class ModelContext:
         self.block_offsets = block_offsets
 
     def get_block_offsets(self):
+        """return block offsets."""
         return self.block_offsets
-
-    def fill_cache(
-        self,
-        k_states: torch.Tensor,
-        v_states: torch.Tensor,
-        start_loc: torch.Tensor,
-        seq_length: torch.Tensor,
-        k_caches: torch.Tensor,
-        v_caches: torch.Tensor,
-    ):
-        k_states = try_to_local(k_states)
-        v_states = try_to_local(v_states)
-        start_loc = try_to_local(start_loc)
-        seq_length = try_to_local(seq_length)
-        k_caches = try_to_local(k_caches)
-        v_caches = try_to_local(v_caches)
-
-        block_size = k_caches.size(1)
-        block_offsets = self.block_offsets_list
-
-        history_lengths = torch.tensor(self.history_lengths)
-        first_free_block_offsets = history_lengths // block_size
-        first_token_offsets = history_lengths % block_size
-
-        for bid in range(len(history_lengths)):
-            loc = start_loc[bid]
-            seq_len = seq_length[bid]
-            b_offsets = block_offsets[bid]
-            free_offset = first_free_block_offsets[bid]
-            token_offset = first_token_offsets[bid]
-
-            assert 0 <= loc <= k_states.size(0)
-            assert 0 <= loc + seq_len <= k_states.size(0)
-
-            k_state = k_states[loc:loc + seq_len]
-            v_state = v_states[loc:loc + seq_len]
-
-            # fill remain(last non-full block)
-            block_id = b_offsets[free_offset]
-            fill_token_num = min(block_size - token_offset, seq_len)
-
-            assert 0 <= fill_token_num <= block_size
-
-            k_caches[block_id][token_offset:token_offset +
-                               fill_token_num] = k_state[:fill_token_num]
-            v_caches[block_id][token_offset:token_offset +
-                               fill_token_num] = v_state[:fill_token_num]
-
-            # update offset
-            seq_len = seq_len - fill_token_num
-            free_offset += 1
-            k_state = k_state[fill_token_num:]
-            v_state = v_state[fill_token_num:]
-
-            for seq_offset in range(0, seq_len, block_size):
-                token_num = min(seq_len - seq_offset, block_size)
-                block_id = b_offsets[free_offset]
-                k_caches[block_id][:token_num] = k_state[:token_num]
-                v_caches[block_id][:token_num] = v_state[:token_num]
-
-                free_offset += 1
-                k_state = k_state[token_num:]
-                v_state = v_state[token_num:]
 
 
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
                          gpu_id: int = 0):
+    """Update the gpu mem and cpu mem according to model info.
+
+    Args:
+        model_config (ModelConfig): The config of the model.
+        cache_config (CacheConfig): The config of the cache info.
+        gpu_id (int): The GPU id to use.
+    """
     GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
     reserved_mem = torch.cuda.memory_reserved(gpu_id)
@@ -185,6 +151,12 @@ def _update_cache_config(model_config: ModelConfig,
 
 
 def _get_torch_dtype(config: Any, default: str = 'float16'):
+    """Get the torch dtype from the model config.
+
+    Args:
+        config: Config of the hf model.
+        default (str): default device type.
+    """
     torch_dtype = getattr(config, 'torch_dtype', default)
     return eval(f'torch.{torch_dtype}')
 
@@ -199,6 +171,20 @@ def _tp_model_loop(
     out_que: mp.Queue,
     world_size: int,
 ):
+    """Start model loops for tensor parallel model inference.
+
+    Args:
+        rank (int): Distribution rank.
+        model_path (int): Path of the hugging face model. Could be
+            local or online.
+        extra_args (List[str]): The extra arguments to add to the
+            patched model.
+        model_config (ModelConfig): The config of the model.
+        cache_config (CacheConfig): The config of the cache.
+        in_que (mp.Queue): Input queue. Used to receive model input.
+        out_que (mp.Queue): Output queue. Used to send the model output.
+        world_size (int): The distribution world size.
+    """
     from accelerate import init_empty_weights
 
     device_mesh = DeviceMesh('cuda', list(range(world_size)))
@@ -346,6 +332,15 @@ def _start_tp_process(rank: int,
                       func: Callable,
                       args: List = None,
                       kwargs: Dict = None):
+    """Start the tensor parallel process.
+
+    Args:
+        rank (int): The distribution rank.
+        world_size (int): The distribution world size.
+        func (Callable): The function to be called in the process.
+        args (List): The arguments of the func.
+        kwargs (Dict): The keyword arguments of the func.
+    """
     try:
         os.environ['MASTER_ADDR'] = '127.0.0.1'
         os.environ['MASTER_PORT'] = '29500'
@@ -366,6 +361,14 @@ def _start_tp_process(rank: int,
 
 
 class Engine:
+    """The inference engine of lmdeploy pytorch.
+
+    Args:
+        model_path (str): The hugging face model path.
+        scheduler_config (SchedulerConfig): The config of the scheduler.
+        cache_config (CacheConfig): The config of the cache info.
+        tp (int): Number of tensor parallel.
+    """
 
     def __init__(
         self,
@@ -462,6 +465,19 @@ class Engine:
         out_que: mp.Queue,
         world_size: int,
     ):
+        """Start tensor parallel sub process.
+
+        Args:
+            model_path (int): Path of the hugging face model.
+                Could be local or online.
+            extra_args (List[str]): The extra arguments to add to the
+                patched model.
+            model_config (ModelConfig): The config of the model.
+            cache_config (CacheConfig): The config of the cache.
+            in_que (mp.Queue): Input queue. Used to receive model input.
+            out_que (mp.Queue): Output queue. Used to send the model output.
+            world_size (int): The distribution world size.
+        """
         self.mp_context = mp.spawn(
             _start_tp_process,
             args=(
@@ -492,12 +508,22 @@ class Engine:
         return EngineInstance(self)
 
     def add_session(self, session: SchedulerSession):
+        """Add new session."""
         self.scheduler.add_session(session)
 
     def add_message(self, message: SchedulerMessage):
+        """Add new message."""
         self.scheduler.add_message(message)
 
-    def _make_inputs(self, messages: List[SchedulerMessage], device='cuda'):
+    def _make_inputs(self,
+                     messages: List[SchedulerMessage],
+                     device: str = 'cuda'):
+        """create model inputs from messages.
+
+        Args:
+            messages (List[SchedulerMessage]): The input messages.
+            device (str): Device name.
+        """
         sessions = self.scheduler.get_sessions(messages)
         history_lengths = [sess.history_length for sess in sessions]
 
@@ -540,14 +566,25 @@ class Engine:
         )
 
     def stop_session(self, session_id: int):
+        """stop session."""
         self.scheduler.stop_session(session_id)
         self.scheduler.update()
 
     def end_session(self, session_id: int):
+        """end session."""
         self.scheduler.end_session(session_id)
         self.scheduler.update()
 
     def _stoping_criteria(self, msg: SchedulerMessage, next_token_id: int):
+        """Check if the message should stop.
+
+        Args:
+            msg (SchedulerMessage): The input message.
+            next_token_id (int): The next token id from inference result.
+
+        Returns:
+            bool: Weither the message should be stopped.
+        """
         # check eof
         sampling_param = msg.sampling_param
         if not sampling_param.ignore_eos:
@@ -572,6 +609,13 @@ class Engine:
 
     def _model_forward(self, inputs: Dict, swap_in_map: Dict[int, int],
                        swap_out_map: Dict[int, int]):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (Dict[int, int]): Cache maps to swap in.
+            swap_out_map (Dict[int, int]): Cache maps to swap out.
+        """
         if self.tp == 1:
             # swap in/out
             issued_cache_op = False
@@ -623,7 +667,14 @@ class Engine:
             return output
 
     def step(self, return_logits=False):
-        # TODO: cache manage
+        """one step inference. Used to perform streaming chat.
+
+        Args:
+            return_logits (bool): Weither to return the output logits.
+
+        Returns:
+            Dict[int, InferOutput]: The output of each session.
+        """
 
         # schedule
         schedule_output = self.scheduler.schedule()
@@ -697,6 +748,14 @@ class Engine:
         return outputs
 
     def infer(self, return_logits: bool = False):
+        """Perform inference until all message stopped.
+
+        Args:
+            return_logits (bool): Weither to return the output logits.
+
+        Returns:
+            Dict[int, InferOutput]: The output of each session.
+        """
         ret_tokens: Dict[int, InferOutput] = dict()
         while self.scheduler.has_unfinished():
             outputs = self.step(return_logits)
@@ -721,6 +780,14 @@ class Engine:
         return ret_tokens
 
     def decode(self, prompt_token_ids: List[List[int]]):
+        """Perform one step inference and get logits.
+
+        Args:
+            prompt_token_ids (List[List[int]]): Input prompts.
+
+        Returns:
+            List[Tensor]: The logits.
+        """
         assert not self.scheduler.has_unfinished()
 
         if len(self.scheduler.sessions) > 0:
@@ -757,6 +824,10 @@ class Engine:
         return logits
 
     def loop(self):
+        """Main loop of the engine.
+
+        Each engine instance would communicate with the engine by queue.
+        """
         out_ques: Dict[int, Queue] = dict()
 
         def _session_exist(
@@ -861,7 +932,6 @@ class EngineInstance:
 
     Args:
         engine (Engine): engine
-        cuda_stream_id(int): identity of a cuda stream
     """
 
     def __init__(self, engine: Engine):
@@ -871,6 +941,12 @@ class EngineInstance:
         self.owned_sessions: List[int] = list()
 
     def _send_req(self, req_type: RequestType, data: Any):
+        """Send request to engine.
+
+        Args:
+            req_type (RequestType): The request type to send.
+            data (Any): The data of the request.
+        """
         self.engine.requests.put(
             Request(type=req_type,
                     resp=self.response,
@@ -879,6 +955,11 @@ class EngineInstance:
         self.req_count += 1
 
     def _try_add_session(self, session_id: int):
+        """Add new session.
+
+        Args:
+            session_id (int): The session id to add.
+        """
         if session_id not in self.owned_sessions:
             self._send_req(RequestType.ADD_SESSION,
                            dict(session_id=session_id))
@@ -892,6 +973,20 @@ class EngineInstance:
             step: int = 0,
             sampling_param: SamplingParam = SamplingParam(),
     ):
+        """Send stream inference request.
+
+        Args:
+            session_id (int): The session id.
+            prompt_token_ids (List[int]): The input token ids.
+            request_output_len (int): The max output length of this request.
+            step (int): No use for now.
+            sampling_param (SamplingParam): The sampling param of the output.
+
+        Yields:
+            int: Error flags. 0 if success.
+            List[int]: The streaming output tokens.
+            int: The number of the output tokens.
+        """
         self._try_add_session(session_id)
         req_id = self.req_count
         msg = dict(
@@ -931,6 +1026,20 @@ class EngineInstance:
             step: int = 0,
             sampling_param: SamplingParam = SamplingParam(),
     ):
+        """Send inference request.
+
+        Args:
+            session_id (int): The session id.
+            prompt_token_ids (List[int]): The input token ids.
+            request_output_len (int): The max output length of this request.
+            step (int): No use for now.
+            sampling_param (SamplingParam): The sampling param of the output.
+
+        Returns:
+            int: Error flags. 0 if success.
+            List[int]: The streaming output tokens.
+            int: The number of the output tokens.
+        """
         self._try_add_session(session_id)
         req_id = self.req_count
         msg = dict(
@@ -964,10 +1073,12 @@ class EngineInstance:
         return (status, token_ids, len(token_ids))
 
     def end(self, session_id: int):
+        """End the given session."""
         self._send_req(RequestType.END_SESSION, dict(session_id=session_id))
         self.owned_sessions.remove(session_id)
 
     def cancel(self, session_id: int):
+        """Stop current streaming inference."""
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
 
     def decode(self, prompt_token_ids: List[List[int]]):

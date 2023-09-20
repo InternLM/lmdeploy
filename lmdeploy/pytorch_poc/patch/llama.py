@@ -14,10 +14,12 @@ from lmdeploy.pytorch_poc.patch.functional import (
 
 
 class LlamaAttention(nn.Module):
+    """Rewrite module of LlamaAttention."""
 
     @classmethod
     def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
+        """Distribution partition callback."""
         if mod_name in ['q_proj', 'k_proj', 'v_proj']:
             colwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
@@ -29,6 +31,7 @@ class LlamaAttention(nn.Module):
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
         dist.all_reduce(outputs[0])
         return outputs
 
@@ -41,6 +44,11 @@ class LlamaAttention(nn.Module):
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """Rewrite implementation of LlamaAttention.forward.
+
+        Add continuous batching support. Add paged attention support. TP
+        support.
+        """
         assert not output_attentions
         context = self.context.context
         history_lengths = context.history_lengths
@@ -81,6 +89,7 @@ class LlamaAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """Rewrite of LlamaAttention.forward."""
         if self.context.use_origin:
             return self.origin_mod(
                 hidden_states,
@@ -109,6 +118,7 @@ class LlamaMLP(nn.Module):
     @classmethod
     def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
+        """Distribution partition callback."""
         if mod_name in ['gate_proj', 'up_proj']:
             colwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
@@ -120,6 +130,7 @@ class LlamaMLP(nn.Module):
 
     @classmethod
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
 
@@ -138,6 +149,7 @@ class LlamaModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        """Rewrite implementation of LlamaModel.forward."""
         output_attentions = (output_attentions if output_attentions is not None
                              else self.config.output_attentions)
         output_hidden_states = (output_hidden_states
@@ -224,6 +236,7 @@ class LlamaModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        """Rewrite of LlamaModel.forward."""
         use_origin = self.context.use_origin
         if use_origin:
             # use origin model

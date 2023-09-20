@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 
 class LogicalTokenBlock:
+    """Logical block used to count tokens per block."""
 
     def __init__(self, block_id: int, block_size: int):
         self.block_id = block_id
@@ -27,6 +28,8 @@ class LogicalTokenBlock:
 
 @dataclass
 class PhysicalTokenBlock:
+    """Physical block used to schedule key value cache."""
+
     device: str
     block_id: int
     block_size: int
