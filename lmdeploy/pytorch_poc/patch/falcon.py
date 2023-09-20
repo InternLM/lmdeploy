@@ -117,7 +117,7 @@ class PatchedFalconAttention(nn.Module):
         history_lengths = q_seq_length.new_tensor(history_lengths)
         kv_seq_length = q_seq_length + history_lengths
         max_seq_len = q_seq_length.max().item()
-        config = getattr(self, 'config', None)
+        # config = getattr(self, 'config', None)
 
         fused_qkv = self.query_key_value(
             hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
@@ -170,7 +170,7 @@ class PatchedFalconAttention(nn.Module):
                 past_value,
             )
 
-        _, _, kv_length, _ = key_layer.shape
+        # _, _, kv_length, _ = key_layer.shape
         if use_cache:
             present = (key_layer, value_layer)
         else:
@@ -240,9 +240,9 @@ class PatchedFalconAttention(nn.Module):
                                 BLOCK=block_size)
 
             attn_output = attn_output.reshape(batch_size, query_length, -1)
-            logger.debug(
-                f'attn_output (before dense) {attn_output.size()} = \n%s',
-                attn_output)
+            # logger.debug(
+            #     f'attn_output (before dense) {attn_output.size()} = \n%s',
+            #     attn_output)
 
             output_tensor = self.dense(attn_output)
 
@@ -322,7 +322,6 @@ class PatchedFalconAttention(nn.Module):
         output_attentions: bool = False,
     ):
 
-        position_ids = self.context.context.position_ids
         use_origin = False
         if use_origin:
             return self.origin_mod(hidden_states, alibi, attention_mask,
@@ -330,109 +329,11 @@ class PatchedFalconAttention(nn.Module):
                                    output_attentions)
         else:
             # logger.debug('continuous forwarding')
+            position_ids = self.context.context.position_ids
             return self._contiguous_batching_forward(
                 hidden_states, position_ids, alibi, attention_mask, layer_past,
                 head_mask, use_cache, output_attentions)
 
-
-class PatchedFalconDecoderLayer(nn.Module):
-
-    def _contiguous_batching_forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: torch.Tensor,
-        alibi: Optional[torch.Tensor],
-        attention_mask: torch.Tensor,
-        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-    ):
-        residual = hidden_states
-
-        if self.config.new_decoder_architecture:
-            attention_layernorm_out = self.ln_attn(hidden_states)
-            mlp_layernorm_out = self.ln_mlp(hidden_states)
-        else:
-            attention_layernorm_out = self.input_layernorm(hidden_states)
-
-        # Self attention.
-        attn_outputs = self.self_attention(
-            attention_layernorm_out,
-            position_ids=position_ids,
-            layer_past=layer_past,
-            attention_mask=attention_mask,
-            alibi=alibi,
-            head_mask=head_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-        )
-
-        attention_output = attn_outputs[0]
-
-        if not self.config.new_decoder_architecture:
-            if self.config.parallel_attn:
-                mlp_layernorm_out = attention_layernorm_out
-            else:
-                residual = dropout_add(attention_output,
-                                       residual,
-                                       self.config.attention_dropout,
-                                       training=self.training)
-                mlp_layernorm_out = self.post_attention_layernorm(residual)
-
-        outputs = attn_outputs[1:]
-
-        # MLP.
-        mlp_output = self.mlp(mlp_layernorm_out)
-
-        if self.config.new_decoder_architecture or self.config.parallel_attn:
-            mlp_output += attention_output
-
-        output = dropout_add(mlp_output,
-                             residual,
-                             self.config.hidden_dropout,
-                             training=self.training)
-
-        if use_cache:
-            outputs = (output, ) + outputs
-        else:
-            outputs = (output, ) + outputs[1:]
-
-        return outputs  # hidden_states, present, attentions
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor],
-        alibi: Optional[torch.Tensor],
-        attention_mask: torch.Tensor,
-        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-    ):
-
-        use_origin = False
-
-        if use_origin:
-            return self.origin_mod(hidden_states=hidden_states,
-                                   alibi=alibi,
-                                   attention_mask=attention_mask,
-                                   layer_past=layer_past,
-                                   head_mask=head_mask,
-                                   use_cache=use_cache,
-                                   output_attentions=output_attentions)
-        else:
-            # print("continuous forwarding")
-            return self._contiguous_batching_forward(
-                hidden_states=hidden_states,
-                position_ids=position_ids,
-                alibi=alibi,
-                attention_mask=attention_mask,
-                layer_past=layer_past,
-                head_mask=head_mask,
-                use_cache=use_cache,
-                output_attentions=output_attentions)
 
 
 class PatchedFalconModel(nn.Module):
@@ -453,7 +354,7 @@ class PatchedFalconModel(nn.Module):
     ) -> Union[Tuple[torch.Tensor, ...],
                BaseModelOutputWithPastAndCrossAttentions]:
 
-        history_lengths = self.context.context.history_lengths
+        # history_lengths = self.context.context.history_lengths
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (output_hidden_states
@@ -498,7 +399,8 @@ class PatchedFalconModel(nn.Module):
         all_hidden_states = () if output_hidden_states else None
 
         # Compute alibi tensor: check build_alibi_tensor documentation
-        logger.debug(f'history_lengths = {history_lengths}')
+        # history_lengths = self.context.context.history_lengths
+        # logger.debug(f'history_lengths = {history_lengths}')
         # past_key_values_length = history_lengths
         # past_key_values_length = 0
         # if past_key_values[0] is not None:
@@ -524,12 +426,13 @@ class PatchedFalconModel(nn.Module):
         #     past_key_values_length=past_key_values_length,
         # )
 
-        seqlen = self.context.position_ids.max().item()
+        # seqlen = self.context.position_ids.max().item()
+
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states, )
 
-            logger.debug(f'====SeqLen {seqlen} Decode Layer {i}=======')
+            # logger.debug(f'====SeqLen {seqlen} Decode Layer {i}=======')
             outputs = block(
                 hidden_states,
                 # position_ids=position_ids,
@@ -551,11 +454,11 @@ class PatchedFalconModel(nn.Module):
 
         # Add last hidden state
 
-        logger.debug(f'hidden_states before in_f \n {hidden_states}')
+        # logger.debug(f'hidden_states before in_f \n {hidden_states}')
 
         hidden_states = self.ln_f(hidden_states)
 
-        logger.debug(f'hidden_states after in_f \n {hidden_states}')
+        # logger.debug(f'hidden_states after in_f \n {hidden_states}')
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states, )
@@ -580,7 +483,7 @@ class PatchedFalconModel(nn.Module):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        # position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
                                         ...]] = None,
         attention_mask: Optional[torch.Tensor] = None,
@@ -609,95 +512,6 @@ class PatchedFalconModel(nn.Module):
             return self._contiguous_batching_forward(
                 input_ids=input_ids,
                 # position_ids=position_ids,
-                past_key_values=past_key_values,
-                attention_mask=attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict)
-
-
-class PatchedFalconForCausalLM(nn.Module):
-
-    def _contiguous_batching_forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
-                                        ...]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        head_mask: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor, ...],
-               BaseModelOutputWithPastAndCrossAttentions]:
-
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        transformer_outputs = self.transformer(
-            input_ids,
-            position_ids=position_ids,  # add position_ids
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-        hidden_states = transformer_outputs[0]
-
-        lm_logits = self.lm_head(hidden_states)
-
-        loss = None
-        # remove labels to compute loss
-
-        if not return_dict:
-            output = (lm_logits, ) + transformer_outputs[1:]
-            return ((loss, ) + output) if loss is not None else output
-
-        return CausalLMOutputWithCrossAttentions(
-            loss=loss,
-            logits=lm_logits,
-            past_key_values=transformer_outputs.past_key_values,
-            hidden_states=transformer_outputs.hidden_states,
-            attentions=transformer_outputs.attentions,
-        )
-
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
-                                        ...]] = None,
-        return_dict: Optional[bool] = True,
-        output_attentions: Optional[bool] = False,
-        output_hidden_states: Optional[bool] = False,
-        use_origin: Optional[bool] = False,
-    ) -> Union[Tuple[torch.Tensor, ...],
-               BaseModelOutputWithPastAndCrossAttentions]:
-
-        use_origin = False
-        if use_origin:
-            return self.origin_mod(input_ids=input_ids,
-                                   past_key_values=past_key_values,
-                                   attention_mask=attention_mask,
-                                   head_mask=None,
-                                   inputs_embeds=None,
-                                   use_cache=False,
-                                   labels=None,
-                                   output_attentions=output_attentions,
-                                   output_hidden_states=output_hidden_states,
-                                   return_dict=return_dict)
-        else:
-            # print("continuous forwarding causal lm")
-            return self._contiguous_batching_forward(
-                input_ids=input_ids,
-                position_ids=position_ids,
                 past_key_values=past_key_values,
                 attention_mask=attention_mask,
                 output_attentions=output_attentions,
