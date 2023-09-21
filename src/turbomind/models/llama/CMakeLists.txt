@@ -10,6 +10,8 @@ add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
         LlamaCacheManager.cc
+        BlockManager.cc
+        SequenceManager.cc
         LlamaContextDecoder.cc
         LlamaContextAttentionLayer.cc
         LlamaDecoderSelfAttentionLayer.cc

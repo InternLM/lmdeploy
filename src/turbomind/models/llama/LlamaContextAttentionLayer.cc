@@ -116,6 +116,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
      *   \param history_lengths [batch_size], int
      *   \param context_lengths [batch_size], int
      *   \param cu_seqlens [batch_size+1], int
+     *   \param cu_block_counts [batch_size+1], int
      *   \param max_seq_len [1], int on cpu
      *   \param is_final_layer [1], bool on cpu
      *   \param layer_id [1], int on cpu
@@ -141,10 +142,11 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
     T* attention_mask  = input_tensors->at("attention_mask").getPtr<T>();
 
-    const auto input_length   = input_tensors->at("input_lengths").getPtr<const int>();
-    const auto history_length = input_tensors->at("history_lengths").getPtr<const int>();
-    const auto context_length = input_tensors->at("context_lengths").getPtr<const int>();
-    int*       cu_seqlens     = input_tensors->at("cu_seqlens").getPtr<int>();
+    const auto input_length    = input_tensors->at("input_lengths").getPtr<const int>();
+    const auto history_length  = input_tensors->at("history_lengths").getPtr<const int>();
+    const auto context_length  = input_tensors->at("context_lengths").getPtr<const int>();
+    int*       cu_seqlens      = input_tensors->at("cu_seqlens").getPtr<int>();
+    int*       cu_block_counts = input_tensors->at("cu_block_counts").getPtr<int>();
 
     const auto padding_offset = input_tensors->at("padding_offset").getPtr<int>();
 

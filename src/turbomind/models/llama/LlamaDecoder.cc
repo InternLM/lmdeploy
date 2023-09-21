@@ -124,6 +124,7 @@ void LlamaDecoder<T>::forwardSelfAttn(const LlamaDecoder::Session&              
                                         {MEMORY_GPU, data_type_, {sess.batch_size, hidden_units_}, attn_io});
     const int layer_id = layer;
     self_attention_input_tensors.insert("layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id});
+    self_attention_input_tensors.insert("cu_block_counts", input_tensors->at("cu_block_counts"));
     auto& k_cache = *sess.k_cache;
     auto& v_cache = *sess.v_cache;
 

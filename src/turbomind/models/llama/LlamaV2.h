@@ -28,6 +28,7 @@
 #include "src/turbomind/models/llama/LlamaDecoder.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/instance_comm.h"
@@ -44,6 +45,7 @@ public:
         std::vector<std::shared_ptr<Request>> stop_requests;
         RequestQueue                          request_queue;
         std::shared_ptr<Barrier>              barrier;
+        bool                                  abort;
     };
 
     ~LlamaV2();
@@ -94,8 +96,6 @@ public:
 private:
     friend class Batch;
 
-    void internalThreadEntry(int device_id);
-
     void
     initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, bool use_context_fmha, int quant_policy);
 
@@ -110,23 +110,24 @@ private:
                        const int* input_length,
                        const int* history_length,
                        const int* context_length,
+                       const int* cu_block_counts,
                        size_t     token_num,
                        size_t     max_input_len,
                        size_t     max_context_len,
                        size_t     session_len,
                        size_t     batch_size);
 
-    void decoderForward(T*         decoder_output,
-                        uintptr_t* k_cache_ptr,
-                        uintptr_t* v_cache_ptr,
-                        T*         decoder_input,
-                        const int* sequence_length,
-                        const int* total_padding_count,
-                        bool*      finished,
-                        int        step,
-                        int        ite,
-                        size_t     session_len,
-                        size_t     batch_size);
+    void decoderForward(T*          decoder_output,
+                        uintptr_t*  k_cache_ptr,
+                        uintptr_t*  v_cache_ptr,
+                        T*          decoder_input,
+                        const int*  sequence_length,
+                        const bool* finished,
+                        const int*  cu_block_counts,
+                        int         step,
+                        int         ite,
+                        size_t      session_len,
+                        size_t      batch_size);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 
@@ -146,7 +147,15 @@ private:
                        size_t          token_ids_len,
                        size_t          batch_size);
 
-    void start();
+    curandState_t* GetTopKState(int index)
+    {
+        return dynamic_decode_layer_->topk_curandstate_buf() + index;
+    }
+
+    curandState_t* GetTopPState(int index)
+    {
+        return dynamic_decode_layer_->topp_curandstate_buf() + index;
+    }
 
 private:
     friend class LlamaBatch<T>;
@@ -176,18 +185,14 @@ private:
 
     const bool debug_{false};
 
-    std::unique_ptr<LlamaCacheManager> kv_cache_mgr_;
-
     LlamaWeight<T>*            weights_{};
     LlamaDecoder<T>*           decoder_{};
     LlamaContextDecoder<T>*    context_decoder_{};
     DynamicDecodeLayer<float>* dynamic_decode_layer_{};
 
-    const int                    step_length_;
-    LlamaBatch<T>                batch_;
-    std::shared_ptr<SharedState> shared_state_;
-
-    std::thread internal_thread_;
+    const int                      step_length_;
+    std::unique_ptr<LlamaBatch<T>> batch_;
+    std::shared_ptr<SharedState>   shared_state_;
 };
 
 }  // namespace turbomind

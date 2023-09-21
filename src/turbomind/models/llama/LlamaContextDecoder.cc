@@ -109,6 +109,7 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
         {"input_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.input_length}},
         {"history_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.history_length}},
         {"context_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.context_length}},
+        {"cu_block_counts", input_tensors->at("cu_block_counts")},
         {"max_seq_len", input_tensors->at("max_seq_len")}};
 
     auto& k_cache = *sess.k_cache;

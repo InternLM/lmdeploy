@@ -79,8 +79,7 @@ namespace mmha {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Dh>
-struct Qk_vec_m_ {
-};
+struct Qk_vec_m_ {};
 
 template<>
 struct Qk_vec_m_<float, 32> {
@@ -180,8 +179,7 @@ struct Qk_vec_k_<__nv_fp8_e4m3, 256> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int THREADS_PER_KEY>
-struct K_vec_m_ {
-};
+struct K_vec_m_ {};
 
 template<>
 struct K_vec_m_<float, 4> {
@@ -262,8 +260,7 @@ struct K_vec_k_<__nv_fp8_e4m3, 1> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int V_VEC_SIZE>
-struct V_vec_m_ {
-};
+struct V_vec_m_ {};
 
 template<>
 struct V_vec_m_<float, 1> {
@@ -343,8 +340,7 @@ struct V_vec_k_<__nv_fp8_e4m3, 16> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_FMA
 template<typename T>
-struct Qk_vec_acum_fp32_ {
-};
+struct Qk_vec_acum_fp32_ {};
 
 template<>
 struct Qk_vec_acum_fp32_<float> {
@@ -426,8 +422,7 @@ struct Qk_vec_acum_fp32_<fp8_4_t> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-struct K_vec_acum_fp32_ {
-};
+struct K_vec_acum_fp32_ {};
 
 template<>
 struct K_vec_acum_fp32_<float> {
@@ -489,8 +484,7 @@ struct K_vec_acum_fp32_<fp8_4_t> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_OUT
 template<typename T>
-struct V_vec_acum_fp32_ {
-};
+struct V_vec_acum_fp32_ {};
 
 template<>
 struct V_vec_acum_fp32_<float> {
@@ -1471,6 +1465,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         }
         // We don't need to apply the linear position bias here since qi - ki = 0 yields the position bias 0.
 
+        printf("QK_last[%d] = %f\n", hi, qk);
+
         qk_max                        = qk;
         qk_smem[tlength - first_step] = qk;
         // qk_smem[params.timestep] = qk;
@@ -1595,6 +1591,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
                 qk += mul<float, T, float>(params.linear_bias_slopes[hi], dist);
             }
+            // printf("QK_%d = %f\n", (int)ti, qk);
             qk_max                   = is_mask ? qk_max : fmaxf(qk_max, qk);
             qk_smem[ti - first_step] = qk;
         }
@@ -1631,6 +1628,10 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // Broadcast to all the threads in the warp.
     qk_max = __shfl_sync(uint32_t(-1), qk_max, 0);
 
+    if (threadIdx.x == 0) {
+        printf("QK_MAX[%d] = %f\n", hi, (float)qk_max);
+    }
+
     // Compute the logits and start the sum.
     float sum = 0.f;
     // for( int ti = tidx; ti <= params.timestep; ti += THREADS_PER_BLOCK ) {
@@ -1655,6 +1656,10 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
     // Compute the sum.
     sum = block_sum<WARPS_PER_BLOCK>(&red_smem[WARPS_PER_BLOCK], sum);
+
+    if (threadIdx.x == 0) {
+        printf("SUM[%d] = %f\n", hi, (float)sum);
+    }
 
     // Normalize the logits.
     float inv_sum = __fdividef(1.f, sum + 1.e-6f);

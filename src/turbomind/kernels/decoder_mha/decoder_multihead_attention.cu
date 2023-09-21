@@ -26,7 +26,7 @@ bool Dump()
 template<typename T, int HeadDim>
 void LaunchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
 {
-    using MHAType = DecoderMultiHeadAttentionKernel<T, 1, HeadDim, 16, HeadDim, 1024, 5>;
+    using MHAType = DecoderMultiHeadAttentionKernel<T, 1, HeadDim, 16, HeadDim, 2048, 6>;
 
     [[maybe_unused]] static const bool init = Dump<MHAType>();
 

@@ -70,13 +70,13 @@ int main(int argc, char* argv[])
 {
     DecoderMultiHeadAttentionParams<half> params{};
 
-    constexpr int kHeadNum = 108 * 6;
+    constexpr int kHeadNum = 108 * 4;
     // constexpr int kHeadNum     = 32 * 4;
     constexpr int kHeadDim     = 128;
     constexpr int kBatchSize   = 1;
     constexpr int kContextLen  = 8192;
     constexpr int kSequenceLen = kContextLen + 1;
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz     = 256;
     constexpr int kTestIter    = 1;
 
     RNG rng{};

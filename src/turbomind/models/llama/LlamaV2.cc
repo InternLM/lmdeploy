@@ -28,6 +28,7 @@
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
@@ -86,14 +87,15 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     cuda_device_prop_(cuda_device_prop),
     debug_(isDebug()),
     step_length_(step_length),
-    batch_(max_batch_size, max_context_token_num, session_len, this),
+    // batch_(max_batch_size, max_context_token_num, session_len, this),
     shared_state_(shared_state)
 
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TM_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
 
-    vocab_size_padded_ = (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
+    vocab_size_padded_ =
+        (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
 
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -109,23 +111,36 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 
     const size_t local_kv_head_num = kv_head_num / tensor_para.world_size_;
 
-    kv_cache_mgr_ = std::make_unique<LlamaCacheManager>(num_layer_,
-                                                        local_kv_head_num,
-                                                        size_per_head_,
-                                                        session_len,
-                                                        elem_bits,
-                                                        cache_max_entry_count,
-                                                        cache_chunk_size,
-                                                        tensor_para.rank_,
-                                                        allocator);
+    // kv_cache_mgr_     = std::make_unique<LlamaCacheManager>(num_layer_,
+    //                                                     local_kv_head_num,
+    //                                                     size_per_head_,
+    //                                                     session_len,
+    //                                                     elem_bits,
+    //                                                     cache_max_entry_count,
+    //                                                     cache_chunk_size,
+    //                                                     tensor_para.rank_,
+    //                                                     allocator);
+    auto sequence_manager = std::make_unique<SequenceManager>(num_layer,
+                                                              local_kv_head_num,
+                                                              size_per_head_,
+                                                              128,
+                                                              cache_max_entry_count,
+                                                              cache_chunk_size,
+                                                              elem_bits,
+                                                              tensor_para_.rank_,
+                                                              allocator);
+    batch_                = std::make_unique<LlamaBatch<T>>(
+        max_batch_size, max_context_token_num, session_len, std::move(sequence_manager), this);
+
     initialize(attn_params, kv_head_num, use_context_fmha, quant_policy);
-    start();
+
+    /// TODO: decouple Llama model and batch inference
+    batch_->Start();
 }
 
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
-    internal_thread_.join();
 
     delete decoder_;
     delete dynamic_decode_layer_;
@@ -171,7 +186,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
                                                           vocab_size_padded_,
-                                                          0,            // end_id, deprecated
+                                                          0,  // end_id, deprecated
                                                           stream_,
                                                           cublas_wrapper_,
                                                           allocator_,
@@ -209,6 +224,7 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
                                const int* input_length,
                                const int* history_length,
                                const int* context_length,
+                               const int* cu_block_counts,
                                size_t     token_num,
                                size_t     max_input_len,
                                size_t     max_context_len,
@@ -251,7 +267,7 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
         {"max_q_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_q_len}},
         {"max_kv_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_kv_len}},
         {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
-    };
+        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}}};
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
         {"decoder_output", {MEMORY_GPU, dtype, {bsz, max_input_len, hidden_units_}, context_decoder_output_buf}},
@@ -267,17 +283,17 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
 }
 
 template<typename T>
-void LlamaV2<T>::decoderForward(T*         decoder_output,
-                                uintptr_t* k_cache_ptr,
-                                uintptr_t* v_cache_ptr,
-                                T*         decoder_input,
-                                const int* sequence_length,
-                                const int* total_padding_count,
-                                bool*      finished,
-                                int        step,
-                                int        ite,
-                                size_t     session_len,
-                                size_t     batch_size)
+void LlamaV2<T>::decoderForward(T*          decoder_output,
+                                uintptr_t*  k_cache_ptr,
+                                uintptr_t*  v_cache_ptr,
+                                T*          decoder_input,
+                                const int*  sequence_length,
+                                const bool* finished,
+                                const int*  cu_block_counts,
+                                int         step,
+                                int         ite,
+                                size_t      session_len,
+                                size_t      batch_size)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -289,7 +305,7 @@ void LlamaV2<T>::decoderForward(T*         decoder_output,
     std::unordered_map<std::string, Tensor> decoder_input_tensors{
         {"decoder_input", {MEMORY_GPU, dtype, {batch_size, hidden_units_}, decoder_input}},
         {"sequence_lengths", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
-        {"total_padding_tokens", {MEMORY_GPU, TYPE_INT32, {batch_size}, total_padding_count}},
+        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}},
         {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
         {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
         {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
@@ -428,73 +444,6 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     }
 
     dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-}
-
-template<typename T>
-void LlamaV2<T>::internalThreadEntry(int device_id)
-{
-    TM_LOG_INFO("[internalThreadEntry] %d", (int)tensor_para_.rank_);
-    check_cuda_error(cudaSetDevice(device_id));
-
-    auto& request_queue  = shared_state_->request_queue;
-    auto& infer_requests = shared_state_->infer_requests;
-    auto& stop_requests  = shared_state_->stop_requests;
-
-    while (1) {
-        if (tensor_para_.rank_ == 0) {
-            const int  free_slot_count = batch_.maxSize() - batch_.size() + batch_.finishedCount();
-            const bool is_empty        = free_slot_count == batch_.maxSize();
-
-            request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty);
-
-            batch_.verifyRequests(stop_requests, infer_requests);
-        }
-
-        // wait while rank-0 is dequeueing
-        shared_state_->barrier->wait();
-
-        bool modified = false;
-
-        if (!(batch_.finishedCount() == 0 && stop_requests.empty() && infer_requests.empty())) {
-            batch_.handleStopRequests(stop_requests);
-            batch_.synchronize();
-            modified = true;
-        }
-
-        const int infer_request_count = infer_requests.size();
-
-        if (!infer_requests.empty()) {
-            batch_.initialize(infer_requests);  // reinitialize when new requests come, possible buffer allocation
-            batch_.contextDecode();
-            modified = true;
-        }
-
-        // wait while shared stop/infer_requests is being used
-        shared_state_->barrier->wait();
-
-        if (batch_.size()) {
-            if (modified) {
-                batch_.initializeGeneration();
-                batch_.initializeSampling(infer_request_count);
-            }
-            for (int i = 0; i < step_length_; ++i) {
-                if (!batch_.generate()) {
-                    break;
-                }
-            }
-            batch_.finish();
-        }
-    }
-
-    FT_CHECK(0);
-}
-
-template<typename T>
-void LlamaV2<T>::start()
-{
-    int device_id = -1;
-    check_cuda_error(cudaGetDevice(&device_id));
-    internal_thread_ = std::thread(&LlamaV2<T>::internalThreadEntry, this, device_id);
 }
 
 static inline Tensor slice(const Tensor& tensor, int index)

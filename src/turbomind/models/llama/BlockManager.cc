@@ -1,0 +1,187 @@
+#include "src/turbomind/models/llama/BlockManager.h"
+// #include "src/turbomind/models/llama/utility.h"
+#include <algorithm>
+#include <iterator>
+#include <stdexcept>
+
+namespace turbomind {
+
+BlockManager::BlockManager(size_t block_size, double block_count, int chunk_size, IAllocator* allocator):
+    block_size_(block_size), allocator_(allocator)
+{
+    if (block_count < 1.) {
+        max_block_count_ = GetBlockCount(block_size, block_count);
+    }
+    else {
+        max_block_count_ = block_count;
+    }
+
+    if (chunk_size == 0) {
+        chunk_size_ = static_cast<int>(std::sqrt(max_block_count_));
+    }
+    else if (chunk_size < 0) {
+        chunk_size_ = max_block_count_;
+    }
+
+    blocks_.reserve(max_block_count_);
+
+    active_ids_.reserve(max_block_count_);
+    cached_ids_.reserve(max_block_count_);
+    free_ids_.reserve(max_block_count_);
+
+    // pre-allocate first chunk
+    Malloc();
+}
+
+BlockManager::~BlockManager()
+{
+    for (auto& chunk : chunks_) {
+        allocator_->free(&chunk);
+    }
+}
+
+bool BlockManager::Malloc()
+{
+    auto chunk_size = std::min<int>(chunk_size_, max_block_count_ - blocks_.size());
+
+    if (!chunk_size) {
+        return false;
+    }
+
+    auto ptr = (std::byte*)allocator_->malloc(block_size_ * chunk_size);
+    if (!ptr) {
+        return false;
+    }
+
+    chunks_.push_back(ptr);
+
+    for (int i = 0; i < chunk_size; ++i, ptr += block_size_) {
+        auto& block     = blocks_.emplace_back();
+        block.ref_count = 0;
+        block.id        = (int)blocks_.size() - 1;
+        block.timestamp = 0;
+        block.data      = ptr;
+
+        free_ids_.push_back(block.id);
+    }
+
+    return true;
+}
+
+size_t BlockManager::GetBlockCount(size_t block_size, double ratio)
+{
+    size_t free{};
+    size_t total{};
+    check_cuda_error(cudaMemGetInfo(&free, &total));
+    return static_cast<size_t>(free * ratio / block_size);
+}
+
+void BlockManager::Move(std::vector<int>& src, const std::vector<int>& delta, std::vector<int>& dst)
+{
+    std::vector<int> src1(src.size() - delta.size());
+    std::set_difference(src.begin(), src.end(), delta.begin(), delta.end(), src1.begin());
+    src.swap(src1);
+
+    std::vector<int> dst1(dst.size() + delta.size());
+    std::set_union(dst.begin(), dst.end(), delta.begin(), delta.end(), dst1.begin());
+    dst.swap(dst1);
+}
+
+std::vector<const Block*> BlockManager::Allocate(int count)
+{
+    while (free_ids_.size() < count) {
+        if (!Malloc()) {
+            throw std::runtime_error("out of memory");
+        }
+    }
+
+    std::vector<const Block*> ret;
+
+    std::vector<int> idxs;
+    idxs.reserve(count);
+
+    for (int i = 0; i < count; ++i) {
+        int idx     = free_ids_[i];
+        idxs[i]     = idx;
+        auto& block = blocks_[idx];
+        FT_CHECK(block.ref_count == 0);
+        FT_CHECK(block.timestamp == 0);
+        block.ref_count = 1;
+        block.unique_id = unique_id_++;
+        ret.push_back(&block);
+    }
+
+    Move(free_ids_, idxs, active_ids_);
+
+    return ret;
+}
+
+void BlockManager::Evict(int count)
+{
+    std::vector<int> idxs(cached_ids_);
+    // get first `count` cached ids according to timestamp
+    std::nth_element(idxs.begin(), idxs.begin() + count, idxs.end(), [&](int i, int j) {
+        return blocks_[i].timestamp < blocks_[j].timestamp;
+    });
+    idxs.resize(count);
+
+    // sort the retrieved ids
+    std::sort(idxs.begin(), idxs.end());
+
+    // set as free
+    for (const auto& idx : idxs) {
+        blocks_[idx].timestamp = 0;
+    }
+
+    Move(cached_ids_, idxs, free_ids_);
+}
+
+void BlockManager::Release(const std::vector<const Block*>& bs)
+{
+    std::vector<int> cached;
+
+    for (const auto& p : bs) {
+        auto& block = blocks_[p->id];
+        if (--block.ref_count == 0) {
+            cached.push_back(block.id);
+        }
+    }
+
+    std::sort(cached.begin(), cached.end());
+
+    Move(active_ids_, cached, cached_ids_);
+}
+
+void BlockManager::Retain(const std::vector<const Block*>& bs)
+{
+    for (const auto& p : bs) {
+        FT_CHECK(is_active(*p));
+        ++const_cast<Block*>(p)->ref_count;
+    }
+}
+
+void BlockManager::Touch(const std::vector<const Block*>& bs)
+{
+    std::for_each(bs.crbegin(), bs.crend(), [this](const Block* p) {
+        FT_CHECK(is_active(*p));
+        const_cast<Block*>(p)->timestamp = timestamp_++;
+    });
+}
+
+Snapshot BlockManager::TakeSnapshot()
+{
+    std::vector<int> ref_count(blocks_.size());
+    for (const auto& idx : active_ids_) {
+        ref_count[idx] = blocks_[idx].ref_count;
+    }
+    return {(int)active_ids_.size(), (int)cached_ids_.size(), (int)free_ids_.size(), std::move(ref_count)};
+}
+
+std::ostream& operator<<(std::ostream& os, const Block& block)
+{
+    os << "Block[id=" << block.id << ",ref_count=" << block.ref_count << ",unique_id=" << block.unique_id
+       << ",timestamp=" << block.timestamp << ",data=" << block.data << "]";
+    return os;
+}
+
+}  // namespace turbomind
