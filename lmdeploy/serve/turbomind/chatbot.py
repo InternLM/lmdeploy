@@ -18,6 +18,7 @@ from tritonclient.grpc.service_pb2 import ModelInferResponse
 from lmdeploy.model import MODELS
 from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
                                             prepare_tensor)
+from lmdeploy.utils import filter_suffix
 
 
 @dataclass
@@ -157,6 +158,8 @@ class Chatbot:
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
+            if status == StatusCode.TRITON_STREAM_END:  # remove stop_words
+                res = filter_suffix(res, self.model.stop_words)
             if status.value < 0:
                 break
             else:
@@ -346,6 +349,8 @@ class Chatbot:
                                                       sequence_end):
             if status.value < 0:
                 break
+            if status == StatusCode.TRITON_STREAM_END:  # remove stop_words
+                res = filter_suffix(res, self.model.stop_words)
         if status.value == 0:
             self._session.histories = \
                 self._session.histories + self._session.prompt + \

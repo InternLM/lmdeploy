@@ -513,7 +513,7 @@ class CodeLlama(Llama2):
             self.top_p = kwargs.get('top_p', 0.9)
             self.temperature = kwargs.get('temperature', 0.0)
             if self.stop_words is None:
-                self.stop_words = '<EOT>'
+                self.stop_words = ['<EOT>']
 
     def decorate_prompt(self, prompt, sequence_start=True):
         if self.capability == 'infilling':
