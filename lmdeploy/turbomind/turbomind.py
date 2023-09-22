@@ -168,6 +168,8 @@ class TurboMindInstance:
         self.gpu_count = tm_model.gpu_count
 
         self.stop_words = tm_model.stop_words
+        self.stop_tokens = [] if self.stop_words is None else \
+            self.stop_words.flatten().tolist()
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
 
@@ -352,6 +354,8 @@ class TurboMindInstance:
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id:
                     outputs.append((output[:-1], len_ - 1))
+                elif len(output) > 0 and output[-1].item() in self.stop_tokens:
+                    outputs.append((output[:-1], len_))
                 else:
                     outputs.append((output, len_))
 
