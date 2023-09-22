@@ -7,12 +7,9 @@ export USERID=${USERID}
 export GROUPID=${GROUPID}
 export CUDAVER=$(nvcc --version | sed -n 's/^.*release \([0-9]\+\).*$/\1/p')
 
-export GIT_REMOTE=${GIT_REMOTE:-https://github.com/InternLM/lmdeploy}
-export GIT_BRANCH=${GIT_BRANCH:-main}
 source /opt/conda/bin/activate
 conda activate $PYTHON_VERSION
 
-git clone -b ${GIT_BRANCH} ${GIT_REMOTE}
 cd lmdeploy
 mkdir build && cd build
 bash ../generate.sh

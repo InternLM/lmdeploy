@@ -61,8 +61,8 @@ std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert
 
     const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
     const size_t input_data_len     = input_tensors->at("input_ids").shape[1];
-    // freed in forward()
-    h_total_output_lengths_ = reinterpret_cast<uint32_t*>(malloc(request_batch_size * sizeof(uint32_t)));
+    h_total_output_lengths_ =
+        (uint32_t*)std::realloc((void*)h_total_output_lengths_, request_batch_size * sizeof(uint32_t));
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors = std::unordered_map<std::string, ft::Tensor>{
         {"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
@@ -251,11 +251,6 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
         output_tensors.insert({"error_message", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_BYTES, {1}, &h_exception_}});
     }
 
-    if (h_total_output_lengths_ != nullptr) {
-        free(h_total_output_lengths_);
-        h_total_output_lengths_ = nullptr;
-    }
-
     return convert_outputs(output_tensors);
 }
 
@@ -293,6 +288,7 @@ void LlamaTritonModelInstance<T>::freeBuffer()
     allocator_->free((void**)(&d_sequence_lengths_));
     allocator_->free((void**)(&d_output_log_probs_));
     allocator_->free((void**)(&d_cum_log_probs_));
+    std::free(h_total_output_lengths_);
 }
 
 template struct LlamaTritonModelInstance<float>;

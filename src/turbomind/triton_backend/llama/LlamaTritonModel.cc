@@ -276,6 +276,7 @@ LlamaTritonModel<T>::createModelInstance(int                                    
         instance = shared_instances_[device_id].lock();
         if (!instance) {
             instance = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
+            instance->llm->setFfiLock(ffi_lock_);
             shared_instances_[device_id] = instance;
         }
     }

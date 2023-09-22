@@ -95,8 +95,10 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
 
     loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
 
-    loadWeightFromBin(
-        (T*)post_decoder_embedding_kernel, {hidden_units_ * vocab_size_padded_}, dir_path + "output.weight", model_file_type);
+    loadWeightFromBin((T*)post_decoder_embedding_kernel,
+                      {hidden_units_ * vocab_size_padded_},
+                      dir_path + "output.weight",
+                      model_file_type);
 
     for (unsigned layer = 0; layer < num_layer_; ++layer) {
         decoder_layer_weights[layer]->loadModel(dir_path + "layers." + std::to_string(layer), model_file_type);

@@ -899,8 +899,9 @@ void LlamaBatch<T>::outputContextLogits(T*                      context_decoder_
 
     if (context_logits_buf_ == nullptr) {
         NcclGuard guard(llama_->tensor_para_, stream_, true);
-        context_logits_buf_ = (float*)allocator_->malloc(sizeof(float) * llama_->vocab_size_padded_ * max_context_token_num_);
-        const auto tp       = llama_->tensor_para_.world_size_;
+        context_logits_buf_ =
+            (float*)allocator_->malloc(sizeof(float) * llama_->vocab_size_padded_ * max_context_token_num_);
+        const auto tp = llama_->tensor_para_.world_size_;
         if (tp > 1) {
             FT_CHECK(llama_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = llama_->vocab_size_padded_ / tp;
@@ -938,11 +939,17 @@ void LlamaBatch<T>::finish()
 
     check_cuda_error(cudaStreamSynchronize(stream_));
 
+    if (rank_ == 0 && llama_->ffi_lock_) {
+        llama_->ffi_lock_(1);
+    }
     for (int i = 0; i < batch_size_; ++i) {
         FT_CHECK(requests_[i] != nullptr);
         if (requests_[i]->stream_cb && rank_ == 0) {
             requests_[i]->stream_cb(&requests_[i]->outputs[rank_].get());
         }
+    }
+    if (rank_ == 0 && llama_->ffi_lock_) {
+        llama_->ffi_lock_(0);
     }
 
     if (debug_ && rank_ == 0) {
