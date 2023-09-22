@@ -229,7 +229,8 @@ class TurboMindInstance:
                      repetition_penalty=1.0,
                      ignore_eos=False,
                      random_seed=None,
-                     stream_output=False):
+                     stream_output=False,
+                     **kwargs):
         """Perform model inference.
 
         Args:
