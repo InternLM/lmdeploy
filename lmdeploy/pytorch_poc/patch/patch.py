@@ -13,6 +13,7 @@ from torch.distributed._tensor import DeviceMesh
 from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
+# llama
 MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
@@ -20,6 +21,10 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
+}
+
+# baichuan
+MODULE_MAP.update({
     'modeling_baichuan.Model':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
     'modeling_baichuan.BaichuanModel':
@@ -30,7 +35,17 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
     'modeling_baichuan.MLP':
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
-}
+})
+
+# internlm
+MODULE_MAP.update({
+    'modeling_internlm.InternLMAttention':
+    'lmdeploy.pytorch_poc.patch.internlm.PatchedInternLMAttention',
+    'modeling_internlm.InternLMModel':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
+    'modeling_internlm.InternLMMLP':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
+})
 
 
 def _get_rewrite_qualname(origin_qualname: str) -> str:
