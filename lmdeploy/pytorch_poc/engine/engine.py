@@ -35,7 +35,7 @@ from .cache_engine import CacheEngine
 
 # logger = get_logger('lmdeploy')
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 class RequestType(enum.Enum):
@@ -458,7 +458,7 @@ class Engine:
                 kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
                 kv_head = 1
             else:
-                kv_dim = hf_config.hidden_size,
+                kv_dim = hf_config.hidden_size
                 kv_head = hf_config.num_attention_heads
             model_config = ModelConfig(
                 kv_dim,

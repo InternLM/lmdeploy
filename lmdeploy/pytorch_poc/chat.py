@@ -66,6 +66,7 @@ def main(
     seed = random.getrandbits(64)
     model = MODELS.get(model_name)()
 
+    # for prompt in ["Girafatron is obsessed with giraffes, the most glorious animal on the face of this Earth. Giraftron believes all other animals are irrelevant when compared to the glorious majesty of the giraffe.\nDaniel: Hello, Girafatron!\nGirafatron:", 'exit']:
     for prompt in ['Write a poem about Valencia.', 'exit']:
         # prompt = input_prompt()
         if prompt == 'exit':
@@ -115,9 +116,9 @@ def main(
 
 
 if __name__ == '__main__':
-    import torch
-    torch.set_default_device(0)
-    logging.basicConfig(filename='chat-llama.log',
+    # import torch
+    # torch.set_default_device(0)
+    logging.basicConfig(filename='chat-falcon.log',
                         level=logging.DEBUG,
                         filemode='w',
                         format='{%(pathname)s:%(lineno)d}\n  %(message)s')

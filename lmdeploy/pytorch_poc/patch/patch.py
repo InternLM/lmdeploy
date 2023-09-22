@@ -24,8 +24,8 @@ MODULE_MAP = {
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP'
 }
 
+# Falcon Models in transformer / on hub
 MODULE_MAP.update({
-    # Falcon Models in transformer / on hub
     'transformers.models.falcon.modeling_falcon.FalconAttention':
     'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
     'transformers.models.falcon.modeling_falcon.FalconModel':
@@ -132,8 +132,8 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
     origin_qualname = f'{module_name}.{class_name}'
     rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
-    global logger
-    # logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
+    logger = logging.getLogger()
+    logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
 
     if rewrite_qualname is None:
         # class name only
