@@ -33,6 +33,9 @@ def main(
         model_path,
         model_name: str,  # can not get model_name from hf model
         session_id: int = 1,
+        top_k=40,
+        top_p=0.8,
+        temperature=0.8,
         repetition_penalty: float = 1.0,
         tp: int = 1,
         stream_output=True):
@@ -73,12 +76,13 @@ def main(
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
+            input_ids = model.update_input_ids(input_ids)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             sampling_param = SamplingParam(
-                top_k=40,
-                top_p=0.8,
-                temperature=0.8,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=False,
                 random_seed=seed,

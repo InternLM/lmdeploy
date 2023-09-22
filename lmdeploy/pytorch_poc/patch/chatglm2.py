@@ -1,24 +1,66 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Adapted from https://huggingface.co/THUDM/chatglm2-6b/blob/main/modeling_chatglm.py   # noqa: E501
 
-import importlib
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
 from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
 
-chatglm_module = importlib.import_module('.chatglm2-6b.modeling_chatglm',
-                                         TRANSFORMERS_DYNAMIC_MODULE_NAME)
 
-apply_rotary_pos_emb = chatglm_module.apply_rotary_pos_emb
-RotaryEmbedding = chatglm_module.RotaryEmbedding
-split_tensor_along_last_dim = chatglm_module.split_tensor_along_last_dim
-ChatGLMModel = chatglm_module.ChatGLMModel
+def split_tensor_along_last_dim(
+    tensor: torch.Tensor,
+    num_partitions: int,
+    contiguous_split_chunks: bool = False,
+) -> List[torch.Tensor]:
+    """Split a tensor along its last dimension.
+
+    Arguments:
+        tensor: input tensor.
+        num_partitions: number of partitions to split the tensor
+        contiguous_split_chunks: If True, make each chunk contiguous
+                                 in memory.
+
+    Returns:
+        A list of Tensors
+    """
+    # Get the size and dimension.
+    last_dim = tensor.dim() - 1
+    last_dim_size = tensor.size()[last_dim] // num_partitions
+    # Split.
+    tensor_list = torch.split(tensor, last_dim_size, dim=last_dim)
+    # Note: torch.split does not create contiguous tensors by default.
+    if contiguous_split_chunks:
+        return tuple(chunk.contiguous() for chunk in tensor_list)
+
+    return tensor_list
+
+
+@torch.jit.script
+def apply_rotary_pos_emb(x: torch.Tensor,
+                         rope_cache: torch.Tensor) -> torch.Tensor:
+    # x: [sq, b, np, hn]
+    sq, _, np, _ = x.size(0), x.size(1), x.size(2), x.size(3)
+    rot_dim = rope_cache.shape[-2] * 2
+    x, x_pass = x[..., :rot_dim], x[..., rot_dim:]
+    # truncate to support variable sizes
+    rope_cache = rope_cache[:sq]
+    xshaped = x.reshape(sq, -1, np, rot_dim // 2, 2)
+    rope_cache = rope_cache.view(sq, -1, 1, xshaped.size(3), 2)
+    x_out2 = torch.stack(
+        [
+            xshaped[..., 0] * rope_cache[..., 0] -
+            xshaped[..., 1] * rope_cache[..., 1],
+            xshaped[..., 1] * rope_cache[..., 0] +
+            xshaped[..., 0] * rope_cache[..., 1],
+        ],
+        -1,
+    )
+    x_out2 = x_out2.flatten(3)
+    return torch.cat((x_out2, x_pass), dim=-1)
 
 
 class PatchedSelfAttention(nn.Module):
