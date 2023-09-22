@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 @dataclass
 class SchedulerConfig:
+    """Config of scheduler."""
+
     max_batches: int
     max_session_len: int
     max_request_output_len: int
@@ -12,6 +14,8 @@ class SchedulerConfig:
 
 @dataclass
 class CacheConfig:
+    """Config of key value cache."""
+
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
@@ -19,6 +23,8 @@ class CacheConfig:
 
 @dataclass
 class ModelConfig:
+    """Config of model."""
+
     hidden_size: int
     num_layers: int
     num_heads: int

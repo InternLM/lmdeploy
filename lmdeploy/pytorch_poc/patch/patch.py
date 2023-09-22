@@ -4,7 +4,7 @@ import inspect
 import logging
 import re
 from copy import copy
-from typing import Dict, Sequence
+from typing import Any, Dict, Sequence
 
 import torch
 import torch.distributed as dist
@@ -14,23 +14,17 @@ from torch.distributed._tensor import DeviceMesh
 from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
-logger = logging.getLogger()
-
+# llama
 MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
     'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
-    'modeling_baichuan.(.*)Model':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
-    'modeling_baichuan.(.*)Attention':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
-    'modeling_baichuan.BaichuanForCausalLM':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanForCausalLM',  # noqa
-    'modeling_baichuan.BaichuanLayer':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanLayer',  # noqa
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP'
+}
+
+MODULE_MAP.update({
     # Falcon Models in transformer / on hub
     'transformers.models.falcon.modeling_falcon.FalconAttention':
     'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
@@ -48,18 +42,60 @@ MODULE_MAP = {
     # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconForCausalLM',
     # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
     # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconDecoderLayer',
-}
+})
+
+# baichuan
+MODULE_MAP.update({
+    'modeling_baichuan.Model':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
+    'modeling_baichuan.BaichuanModel':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',  # noqa
+    'modeling_baichuan.Attention':
+    'lmdeploy.pytorch_poc.patch.baichuan.Attention',  # noqa
+    'modeling_baichuan.BaichuanAttention':
+    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
+    'modeling_baichuan.MLP':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
+})
+
+# internlm
+MODULE_MAP.update({
+    'modeling_internlm.InternLMAttention':
+    'lmdeploy.pytorch_poc.patch.internlm.PatchedInternLMAttention',
+    'modeling_internlm.InternLMModel':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
+    'modeling_internlm.InternLMMLP':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
+})
 
 
-def _get_rewrite_qualname(origin_qualname: str):
+def _get_rewrite_qualname(origin_qualname: str) -> str:
+    """get rewrite module from origin module name.
+
+    Args:
+        origin_qualname (str): The origin qualname of the module.
+
+    Returns:
+        str: The rewrite qualname.
+    """
     global MODULE_MAP
+    if origin_qualname in MODULE_MAP:
+        return MODULE_MAP[origin_qualname]
     for key, value in MODULE_MAP.items():
         if re.search(key, origin_qualname):
             return value
     return None
 
 
-def _class_from_qualname(qualname):
+def _class_from_qualname(qualname: str) -> Any:
+    """Import class with qualname.
+
+    Args:
+        qualname (str): Qualname of the class
+
+    Returns:
+        Any: class or builder of the class
+    """
     last_dot = qualname.rfind('.')
     modname = qualname[:last_dot]
     clsname = qualname[last_dot + 1:]
@@ -71,7 +107,16 @@ def _class_from_qualname(qualname):
     return cls_type
 
 
-def _patch(model: torch.nn.Module, context: Addict):
+def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
+    """patch the model with rewrite module.
+
+    Args:
+        model (Module): model to be patched.
+        context (Addict): The environment info to patched in model
+
+    Returns:
+        Module: The patched model
+    """
     global MODULE_MAP
     # logger = get_logger('lmdeploy')
 
@@ -124,13 +169,15 @@ def _patch(model: torch.nn.Module, context: Addict):
         model = copy(model)
         model.__class__ = new_type
 
-        if hasattr(model, '_update_model_fn'):
-            model._update_model_fn()
-
     return model
 
 
 def _update_model(model: torch.nn.Module):
+    """Update model after patch and load.
+
+    Args:
+        model (Module): The model to be updated.
+    """
     # recursive over children
     for _, child in model.named_children():
         _update_model(child)
@@ -147,6 +194,23 @@ def _load_state_dict(
     device_mesh: DeviceMesh = None,
     state_prefix: str = '',
 ):
+    """Load state dict by rank.
+
+    Load full state dict into device memory is not possible in LLM.
+    This method load shard and partition weights for different
+    distribution rank
+
+    Args:
+        model (Module): Model to load weight.
+        state_dict (Dict[str, Tensor]): State dict object.
+        rank (int): Distribution rank.
+        world_size (int): Distribution world size.
+        device_mesh (DeviceMesh): Distribution device mesh.
+        state_prefix (str): The prefix of state dict.
+
+    Returns:
+        Module: Updated model
+    """
     # post order
     for name, child in model.named_children():
         loaded_child = _load_state_dict(
@@ -240,6 +304,21 @@ def patch(
     world_size: int = 1,
     checkpoints: Sequence[str] = None,
 ):
+    """Patch the model with rewrite modules.
+
+    Extra arguments will be patched in forward of model, weights on each rank
+    will be partitioned.
+
+    Args:
+        model (Module): Model to be patched.
+        extra_args (Sequence[str]): Extra arguments of model forward.
+        rank (int): Distribution rank.
+        world_size (int): Distribution world size.
+        checkpoints (Sequence[str]): checkpoints of the model.
+
+    Returns:
+        Module: The patched model.
+    """
     if extra_args is None:
         extra_args = []
 
