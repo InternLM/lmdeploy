@@ -3,7 +3,6 @@ import enum
 import itertools
 import json
 import os
-import os.path as osp
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -19,6 +18,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
+from transformers.utils import WEIGHTS_INDEX_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
@@ -257,15 +257,14 @@ def _tp_model_loop(
                                                      torch_dtype=torch_dtype,
                                                      trust_remote_code=True)
 
-        torch_model_json_path = osp.join(model_path,
-                                         'pytorch_model.bin.index.json')
+        torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
         with open(torch_model_json_path, mode='r') as f:
             torch_model_json = json.load(f)
 
         weight_map = torch_model_json['weight_map']
 
         checkpoints = list(set(weight_map.values()))
-        checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
+        checkpoints = [cached_file(model_path, ckpt) for ckpt in checkpoints]
         patched_model = patch(
             model,
             extra_args=extra_args,
