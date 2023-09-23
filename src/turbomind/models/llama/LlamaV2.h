@@ -46,6 +46,9 @@ public:
         std::vector<std::shared_ptr<Request>> stop_requests;
         RequestQueue                          request_queue;
         std::shared_ptr<Barrier>              barrier;
+
+        // rank 0 sets flag to true if there are no more tasks in the request_queue
+        bool should_stop = false;
     };
 
     ~LlamaV2();
