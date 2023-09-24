@@ -125,7 +125,8 @@ class Allocator;
 template<>
 class Allocator<AllocatorType::CUDA>: public IAllocator {
 private:
-    enum class MemoryType {
+    enum class MemoryType
+    {
         HOST,
         DEVICE
     };
@@ -248,7 +249,7 @@ public:
         if (*ptr != nullptr) {
             int o_device = 0;
             if (pointer_mapping_->count(address)) {
-                const auto is_host = pointer_mapping_[address].second == MemoryType::HOST;
+                const auto is_host = pointer_mapping_->at(address).second == MemoryType::HOST;
                 TM_LOG_DEBUG("Free buffer %p", address);
                 check_cuda_error(getSetDevice(device_id_, &o_device));
                 if (is_host) {
