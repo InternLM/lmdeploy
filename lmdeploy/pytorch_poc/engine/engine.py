@@ -439,12 +439,14 @@ class Engine:
         tp (int): Number of tensor parallel.
     """
 
-    def __init__(self,
-                 model_path: str,
-                 scheduler_config: SchedulerConfig = None,
-                 cache_config: CacheConfig = None,
-                 tp: int = 1,
-                 trust_remote_code=True) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        scheduler_config: SchedulerConfig = None,
+        cache_config: CacheConfig = None,
+        tp: int = 1,
+        trust_remote_code=True,
+    ) -> None:
 
         self.tp = tp
         hf_config = AutoConfig.from_pretrained(
