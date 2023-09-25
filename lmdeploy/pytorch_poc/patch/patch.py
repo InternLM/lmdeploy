@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
 import inspect
-import logging
 import re
 from copy import copy
 from typing import Any, Dict, Sequence
@@ -21,7 +20,7 @@ MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaModel':
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP'
+    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
 }
 
 # Falcon Models in transformer / on hub
@@ -126,7 +125,7 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
         Module: The patched model
     """
     global MODULE_MAP
-    # logger = get_logger('lmdeploy')
+    logger = get_logger('lmdeploy')
 
     # recursive over children
     for name, child in model.named_children():
@@ -139,9 +138,6 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
     class_name = model.__class__.__name__
     origin_qualname = f'{module_name}.{class_name}'
     rewrite_qualname = _get_rewrite_qualname(origin_qualname)
-
-    logger = logging.getLogger()
-    # logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
 
     if rewrite_qualname is None:
         # class name only

@@ -76,7 +76,6 @@ class LlamaAttention(nn.Module):
             o_proj=self.o_proj,
             rotary_emb_fn=_rotary_emb_fn,
         )
-        # print('cache_k', past_key_value[0].shape)
 
         return attn_output, None, past_key_value
 

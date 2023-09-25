@@ -2,7 +2,6 @@
 import enum
 import itertools
 import json
-import logging
 import os
 import time
 from dataclasses import dataclass
@@ -33,9 +32,7 @@ from lmdeploy.utils import get_logger
 
 from .cache_engine import CacheEngine
 
-# logger = get_logger('lmdeploy')
-
-logger = logging.getLogger()
+logger = get_logger('lmdeploy')
 
 
 class RequestType(enum.Enum):
@@ -138,7 +135,17 @@ class ModelContext:
         k_caches: torch.Tensor,
         v_caches: torch.Tensor,
     ):
-        """fill cache."""
+        """Fill current key/value to cache.
+
+        Args:
+            k_states (torch.Tensor): [packed_seq_len, head, dim]
+            v_states (torch.Tensor): [packed_seq_len, head, dim]
+            start_loc (torch.Tensor): [bs]
+            seq_length (torch.Tensor): [bs]
+            k_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+            v_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+        """
+
         block_size = k_caches.size(1)
         block_offsets = self.block_offsets_list
 
@@ -230,6 +237,7 @@ def _tp_model_loop(
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
+    trust_remote_code=True,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -431,12 +439,14 @@ class Engine:
         tp (int): Number of tensor parallel.
     """
 
-    def __init__(self,
-                 model_path: str,
-                 scheduler_config: SchedulerConfig = None,
-                 cache_config: CacheConfig = None,
-                 tp: int = 1,
-                 trust_remote_code=True) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        scheduler_config: SchedulerConfig = None,
+        cache_config: CacheConfig = None,
+        tp: int = 1,
+        trust_remote_code=True,
+    ) -> None:
 
         self.tp = tp
         hf_config = AutoConfig.from_pretrained(
@@ -501,9 +511,7 @@ class Engine:
                 hf_model.eval()
 
             self.patched_model = patch(
-                hf_model,
-                ['context', 'use_origin', 'q_seq_info', 'position_ids'
-                 ]).cuda()
+                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
@@ -535,7 +543,6 @@ class Engine:
             # # have to update cache on host to support scheduler
             # _update_cache_config(model_config, cache_config)
 
-        logger.debug(self.patched_model)
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.requests = Queue(scheduler_config.max_batches)
@@ -725,13 +732,11 @@ class Engine:
                 for event in cache_events:
                     event.wait()
 
-            logger.debug(f"inputs['input_ids'] = {inputs['input_ids']}")
-            logger.debug(f"inputs['position_ids'] = {inputs['position_ids']}")
             with torch.no_grad():
                 # forward
                 output = self.patched_model(
                     input_ids=inputs['input_ids'],
-                    position_ids=inputs['position_ids'],
+                    # position_ids=inputs['position_ids'],
                     attention_mask=inputs['attention_mask'],
                     past_key_values=self.cache_engine.gpu_cache,
                     return_dict=True,
@@ -790,7 +795,6 @@ class Engine:
         logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-        # logger.debug('logits = %s', logits)
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -806,9 +810,6 @@ class Engine:
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
-            # logger.debug(f'msg = {msg}')
-            logger.debug(f'input_ids = {input_ids}')
-            logger.debug(f'logit = {logit}')
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),
@@ -818,7 +819,6 @@ class Engine:
             logit = logit.reshape([-1, logit.shape[-1]])
             next_token_ids.append(logit[-1].argmax())
 
-        logger.debug(f'next_token_ids = {next_token_ids}')
         # update scheduler
         for token, msg in zip(next_token_ids, running):
             msg.token_ids = [token]
