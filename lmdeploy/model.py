@@ -87,6 +87,10 @@ class BaseModel:
         """Return the stop-words' token ids."""
         return None
 
+    def update_input_ids(self, input_ids: List[int]):
+        """Further modify input ids of the prompt."""
+        return input_ids
+
 
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):
@@ -479,6 +483,25 @@ class Qwen7BChat(BaseModel):
     def stop_words(self):
         """Return the stop-words' token ids."""
         return [151645]  # <|im_end|>
+
+
+@MODELS.register_module(name='chatglm2-6b')
+class ChatGLM2(BaseModel):
+
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def get_prompt(self, prompt, sequence_start=True):
+        # need more check
+        # https://github.com/THUDM/ChatGLM2-6B/issues/48
+        # [64790, 64792] to be prepended
+        self.count += 1
+        return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+
+    def update_input_ids(self, input_ids: List):
+        input_ids = [64790, 64792] + input_ids
+        return input_ids
 
 
 def main(model_name: str = 'test'):

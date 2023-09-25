@@ -447,14 +447,25 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        model_config = ModelConfig(
-            hf_config.hidden_size,
-            hf_config.num_hidden_layers,
-            hf_config.num_attention_heads,
-            bos_token_id=hf_config.bos_token_id,
-            eos_token_id=hf_config.eos_token_id,
-            dtype=torch_dtype,
-        )
+        if 'chatglm' in model_path:
+            model_config = ModelConfig(
+                hf_config.hidden_size // hf_config.num_attention_heads *
+                hf_config.multi_query_group_num,
+                hf_config.num_layers,
+                hf_config.multi_query_group_num,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
+        else:
+            model_config = ModelConfig(
+                hf_config.hidden_size,
+                hf_config.num_hidden_layers,
+                hf_config.num_attention_heads,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
