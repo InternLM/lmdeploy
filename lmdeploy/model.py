@@ -201,7 +201,7 @@ class InternLMChat7B(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.user}:{prompt}{self.eoh}\n' \
+            return f'<BOS>{self.system}{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
@@ -219,7 +219,7 @@ class InternLMChat7B(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        ret = '<BOS>'
+        ret = '<BOS>' + self.system if system is None else '<BOS>' + system
         for user, assistant in zip(users, assistants):
             if assistant:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \

@@ -92,5 +92,6 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
     if suffixes is None:
         return response
     for item in suffixes:
-        response = response.removesuffix(item)
+        if response.endswith(item):
+            response = response[:len(response) - len(item)]
     return response
