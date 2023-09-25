@@ -11,6 +11,16 @@ KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 
 class CacheEngine:
+    """Host and Device memory maintainer.
+
+    Args:
+        cache_config (CacheConfig): config of the cache information.
+        model_config (ModelConfig): config of the model.
+        rank (int): distribution rank, 0 on non-distributed environment.
+        world_size (int): distribution world size, 1 on non-distributed
+            environment.
+        device_mesh (DeviceMesh): distribution device mesh.
+    """
 
     def __init__(
         self,
@@ -50,9 +60,11 @@ class CacheEngine:
 
     @property
     def gpu_cache(self):
+        """gpu cache."""
         return self.local_gpu_cache
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
+        """get shape of key block."""
         num_heads = self.num_heads
         if local:
             assert self.num_heads % self.world_size == 0
@@ -65,6 +77,7 @@ class CacheEngine:
 
     def get_value_block_shape(self,
                               local: bool = False) -> Tuple[int, int, int]:
+        """get shape of value block."""
         num_heads = self.num_heads
         if local:
             assert self.num_heads % self.world_size == 0
@@ -76,6 +89,7 @@ class CacheEngine:
         )
 
     def allocate_gpu_cache(self):
+        """allocate caches on GPU."""
         gpu_cache: List[KVCache] = []
         key_block_shape = self.get_key_block_shape(local=True)
         value_block_shape = self.get_value_block_shape(local=True)
@@ -95,6 +109,7 @@ class CacheEngine:
         return gpu_cache
 
     def allocate_cpu_cache(self):
+        """allocate caches on Host."""
         cpu_cache: List[KVCache] = []
         key_block_shape = self.get_key_block_shape()
         value_block_shape = self.get_value_block_shape()
@@ -118,6 +133,13 @@ class CacheEngine:
 
     def _swap(self, src: List[KVCache], dst: List[KVCache],
               src_to_dst: Dict[int, int]):
+        """Move caches from src memory to dst memory.
+
+        Args:
+            src (List[KVCache]): Source cache.
+            dst (List[KVCache]): Destination cache.
+            src_to_dst (Dict[int, int]): Map between src and dst.
+        """
         with torch.cuda.stream(self.cache_stream):
             for i in range(self.num_layers):
                 src_key_cache, src_value_cache = src[i]
@@ -131,14 +153,33 @@ class CacheEngine:
                     event.record(stream=self.cache_stream)
 
     def swap_in(self, src_to_dst: Dict[int, int]) -> None:
+        """Move cache from Host to Device.
+
+        Args:
+            src_to_dst (Dict[int, int]): Map between src and dst.
+        """
         self._swap(self.local_cpu_cache, self.local_gpu_cache, src_to_dst)
 
     def swap_out(self, src_to_dst: Dict[int, int]) -> None:
+        """Move cache from Device to Host.
+
+        Args:
+            src_to_dst (Dict[int, int]): Map between src and dst.
+        """
         self._swap(self.local_gpu_cache, self.local_cpu_cache, src_to_dst)
 
     @staticmethod
     def get_cache_block_size(block_size: int,
                              model_config: ModelConfig) -> int:
+        """Get the required cache size of the model.
+
+        Args:
+            block_size (int): The token numbers of the block.
+            model_config (ModelConfig): The config of the model.
+
+        Return:
+            int: Required memory size in bytes.
+        """
         head_size = model_config.get_head_size()
         num_layers = model_config.num_layers
         num_heads = model_config.num_heads
@@ -151,4 +192,12 @@ class CacheEngine:
 
 
 def _get_dtype_size(dtype: torch.dtype) -> int:
+    """get size of the given dtype.
+
+    Args:
+        dtype (torch.dtype): Data type.
+
+    Return:
+        int: size in bytes.
+    """
     return torch.tensor([], dtype=dtype).element_size()

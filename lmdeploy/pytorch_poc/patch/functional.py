@@ -19,6 +19,18 @@ def rotate_half(x: Tensor):
 
 def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
                          position_ids: Tensor):
+    """Apply rotary positional embedding on query and key.
+
+    Args:
+        q (Tensor): Query state.
+        k (Tensor): Key state.
+        cos (Tensor): cosine matrix (seq_len, dim).
+        sin (Tensor): sine matrix (seq_len, dim).
+        position_ids (Tensor): Position ids of q and k.
+
+    Returns:
+        Tuple[Tensor, Tensor]: Embedded query and key.
+    """
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
     cos = cos.to(q.device)
@@ -48,6 +60,22 @@ def fill_kv_cache(
     block_offsets: Tensor,
     history_lengths: Sequence,
 ):
+    """Fill key/value cache with current key value states.
+
+    Paged attention choose cache block by block tables. New key/value should be
+    filled into the cache blocks indicated by block tables.
+
+    Args:
+        k_states (Tensor): key states
+        v_states (Tensor): value states
+        k_caches (Tensor): key caches
+        v_caches (Tensor): value caches
+        start_loc (Tensor): state location of each data in batch
+        seq_length (Tensor): sequence length of each data in batch
+        block_offsets (Tensor): block table of blocks in key/value caches.
+        history_lengths (Sequence): Cache length in k_caches/v_caches.
+            Does not include data in k_states/v_states
+    """
     block_size = k_caches.size(1)
 
     history_lengths = torch.tensor(history_lengths)
@@ -94,6 +122,7 @@ def generate_batched_mask(q_lens,
                           max_q_len: int = None,
                           max_k_len: int = None,
                           device='cuda'):
+    """Generate batched mask."""
     if max_q_len is None:
         max_q_len = max(q_lens)
 
@@ -113,7 +142,8 @@ def generate_batched_mask(q_lens,
     return mask
 
 
-def get_slopes(n):
+def get_slopes(n: int):
+    """Get alibi slopes."""
 
     def _get_interleave_power_of_2(n):
         start = 2**(-(2**-(math.log2(n) - 3)))
@@ -131,9 +161,10 @@ def get_slopes(n):
 
 @torch.no_grad()
 def get_alibi_biases(n_heads: int, mask: torch.Tensor):
+    """Get alibi bias."""
     m = torch.tensor(get_slopes(n_heads)).to(mask.device)
-    distance = mask.cumsum(dim=-1)
-    return distance * m[:, None, None]
+    distance = mask.cumsum(dim=-1) - 1
+    return distance * m[None, :, None, None]
 
 
 @torch.no_grad()
@@ -154,6 +185,26 @@ def attention_forward_with_paged_attention(
     rotary_emb_fn: Optional[Callable] = None,
     bias_type: str = 'default',
 ) -> Tensor:
+    """Attention module forward with paced attention.
+
+    Args:
+        hidden_states (Tensor): Input of attention layer.
+        history_lengths (Sequence): Cache lengths of each data in batch.
+        block_offsets (Tensor): Block table of the key/value caches,
+            used by paged attention.
+        num_heads (int): numbers of query heads.
+        num_kv_heads (int): numbers of key/value heads.
+        head_dim (int): Feature dimension of heads.
+        position_ids (LongTensor): position ids of the input.
+        past_key_value (Tuple[Tensor]): key value cache.
+        q_proj (Callable): query project module/function.
+        k_proj (Callable): key project module/function.
+        v_proj (Callable): value project module/function.
+        qkv_proj (Callable): query/key/value project module/function.
+        o_proj (Callable): output project module/function.
+        rotary_emb_fn (Callable): rotary embeding callback.
+        bias_type (str): type of attention bias. support ['default', 'alibi'].
+    """
     max_seq_len = position_ids.size(-1)
 
     if qkv_proj is not None:

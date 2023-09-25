@@ -3,6 +3,7 @@
 import torch
 import triton
 import triton.language as tl
+from torch import Tensor
 
 assert triton.__version__ >= '2.1.0'
 
@@ -145,19 +146,33 @@ def _fwd_kernel(
 
 @torch.no_grad()
 def biased_paged_attention_fwd(
-    q,
-    k,
-    v,
-    bias,
-    head_scale,
-    o,
-    block_offsets,
-    b_start_loc,
-    b_seq_len,
-    b_kv_seq_len,
-    max_input_len,
-    BLOCK=64,
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    bias: Tensor,
+    o: Tensor,
+    block_offsets: Tensor,
+    b_start_loc: Tensor,
+    b_seq_len: Tensor,
+    b_kv_seq_len: Tensor,
+    max_input_len: int,
+    BLOCK: int = 64,
 ):
+    """Paged attention forward with custom bias.
+
+    Args:
+        q (Tensor): Query state.
+        k (Tensor): Key state caches.
+        v (Tensor): Value state caches.
+        bias (Tensor): Bias of the QK.
+        o (Tensor): Output state.
+        block_offsets (Tensor): The block offset of key and value.
+        b_start_loc (Tensor): Start token location of each data in batch.
+        b_seq_len (Tensor): Query length for each data in batch.
+        b_kv_seq_len (Tensor): Key/Value length for each data in batch.
+        max_input_len (int): The max input length.
+        BLOCK (int): The kernel block size.
+    """
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
