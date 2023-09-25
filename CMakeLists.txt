@@ -13,6 +13,7 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
+cmake_policy(SET CMP0074 NEW)
 project(TurboMind LANGUAGES CXX CUDA)
 
 find_package(CUDA 10.2 REQUIRED)
@@ -265,8 +266,8 @@ print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
 endif()
 
 if (BUILD_MULTI_GPU)
-  list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
-  list(APPEND COMMON_LIB_DIRS /usr/local/mpi/lib)
+  list(APPEND COMMON_HEADER_DIRS ${MPI_CXX_INCLUDE_DIRS})
+  list(APPEND COMMON_HEADER_DIRS ${NCCL_INCLUDE_DIRS})
 endif()
 
 if(USE_TRITONSERVER_DATATYPE)
@@ -347,7 +348,7 @@ add_library(transformer-shared SHARED
 
 if (BUILD_MULTI_GPU)
 target_link_libraries(transformer-shared PUBLIC
-  -lmpi
+  ${MPI_CXX_LIBRARIES}
   ${NCCL_LIBRARIES}
 )
 endif()
