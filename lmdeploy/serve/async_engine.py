@@ -4,7 +4,7 @@ import dataclasses
 import os.path as osp
 import random
 from contextlib import contextmanager
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from lmdeploy.model import MODELS, BaseModel
 
@@ -46,6 +46,7 @@ class AsyncEngine:
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}
+        self.loop = asyncio.get_event_loop()
 
     @contextmanager
     def safe_run(self, instance_id: int, stop: bool = False):
@@ -54,7 +55,6 @@ class AsyncEngine:
         self.available[instance_id] = True
 
     async def get_embeddings(self, prompt):
-        prompt = self.model.get_prompt(prompt)
         input_ids = self.tokenizer.encode(prompt)
         return input_ids
 
@@ -64,6 +64,58 @@ class AsyncEngine:
             while self.available[instance_id] is False:
                 await asyncio.sleep(0.1)
         return self.generators[instance_id]
+
+    def batch_infer(self,
+                    prompts: List[str],
+                    request_output_len=512,
+                    top_k=40,
+                    top_p=0.8,
+                    temperature=0.8,
+                    repetition_penalty=1.0,
+                    ignore_eos=False,
+                    **kwargs):
+        """Inference a batch of prompts.
+
+        Args:
+            prompts (List[str]): a batch of prompts
+            request_output_len (int): output token nums
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+            are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+              1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+        """
+        batch_size = len(prompts)
+        outputs = [''] * batch_size
+        generators = []
+        for i, prompt in enumerate(prompts):
+            generators.append(
+                self.generate(prompt,
+                              i,
+                              stream_response=True,
+                              sequence_start=True,
+                              sequence_end=True,
+                              request_output_len=request_output_len,
+                              top_k=top_k,
+                              top_p=top_p,
+                              temperature=temperature,
+                              ignore_eos=ignore_eos,
+                              repetition_penalty=repetition_penalty))
+
+        async def _inner_call(i, generator):
+            async for out in generator:
+                outputs[i] += out.response
+
+        async def gather():
+            await asyncio.gather(
+                *[_inner_call(i, generators[i]) for i in range(batch_size)])
+
+        self.loop.run_until_complete(gather())
+        return outputs
 
     async def generate(
         self,
