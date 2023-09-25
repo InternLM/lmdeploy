@@ -60,7 +60,7 @@ def create_error_response(status: HTTPStatus, message: str):
     return JSONResponse(
         ErrorResponse(message=message,
                       type='invalid_request_error',
-                      code=status.value).dict())
+                      code=status.value).model_dump())
 
 
 async def check_request(request) -> Optional[JSONResponse]:
@@ -152,7 +152,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             model=model_name,
             choices=[choice_data],
         )
-        response_json = response.json(ensure_ascii=False)
+        response_json = response.model_dump_json()
 
         return response_json
 
@@ -167,7 +167,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             chunk = ChatCompletionStreamResponse(id=request_id,
                                                  choices=[choice_data],
                                                  model=model_name)
-            data = chunk.json(exclude_unset=True, ensure_ascii=False)
+            data = chunk.model_dump_json(exclude_unset=True)
             yield f'data: {data}\n\n'
 
         async for res in result_generator:
