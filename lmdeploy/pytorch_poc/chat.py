@@ -80,6 +80,7 @@ def main(
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
+            input_ids = model.update_input_ids(input_ids)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             sampling_param = SamplingParam(

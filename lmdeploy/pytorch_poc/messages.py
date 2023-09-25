@@ -7,16 +7,19 @@ from lmdeploy.pytorch_poc.block import LogicalTokenBlock
 
 
 class SamplingParam:
+    """Sampling parameter."""
 
-    def __init__(self,
-                 top_p: float = 0.8,
-                 top_k: int = None,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
-                 ignore_eos: bool = False,
-                 random_seed: int = None,
-                 stop_words: List[int] = None,
-                 bad_words: List[int] = None):
+    def __init__(
+        self,
+        top_p: float = 0.8,
+        top_k: int = None,
+        temperature: float = 0.8,
+        repetition_penalty: float = 1.0,
+        ignore_eos: bool = False,
+        random_seed: int = None,
+        stop_words: List[int] = None,
+        bad_words: List[int] = None,
+    ):
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
@@ -29,6 +32,7 @@ class SamplingParam:
 
 class MessageStatus(enum.Enum):
     """Status of a sequence."""
+
     WAITING = enum.auto()
     RUNNING = enum.auto()
     SWAP_OUT = enum.auto()
@@ -39,6 +43,7 @@ class MessageStatus(enum.Enum):
 
 
 class SchedulerSession:
+    """Scheduler session."""
 
     def __init__(self, session_id: int, arrive_time: float = 0.0) -> None:
         self.session_id = session_id
@@ -49,7 +54,12 @@ class SchedulerSession:
         self.history_length: int = 0
 
     def append_tokens(self, num_tokens: int, block_size: int):
+        """Append new tokens, update logical blocks.
 
+        Args:
+            num_tokens (int): Number of tokens.
+            block_size (int): Size of block.
+        """
         if len(self.logical_blocks) == 0:
             remain_num_tokens = num_tokens
             next_block_id = 0
@@ -72,6 +82,8 @@ class SchedulerSession:
 
 @dataclass
 class SchedulerMessage:
+    """Scheduler message."""
+
     token_ids: Sequence
     session_id: int
     status: MessageStatus = MessageStatus.WAITING

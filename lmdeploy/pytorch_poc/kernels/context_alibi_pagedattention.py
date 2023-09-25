@@ -1,13 +1,48 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
+import math
+
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
 
-from lmdeploy.pytorch_poc.dist_utils import try_to_local
-
 assert triton.__version__ >= '2.1.0'
+
+LOG2 = math.log(2)
+
+
+@triton.jit
+def tl_pow(a, b):
+    return tl.exp(b * tl.log(a))
+
+
+@triton.jit
+def tl_2pow(b):
+    return tl.exp(b * LOG2)
+
+
+@triton.jit
+def tl_log2(a):
+    return tl.log(a) / LOG2
+
+
+@triton.jit
+def _get_interleave_power_of_2(i, n):
+    start = -tl_2pow(3 - tl_log2(n))
+    start = tl_2pow(start)
+    ratio = start
+    return start * tl_pow(ratio, i)
+
+
+@triton.jit
+def get_slope(i, n):
+    closest_power_of_2 = tl_2pow(tl_log2(n).to(tl.int32))
+    if i < closest_power_of_2:
+        return _get_interleave_power_of_2(i, closest_power_of_2)
+    else:
+        return _get_interleave_power_of_2((i - closest_power_of_2) * 2,
+                                          2 * closest_power_of_2)
 
 
 @triton.jit
@@ -34,6 +69,8 @@ def _fwd_kernel(
     stride_oh,
     stride_od,
     stride_boffb,
+    head_offset,
+    num_heads,
     kv_group_num,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -51,6 +88,8 @@ def _fwd_kernel(
     history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
+    head_slope = get_slope(
+        cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
@@ -93,9 +132,13 @@ def _fwd_kernel(
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
+
+        mask = start_n + offs_n[None, :]
+        bias = mask.to(tl.float32) * head_slope
+        qk += bias
         # NOTE: inf - inf = nan, and nan will leads to error
         qk = tl.where(
-            (history_len + offs_m[:, None]) >= (start_n + offs_n[None, :]),
+            (history_len + offs_m[:, None]) >= mask,
             qk,
             float(-1e30),
         )
@@ -136,7 +179,7 @@ def _fwd_kernel(
 
 
 @torch.no_grad()
-def paged_attention_fwd(
+def alibi_paged_attention_fwd(
     q: Tensor,
     k: Tensor,
     v: Tensor,
@@ -146,9 +189,11 @@ def paged_attention_fwd(
     b_seq_len: Tensor,
     b_kv_seq_len: Tensor,
     max_input_len: int,
+    head_offset: int = 0,
+    num_heads: int = -1,
     BLOCK: int = 64,
 ):
-    """Paged Attention forward.
+    """Paged attention forward with alibi bias.
 
     Args:
         q (Tensor): Query state.
@@ -160,17 +205,12 @@ def paged_attention_fwd(
         b_seq_len (Tensor): Query length for each data in batch.
         b_kv_seq_len (Tensor): Key/Value length for each data in batch.
         max_input_len (int): The max input length.
+        head_offset (int): The offset of the start head. Head might be
+            partitioned when tensor parallel inference.
+        num_heads (int): The number of heads. Head might be partitioned when
+            tensor parallel inference.
         BLOCK (int): The kernel block size.
     """
-    q = try_to_local(q)
-    k = try_to_local(k)
-    v = try_to_local(v)
-    o = try_to_local(o)
-    block_offsets = try_to_local(block_offsets)
-    b_start_loc = try_to_local(b_start_loc)
-    b_seq_len = try_to_local(b_seq_len)
-    b_kv_seq_len = try_to_local(b_kv_seq_len)
-
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -179,6 +219,8 @@ def paged_attention_fwd(
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[-2]
     kv_group_num = q.shape[-2] // k[0].shape[-2]
+    if num_heads <= 0:
+        num_heads = head
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
@@ -206,6 +248,8 @@ def paged_attention_fwd(
         o.stride(-2),
         o.stride(-1),
         block_offsets.stride(0),
+        head_offset=head_offset,
+        num_heads=num_heads,
         kv_group_num=kv_group_num,
         BLOCK_M=BLOCK,
         BLOCK_DMODEL=Lk,

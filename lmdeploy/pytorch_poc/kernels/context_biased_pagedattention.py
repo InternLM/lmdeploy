@@ -5,8 +5,6 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from lmdeploy.pytorch_poc.dist_utils import try_to_local
-
 assert triton.__version__ >= '2.1.0'
 
 
@@ -15,6 +13,8 @@ def _fwd_kernel(
     Q,
     K,
     V,
+    Bias,
+    Head_scale,
     sm_scale,
     B_Start_Loc,
     B_Seqlen,
@@ -30,6 +30,10 @@ def _fwd_kernel(
     stride_vbs,
     stride_vh,
     stride_vd,
+    stride_biasbs,
+    stride_biash,
+    stride_biasq,
+    stride_biask,
     stride_obs,
     stride_oh,
     stride_od,
@@ -48,7 +52,6 @@ def _fwd_kernel(
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_kv_len = tl.load(B_kvlen + cur_batch)
     cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
-    history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
 
@@ -62,11 +65,15 @@ def _fwd_kernel(
              offs_d[:, None] * stride_kd)
     off_v = (offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh +
              offs_d[None, :] * stride_vd)
+    off_bias = (cur_batch * stride_biasbs + cur_head * stride_biash +
+                offs_m[:, None] * stride_biasq +
+                offs_n[None, :] * stride_biask)
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
     k_ptrs = K + off_k
     v_ptrs = V + off_v
+    bias_ptrs = Bias + off_bias
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
@@ -93,12 +100,14 @@ def _fwd_kernel(
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
-        # NOTE: inf - inf = nan, and nan will leads to error
-        qk = tl.where(
-            (history_len + offs_m[:, None]) >= (start_n + offs_n[None, :]),
-            qk,
-            float(-1e30),
+
+        bias = tl.load(
+            bias_ptrs + start_n,
+            mask=(start_n + offs_n[None, :]) < cur_batch_kv_len
+            and (offs_m[:, None] < cur_batch_seq_len),
+            other=-1e30,
         )
+        qk += bias
 
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -136,10 +145,11 @@ def _fwd_kernel(
 
 
 @torch.no_grad()
-def paged_attention_fwd(
+def biased_paged_attention_fwd(
     q: Tensor,
     k: Tensor,
     v: Tensor,
+    bias: Tensor,
     o: Tensor,
     block_offsets: Tensor,
     b_start_loc: Tensor,
@@ -148,12 +158,13 @@ def paged_attention_fwd(
     max_input_len: int,
     BLOCK: int = 64,
 ):
-    """Paged Attention forward.
+    """Paged attention forward with custom bias.
 
     Args:
         q (Tensor): Query state.
         k (Tensor): Key state caches.
         v (Tensor): Value state caches.
+        bias (Tensor): Bias of the QK.
         o (Tensor): Output state.
         block_offsets (Tensor): The block offset of key and value.
         b_start_loc (Tensor): Start token location of each data in batch.
@@ -162,19 +173,17 @@ def paged_attention_fwd(
         max_input_len (int): The max input length.
         BLOCK (int): The kernel block size.
     """
-    q = try_to_local(q)
-    k = try_to_local(k)
-    v = try_to_local(v)
-    o = try_to_local(o)
-    block_offsets = try_to_local(block_offsets)
-    b_start_loc = try_to_local(b_start_loc)
-    b_seq_len = try_to_local(b_seq_len)
-    b_kv_seq_len = try_to_local(b_kv_seq_len)
-
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128}
+    assert bias.dtype == torch.float32
+
+    if bias.dim() == 2:
+        bias = bias.unsqueeze(0)
+
+    if bias.dim() == 3:
+        bias = bias.unsqueeze(1)
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[-2]
@@ -187,6 +196,7 @@ def paged_attention_fwd(
         q,
         k,
         v,
+        bias,
         sm_scale,
         b_start_loc,
         b_seq_len,
@@ -202,6 +212,10 @@ def paged_attention_fwd(
         v.stride(-3),
         v.stride(-2),
         v.stride(-1),
+        bias.stride(-4),
+        bias.stride(-3),
+        bias.stride(-2),
+        bias.stride(-1),
         o.stride(-3),
         o.stride(-2),
         o.stride(-1),

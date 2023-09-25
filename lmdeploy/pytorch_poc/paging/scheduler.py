@@ -26,6 +26,8 @@ BlockTable = List[PhysicalTokenBlock]
 
 @dataclass
 class SchedulerOutput:
+    """Output of schedule."""
+
     running: List[SchedulerMessage]
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
@@ -33,6 +35,12 @@ class SchedulerOutput:
 
 
 class Scheduler:
+    """Tools to schedule next step.
+
+    Args:
+        scheduler_config (SchedulerConfig): The config of scheduler.
+        cache_config (CacheConfig): The config of cache info.
+    """
 
     def __init__(self, scheduler_config: SchedulerConfig,
                  cache_config: CacheConfig) -> None:
@@ -45,12 +53,20 @@ class Scheduler:
         self.aborted: List[SchedulerMessage] = []
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
-        self.block_manager = BlockManager(cache_config.block_size,
-                                          cache_config.num_gpu_blocks,
-                                          cache_config.num_cpu_blocks)
+        self.block_manager = BlockManager(
+            cache_config.block_size,
+            cache_config.num_gpu_blocks,
+            cache_config.num_cpu_blocks,
+        )
 
     def _set_message_status(self, message: SchedulerMessage,
                             status: MessageStatus):
+        """Set status of message.
+
+        Args:
+            message (SchedulerMessage): message to setup status.
+            status (MessageStatus): New message status.
+        """
         session_id = message.session_id
         session = self.sessions[session_id]
 
@@ -58,25 +74,47 @@ class Scheduler:
         session.status = status
 
     def add_session(self, session: SchedulerSession):
+        """Add new session.
+
+        Args:
+            session (SchedulerSession): New session.
+        """
         assert session.session_id not in self.sessions
         self.sessions[session.session_id] = session
 
     def get_sessions(self, messages: List[SchedulerMessage]):
+        """Get sessions by message.
+
+        Args:
+            messages (List[SchedulerMessage]): Messages
+
+        Returns:
+            List[SchedulerSession]: Sessions of input messages.
+        """
         return [self.sessions[msg.session_id] for msg in messages]
 
     def add_message(self, message: SchedulerMessage):
-        assert message.session_id in self.sessions, (
-            f'Unknown session id {message.session_id}')
+        """Add message.
+
+        Args:
+            message (SchedulerMessage): New message.
+        """
+        assert (message.session_id
+                in self.sessions), f'Unknown session id {message.session_id}'
 
         # push message to waiting queue
         self._set_message_status(message, MessageStatus.WAITING)
         if message.max_request_output_len == 0:
-            message.max_request_output_len = \
-                self.scheduler_config.max_request_output_len
+            message.max_request_output_len = (
+                self.scheduler_config.max_request_output_len)
         self.waiting.append(message)
 
     def _schedule(self):
+        """Schedule next step.
 
+        Running is the messages to perform inference. Swap in/swap out is the
+        table used to perform memory paging (between host and device)
+        """
         running: List[SchedulerMessage] = []
         swap_out_map: Dict[int, int] = {}
         swap_in_map: Dict[int, int] = {}
@@ -108,8 +146,8 @@ class Scheduler:
                 _to_running(msg)
             else:
                 # swap out
-                assert self.block_manager.can_swap_out(session), (
-                    'Can not swap out')
+                assert self.block_manager.can_swap_out(
+                    session), 'Can not swap out'
                 tmp_map = self.block_manager.swap_out(session)
                 swap_out_map.update(tmp_map)
                 self._set_message_status(msg, MessageStatus.SWAP_OUT)
@@ -139,7 +177,7 @@ class Scheduler:
                 if self.block_manager.can_append_slot(session):
                     msg_length = len(msg.token_ids)
                     block_size = self.cache_config.block_size
-                    session.append_tokens(msg_length + 1, block_size)
+                    session.append_tokens(msg_length, block_size)
                     self.block_manager.append_slot(session)
                     enable_running = True
             else:
@@ -147,7 +185,7 @@ class Scheduler:
                     # update logical blocks of session
                     msg_length = len(msg.token_ids)
                     block_size = self.cache_config.block_size
-                    session.append_tokens(msg_length + 1, block_size)
+                    session.append_tokens(msg_length, block_size)
 
                     # allocate session memory
                     self.block_manager.allocate(session)
@@ -165,6 +203,7 @@ class Scheduler:
         return running, swap_in_map, swap_out_map
 
     def schedule(self):
+        """Schedule inputs for next steps."""
         running, swap_in_map, swap_out_map = self._schedule()
 
         sessions = [self.sessions[msg.session_id] for msg in running]
@@ -173,12 +212,20 @@ class Scheduler:
             self.block_manager.get_block_table(session) for session in sessions
         ]
 
-        return SchedulerOutput(running=running,
-                               swap_in_map=swap_in_map,
-                               swap_out_map=swap_out_map,
-                               block_tables=block_tables)
+        return SchedulerOutput(
+            running=running,
+            swap_in_map=swap_in_map,
+            swap_out_map=swap_out_map,
+            block_tables=block_tables,
+        )
 
-    def _set_session_status(self, session_id, status):
+    def _set_session_status(self, session_id: int, status: MessageStatus):
+        """Setup the status of session.
+
+        Args:
+            session_id (int): The session id.
+            status (MessageStatus): New status.
+        """
         session = self.sessions[session_id]
         session.status = status
         running_msg = _find_message_with_session_id(self.running, session_id)
@@ -188,22 +235,44 @@ class Scheduler:
         for msg in running_msg + waiting_msg + swaping_msg:
             msg.status = status
 
-    def stop_session(self, session_id):
+    def stop_session(self, session_id: int):
+        """Stop session.
+
+        Args:
+            session_id (int): The session id.
+        """
         self._set_session_status(session_id, MessageStatus.STOPPED)
 
-    def end_session(self, session_id):
+    def end_session(self, session_id: int):
+        """End session.
+
+        Args:
+            session_id (int): The session id.
+        """
         self._set_session_status(session_id, MessageStatus.ENDED)
 
     def has_unfinished(self):
+        """Check if there are any unfinished message."""
         return self.waiting or self.running or self.swapped
 
     def _remove_session(self, session_id: int):
+        """Remove session.
+
+        Args:
+            session_id (int): The session id.
+        """
         assert session_id in self.sessions
         session = self.sessions.pop(session_id)
         self.block_manager.free(session)
 
     def update(self):
+        """Update scheduler status after one step.
 
+        A full step inference should include:
+        1. schedule
+        2. forward
+        3. update
+        """
         session_id_to_remove = set()
 
         for msg in self.running:
@@ -235,5 +304,6 @@ class Scheduler:
             self._remove_session(session_id)
 
     def get_block_tables(self, messages: List[SchedulerMessage]):
+        """get block table of the messages."""
         sessions = [self.sessions[msg.session_id] for msg in messages]
         return [self.block_manager.get_block_table(sess) for sess in sessions]
