@@ -174,15 +174,21 @@ class Vicuna(BaseModel):
 class InternLMChat7B(BaseModel):
     """Chat template of InternLM model."""
 
-    def __init__(self,
-                 system='',
-                 user='<|User|>',
-                 eoh='',
-                 eoa='<eoa>',
-                 assistant='<|Bot|>',
-                 **kwargs):
+    def __init__(
+            self,
+            system='<|System|>',
+            meta_instruction="""You are an AI assistant whose name is InternLM (书生·浦语).
+- InternLM (书生·浦语) is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
+- InternLM (书生·浦语) can understand and communicate fluently in the language chosen by the user such as English and 中文.
+""",  # noqa: E501
+            user='<|User|>',
+            eoh='',
+            eoa='<eoa>',
+            assistant='<|Bot|>',
+            **kwargs):
         super().__init__(**kwargs)
         self.system = system
+        self.meta_instruction = meta_instruction
         self.user = user
         self.eoh = eoh
         self.eoa = eoa
@@ -202,7 +208,8 @@ class InternLMChat7B(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.user}:{prompt}{self.eoh}\n' \
+            return f'<BOS>{self.system}:{self.meta_instruction}\n' \
+                   f'{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
             return f'\n{self.user}:{prompt}{self.eoh}\n' \
