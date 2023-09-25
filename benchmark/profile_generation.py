@@ -315,8 +315,9 @@ def main():
         writer = csv.writer(csvfile)
         writer.writerow([
             'batch', 'prompt_tokens', 'completion_tokens',
-            'throughput_per_proc(token/s)', 'throughput_per_node(token/s)',
-            'mem_per_proc(GB)', 'mem_per_gpu(GB)', 'mem_per_node(GB)'
+            'first_token_latency', 'throughput_per_proc(token/s)',
+            'throughput_per_node(token/s)', 'mem_per_proc(GB)',
+            'mem_per_gpu(GB)', 'mem_per_node(GB)'
         ])
         for re in results:
             writer.writerow([

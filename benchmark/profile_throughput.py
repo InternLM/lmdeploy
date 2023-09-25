@@ -17,7 +17,6 @@ def sample_requests(
     tokenizer: Tokenizer,
 ) -> List[Tuple[str, int, int]]:
     # Load the dataset.
-    print('load test data...')
     with open(dataset_path) as f:
         dataset = json.load(f)
     # Filter out the conversations with less than 2 turns.
@@ -60,7 +59,6 @@ def sample_requests(
 
     # Sample the requests.
     sampled_requests = random.sample(filtered_dataset, num_requests)
-    print('load test data successfully')
     return sampled_requests
 
 
@@ -170,7 +168,6 @@ def main(dataset: str,
 
     engine = Engine(model_path, tp=tp)
     tokenizer = engine.tokenizer
-    print('load model successfully')
     warmup(engine.tm_model, tokenizer, concurrency)
 
     requests = sample_requests(dataset, num_prompts, tokenizer)
