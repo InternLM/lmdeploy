@@ -133,7 +133,7 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
     rewrite_qualname = _get_rewrite_qualname(origin_qualname)
 
     logger = logging.getLogger()
-    logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
+    # logger.debug(f"{origin_qualname} -> {rewrite_qualname}")
 
     if rewrite_qualname is None:
         # class name only

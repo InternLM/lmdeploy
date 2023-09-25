@@ -202,7 +202,7 @@ def attention_forward_with_paged_attention(
         v_proj (Callable): value project module/function.
         qkv_proj (Callable): query/key/value project module/function.
         o_proj (Callable): output project module/function.
-        rotary_emb_fn (Callable): rotary embeding callback.
+        rotary_emb_fn (Callable): rotary embedding callback.
         bias_type (str): type of attention bias. support ['default', 'alibi'].
     """
     max_seq_len = position_ids.size(-1)

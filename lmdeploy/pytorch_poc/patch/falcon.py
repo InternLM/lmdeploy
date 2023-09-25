@@ -21,7 +21,7 @@ from transformers.modeling_outputs import (
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.falcon.modeling_falcon import build_alibi_tensor
 
-from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
+from lmdeploy.pytorch_poc.kernels import paged_attention_fwd, alibi_paged_attention_fwd, biased_paged_attention_fwd
 
 # from transformers.models.falcon.modeling_falcon import
 
@@ -143,8 +143,11 @@ class PatchedFalconAttention(nn.Module):
         # past_kv_length = 0 if layer_past is None else layer_past[0].shape[1]
 
         if isinstance(self.maybe_rotary, nn.Module):
+            logger.debug('rotary = True')
             query_layer, key_layer = self.maybe_rotary(query_layer, key_layer,
                                                        position_ids)
+        else:
+            logger.debug('rotary = False')
 
         # logger.debug(f'query_layer (just after rotary) {query_layer.size()}=\n {query_layer}')
         # logger.debug(f'key_layer (just after rotary) {key_layer.size()}=\n {key_layer}')
@@ -240,9 +243,6 @@ class PatchedFalconAttention(nn.Module):
                                 BLOCK=block_size)
 
             attn_output = attn_output.reshape(batch_size, query_length, -1)
-            # logger.debug(
-            #     f'attn_output (before dense) {attn_output.size()} = \n%s',
-            #     attn_output)
 
             output_tensor = self.dense(attn_output)
 
@@ -283,17 +283,33 @@ class PatchedFalconAttention(nn.Module):
             # # change view [batch_size, num_heads, q_length, kv_length]
             # attention_probs_reshaped = attention_probs.view(
             #     batch_size, self.num_heads, query_length, kv_length)
-
+            logger.debug(f'query_layer_ = {query_layer.shape}\n%s',
+                         query_layer)
+            logger.debug('block_offsets = \n%s', block_offsets)
+            logger.debug(
+                f'key_layer filled in  = {past_key[block_offsets[0][-1].item()].shape}\n%s',
+                past_key[block_offsets[0][-1].item()])
+            logger.debug(
+                f'value_layer filled in  = {past_value[block_offsets[0][-1].item()].shape}\n%s',
+                past_value[block_offsets[0][-1].item()])
+            logger.debug(f'q_start_loc =\n {q_start_loc}')
+            logger.debug(f'q_seq_length =\n {q_seq_length}')
             context_layer = torch.empty_like(query_layer)
-            paged_attention_fwd(query_layer,
-                                past_key,
-                                past_value,
-                                context_layer,
-                                block_offsets,
+
+            bias = alibi.view(batch_size, self.num_heads, 1, -1).expand(-1,-1,max_seq_len,-1).float()
+            # bias = -bias
+            # bias *= self.inv_norm_factor
+            alibi_paged_attention_fwd(q=query_layer,
+                                k=past_key,
+                                v=past_value,
+                                # bias=bias,
+                                o=context_layer,
+                                block_offsets=block_offsets,
                                 b_start_loc=q_start_loc,
                                 b_seq_len=q_seq_length,
                                 b_kv_seq_len=kv_seq_length,
                                 max_input_len=max_seq_len,
+                                alibi_scale = self.inv_norm_factor,
                                 BLOCK=block_size)
 
             # # matmul: [batch_size * num_heads, q_length, head_dim]
@@ -303,6 +319,9 @@ class PatchedFalconAttention(nn.Module):
             # change view [batch_size, q_length, num_heads * head_dim]
             # context_layer = self._merge_heads(context_layer)
             context_layer = context_layer.reshape(batch_size, query_length, -1)
+            logger.debug(
+                f'context_layer (before dense) {context_layer.size()} = \n%s',
+                context_layer)
 
             output_tensor = self.dense(context_layer)
 
@@ -426,13 +445,13 @@ class PatchedFalconModel(nn.Module):
         #     past_key_values_length=past_key_values_length,
         # )
 
-        # seqlen = self.context.position_ids.max().item()
+        seqlen = self.context.position_ids.max().item()
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states, )
 
-            # logger.debug(f'====SeqLen {seqlen} Decode Layer {i}=======')
+            logger.debug(f'====SeqLen {seqlen} Decode Layer {i}=======')
             outputs = block(
                 hidden_states,
                 # position_ids=position_ids,
