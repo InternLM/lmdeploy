@@ -102,8 +102,10 @@ private:
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
     void contextDecode(T*         deocder_output,
-                       uintptr_t* k_cache_ptr,
-                       uintptr_t* v_cache_ptr,
+                       uintptr_t* k_block_ptrs,
+                       uintptr_t* v_block_ptrs,
+                       void**     k_tmp_ptrs,
+                       void**     v_tmp_ptrs,
                        T*         context_decoder_input_buf,
                        T*         context_decoder_output_buf,
                        const int* input_ids,
@@ -175,6 +177,7 @@ private:
     const size_t hidden_units_;
 
     const size_t local_head_num_;
+    const size_t local_kv_head_num_;
     NcclParam    tensor_para_;
 
     cudaStream_t     stream_;

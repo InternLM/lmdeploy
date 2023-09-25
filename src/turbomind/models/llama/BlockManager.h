@@ -59,10 +59,10 @@ public:
     ~BlockManager();
 
     // free -> active
-    std::vector<const Block*> Allocate(int count);
+    [[nodiscard]] std::vector<const Block*> Allocate(int count);
 
     // active -> cached
-    void Release(const std::vector<const Block*>& bs);
+    [[maybe_unused]] int Release(const std::vector<const Block*>& bs);
 
     // cached -> free
     void Evict(int count);
@@ -80,17 +80,22 @@ public:
         return max_block_count_;
     }
 
-    int active_count() const noexcept {
+    int active_count() const noexcept
+    {
         return active_ids_.size();
     }
 
-    int cached_count() const noexcept {
+    int cached_count() const noexcept
+    {
         return cached_ids_.size();
     }
 
-    int free_count() const noexcept {
-        return free_ids_.size();
+    int free_count() const noexcept
+    {
+        return (max_block_count_ - blocks_.size()) + free_ids_.size();
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const BlockManager&);
 
 private:
     static size_t GetBlockCount(size_t block_size, double ratio);
@@ -115,7 +120,8 @@ private:
 
     std::vector<Block> blocks_;  // < 100k
 
-    uint64_t unique_id_{1UL << 63};
+    // uint64_t unique_id_{1UL << 63};
+    uint64_t unique_id_{0};
     uint64_t timestamp_{1};
 };
 

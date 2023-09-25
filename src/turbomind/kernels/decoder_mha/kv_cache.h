@@ -4,24 +4,6 @@
 
 namespace turbomind {
 
-// template<typename T>
-// void ConvertLinearToBlocks(
-//     const T* src, T** dst_block_ptrs, int dst_block_size, int heads, int dims, int seq_len, cudaStream_t st);
-
-// template<typename T>
-// void ConvertBlocksToLinear(
-//     const T** src_block_ptrs, T* dst, int src_block_size, int heads, int dims, int seq_len, cudaStream_t st);
-
-// template<typename T>
-// void ConvertBlocksToBlocks(const T**    src_block_ptrs,
-//                            T**          dst_block_ptrs,
-//                            int          src_block_size,
-//                            int          dst_block_size,
-//                            int          heads,
-//                            int          dims,
-//                            int          seq_len,
-//                            cudaStream_t st);
-
 template<typename T>
 void ConvertLinearToBlocks(const T*     src,
                            T**          dst_block_ptrs,
@@ -45,5 +27,19 @@ void ConvertBlocksToLinear(const T**    src_block_ptrs,
                            int          head_dim,
                            int          batch_size,
                            cudaStream_t st);
+
+template<typename T>
+void ConvertKvCacheBlocksToLinear(const T**    src_k_block_ptrs,
+                                  const T**    src_v_block_ptrs,
+                                  T**          dst_k_ptrs,
+                                  T**          dst_v_ptrs,
+                                  const int*   src_cu_block_cnts,
+                                  const int*   seq_lens,
+                                  int          src_block_len,
+                                  int          dst_block_len,  // max{seq_lens}
+                                  int          head_num,
+                                  int          head_dim,
+                                  int          batch_size,
+                                  cudaStream_t st);
 
 }  // namespace turbomind

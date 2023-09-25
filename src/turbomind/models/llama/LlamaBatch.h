@@ -3,6 +3,7 @@
 #pragma once
 
 // #include "src/turbomind/models/llama/LlamaCacheManager.h"
+#include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
@@ -24,9 +25,10 @@ struct BatchState {
     std::vector<const Sequence*>          sequences;
     std::vector<std::shared_ptr<Request>> requests;
 
-    // |<-- existing -->|<-- swap-in -->|<-- inactive -->|
-    int size;
+    // |<-- existing -->|<-- swap-in -->|
+    // |<----------- active ----------->|<-- inactive -->|
     int active_size;
+    int size;
 };
 
 template<typename T>
@@ -40,10 +42,11 @@ public:
     void FreeBuffer();
 
     using Requests = std::vector<std::shared_ptr<Request>>;
+    using Signal   = std::function<void()>;
 
     void RejectInvalidRequests(Requests& stop_reqs, Requests& infer_reqs);
 
-    void ProcessStopRequests(const Requests& requests);
+    [[nodiscard]] auto ProcessStopRequests(const Requests& requests) -> std::vector<Signal>;
 
     void ProcessInferRequests(const Requests& requests);
 
@@ -53,10 +56,11 @@ public:
 
     void InitializeSampling();
     void InitializeGeneration();
-    bool Generate();
 
-    int  Finish();
-    void FinishRequest(int index, bool force_end);
+    [[nodiscard]] bool Generate();
+
+    [[nodiscard]] auto Finish() -> std::vector<Signal>;
+    void               FinishRequest(int index, bool force_end);
 
     void SetOutputTensors(int max_gen_step);
 
@@ -91,6 +95,8 @@ private:
 
     void LoadRandomState(BatchState& state, int idx);
 
+    void BarrierSignalRequests(Barrier& barrier, const std::vector<Signal>& signals);
+
     // analogs to `std::copy_n`
     template<typename U>
     U* Copy(const U* src, size_t count, U* dst)
@@ -124,6 +130,14 @@ private:
 
     T* decoder_input_buf_{};   // CTXDEC, GENERATE
     T* decoder_output_buf_{};  // CTXDEC, GENERATE
+
+    // temp buffers used for block->linear kv-cache conversion
+    T*     tmp_k_cache_buf_{};
+    T*     tmp_v_cache_buf_{};
+    void** tmp_k_ptrs_{};
+    void** tmp_v_ptrs_{};
+    void** h_tmp_k_ptrs_{};
+    void** h_tmp_v_ptrs_{};
 
     int*       input_ids_buf_{};       // input token ids + cache missed token ids, CTXDEC
     int*       input_length_buf_{};    // input + cache missed length, CTXDEC, GENERATE

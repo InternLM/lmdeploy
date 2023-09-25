@@ -45,6 +45,9 @@ public:
                              int         rank,
                              IAllocator* allocator);
 
+    SequenceManager(const SequenceManager&)     = delete;
+    SequenceManager(SequenceManager&&) noexcept = default;
+
     const Sequence* Create(uint64_t id);
 
     const Sequence* Fetch(uint64_t id);
@@ -55,10 +58,16 @@ public:
 
     bool Contains(uint64_t id);
 
-    bool Materialize(const std::vector<const Sequence*>& sequences,
-                     const std::vector<int>&             context_lengths,
-                     const std::vector<uint64_t>&        priorities,
-                     int                                 step_length);
+    struct Outcome {
+        int allocation;
+        int swap_in;
+        int swap_out;
+    };
+
+    Outcome Materialize(const std::vector<const Sequence*>& sequences,
+                        const std::vector<int>&             context_lengths,
+                        const std::vector<uint64_t>&        priorities,
+                        int                                 step_length);
 
     void* OffsetKey(void* block_ptr)
     {
@@ -73,6 +82,12 @@ public:
     int max_block_count() const noexcept
     {
         return block_manager_->max_block_count();
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Outcome& oc)
+    {
+        os << "allocation: " << oc.allocation << ", swap-in: " << oc.swap_in << ", swap-out: " << oc.swap_out;
+        return os;
     }
 
 private:
@@ -92,13 +107,5 @@ private:
 
     std::vector<const Block*> released_;
 };
-
-// cu_block_cnts(seq_idx) -> block_idx_offset
-// block_idxs(block_idx_offset) -> (seq_idx, seq_offset)
-
-
-inline void func(const std::vector<int>& block_cnts, std::vector<int>& cu_block_cnts, std::vector<int>& inv_block_idxs) {
-
-}
 
 }  // namespace turbomind

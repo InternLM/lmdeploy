@@ -21,12 +21,12 @@
 
 #include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/decoder_mha/kv_cache.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include "src/turbomind/kernels/decoder_mha/kv_cache.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -188,6 +188,10 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
 
     auto k_cache_ptrs = output_tensors->getPtr<T*>("key_cache");
     auto v_cache_ptrs = output_tensors->getPtr<T*>("value_cache");
+
+    auto tmp_k_ptrs = output_tensors->getPtr<T*>("tmp_k");
+    auto tmp_v_ptrs = output_tensors->getPtr<T*>("tmp_v");
+
     //////////////////////////////////////////////////////////
     /// insert the k/v computed from inputs into k/v cache
     /// transpose kv -> kv cache
@@ -210,13 +214,25 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                         quant_policy_,
                         weights->past_kv_scale.data(),
                         stream_);
-
-    ConvertBlocksToLinear(k_cache_ptrs, k_cache_, cu_block_counts, max_seq_len, kv_cache_block_len_, int dst_max_seq_len, int head_num, int head_dim, int batch_size, cudaStream_t st)
-
     sync_check_cuda_error();
+
+    ConvertKvCacheBlocksToLinear((const T**)k_cache_ptrs,
+                                 (const T**)v_cache_ptrs,
+                                 tmp_k_ptrs,
+                                 tmp_k_ptrs,
+                                 cu_block_counts,
+                                 history_length,
+                                 kv_cache_block_len_,
+                                 max_seq_len,
+                                 local_kv_head_num_,
+                                 size_per_head_,
+                                 batch_size,
+                                 stream_);
+    sync_check_cuda_error();
+
     if (use_fmha_) {
-        fusedMultiHeadAttention(k_cache_ptrs,
-                                v_cache_ptrs,
+        fusedMultiHeadAttention(tmp_k_ptrs,
+                                tmp_k_ptrs,
                                 layer_offset,
                                 attention_mask,
                                 cu_seqlens,
@@ -226,8 +242,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                 max_seq_len);
     }
     else {
-        unfusedMultiHeadAttention(k_cache_ptrs,
-                                  v_cache_ptrs,
+        unfusedMultiHeadAttention(tmp_k_ptrs,
+                                  tmp_k_ptrs,
                                   layer_offset,
                                   attention_mask,
                                   padding_offset,

@@ -1,6 +1,9 @@
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/utils/allocator.h"
+#include "src/turbomind/utils/dbg.h"
 #include "src/turbomind/utils/logger.h"
 #include <ctime>
+#include <stdexcept>
 
 namespace turbomind {
 
@@ -81,6 +84,9 @@ bool SequenceManager::Erase(uint64_t id)
         }
         sequences_.erase(it);
     }
+    else {
+        throw std::out_of_range(std::to_string(id));
+    }
 
     return false;
 }
@@ -103,6 +109,7 @@ struct Schedule {
 
     int allocate;
     int evict;
+    int preempt;
 
     std::vector<int> victims;
 
@@ -112,6 +119,25 @@ struct Schedule {
     std::vector<int> inactive;
 };
 
+template<typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& v)
+{
+    os << "[";
+    for (int i = 0; i < v.size(); ++i) {
+        os << (i ? "," : "") << v[i];
+    }
+    os << "]";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const Schedule& s)
+{
+    os << "Schedule { free=" << s.free << ", cached=" << s.cached << ", allocate=" << s.allocate
+       << ", evict=" << s.evict << ", preempt=" << s.preempt << ", active=" << s.active << ", victims=" << s.victims
+       << ", block_counts=" << s.block_counts << ", inactive=" << s.inactive << " }";
+    return os;
+}
+
 class Simulator {
 public:
     explicit Simulator(const std::vector<const Sequence*>& seqs,
@@ -119,6 +145,7 @@ public:
                        std::vector<int>&                   ref_count):
         seqs_(seqs), idxs_(idxs), ref_count_(ref_count)
     {
+        dbg(seqs.size());
         released_.resize(seqs.size());
         ptr_ = released_.size();
     }
@@ -189,10 +216,15 @@ struct Transaction {
     void Commit()
     {
         sched_.free -= allocate_;
-        sched_.cached += preempt_ - evict_;
+        FT_CHECK(sched_.free >= 0);
+
+        sched_.cached += preempt_;
+        sched_.cached -= evict_;
+        FT_CHECK(sched_.cached >= 0);
 
         sched_.allocate += allocate_;
         sched_.evict += evict_;
+        sched_.preempt += preempt_;
 
         sched_.victims.insert(sched_.victims.end(), victims_.begin(), victims_.end());
 
@@ -201,24 +233,32 @@ struct Transaction {
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const Transaction& trans)
+{
+    os << "Transaction { index=" << trans.index_ << ", block_count=" << trans.block_count_
+       << ", allocate=" << trans.allocate_ << ", evict=" << trans.evict_ << ", preempt=" << trans.preempt_
+       << ", victims=" << trans.victims_ << " }";
+    return os;
+}
+
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os, const Sequence& seq)
 {
-    os << "Sequence[id=" << seq.id << ",status=" << seq.status << ",size(blocks)=" << seq.blocks.size()
-       << ",cache_len=" << seq.cache_len << ",size(random_state)=" << seq.random_state.size() << "]";
+    os << "Sequence { id=" << seq.id << ", status=" << seq.status << ", size(blocks)=" << seq.blocks.size()
+       << ", cache_len=" << seq.cache_len << ", size(random_state)=" << seq.random_state.size() << " }";
     return os;
 }
 
-bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
+auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
                                   const std::vector<int>&             context_lengths,
                                   const std::vector<uint64_t>&        priorities,
-                                  int                                 step_length)
+                                  int                                 step_length) -> Outcome
 {
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule the assignment of blocks to sequences
-
-    auto seqs = const_cast<Sequence* const*>(sequences.data());
+    auto    seqs = const_cast<Sequence* const*>(sequences.data());
+    Outcome outcome{};
 
     // check validity of of cached blocks (blocks of active & locked seqs are always valid)
     if (need_verification_) {
@@ -236,13 +276,15 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
     for (int i = 0; i < sequences.size(); ++i) {
         int seq_len = context_lengths[i] + step_length;
         int count   = (seq_len + block_len_ - 1) / block_len_ - static_cast<int>(seqs[i]->blocks.size());
-        required.push_back(std::max(0, count));
-        total_required += required.back();
+        required[i] = std::max(0, count);
+        total_required += required[i];
     }
+
+    dbg(required);
 
     // no new blocks required, exit early
     if (total_required == 0) {
-        return false;
+        return outcome;
     }
 
     /// TODO: more early exit heuristics
@@ -259,7 +301,8 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
 
     Simulator simulator(sequences, idxs, snapshot.ref_count);
 
-    bool modified = false;
+    std::vector<int> active(idxs.size());
+    std::vector<int> victim(idxs.size());
 
     for (int i = 0, j = idxs.size(); i < j; ++i) {
         const int idx = idxs[i];
@@ -275,7 +318,7 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
         }
         // evict cached blocks
         if (block_count) {
-            block_count -= trans.Evict(std::min(block_count, schedule.free));
+            block_count -= trans.Evict(std::min(block_count, schedule.cached));
         }
 
         for (int v = j - 1; block_count && v > i; --v) {
@@ -283,6 +326,7 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
                 continue;
             }
             int preempt = trans.Preempt(v, idxs[v]);
+            dbg(preempt);
             // Commit only when preemption actually free enough blocks for the sequence to run
             if (block_count <= preempt) {
                 // preempted blocks are in cached state
@@ -292,30 +336,33 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
             }
         }
 
+        dbg(block_count, trans);
+
         if (block_count == 0) {
             trans.Commit();
+            active[i] = 1;
             if (seq.status != Sequence::kActive) {
-                modified = true;
-            }
-        }
-        else {
-            // failed to collect enough block for the sequence, transaction aborted. Active sequence will be kept
-            // locked if not preempted by seq with higher priority
-            schedule.inactive.push_back(idx);
-            if (seq.status == Sequence::kActive) {
-                modified = true;
+                ++outcome.swap_in;
             }
         }
     }
 
-    // Verify the schedule
-    FT_CHECK(schedule.allocate <= snapshot.free);
-    FT_CHECK(schedule.evict <= snapshot.cached);
-    // FT_CHECK(schedule.allocate + schedule.evict + schedule.preempt == total_block_count);
+    for (const auto& i : idxs) {
+        if (!active[i]) {
+            schedule.inactive.push_back(i);
+            if (seqs[i]->status == Sequence::kActive) {
+                ++outcome.swap_out;
+            }
+        }
+    }
+
+    dbg(schedule);
 
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule is ready, time to execute it. (locked -> cached -> free -> locked)
     schedule.allocate += schedule.evict;
+
+    outcome.allocation = schedule.allocate;
 
     // release preempted blocks -> cached
     {
@@ -352,8 +399,6 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
         first = last;
     }
 
-    block_manager_->Touch(blocks);
-
     for (const auto& idx : schedule.inactive) {
         if (seqs[idx]->status == Sequence::kActive) {
             seqs[idx]->status = Sequence::kLocked;
@@ -364,7 +409,7 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
         seqs[idx]->status = Sequence::kCached;
     }
 
-    return modified;
+    return outcome;
 }
 
 }  // namespace turbomind
