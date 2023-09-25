@@ -26,6 +26,7 @@
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/kernels/decoder_mha/kv_cache.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -183,7 +184,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    stream_);
     sync_check_cuda_error();
 
-    const size_t layer_offset = layer_id * local_kv_head_num_ * max_seq_len * size_per_head_;
+    const size_t layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
     auto k_cache_ptrs = output_tensors->getPtr<T*>("key_cache");
     auto v_cache_ptrs = output_tensors->getPtr<T*>("value_cache");
@@ -195,19 +196,22 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     // v_buf_2 [B, kvH, s, D] -> val_cache [B, kvH, S[t:t+s], D/x, x]
     invokeExtendKVCache(k_cache_ptrs,
                         v_cache_ptrs,
-                        layer_offset,
                         k_buf_2_,
                         v_buf_2_,
-                        batch_size,
+                        cu_block_counts,
                         input_length,
-                        max_q_len,
                         history_length,
-                        max_seq_len,
+                        batch_size,
+                        kv_cache_block_len_,
+                        layer_offset,
+                        max_q_len,
                         size_per_head_,
                         local_kv_head_num_,
-                        stream_,
                         quant_policy_,
-                        weights->past_kv_scale.data());
+                        weights->past_kv_scale.data(),
+                        stream_);
+
+    ConvertBlocksToLinear(k_cache_ptrs, k_cache_, cu_block_counts, max_seq_len, kv_cache_block_len_, int dst_max_seq_len, int head_num, int head_dim, int batch_size, cudaStream_t st)
 
     sync_check_cuda_error();
     if (use_fmha_) {

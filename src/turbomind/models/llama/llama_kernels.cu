@@ -200,300 +200,131 @@ template void invokeCreateCausalMasks(float* mask, const int*, const int*, int, 
 template void invokeCreateCausalMasks(half* mask, const int*, const int*, int, int, int, cudaStream_t);
 
 template<typename T>
-__global__ void extend_key_cache(T**          k_dst,
-                                 const size_t dst_offset,
-                                 const T*     k_src,
-                                 const int    head_num,
-                                 const int    size_per_head,
-                                 const int*   query_length,
-                                 const int*   history_length,
-                                 const int    max_q_len,
-                                 const int    max_seq_len)
+__global__ void extend_kv_cache(T**          k_dst_ptrs,
+                                T**          v_dst_ptrs,
+                                const T*     k_src,
+                                const T*     v_src,
+                                const int*   cu_block_counts,
+                                const int*   query_length,
+                                const int*   history_length,
+                                const int    block_length,
+                                const size_t dst_layer_offset,
+                                const int    max_q_len,
+                                const int    head_num,
+                                const int    head_dim)
 {
-    const int     batch_id = blockIdx.y;
-    const int     head_id  = blockIdx.z;
-    constexpr int X_ELEMS  = (sizeof(T) == 4) ? 4 : 8;
+    const int batch_id     = blockIdx.y;
+    const int query_len    = query_length[batch_id];
+    const int history_len  = history_length[batch_id];
+    const int cu_block_cnt = cu_block_counts[batch_id];
 
+    const int     head_id = blockIdx.z;
+    constexpr int X_ELEMS = (sizeof(T) == 4) ? 4 : 8;
+
+    const int size_per_head_div_x = head_dim / X_ELEMS;
     const int idx                 = blockIdx.x * blockDim.x + threadIdx.x;
-    int       size_per_head_div_x = size_per_head / X_ELEMS;
+    const int head_size_id        = idx % size_per_head_div_x;
+    const int seq_len_id          = idx / size_per_head_div_x;
+
+    const int cache_block_index  = (seq_len_id + history_len) / block_length;
+    const int cache_block_offset = (seq_len_id + history_len) % block_length;
 
     // x dim is now handled by uint4 type
-    const auto key_src = reinterpret_cast<const uint4*>(k_src);
-    const auto key_dst = reinterpret_cast<uint4*>(k_dst[batch_id] + dst_offset);
+    const auto k_val_src = reinterpret_cast<const uint4*>(k_src);
+    const auto v_val_src = reinterpret_cast<const uint4*>(v_src);
 
-    const auto seq_len  = query_length[batch_id];
-    const auto t_offset = history_length[batch_id];
+    // const auto val_dst = reinterpret_cast<uint4*>(v_dst[batch_id] + dst_layer_offset);
+    const auto k_val_dst = (uint4*)((k_dst_ptrs + cu_block_cnt)[cache_block_index] + dst_layer_offset);
+    const auto v_val_dst = (uint4*)((v_dst_ptrs + cu_block_cnt)[cache_block_index] + dst_layer_offset);
 
-    const int k_head_size_id = idx % size_per_head_div_x;
-    const int k_seq_len_id   = idx / size_per_head_div_x;
-
-    if (k_seq_len_id < seq_len) {
-        // [B, H, s, D/x] -> [H, D/x, S[t:t+s]]
-
-        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +  // H
-                                k_head_size_id * max_seq_len +                 // D/x
-                                t_offset + k_seq_len_id;                       // s + offset
-
-        const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
-                                head_id * size_per_head_div_x * max_q_len +              // H
-                                k_seq_len_id * size_per_head_div_x +                     // s
-                                k_head_size_id;                                          // D/x
-
-        key_dst[dst_idx] = key_src[src_idx];
-    }
-}
-
-template<typename T>
-__global__ void extend_value_cache(T**          v_dst,
-                                   const size_t dst_offset,
-                                   const T*     v_src,
-                                   const int    head_num,
-                                   const int    size_per_head,
-                                   const int*   query_length,
-                                   const int*   history_length,
-                                   const int    max_q_len,
-                                   const int    max_seq_len)
-{
-    const int     batch_id = blockIdx.y;
-    const int     head_id  = blockIdx.z;
-    constexpr int X_ELEMS  = (sizeof(T) == 4) ? 4 : 8;
-
-    const int idx                 = blockIdx.x * blockDim.x + threadIdx.x;
-    int       size_per_head_div_x = size_per_head / X_ELEMS;
-
-    // x dim is now handled by uint4 type
-    const auto val_src = reinterpret_cast<const uint4*>(v_src);
-    const auto val_dst = reinterpret_cast<uint4*>(v_dst[batch_id] + dst_offset);
-
-    const auto seq_len  = query_length[batch_id];
-    const auto t_offset = history_length[batch_id];
-
-    const int v_head_size_id = idx % size_per_head_div_x;
-    const int v_seq_len_id   = idx / size_per_head_div_x;
-
-    if (v_seq_len_id < seq_len) {
+    if (seq_len_id < query_len) {
         // [B, H, s, D/x] -> [H, S[t:t+s], D/x]
-        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +      // H
-                                (v_seq_len_id + t_offset) * size_per_head_div_x +  // s + offset
-                                v_head_size_id;                                    // D/x
+        const int64_t dst_idx = head_id * size_per_head_div_x * block_length +  // H
+                                cache_block_offset * size_per_head_div_x +      // s + offset
+                                head_size_id;                                   // D/x
 
         const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
                                 head_id * size_per_head_div_x * max_q_len +              // H
-                                v_seq_len_id * size_per_head_div_x +                     // s
-                                v_head_size_id;                                          // D/x
+                                seq_len_id * size_per_head_div_x +                       // s
+                                head_size_id;                                            // D/x
 
-        val_dst[dst_idx] = val_src[src_idx];
-    }
-}
-
-inline __device__ float2 float2div(float a, float2 b)
-{
-    float2 c;
-    c.x = b.x / a;
-    c.y = b.y / a;
-    return c;
-}
-
-inline __device__ float2 float2sub(float zp, float2 val)
-{
-    float2 ret;
-    ret.x = val.x - zp;
-    ret.y = val.y - zp;
-    return ret;
-}
-
-static inline __device__ half4 char4_scale_to_half4(char4 value, const float scale, const float zp)
-{
-    half4 dst;
-    dst.x = __float2half(value.x * scale + zp);
-    dst.y = __float2half(value.y * scale + zp);
-    dst.z = __float2half(value.z * scale + zp);
-    dst.w = __float2half(value.w * scale + zp);
-    return dst;
-}
-
-static inline __device__ uint32_t float4_to_char4(float x, float y, float z, float w)
-{
-    uint32_t dst;
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 720
-    uint32_t a;
-    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(a) : "f"(x));
-    uint32_t b;
-    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(b) : "f"(y));
-    uint32_t c;
-    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(c) : "f"(z));
-    uint32_t d;
-    asm volatile("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(d) : "f"(w));
-
-    asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2,  0;\n" : "=r"(dst) : "r"(d), "r"(c));
-    asm volatile("cvt.pack.sat.s8.s32.b32 %0, %1, %2, %0;\n" : "+r"(dst) : "r"(b), "r"(a));
-#else
-    char4 tmp;
-    tmp.x       = x;
-    tmp.y       = y;
-    tmp.z       = z;
-    tmp.w       = w;
-    dst         = reinterpret_cast<const uint32_t&>(tmp);
-#endif
-    return dst;
-}
-
-template<typename T>
-__global__ void extend_value_cache_int8(int8_t**     v_dst,
-                                        const size_t dst_offset,
-                                        const T*     v_src,
-                                        const int    head_num,
-                                        const int    size_per_head,
-                                        const int*   query_length,
-                                        const int*   history_length,
-                                        const int    max_q_len,
-                                        const int    max_seq_len,
-                                        const float  v_scale,
-                                        const float  v_zp)
-{
-    const int     batch_id = blockIdx.y;
-    const int     head_id  = blockIdx.z;
-    constexpr int X_ELEMS  = (sizeof(T) == 4) ? 4 : 8;
-
-    const int idx                 = blockIdx.x * blockDim.x + threadIdx.x;
-    int       size_per_head_div_x = size_per_head / X_ELEMS;
-
-    // x dim is now handled by uint4 type
-    const auto val_src = reinterpret_cast<const uint4*>(v_src);
-    const auto val_dst = reinterpret_cast<uint2*>(v_dst[batch_id] + dst_offset);
-
-    const auto seq_len  = query_length[batch_id];
-    const auto t_offset = history_length[batch_id];
-
-    const int v_head_size_id = idx % size_per_head_div_x;
-    const int v_seq_len_id   = idx / size_per_head_div_x;
-
-    if (v_seq_len_id < seq_len) {
-        // [B, H, s, D/x] -> [H, S[t:t+s], D/x]
-        const int64_t dst_idx = head_id * size_per_head_div_x * max_seq_len +      // H
-                                (v_seq_len_id + t_offset) * size_per_head_div_x +  // s + offset
-                                v_head_size_id;                                    // D/x
-
-        const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
-                                head_id * size_per_head_div_x * max_q_len +              // H
-                                v_seq_len_id * size_per_head_div_x +                     // s
-                                v_head_size_id;                                          // D/x
-
-        // scale to int8 and write
-        const auto value  = val_src[src_idx];
-        auto       to_ptr = reinterpret_cast<uint32_t*>(val_dst + dst_idx);
-
-        float2 float2_0 = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.x)));
-        float2 float2_1 = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.y)));
-        to_ptr[0]       = float4_to_char4(float2_0.x, float2_0.y, float2_1.x, float2_1.y);
-
-        float2_0  = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.z)));
-        float2_1  = float2div(v_scale, float2sub(v_zp, mmha::half2_to_float2(value.w)));
-        to_ptr[1] = float4_to_char4(float2_0.x, float2_0.y, float2_1.x, float2_1.y);
+        k_val_dst[dst_idx] = k_val_src[src_idx];
+        v_val_dst[dst_idx] = v_val_src[src_idx];
     }
 }
 
 template<typename T>
-void invokeExtendKVCache(T**          k_dst,
-                         T**          v_dst,
-                         size_t       dst_offset,
+void invokeExtendKVCache(T**          k_dst_ptrs,
+                         T**          v_dst_ptrs,
                          const T*     k_src,
                          const T*     v_src,
-                         int          local_batch_size,
+                         const int*   cu_block_counts,
                          const int*   query_length,
-                         int          max_q_len,
                          const int*   history_length,
-                         int          max_seq_len,
-                         int          size_per_head,
-                         int          local_head_num,
-                         cudaStream_t stream,
+                         int          batch_size,
+                         int          block_length,
+                         size_t       dst_layer_offset,
+                         int          max_q_len,
+                         int          head_dim,
+                         int          head_num,
                          int          quant,
-                         const float* kv_scale)
+                         const float* kv_scale,
+                         cudaStream_t stream)
 {
     constexpr int block_sz = 128;
     constexpr int x        = (sizeof(T) == 4) ? 4 : 8;
 
-    dim3 grid((max_q_len * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
+    dim3 grid((max_q_len * head_dim / x + block_sz - 1) / block_sz, batch_size, head_num);
 
-    if (quant & QuantPolicy::kCacheKVInt8) {
-        extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(reinterpret_cast<int8_t**>(k_dst),
-                                                               dst_offset,
-                                                               k_src,
-                                                               local_head_num,
-                                                               size_per_head,
-                                                               query_length,
-                                                               history_length,
-                                                               max_q_len,
-                                                               max_seq_len,
-                                                               kv_scale[0],
-                                                               kv_scale[1]);
+    FT_CHECK(quant == 0);
 
-        extend_value_cache_int8<<<grid, block_sz, 0, stream>>>(reinterpret_cast<int8_t**>(v_dst),
-                                                               dst_offset,
-                                                               v_src,
-                                                               local_head_num,
-                                                               size_per_head,
-                                                               query_length,
-                                                               history_length,
-                                                               max_q_len,
-                                                               max_seq_len,
-                                                               kv_scale[2],
-                                                               kv_scale[3]);
-    }
-    else {
-        extend_value_cache<<<grid, block_sz, 0, stream>>>(k_dst,
-                                                          dst_offset,
-                                                          k_src,
-                                                          local_head_num,
-                                                          size_per_head,
-                                                          query_length,
-                                                          history_length,
-                                                          max_q_len,
-                                                          max_seq_len);
-
-        extend_value_cache<<<grid, block_sz, 0, stream>>>(v_dst,
-                                                          dst_offset,
-                                                          v_src,
-                                                          local_head_num,
-                                                          size_per_head,
-                                                          query_length,
-                                                          history_length,
-                                                          max_q_len,
-                                                          max_seq_len);
-    }
+    extend_kv_cache<<<grid, block_sz, 0, stream>>>(k_dst_ptrs,
+                                                   v_dst_ptrs,
+                                                   k_src,
+                                                   v_src,
+                                                   cu_block_counts,
+                                                   query_length,
+                                                   history_length,
+                                                   block_length,
+                                                   dst_layer_offset,
+                                                   max_q_len,
+                                                   head_num,
+                                                   head_dim);
 }
 
-template void invokeExtendKVCache(float**,
-                                  float**,
-                                  size_t,
-                                  const float*,
-                                  const float*,
-                                  int,
-                                  const int*,
-                                  int,
-                                  const int*,
-                                  int,
-                                  int,
-                                  int,
-                                  cudaStream_t stream,
-                                  int,
-                                  const float*);
+template void invokeExtendKVCache(float**      k_dst_ptrs,
+                                  float**      v_dst_ptrs,
+                                  const float* k_src,
+                                  const float* v_src,
+                                  const int*   cu_block_counts,
+                                  const int*   query_length,
+                                  const int*   history_length,
+                                  int          batch_size,
+                                  int          block_length,
+                                  size_t       dst_layer_offset,
+                                  int          max_q_len,
+                                  int          head_dim,
+                                  int          head_num,
+                                  int          quant,
+                                  const float* kv_scale,
+                                  cudaStream_t stream);
 
-template void invokeExtendKVCache(half**,
-                                  half**,
-                                  size_t,
-                                  const half*,
-                                  const half*,
-                                  int,
-                                  const int*,
-                                  int,
-                                  const int*,
-                                  int,
-                                  int,
-                                  int,
-                                  cudaStream_t stream,
-                                  int,
-                                  const float*);
+template void invokeExtendKVCache(half**       k_dst_ptrs,
+                                  half**       v_dst_ptrs,
+                                  const half*  k_src,
+                                  const half*  v_src,
+                                  const int*   cu_block_counts,
+                                  const int*   query_length,
+                                  const int*   history_length,
+                                  int          batch_size,
+                                  int          block_length,
+                                  size_t       dst_layer_offset,
+                                  int          max_q_len,
+                                  int          head_dim,
+                                  int          head_num,
+                                  int          quant,
+                                  const float* kv_scale,
+                                  cudaStream_t stream);
 
 template<typename T>
 __global__ void transpose_value_cache(T*           v_dst,  //
@@ -581,8 +412,8 @@ __global__ void transpose_value_cache_int8(T*             v_dst,  //
         const auto from_ptr = reinterpret_cast<const char4*>(val_src + src_idx);
         auto       to_ptr   = reinterpret_cast<half4*>(val_dst + dst_idx);
 
-        to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale, v_zp);
-        to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale, v_zp);
+        // to_ptr[0] = char4_scale_to_half4(from_ptr[0], v_scale, v_zp);
+        // to_ptr[1] = char4_scale_to_half4(from_ptr[1], v_scale, v_zp);
     }
 }
 

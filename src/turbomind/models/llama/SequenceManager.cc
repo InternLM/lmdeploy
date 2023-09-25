@@ -17,7 +17,8 @@ SequenceManager::SequenceManager(size_t      layer_num,
 {
     constexpr int kBitsPerByte = 8;
 
-    size_t block_size = layer_num * head_num * block_len * head_dim * elem_bits / kBitsPerByte * 2;
+    // [2, L, H, block_len, D]
+    size_t block_size = 2UL * layer_num * head_num * block_len * head_dim * elem_bits / kBitsPerByte;
 
     block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator);
 
@@ -216,6 +217,7 @@ bool SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
 {
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule the assignment of blocks to sequences
+
     auto seqs = const_cast<Sequence* const*>(sequences.data());
 
     // check validity of of cached blocks (blocks of active & locked seqs are always valid)

@@ -93,4 +93,12 @@ private:
     std::vector<const Block*> released_;
 };
 
+// cu_block_cnts(seq_idx) -> block_idx_offset
+// block_idxs(block_idx_offset) -> (seq_idx, seq_offset)
+
+
+inline void func(const std::vector<int>& block_cnts, std::vector<int>& cu_block_cnts, std::vector<int>& inv_block_idxs) {
+
+}
+
 }  // namespace turbomind
