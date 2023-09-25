@@ -4,7 +4,6 @@ import itertools
 import json
 import logging
 import os
-import os.path as osp
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -20,6 +19,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
+from transformers.utils import WEIGHTS_INDEX_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
@@ -262,15 +262,14 @@ def _tp_model_loop(
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code)
 
-        torch_model_json_path = osp.join(model_path,
-                                         'pytorch_model.bin.index.json')
+        torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
         with open(torch_model_json_path, mode='r') as f:
             torch_model_json = json.load(f)
 
         weight_map = torch_model_json['weight_map']
 
         checkpoints = list(set(weight_map.values()))
-        checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
+        checkpoints = [cached_file(model_path, ckpt) for ckpt in checkpoints]
         patched_model = patch(
             model,
             extra_args=extra_args,
@@ -464,6 +463,16 @@ class Engine:
                 kv_dim,
                 hf_config.num_hidden_layers,
                 kv_head,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
+        elif 'chatglm' in model_path:
+            model_config = ModelConfig(
+                hf_config.hidden_size // hf_config.num_attention_heads *
+                hf_config.multi_query_group_num,
+                hf_config.num_layers,
+                hf_config.multi_query_group_num,
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 dtype=torch_dtype,

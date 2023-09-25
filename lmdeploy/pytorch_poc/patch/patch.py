@@ -58,6 +58,14 @@ MODULE_MAP.update({
     'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
 })
 
+# chatglm2
+MODULE_MAP.update({
+    'modeling_chatglm.SelfAttention':
+    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedSelfAttention',
+    'modeling_chatglm.ChatGLMModel':
+    'lmdeploy.pytorch_poc.patch.chatglm2.PatchedChatGLMModel',
+})
+
 # internlm
 MODULE_MAP.update({
     'modeling_internlm.InternLMAttention':
