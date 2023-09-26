@@ -736,7 +736,7 @@ class Engine:
                 # forward
                 output = self.patched_model(
                     input_ids=inputs['input_ids'],
-                    # position_ids=inputs['position_ids'],
+                    position_ids=inputs['position_ids'],
                     attention_mask=inputs['attention_mask'],
                     past_key_values=self.cache_engine.gpu_cache,
                     return_dict=True,

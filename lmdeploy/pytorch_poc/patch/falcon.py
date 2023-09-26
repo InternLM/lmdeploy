@@ -333,3 +333,29 @@ class PatchedFalconModel(nn.Module):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict)
+
+
+class PatchedFalconForCausalLM(nn.Module):
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
+                                        ...]] = None,
+        return_dict: Optional[bool] = True,
+        output_attentions: Optional[bool] = False,
+        output_hidden_states: Optional[bool] = False,
+        use_origin: Optional[bool] = True,
+    ) -> Union[Tuple[torch.Tensor, ...],
+               BaseModelOutputWithPastAndCrossAttentions]:
+        """Forward function, patched to ignore position_ids."""
+
+        outputs = self.origin_mod(input_ids=input_ids,
+                                  past_key_values=past_key_values,
+                                  attention_mask=attention_mask,
+                                  output_attentions=output_attentions,
+                                  output_hidden_states=output_hidden_states,
+                                  return_dict=return_dict)
+        return outputs

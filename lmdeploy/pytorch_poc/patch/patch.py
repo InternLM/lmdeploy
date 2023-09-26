@@ -37,8 +37,8 @@ MODULE_MAP.update({
     'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
     'modelling_RW.RotaryEmbedding':
     'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
-    # 'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
-    # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconForCausalLM',
+    'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
+    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconForCausalLM',
     # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
     # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconDecoderLayer',
 })
@@ -328,7 +328,6 @@ def patch(
 
     _patch_context = Addict()
 
-    # patch model
     model = _patch(model, _patch_context)
 
     # load checkpoint
@@ -355,21 +354,28 @@ def patch(
     extra_args_str = ' '.join(f'{arg}=None,' for arg in extra_args)
     context_update_str = ' '.join(f'{arg}={arg},' for arg in extra_args)
 
-    wrap_forward_src = f"""\
+    wrap_forward_src = f"""
 from functools import wraps
-old_forward = model.forward
+# old_forward = model.forward
+old_forward = type(model).forward
 @wraps(old_forward)
-def wrap_forward(*args, {extra_args_str} **kwargs):
+def wrap_forward(self, *args, {extra_args_str} **kwargs):
     global _patch_context
     _patch_context.update({context_update_str})
 
-    output = old_forward(*args, **kwargs)
+    output = old_forward(self, *args, **kwargs)
 
     _patch_context.clear()
 
     return output
-model.forward = wrap_forward
-    """
+# model.forward = wrap_forward
+
+attrs = dict(type(model).__dict__)
+attrs.update(dict(forward=wrap_forward))
+class_name  = model.__class__.__name__
+new_type = type(class_name, (type(model), ), attrs)
+model.__class__ = new_type
+"""
 
     exec(wrap_forward_src, dict(_patch_context=_patch_context, model=model))
 
