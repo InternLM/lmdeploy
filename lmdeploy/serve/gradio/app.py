@@ -176,7 +176,7 @@ def chat_stream_restful(
     for response, tokens, finish_reason in get_streaming_response(
             instruction,
             f'{InterFace.restful_api_url}/generate',
-            instance_id=session_id,
+            session_id=session_id,
             request_output_len=512,
             sequence_start=(len(state_chatbot) == 1),
             sequence_end=False):
@@ -217,7 +217,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
     for response, tokens, finish_reason in get_streaming_response(
             '',
             f'{InterFace.restful_api_url}/generate',
-            instance_id=session_id,
+            session_id=session_id,
             request_output_len=0,
             sequence_start=False,
             sequence_end=True):
@@ -245,7 +245,7 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
     # end the session
     for out in get_streaming_response('',
                                       f'{InterFace.restful_api_url}/generate',
-                                      instance_id=session_id,
+                                      session_id=session_id,
                                       request_output_len=0,
                                       sequence_start=False,
                                       sequence_end=False,
@@ -259,7 +259,7 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
             messages.append(dict(role='assistant', content=qa[1]))
     for out in get_streaming_response(messages,
                                       f'{InterFace.restful_api_url}/generate',
-                                      instance_id=session_id,
+                                      session_id=session_id,
                                       request_output_len=0,
                                       sequence_start=True,
                                       sequence_end=False):

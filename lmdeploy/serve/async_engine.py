@@ -85,7 +85,7 @@ class AsyncEngine:
     async def generate(
         self,
         messages,
-        instance_id,
+        session_id,
         stream_response=True,
         sequence_start=True,
         sequence_end=False,
@@ -102,7 +102,7 @@ class AsyncEngine:
 
         Args:
             messages (str | List): chat history or prompt
-            instance_id (int): actually request host ip
+            session_id (int): the session id
             stream_response (bool): whether return responses streamingly
             request_output_len (int): output token nums
             sequence_start (bool): indicator for starting a sequence
@@ -119,8 +119,7 @@ class AsyncEngine:
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
         """
-        session_id = instance_id
-        instance_id %= self.instance_num
+        instance_id = session_id % self.instance_num
         if str(session_id) not in self.steps:
             self.steps[str(session_id)] = 0
         if step != 0:

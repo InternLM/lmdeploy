@@ -14,7 +14,7 @@ from lmdeploy.utils import get_logger
 
 def get_streaming_response(prompt: str,
                            api_url: str,
-                           instance_id: int,
+                           session_id: int,
                            request_output_len: int,
                            stream: bool = True,
                            sequence_start: bool = True,
@@ -24,7 +24,7 @@ def get_streaming_response(prompt: str,
     pload = {
         'prompt': prompt,
         'stream': stream,
-        'instance_id': instance_id,
+        'session_id': session_id,
         'request_output_len': request_output_len,
         'sequence_start': sequence_start,
         'sequence_end': sequence_end,
@@ -36,7 +36,7 @@ def get_streaming_response(prompt: str,
                              stream=stream)
     for chunk in response.iter_lines(chunk_size=8192,
                                      decode_unicode=False,
-                                     delimiter=b'\0'):
+                                     delimiter=b'\n'):
         if chunk:
             data = json.loads(chunk.decode('utf-8'))
             output = data['text']
