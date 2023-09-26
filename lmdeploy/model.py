@@ -29,12 +29,14 @@ class BaseModel:
                  temperature=0.8,
                  repetition_penalty=1.0,
                  capability='chat',
+                 stop_words=None,
                  **kwargs):
         self.session_len = session_len
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
         self.repetition_penalty = repetition_penalty
+        self.stop_words = stop_words
         self.capability = capability
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -100,11 +102,6 @@ class BaseModel:
         if isinstance(messages, str):
             return self.get_prompt(messages)
         # chat history processing in derived classes
-
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return None
 
     @property
     def sampling_param(self):
@@ -185,6 +182,7 @@ class InternLMChat7B(BaseModel):
             eoh='',
             eoa='<eoa>',
             assistant='<|Bot|>',
+            stop_words=['<eoa>'],
             **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -193,6 +191,7 @@ class InternLMChat7B(BaseModel):
         self.eoh = eoh
         self.eoa = eoa
         self.assistant = assistant
+        self.stop_words = stop_words
 
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -227,7 +226,8 @@ class InternLMChat7B(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        ret = '<BOS>'
+        system = self.meta_instruction if not system else system
+        ret = f'<BOS>{self.system}:{system}\n'
         for user, assistant in zip(users, assistants):
             if assistant:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
@@ -235,11 +235,6 @@ class InternLMChat7B(BaseModel):
             else:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
         return ret
-
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return [103028]
 
 
 @MODELS.register_module(name='internlm-chat-20b')
@@ -339,12 +334,14 @@ class Puyu(BaseModel):
                  eoh='',
                  assistant='',
                  eoa='',
+                 stop_words=None,
                  **kwargs):
         super().__init__(**kwargs)
         self.meta_instruction = meta_instruction
         self.system = system
         self.user = user
         self.assistant = assistant
+        self.stop_words = stop_words
         self.eosys = eosys
         self.eoh = eoh
         self.eoa = eoa
@@ -381,11 +378,6 @@ class Puyu(BaseModel):
             else:
                 ret += f'{self.user}{user}{self.eoh}{self.assistant}'
         return ret
-
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return [45623]
 
 
 @MODELS.register_module(name='llama2')
@@ -468,6 +460,7 @@ class Qwen7BChat(BaseModel):
                  im_start='<|im_start|>',
                  im_end='<|im_end|>',
                  system='You are a helpful assistant.',
+                 stop_words=['<|im_end|>'],
                  **kwargs):
         super().__init__(**kwargs)
         self.session_len = session_len
@@ -478,6 +471,7 @@ class Qwen7BChat(BaseModel):
         self.im_start = im_start
         self.im_end = im_end
         self.system = system
+        self.stop_words = stop_words
 
     def decorate_prompt(self, prompt, sequence_start=True):
         assert self.capability == 'chat', \
@@ -513,11 +507,6 @@ class Qwen7BChat(BaseModel):
                        f'\n{self.im_start}assistant\n'
         return ret
 
-    @property
-    def stop_words(self):
-        """Return the stop-words' token ids."""
-        return [151645]  # <|im_end|>
-
 
 @MODELS.register_module(name='codellama')
 class CodeLlama(Llama2):
@@ -526,6 +515,7 @@ class CodeLlama(Llama2):
                  system='',
                  session_len=4096,
                  suffix_first=False,
+                 stop_words=None,
                  **kwargs):
         super().__init__(**kwargs)
         caps = ['completion', 'infilling', 'chat', 'python']
@@ -535,6 +525,7 @@ class CodeLlama(Llama2):
         self.default_sys_prompt = system
         self.session_len = session_len
         self.suffix_first = suffix_first
+        self.stop_words = stop_words
 
         # The following sampling parameters refers to https://github.com/facebookresearch/codellama # noqa: E501
         if self.capability == 'completion' or self.capability == 'python':
@@ -546,6 +537,8 @@ class CodeLlama(Llama2):
         elif self.capability == 'infilling':
             self.top_p = kwargs.get('top_p', 0.9)
             self.temperature = kwargs.get('temperature', 0.0)
+            if self.stop_words is None:
+                self.stop_words = ['<EOT>']
 
     def decorate_prompt(self, prompt, sequence_start=True):
         if self.capability == 'infilling':
@@ -573,14 +566,6 @@ class CodeLlama(Llama2):
                    f'{prompt} {self.e_inst}'
 
         return f'{self.b_inst} {prompt} {self.e_inst}'
-
-    @property
-    def stop_words(self):
-        if self.capability == 'infilling':
-            # EOT ID
-            return [32010]
-        else:
-            return None
 
     def messages2prompt(self, messages, sequence_start=True):
         assert self.capability == 'chat', \
