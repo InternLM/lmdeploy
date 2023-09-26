@@ -117,10 +117,15 @@ def load_checkpoint(model_path):
     Returns:
         Dict[str, torch.Tensor]: weight in torch format
     """
-    files = [
-        file for file in os.listdir(model_path)
-        if file.endswith('.bin') or file.endswith('.safetensors')
-    ]
+    suffixes = ['.safetensors', '.bin']
+    for suffix in suffixes:
+        files = [
+            file for file in os.listdir(model_path) if file.endswith(suffix)
+        ]
+        if len(files) > 0:
+            break
+
+    assert len(files) > 0, f'could not find checkpoints in {model_path}'
     files = sorted(files)
     print(files)
     params = {}
