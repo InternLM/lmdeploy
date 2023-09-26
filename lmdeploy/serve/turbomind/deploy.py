@@ -11,6 +11,7 @@ from pathlib import Path
 import fire
 import safetensors
 import torch
+from safetensors.torch import load_file
 from sentencepiece import SentencePieceProcessor
 
 import lmdeploy
@@ -106,6 +107,30 @@ def tokenizer_info_qwen(model_dir: str):
     bos_id = 0
     eos_id = 151643
     return n_words, bos_id, eos_id
+
+
+def load_checkpoint(model_path):
+    """Load checkpoint files into torch format.
+
+    Args:
+        model_path (str): the checkpoint folder
+    Returns:
+        Dict[str, torch.Tensor]: weight in torch format
+    """
+    files = [
+        file for file in os.listdir(model_path)
+        if file.endswith('.bin') or file.endswith('.safetensors')
+    ]
+    files = sorted(files)
+    print(files)
+    params = {}
+    for file in files:
+        if file.endswith('.bin'):
+            tmp = torch.load(osp.join(model_path, file), map_location='cpu')
+        else:
+            tmp = load_file(osp.join(model_path, file))
+        params.update(tmp)
+    return params
 
 
 def export(model_name: str,
@@ -437,14 +462,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     _qweight = 'weight'
     _suffixes = [_qweight, 'bias']
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
-    _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _params = load_checkpoint(model_path)
 
     def get_tensor(name):
         """return tensor according its name."""
@@ -837,14 +855,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
     # convert weights from hf to turbomind
     model_params = {}
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
-    _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _params = load_checkpoint(model_path)
 
     def get_tensor(name, trans=True):
         """return a transposed tensor according its name."""

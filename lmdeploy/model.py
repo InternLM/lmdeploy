@@ -508,6 +508,11 @@ class Qwen7BChat(BaseModel):
         return ret
 
 
+@MODELS.register_module(name='qwen-14b')
+class Qwen14BChat(Qwen7BChat):
+    pass
+
+
 @MODELS.register_module(name='codellama')
 class CodeLlama(Llama2):
 
