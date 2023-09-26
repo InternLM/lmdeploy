@@ -2,9 +2,6 @@
 # modify from: https://github.com/ModelTC/lightllm
 import math
 
-import logging
-
-logger = logging.getLogger()
 import torch
 import triton
 import triton.language as tl
@@ -79,8 +76,6 @@ def _fwd_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    # slope,
-    logits,
 ):
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
@@ -96,8 +91,6 @@ def _fwd_kernel(
     block_start_loc = BLOCK_M * start_m
     head_slope = get_slope(
         cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
-
-    # tl.store(slope + cur_head, head_slope)
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
@@ -152,9 +145,6 @@ def _fwd_kernel(
             float(-1e30),
         )
 
-        tl.store(
-            logits + cur_head * 64 * 64 + 64 * offs_n[:, None] +
-            offs_n[None, :], qk)
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
         p = tl.exp(qk - m_ij[:, None])
@@ -235,16 +225,7 @@ def alibi_paged_attention_fwd(
     if num_heads <= 0:
         num_heads = head
 
-    logger.debug(f"b_seq_len = {b_seq_len.shape}")
-    logger.debug(f"q.shape = {q.shape}")
-    logger.debug(f"kv_group_num = {kv_group_num}")
-    logger.debug(f"num_heads = {num_heads}")
-    logger.debug(f"max_input_len = {max_input_len}")
-
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
-    slope = torch.zeros(head, device=q.device)
-    logits = torch.zeros(head, 64, 64, device=q.device)
-    logger.debug(f"grid = {grid}")
 
     num_warps = 4 if Lk <= 64 else 8
     _fwd_kernel[grid](
@@ -279,9 +260,6 @@ def alibi_paged_attention_fwd(
         BLOCK_N=BLOCK,
         num_warps=num_warps,
         num_stages=1,
-        #   slope=slope,
-        logits=logits)
-    # logger.debug(f"head slope = {slope.size()} \n%s", slope)
-    logger.debug(f"logits = {logits.size()} \n%s", logits[:, :58, :58])
+    )
 
     return

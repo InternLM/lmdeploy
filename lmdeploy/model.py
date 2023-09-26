@@ -492,6 +492,9 @@ class Falcon(BaseModel):
         super().__init__()
 
     def get_prompt(self, prompt, sequence_start=True):
+        if prompt == '':
+            # avoid empty input to model
+            prompt = '<|endoftext|>'
         return prompt
 
 
