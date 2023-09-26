@@ -84,7 +84,7 @@ class ChatCompletionResponseChoice(BaseModel):
     """Chat completion response choices."""
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal['stop', 'length']]
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -107,7 +107,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     """Chat completion response stream choice."""
     index: int
     delta: DeltaMessage
-    finish_reason: Optional[Literal['stop', 'length']]
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -142,7 +142,7 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[int] = None
-    finish_reason: Optional[Literal['stop', 'length']]
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class CompletionResponse(BaseModel):
