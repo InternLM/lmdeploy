@@ -190,7 +190,7 @@ class EmbeddingsResponse(BaseModel):
 class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: Union[str, List[Dict[str, str]]]
-    instance_id: int = -1
+    session_id: int = -1
     sequence_start: bool = True
     sequence_end: bool = False
     stream: bool = False
@@ -201,3 +201,10 @@ class GenerateRequest(BaseModel):
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
+
+
+class GenerateResponse(BaseModel):
+    """Generate response."""
+    text: str
+    tokens: int
+    finish_reason: Optional[Literal['stop', 'length']] = None
