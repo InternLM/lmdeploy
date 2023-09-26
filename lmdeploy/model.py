@@ -448,6 +448,7 @@ If a question does not make any sense, or is not factually coherent, explain why
         return ret
 
 
+@MODELS.register_module(name='qwen-14b')
 @MODELS.register_module(name='qwen-7b')
 class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
@@ -506,11 +507,6 @@ class Qwen7BChat(BaseModel):
                 ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
                        f'\n{self.im_start}assistant\n'
         return ret
-
-
-@MODELS.register_module(name='qwen-14b')
-class Qwen14BChat(Qwen7BChat):
-    pass
 
 
 @MODELS.register_module(name='codellama')
