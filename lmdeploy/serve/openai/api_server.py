@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Optional
 import fire
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -28,6 +29,16 @@ class VariableInterface:
 
 
 app = FastAPI(docs_url='/')
+
+origins = ['*']
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 
 
 def get_model_list():
