@@ -167,8 +167,8 @@ def _fwd_kernel(
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
             other=0.0,
         )
-        v = v.to(acc.dtype)
-        p = p.to(acc.dtype)
+
+        p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
         l_i = l_i_new

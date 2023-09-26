@@ -492,10 +492,13 @@ class Falcon(BaseModel):
         super().__init__()
 
     def get_prompt(self, prompt, sequence_start=True):
-        if prompt == '':
-            # avoid empty input to model
-            prompt = '<|endoftext|>'
         return prompt
+
+    def update_input_ids(self, input_ids: List):
+        if len(input_ids) == 0:
+            # avoid empty input to model
+            input_ids = [11]
+        return input_ids
 
 
 @MODELS.register_module(name='chatglm2-6b')
