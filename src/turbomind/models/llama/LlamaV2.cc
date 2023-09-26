@@ -126,6 +126,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
+    shared_state_->request_queue.close();
     internal_thread_.join();
 
     delete decoder_;
@@ -448,11 +449,23 @@ void LlamaV2<T>::internalThreadEntry(int device_id)
 
             request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty);
 
+            // request queue was closed
+            // and there are no unprocessed requests in the queue
+            if (is_empty && infer_requests.empty() && stop_requests.empty()) {
+                // rank 0 sets flag
+                shared_state_->should_stop = true;
+            }
+
             batch_.verifyRequests(stop_requests, infer_requests);
         }
 
         // wait while rank-0 is dequeueing
         shared_state_->barrier->wait();
+
+        // exit if job is done
+        if (shared_state_->should_stop) {
+            return;
+        }
 
         bool modified = false;
 
@@ -486,8 +499,6 @@ void LlamaV2<T>::internalThreadEntry(int device_id)
             batch_.finish();
         }
     }
-
-    FT_CHECK(0);
 }
 
 template<typename T>
