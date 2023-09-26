@@ -234,7 +234,7 @@ LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight
 [Click here](./docs/en/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
 
 > **Warning**<br />
-> runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
+> runtime Tensor Parallel for quantized model is not available. Please setup `--tp` on `deploy` to enable static TP.
 
 ## Contributing
 
