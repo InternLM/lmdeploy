@@ -153,7 +153,6 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 4. 如果感觉请求不是并发地被处理，而是一个一个地处理，请设置好以下参数：
 
    - 不同的 session_id 传入 `generate` api。否则，我们将自动绑定会话 id 为请求端的 ip 地址编号。
-   - 设置 `stream=true` 使模型在前向传播时可以允许其他请求进入被处理
 
 5. `generate` api 和 `v1/chat/completions` 均支持多轮对话。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
    两个 api 都是默认开启多伦对话的，如果你想关闭这个功能，然后在客户端管理会话记录，请设置 `sequence_end: true` 传入 `generate`，或者设置
