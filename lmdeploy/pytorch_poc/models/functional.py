@@ -78,7 +78,8 @@ def fill_kv_cache(
     """
     block_size = k_caches.size(1)
 
-    history_lengths = torch.tensor(history_lengths)
+    if not isinstance(history_lengths, torch.Tensor):
+        history_lengths = torch.tensor(history_lengths)
     first_free_block_offsets = history_lengths // block_size
     first_token_offsets = history_lengths % block_size
 
