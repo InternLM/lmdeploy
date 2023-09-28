@@ -97,6 +97,7 @@ class AsyncEngine:
         temperature=0.8,
         repetition_penalty=1.0,
         ignore_eos=False,
+        do_preprocess=True,
     ):
         """Generate responses.
 
@@ -118,6 +119,7 @@ class AsyncEngine:
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
+            do_preprocess (bool): whether pre-process the messages.
         """
         instance_id = session_id % self.instance_num
         if str(session_id) not in self.steps:
@@ -125,7 +127,9 @@ class AsyncEngine:
         if step != 0:
             self.steps[str(session_id)] = step
         seed = random.getrandbits(64)
-        prompt = self.model.messages2prompt(messages, sequence_start)
+        prompt = messages
+        if do_preprocess:
+            prompt = self.model.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
         if self.steps[str(session_id)] + len(
@@ -180,6 +184,7 @@ class AsyncEngine:
         temperature=0.8,
         repetition_penalty=1.0,
         ignore_eos=False,
+        do_preprocess=True,
     ):
         """Generate responses.
 
@@ -199,6 +204,7 @@ class AsyncEngine:
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
+            do_preprocess (bool): whether pre-process the messages.
         """
         session_id = instance_id
         instance_id %= self.instance_num
@@ -219,7 +225,9 @@ class AsyncEngine:
         if self.steps[str(session_id)] == 0:
             sequence_start = True
         seed = random.getrandbits(64)
-        prompt = self.model.messages2prompt(messages, sequence_start)
+        prompt = messages
+        if do_preprocess:
+            prompt = self.model.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
         if self.steps[str(session_id)] + len(

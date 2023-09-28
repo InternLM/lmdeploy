@@ -135,6 +135,9 @@ class CompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
+    # additional argument of lmdeploy
+    repetition_penalty: Optional[float] = 1.0
+    ignore_eos: Optional[bool] = False
 
 
 class CompletionResponseChoice(BaseModel):

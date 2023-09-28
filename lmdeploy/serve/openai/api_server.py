@@ -13,9 +13,9 @@ from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, DeltaMessage, EmbeddingsRequest,
-    EmbeddingsResponse, ErrorResponse, GenerateRequest, GenerateResponse,
-    ModelCard, ModelList, ModelPermission, UsageInfo)
+    ChatCompletionStreamResponse, ChatMessage, CompletionRequest, DeltaMessage,
+    EmbeddingsRequest, EmbeddingsResponse, ErrorResponse, GenerateRequest,
+    GenerateResponse, ModelCard, ModelList, ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -134,6 +134,149 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
+
+    def create_stream_response_json(
+        index: int,
+        text: str,
+        finish_reason: Optional[str] = None,
+    ) -> str:
+        choice_data = ChatCompletionResponseStreamChoice(
+            index=index,
+            delta=DeltaMessage(role='assistant', content=text),
+            finish_reason=finish_reason,
+        )
+        response = ChatCompletionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[choice_data],
+        )
+        response_json = response.model_dump_json()
+
+        return response_json
+
+    async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        # First chunk with role
+        for i in range(request.n):
+            choice_data = ChatCompletionResponseStreamChoice(
+                index=i,
+                delta=DeltaMessage(role='assistant'),
+                finish_reason=None,
+            )
+            chunk = ChatCompletionStreamResponse(id=request_id,
+                                                 choices=[choice_data],
+                                                 model=model_name)
+            data = chunk.model_dump_json(exclude_unset=True)
+            yield f'data: {data}\n\n'
+
+        async for res in result_generator:
+            response_json = create_stream_response_json(
+                index=0,
+                text=res.response,
+            )
+            yield f'data: {response_json}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    # Streaming response
+    if request.stream:
+        return StreamingResponse(completion_stream_generator(),
+                                 media_type='text/event-stream')
+
+    # Non-streaming response
+    final_res = None
+    text = ''
+    async for res in result_generator:
+        if await raw_request.is_disconnected():
+            # Abort the request if the client disconnects.
+            VariableInterface.async_engine.stop_session(session_id)
+            return create_error_response(HTTPStatus.BAD_REQUEST,
+                                         'Client disconnected')
+        final_res = res
+        text += res.response
+    assert final_res is not None
+    choices = []
+    choice_data = ChatCompletionResponseChoice(
+        index=0,
+        message=ChatMessage(role='assistant', content=text),
+        finish_reason=final_res.finish_reason,
+    )
+    choices.append(choice_data)
+
+    total_tokens = sum([
+        final_res.history_token_len, final_res.input_token_len,
+        final_res.generate_token_len
+    ])
+    usage = UsageInfo(
+        prompt_tokens=final_res.input_token_len,
+        completion_tokens=final_res.generate_token_len,
+        total_tokens=total_tokens,
+    )
+    response = ChatCompletionResponse(
+        id=request_id,
+        created=created_time,
+        model=model_name,
+        choices=choices,
+        usage=usage,
+    )
+
+    return response
+
+
+@app.post('/v1/completions')
+async def completions_v1(request: CompletionRequest,
+                         raw_request: Request = None):
+    """Completion API similar to OpenAI's API.
+
+    Refer to `https://platform.openai.com/docs/api-reference/completions/create`
+    for the API specification.
+
+    The request should be a JSON object with the following fields:
+    - model (str): model name. Available from /v1/models.
+    - prompt (str): the input prompt.
+    - suffix (str): The suffix that comes after a completion of inserted text.
+    - max_tokens (int): output token nums
+    - temperature (float): to modulate the next token probability
+    - top_p (float): If set to float < 1, only the smallest set of most
+        probable tokens with probabilities that add up to top_p or higher
+        are kept for generation.
+    - n (int): How many chat completion choices to generate for each input
+        message. Only support one here.
+    - stream: whether to stream the results or not. Default to false.
+    - repetition_penalty (float): The parameter for repetition penalty.
+        1.0 means no penalty
+    - user (str): A unique identifier representing your end-user.
+
+    Additional arguments supported by LMDeploy:
+    - renew_session (bool): Whether renew the session. Can be used when the
+        session length is exceeded.
+    - ignore_eos (bool): indicator for ignoring eos
+
+    Currently we do not support the following features:
+    - logprobs (not supported yet)
+    - presence_penalty (replaced with repetition_penalty)
+    - frequency_penalty (replaced with repetition_penalty)
+    """
+    session_id = ip2id(raw_request.client.host)
+    error_check_ret = await check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
+
+    model_name = request.model
+    request_id = str(session_id)
+    created_time = int(time.time())
+
+    result_generator = VariableInterface.async_engine.generate_openai(
+        request.prompt,
+        session_id,
+        True,  # always use stream to enable batching
+        request_output_len=request.max_tokens if request.max_tokens else 512,
+        stop=False,
+        top_p=request.top_p,
+        temperature=request.temperature,
+        renew_session=True,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos,
+        do_preprocess=False)
 
     def create_stream_response_json(
         index: int,
