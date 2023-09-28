@@ -12,6 +12,7 @@ from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.css import CSS
 from lmdeploy.serve.openai.api_client import (get_model_list,
                                               get_streaming_response)
+from lmdeploy.serve.openai.api_server import ip2id
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 THEME = gr.themes.Soft(
@@ -37,7 +38,7 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
     instruction = state_chatbot[-1][0]
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
 
     bot_response = llama_chatbot.stream_infer(
         session_id, instruction, f'{session_id}-{len(state_chatbot)}')
@@ -166,7 +167,7 @@ def chat_stream_restful(
     """
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
 
@@ -212,7 +213,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
 
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
     # end the session
     for response, tokens, finish_reason in get_streaming_response(
             '',
@@ -241,7 +242,7 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
     """
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
     # end the session
     for out in get_streaming_response('',
                                       f'{InterFace.restful_api_url}/generate',
@@ -346,7 +347,7 @@ async def chat_stream_local(
     """
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
     bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
 
@@ -391,7 +392,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
 
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
     # end the session
     async for out in InterFace.async_engine.generate('',
                                                      session_id,
@@ -419,7 +420,7 @@ async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
     """
     session_id = threading.current_thread().ident
     if request is not None:
-        session_id = int(request.kwargs['client']['host'].replace('.', ''))
+        session_id = ip2id(request.kwargs['client']['host'])
     # end the session
     async for out in InterFace.async_engine.generate('',
                                                      session_id,
