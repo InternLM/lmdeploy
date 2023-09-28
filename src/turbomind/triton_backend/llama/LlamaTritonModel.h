@@ -109,7 +109,7 @@ private:
     std::shared_ptr<typename ft::LlamaV2<T>::SharedState> shared_state_;
 
     std::vector<std::shared_ptr<LlamaTritonSharedModelInstance<T>>> shared_instances_;
-    std::deque<std::mutex>                                        shared_mutexes_;  // is locking really needed?
+    std::deque<std::mutex>                                          shared_mutexes_;  // is locking really needed?
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;
