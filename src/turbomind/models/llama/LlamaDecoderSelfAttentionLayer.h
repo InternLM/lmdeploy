@@ -56,6 +56,7 @@ public:
         stream_(stream),
         linear_(cublas_wrapper, stream),
         allocator_(allocator),
+        kv_cache_block_len_(128),  ///
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
         quant_policy_(quant_policy)
     {
@@ -76,6 +77,7 @@ private:
     const size_t local_head_num_;
     const size_t local_kv_head_num_;
     const size_t local_hidden_units_;
+    const size_t kv_cache_block_len_;
     const bool   is_free_buffer_after_forward_;
     const int    quant_policy_;
 

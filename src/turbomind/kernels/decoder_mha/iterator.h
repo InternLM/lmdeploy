@@ -66,6 +66,7 @@ struct Iterator {
 
     int block_size_;
     int block_k_;
+    int layer_offset_;
 
     int head_idx_;
 
@@ -102,18 +103,26 @@ struct Iterator {
         is_valid_s_ = offset_s_ < seq_len;
     }
 
-    __device__ Iterator(
-        const void** block_ptrs, int block_size, int head_idx, T* smem, int step, int seqlen, int warp_id, int lane_id)
+    __device__ Iterator(const void** block_ptrs,
+                        int          block_size,
+                        int          layer_offset,
+                        int          head_idx,
+                        T*           smem,
+                        int          step,
+                        int          seqlen,
+                        int          warp_id,
+                        int          lane_id)
     {
         // src_  = src;
         int block_index = step / block_size;
         block_size_     = block_size;
         block_k_        = (block_index + 1) * block_size - step;  // offset to next block
+        layer_offset_   = layer_offset;
         head_idx_       = head_idx;
 
         block_iterator_ = BlockIterator(block_ptrs + block_index);
 
-        src_ = (const T*)block_iterator_.Next() + head_idx_ * block_size_ * ThreadMap::kC;
+        src_ = (const T*)block_iterator_.Next() + layer_offset_ + head_idx_ * block_size_ * ThreadMap::kC;
 
         smem_ = smem;
 
@@ -186,7 +195,7 @@ struct Iterator {
             if (is_valid_s_) {
                 block_k_ -= ThreadMap::kS;
                 if (block_k_ == 0) {
-                    src_        = (const T*)block_iterator_.Next() + head_idx_ * block_size_ * ThreadMap::kC;
+                    src_ = (const T*)block_iterator_.Next() + layer_offset_ + head_idx_ * block_size_ * ThreadMap::kC;
                     block_k_    = block_size_;
                     src_offset_ = init_offset_;
                 }

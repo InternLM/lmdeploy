@@ -10,6 +10,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/dbg.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
 #include <cstdint>
@@ -158,12 +159,12 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
     for (const auto& r : requests) {
 
         // sanity check, incoming request in previous iter should have been moved to `state_`
-        FT_CHECK(state.sequences[i] == nullptr);
+        FT_CHECK(!state.requests[i]);
 
         state.requests[i] = r;
 
         // get sequence for the request
-        state.sequences[i] = r->start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Fetch(r->id);
+        state.sequences[i] = r->start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
 
         auto& seq = *state.sequences[i];
 
@@ -256,21 +257,33 @@ bool LlamaBatch<T>::Initialize()
         }
     }
 
-    auto add = [&](BatchState* state) {
+    auto process = [&](BatchState* state) {
+        // dbg(state->size);
         for (int i = 0; i < state->size; ++i) {
             if (auto& r = state->requests[i]) {
                 sequences.push_back(state->sequences[i]);
                 status.push_back(state->sequences[i]->status);
                 priorities.push_back(r->priority);
+                context_lengths.push_back(state->h_context_length[i]);
                 coords.emplace_back(state, i);
+                // clear swap-in flags
+                state->is_swap_in[i] = 0;
             }
         }
     };
 
-    add(state_);
-    add(incoming_);
+    process(state_);
+    process(incoming_);
 
-    auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, llama_->step_length_);
+    // dbg(sequences);
+    // dbg(context_lengths);
+    // dbg(priorities);
+    // dbg(step_length_);
+
+    auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, step_length_);
+    if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
+        dbg(outcome);
+    }
 
     bool exchange = outcome.swap_in + outcome.swap_out > 0;
 
@@ -304,13 +317,13 @@ bool LlamaBatch<T>::Initialize()
         for (const auto& i : idxs) {
             auto& s = *sequences[i];
             if (exchange) {
+                const auto& [state, idx] = coords[i];
                 // backup random states from dynamic decode layers for swap-outs
                 if (status[i] == Sequence::kActive && s.status != Sequence::kActive) {
-                    SaveRandomState(*coords[i].first, coords[i].second);
+                    SaveRandomState(*state, idx);
                 }
-                // restore random states to dynamic decode layers for swap-ins
                 if (status[i] != Sequence::kActive && s.status == Sequence::kActive) {
-                    LoadRandomState(*coords[i].first, coords[i].second);
+                    state->is_swap_in[idx] = 1;
                 }
             }
             if (s.status == Sequence::kActive) {
@@ -347,9 +360,22 @@ bool LlamaBatch<T>::Initialize()
 
         Copy(state_->h_context_length, batch_size, context_length_buf_);
 
+        dbg(std::vector(h_cu_block_counts_, h_cu_block_counts_ + batch_size + 1));
+        dbg(std::vector(h_k_block_ptrs_, h_k_block_ptrs_ + h_cu_block_counts_[batch_size]));
+        dbg(std::vector(h_v_block_ptrs_, h_v_block_ptrs_ + h_cu_block_counts_[batch_size]));
+        dbg(h_cu_block_counts_[batch_size]);
+
         Copy(h_cu_block_counts_, batch_size + 1, cu_block_counts_);
         Copy(h_k_block_ptrs_, h_cu_block_counts_[batch_size], k_block_ptrs_);
         Copy(h_v_block_ptrs_, h_cu_block_counts_[batch_size], v_block_ptrs_);
+
+        static_assert(sizeof(uintptr_t) == sizeof(void*));
+
+        std::vector<void*> fuck(h_cu_block_counts_[batch_size]);
+        Copy((void**)k_block_ptrs_, fuck.size(), fuck.data());
+        cudaStreamSynchronize(stream_);
+
+        dbg(fuck);
     }
 
     // in case of swap-in/swap-out or there are holes in active buffer, layout of the buffers is changed
@@ -370,6 +396,7 @@ void LlamaBatch<T>::CopyState(const std::pair<BatchState*, int> _src, const std:
     dst->h_finished[j]       = src->h_finished[i];
     dst->seq_len_limit[j]    = src->seq_len_limit[i];
     dst->sequences[j]        = src->sequences[i];
+    dst->is_swap_in[i]       = src->is_swap_in[i];
     dst->requests[j]         = std::move(src->requests[i]);
 
     Copy(src->output_ids + i * session_len_, src->h_context_length[i], dst->output_ids + j * session_len_);
@@ -388,6 +415,7 @@ void LlamaBatch<T>::SaveRandomState(BatchState& state, int idx)
 template<typename T>
 void LlamaBatch<T>::LoadRandomState(BatchState& state, int idx)
 {
+    dbg(idx);
     Copy((curandState_t*)state.top_k_curand_state + idx, 1, llama_->GetTopKState(idx));
     Copy((curandState_t*)state.top_p_curand_state + idx, 1, llama_->GetTopPState(idx));
 }
@@ -402,7 +430,8 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     const size_t vocab_size        = llama_->vocab_size_padded_;
     const size_t head_dim          = llama_->size_per_head_;
     const size_t local_kv_head_num = llama_->local_kv_head_num_;
-    const size_t max_block_count   = sequence_manager_->max_block_count();
+    // +1 padding, BlockIterator does not use predicate
+    const size_t max_block_count = sequence_manager_->max_block_count() + 1;
 
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
@@ -484,6 +513,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
             (int*)allocator_->reMalloc(h_input_length_buf_, sizeof(int) * max_batch_size, false, true);
         h_history_length_buf_ =
             (int*)allocator_->reMalloc(h_history_length_buf_, sizeof(int) * max_batch_size, false, true);
+        h_sequence_lengths_ =
+            (int*)allocator_->reMalloc(h_sequence_lengths_, sizeof(int) * max_batch_size, false, true);
 
         h_tmp_k_ptrs_ = (void**)allocator_->reMalloc(h_tmp_k_ptrs_, sizeof(void*) * max_batch_size, false, true);
         h_tmp_v_ptrs_ = (void**)allocator_->reMalloc(h_tmp_v_ptrs_, sizeof(void*) * max_batch_size, false, true);
@@ -569,6 +600,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&h_input_ids_buf_, true);
         allocator_->free((void**)&h_input_length_buf_, true);
         allocator_->free((void**)&h_history_length_buf_, true);
+        allocator_->free((void**)&h_sequence_lengths_, true);
         allocator_->free((void**)&h_seq_limit_len_, true);
         is_allocate_persistant_buffer_ = false;
     }
@@ -598,6 +630,7 @@ LlamaBatch<T>::LlamaBatch(int                              max_batch_size,
         s.requests.resize(max_batch_size);
         s.sequences.resize(max_batch_size);
         s.seq_len_limit.resize(max_batch_size);
+        s.is_swap_in.resize(max_batch_size);
     }
 
     state_    = &states_[0];
@@ -650,7 +683,7 @@ void LlamaBatch<T>::InitializeSampling()
 
     // recover random states if not a new request
     for (int i = 0; i < batch_size; ++i) {
-        if (!state_->requests[i]->start_flag) {
+        if (!state_->requests[i]->start_flag && state_->is_swap_in[i]) {
             LoadRandomState(*state_, i);
         }
     }
@@ -693,7 +726,8 @@ void LlamaBatch<T>::InitializeGeneration()
     invokePlusScalar(sequence_lengths_, -1, batch_size, stream_);
     sync_check_cuda_error();
 
-    // seq_limit_len_, will be compared to `step` instead of `sequence_length`, so padding len should be accounted for
+    // seq_limit_len_, will be compared to `step` instead of `sequence_length`, so padding len should be accounted
+    // for
     for (int i = 0; i < batch_size; ++i) {
         h_seq_limit_len_[i] = state_->seq_len_limit[i] + (max_context_len_ - state_->h_context_length[i]);
         // mask finished sequences
@@ -818,24 +852,24 @@ void LlamaBatch<T>::ContextDecode()
 
     int base = -1;
     for (int i = 0; i < batch_size; ++i) {
-        if (h_input_length_buf_[i] > 1) {
-            base = i;
-            break;
+        if (state_->is_swap_in[i]) {
+            const auto& seq = *state_->sequences[i];
+            dbg(state_->h_context_length[i], seq.cache_len);
+            if (const int missing = state_->h_context_length[i] - seq.cache_len; missing > 1) {
+                base = base < 0 ? i : base;
+                Copy(state_->output_ids + i * session_len_ + seq.cache_len, missing, input_ids_buf_ + i * session_len_);
+                // subtract input/context len by 1 to skip last input token (will process with decoder later)
+                h_input_length_buf_[i]   = missing - 1;
+                h_history_length_buf_[i] = seq.cache_len;
+            }
         }
     }
-    if (base == -1) {
+    if (base < 0) {
         TM_LOG_INFO("[decodeContext] Context decoding is not needed.");
         return;
     }
 
-    for (int i = base; i < batch_size; ++i) {
-        const auto& seq     = *state_->sequences[i];
-        const int   missing = state_->h_context_length[i] - seq.cache_len;
-        FT_CHECK(missing > 1);
-        Copy(state_->output_ids + i * session_len_ + seq.cache_len, missing, input_ids_buf_ + i * session_len_);
-        h_input_length_buf_[i]   = missing;
-        h_history_length_buf_[i] = seq.cache_len;
-    }
+    const int context_decode_count = batch_size - base;
 
     Copy(h_input_length_buf_, batch_size, input_length_buf_);
     Copy(h_history_length_buf_, batch_size, history_length_buf_);
@@ -843,32 +877,39 @@ void LlamaBatch<T>::ContextDecode()
     check_cuda_error(cudaStreamSynchronize(stream_));
     const auto tick = std::chrono::high_resolution_clock::now();
 
-    const int context_decode_count = batch_size - base;
     if (rank_ == 0) {
         TM_LOG_INFO("[decodeContext] base = %d, count = %d", base, context_decode_count);
     }
     // subtract input/context len by 1 to skip last input token (will process with decoder later)
-    invokePlusScalar(input_length_buf_ + base, -1, context_decode_count, stream_);
     invokePlusScalar(context_length_buf_ + base, -1, context_decode_count, stream_);
 
     // find sub-batch offsets
     std::vector<int> offsets{base};
-    int              accum_input_count   = 0;
-    int              accum_context_count = 0;
+    std::vector<int> max_context_cnts;
+    int              accum_size        = 0;
+    int              accum_input_count = 0;
+    int              max_context_count = 0;
     for (int i = base; i < batch_size; ++i) {
-        int input_count   = accum_input_count + h_input_length_buf_[i] - 1;
-        int context_count = accum_context_count + state_->h_context_length[i] - 1;
-        if (input_count <= max_context_token_num_ && context_count <= max_context_token_num_) {
-            accum_input_count   = input_count;
-            accum_context_count = context_count;
+        int size          = accum_size + 1;
+        int input_count   = accum_input_count + h_input_length_buf_[i];
+        int context_count = std::max(max_context_count, state_->h_context_length[i] - 1);
+        // we have `cu_seqlens` on q so no padding for input is needed
+        // kernels are expecting uniform k/v cache length -> `max_context_count * size <= max_context_token_num_`
+        if (input_count <= max_context_token_num_ && context_count * size <= max_context_token_num_) {
+            accum_size        = size;
+            accum_input_count = input_count;
+            max_context_count = context_count;
         }
         else {
             offsets.push_back(i);
-            accum_input_count   = 0;
-            accum_context_count = 0;
+            max_context_cnts.push_back(max_context_count);
+            accum_size        = 0;
+            accum_input_count = 0;
+            max_context_count = 0;
         }
     }
     offsets.push_back(batch_size);
+    max_context_cnts.push_back(max_context_count);
 
     // context decode on sub-batches
     for (int k = 0; k < offsets.size() - 1; ++k) {
@@ -880,20 +921,19 @@ void LlamaBatch<T>::ContextDecode()
         std::vector<int> decode_indices{};
         std::vector<int> decode_lengths{};
         int              max_input_len{};
-        int              max_context_len{};
         auto             input_ids = context_decoder_ids_buf_;
         for (int i = first; i < last; ++i) {
-            input_ids        = Copy(input_ids_buf_ + i * session_len_, h_input_ids_buf_[i] - 1, input_ids);
+            input_ids        = Copy(input_ids_buf_ + i * session_len_, h_input_length_buf_[i], input_ids);
             h_tmp_k_ptrs_[i] = k_ptr;
             h_tmp_v_ptrs_[i] = v_ptr;
-            k_ptr += (state_->h_context_length[i] - 1) * llama_->local_kv_head_num_ * llama_->size_per_head_;
-            v_ptr += (state_->h_context_length[i] - 1) * llama_->local_kv_head_num_ * llama_->size_per_head_;
+            k_ptr += llama_->local_kv_head_num_ * max_context_cnts[k] * llama_->size_per_head_;
+            v_ptr += llama_->local_kv_head_num_ * max_context_cnts[k] * llama_->size_per_head_;
             decode_indices.push_back(i);
-            decode_lengths.push_back(h_input_length_buf_[i] - 1);
-            max_input_len   = std::max(max_input_len, h_input_length_buf_[i] - 1);
-            max_context_len = std::max(max_context_len, state_->h_context_length[i] - 1);
+            decode_lengths.push_back(h_input_length_buf_[i]);
+            max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
         }
         int token_count = input_ids - context_decoder_ids_buf_;
+        dbg(token_count, max_input_len, max_context_cnts[k]);
 
         Copy(h_tmp_k_ptrs_ + first, sub_batch_szie, tmp_k_ptrs_ + first);
         Copy(h_tmp_v_ptrs_ + first, sub_batch_szie, tmp_v_ptrs_ + first);
@@ -905,7 +945,19 @@ void LlamaBatch<T>::ContextDecode()
                 sub_batch_szie,
                 token_count,
                 max_input_len,
-                max_context_len);
+                max_context_cnts[k]);
+        }
+
+        dbg(first, last);
+        dbg(k_block_ptrs_, v_block_ptrs_);
+
+        if (1) {
+            int a, b, c;
+            Copy(input_length_buf_, 1, &a);
+            Copy(history_length_buf_, 1, &b);
+            Copy(context_length_buf_, 1, &c);
+            cudaStreamSynchronize(stream_);
+            dbg(a, b, c);
         }
 
         llama_->contextDecode(nullptr,
@@ -922,8 +974,8 @@ void LlamaBatch<T>::ContextDecode()
                               cu_block_counts_ + first,
                               token_count,
                               max_input_len,
-                              max_context_len,
-                              session_len_,
+                              max_context_cnts[k],
+                              max_context_cnts[k],
                               sub_batch_szie);
 
         // compute logits of inputs if requested
@@ -931,7 +983,6 @@ void LlamaBatch<T>::ContextDecode()
     }
 
     invokePlusScalar(context_length_buf_ + base, 1, context_decode_count, stream_);
-    invokePlusScalar(input_length_buf_ + base, 1, context_decode_count, stream_);
 
     std::fill(h_input_length_buf_ + base, h_input_length_buf_ + batch_size, 0);
 
@@ -996,7 +1047,8 @@ auto LlamaBatch<T>::Finish() -> std::vector<Signal>
 
     // secure info needed by `synchronize()`
     Copy(finished_buf_, batch_size, state_->h_finished);
-    Copy(sequence_lengths_, batch_size, h_sequence_lengths_);
+    Copy(sequence_lengths_, batch_size, state_->h_context_length);
+    Copy(sequence_lengths_, batch_size, context_length_buf_);
 
     SetOutputTensors(step_);
 
@@ -1104,7 +1156,7 @@ void LlamaBatch<T>::FinishRequest(int index, bool force_end)
 
         check_cuda_error(cudaStreamSynchronize(stream_));
 
-        sequence_manager_->Update(seq);
+        sequence_manager_->Release(seq);
     }
 
     state_->sequences[index] = nullptr;

@@ -248,13 +248,13 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   cuda_device_prop_ptr.get());
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
-        LlamaTritonSharedModelInstance<T>{std::move(llama),
-                                          shared_weights_[device_id],
-                                          std::move(allocator),
+        LlamaTritonSharedModelInstance<T>{std::move(allocator),
                                           std::move(cublas_algo_map),
                                           std::move(cublas_wrapper_mutex),
                                           std::move(cublas_wrapper),
                                           std::move(cuda_device_prop_ptr),
+                                          shared_weights_[device_id],
+                                          std::move(llama),
                                           session_len_});
 }
 

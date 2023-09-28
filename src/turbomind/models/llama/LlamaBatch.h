@@ -21,6 +21,7 @@ struct BatchState {
     int*  output_ids;  // output ids in [B, S]
 
     std::vector<int> seq_len_limit;
+    std::vector<int> is_swap_in;
 
     std::vector<const Sequence*>          sequences;
     std::vector<std::shared_ptr<Request>> requests;
@@ -101,7 +102,7 @@ private:
     template<typename U>
     U* Copy(const U* src, size_t count, U* dst)
     {
-        check_cuda_error(cudaMemcpyAsync(dst, src, sizeof(T) * count, cudaMemcpyDefault, stream_));
+        check_cuda_error(cudaMemcpyAsync(dst, src, sizeof(U) * count, cudaMemcpyDefault, stream_));
         return dst += count;
     }
 
@@ -177,7 +178,7 @@ private:
     float*    h_repetition_penalty_{};
     uint64_t* h_random_seed_{};
 
-    BatchState states_[3];
+    std::array<BatchState, 3> states_{};
 
     BatchState* state_{};
     BatchState* back_{};

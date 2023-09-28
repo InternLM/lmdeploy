@@ -34,7 +34,7 @@ void LaunchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
     dim3 grid(params.num_kv_heads, params.batch_size);
 
     const size_t kDynamicSmemSize = MHAType::GetDynamicSmemSize(0);
-    std::cout << "dynamic shared memory size: " << kDynamicSmemSize << "\n";
+    // std::cout << "dynamic shared memory size: " << kDynamicSmemSize << "\n";
 
     cudaFuncSetAttribute(
         decoder_multihead_attention<MHAType>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynamicSmemSize);
@@ -43,5 +43,6 @@ void LaunchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
 }
 
 template void LaunchDecoderMultiheadAttention<half, 128>(const DecoderMultiHeadAttentionParams<half>& params);
+template void LaunchDecoderMultiheadAttention<float, 128>(const DecoderMultiHeadAttentionParams<float>& params);
 
 }  // namespace turbomind

@@ -112,15 +112,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 
     const size_t local_kv_head_num = kv_head_num / tensor_para.world_size_;
 
-    // kv_cache_mgr_     = std::make_unique<LlamaCacheManager>(num_layer_,
-    //                                                     local_kv_head_num,
-    //                                                     size_per_head_,
-    //                                                     session_len,
-    //                                                     elem_bits,
-    //                                                     cache_max_entry_count,
-    //                                                     cache_chunk_size,
-    //                                                     tensor_para.rank_,
-    //                                                     allocator);
     auto sequence_manager = std::make_unique<SequenceManager>(num_layer,
                                                               local_kv_head_num,
                                                               size_per_head_,
@@ -142,7 +133,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
-
     delete decoder_;
     delete dynamic_decode_layer_;
     delete context_decoder_;
@@ -276,8 +266,8 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
         {"decoder_output", {MEMORY_GPU, dtype, {bsz, max_input_len, hidden_units_}, context_decoder_output_buf}},
         {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_cache_ptr}},
         {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
-        {"tmp_k_ptrs", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_k_ptrs}},
-        {"tmp_v_ptrs", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_v_ptrs}},
+        {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_k_ptrs}},
+        {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_v_ptrs}},
         {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
 
     context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);

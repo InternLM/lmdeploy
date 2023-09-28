@@ -63,21 +63,20 @@ protected:
     const DataType data_type_;
 
     struct Session {
-        size_t  batch_size;
-        size_t  token_num;
-        size_t  max_query_len;
-        size_t  max_key_len;
-        Tensor* k_cache;
-        Tensor* v_cache;
-        int*    input_length{};
-        int*    history_length{};
-        int*    context_length{};
+        size_t batch_size;
+        size_t token_num;
+        size_t max_query_len;
+        size_t max_key_len;
+        int*   input_length{};
+        int*   history_length{};
+        int*   context_length{};
 
         const std::vector<LlamaDecoderLayerWeight<T>*>* weights;
     };
 
     void forwardSelfAttn(const Session&                                 sess,
                          T*                                             attn_io,
+                         std::unordered_map<std::string, Tensor>*       output_tensors,
                          const std::unordered_map<std::string, Tensor>* input_tensors,
                          int                                            layer,
                          bool                                           is_final);

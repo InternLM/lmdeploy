@@ -61,6 +61,22 @@ option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF
 
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
 
+# the environment variable 
+#   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
+# must be set at runtime
+# https://github.com/google/sanitizers/issues/1322
+if (LMDEPLOY_ASAN_ENABLE)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fsanitize=address>)
+    add_link_options(-fsanitize=address)
+endif ()
+
+# notice that ubsan has linker issues for ubuntu < 18.04, see
+# https://stackoverflow.com/questions/50024731/ld-unrecognized-option-push-state-no-as-needed
+if (LMDEPLOY_UBSAN_ENABLE)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fsanitize=undefined>)
+    add_link_options(-fsanitize=undefined)
+endif ()
+
 if(BUILD_MULTI_GPU)
   message(STATUS "Add DBUILD_MULTI_GPU, requires MPI and NCCL")
   add_definitions("-DBUILD_MULTI_GPU")

@@ -1,5 +1,6 @@
 #include "../gemm_s_f16/common.h"
 // #include "cute/tensor.hpp"
+#include "src/turbomind/utils/dbg.h"
 #include <cuda_fp16.h>
 #include <type_traits>
 
@@ -13,6 +14,8 @@ __inline__ __device__ void ConvertBlockSize(const T** __restrict__ src_block_ptr
                                             const int* __restrict__ src_cu_block_cnts,
                                             const int* __restrict__ dst_cu_block_cnts,
                                             const int* __restrict__ seq_lens,
+                                            int         src_offset,
+                                            int         dst_offset,
                                             SrcBlockLen src_block_len,
                                             DstBlockLen dst_block_len,
                                             HeadDim     head_dim)
@@ -32,11 +35,11 @@ __inline__ __device__ void ConvertBlockSize(const T** __restrict__ src_block_ptr
 
     // compute indices into src
     int src_block_index  = si / src_block_len + src_cu_block_cnts[bi];
-    int src_block_offset = hi * src_block_len * head_dim + si % src_block_len * head_dim + di;
+    int src_block_offset = src_offset + hi * src_block_len * head_dim + si % src_block_len * head_dim + di;
 
     // compute indices into dst
     int dst_block_index  = si / dst_block_len + dst_cu_block_cnts[bi];
-    int dst_block_offset = hi * dst_block_len * head_dim + si % dst_block_len * head_dim + di;
+    int dst_block_offset = dst_offset + hi * dst_block_len * head_dim + si % dst_block_len * head_dim + di;
 
     // printf("%d %d\n", src_block_index, dst_block_index);
 
@@ -48,16 +51,12 @@ __inline__ __device__ void ConvertBlockSize(const T** __restrict__ src_block_ptr
     *reinterpret_cast<uint4*>(dst_block + dst_block_offset) = data;
 }
 
-// static inline size_t get_helper_smem_size(int batch_size)
-// {
-//     return (sizeof(void*) + sizeof(int)) * batch_size;
-// }
-
 template<typename T>
 __global__ void LinearToBlocksKernel(const T*   src,
                                      T**        dst_block_ptrs,
                                      const int* dst_cu_block_cnts,
                                      const int* seq_lens,
+                                     int        dst_offset,
                                      int        src_block_len,
                                      int        dst_block_len,
                                      int        head_num,
@@ -81,6 +80,8 @@ __global__ void LinearToBlocksKernel(const T*   src,
                      src_cu_block_cnts,
                      dst_cu_block_cnts,
                      seq_lens,
+                     0,
+                     dst_offset,
                      src_block_len,
                      dst_block_len,
                      head_dim);
@@ -91,6 +92,7 @@ void ConvertLinearToBlocks(const T*     src,
                            T**          dst_block_ptrs,
                            const int*   dst_cu_block_cnts,
                            const int*   seq_lens,
+                           int          dst_offset,
                            int          src_max_len,
                            int          dst_block_len,
                            int          head_num,
@@ -110,6 +112,7 @@ void ConvertLinearToBlocks(const T*     src,
                                                                dst_block_ptrs,
                                                                dst_cu_block_cnts,
                                                                seq_lens,
+                                                               dst_offset,
                                                                src_max_len,
                                                                dst_block_len,
                                                                head_num,
@@ -130,6 +133,7 @@ template void ConvertLinearToBlocks(const half*  src,
                                     half**       dst_block_ptrs,
                                     const int*   dst_cu_block_cnts,
                                     const int*   seq_lens,
+                                    int          dst_offset,
                                     int          src_seq_len,
                                     int          dst_block_len,
                                     int          head_num,
@@ -142,6 +146,7 @@ __global__ void BlocksToLinearKernel(const T**  src_block_ptrs,
                                      T*         dst,
                                      const int* src_cu_block_cnts,
                                      const int* seq_lens,
+                                     int        src_offset,
                                      int        src_block_len,
                                      int        dst_block_len,
                                      int        head_num,
@@ -165,6 +170,8 @@ __global__ void BlocksToLinearKernel(const T**  src_block_ptrs,
                      src_cu_block_cnts,
                      dst_cu_block_cnts,
                      seq_lens,
+                     src_offset,
+                     0,
                      src_block_len,
                      dst_block_len,
                      head_dim);
@@ -175,6 +182,7 @@ void ConvertBlocksToLinear(const T**    src_block_ptrs,
                            T*           dst,
                            const int*   src_cu_block_cnts,
                            const int*   seq_lens,
+                           int          src_offset,
                            int          src_block_len,
                            int          dst_max_len,
                            int          head_num,
@@ -194,7 +202,8 @@ void ConvertBlocksToLinear(const T**    src_block_ptrs,
                                                                dst,
                                                                src_cu_block_cnts,
                                                                seq_lens,
-                                                               std::integral_constant<int, 128>{},
+                                                               src_offset,
+                                                               src_block_len,
                                                                dst_max_len,
                                                                head_num,
                                                                head_dim,
@@ -214,6 +223,7 @@ template void ConvertBlocksToLinear(const half** src_block_ptrs,
                                     half*        dst,
                                     const int*   src_cu_block_cnts,
                                     const int*   seq_lens,
+                                    int          src_offset,
                                     int          src_block_len,
                                     int          dst_max_seq_len,
                                     int          head_num,
@@ -228,6 +238,7 @@ __global__ void KvCacheBlocksToLinearKernel(const T**   src_k_block_ptrs,
                                             T**         dst_v_ptrs,
                                             const int*  src_cu_block_cnts,
                                             const int*  seq_lens,
+                                            int         src_offset,
                                             SrcBlockLen src_block_len,
                                             DstBlockLen dst_block_len,
                                             int         head_num,
@@ -247,6 +258,8 @@ __global__ void KvCacheBlocksToLinearKernel(const T**   src_k_block_ptrs,
                      src_cu_block_cnts,
                      dst_cu_block_cnts,
                      seq_lens,
+                     src_offset,
+                     0,
                      src_block_len,
                      dst_block_len,
                      head_dim);
@@ -256,6 +269,8 @@ __global__ void KvCacheBlocksToLinearKernel(const T**   src_k_block_ptrs,
                      src_cu_block_cnts,
                      dst_cu_block_cnts,
                      seq_lens,
+                     src_offset,
+                     0,
                      src_block_len,
                      dst_block_len,
                      head_dim);
@@ -268,6 +283,7 @@ void ConvertKvCacheBlocksToLinear(const T**    src_k_block_ptrs,
                                   T**          dst_v_ptrs,
                                   const int*   src_cu_block_cnts,
                                   const int*   seq_lens,
+                                  int          src_offset,
                                   int          src_block_len,
                                   int          dst_block_len,
                                   int          head_num,
@@ -282,6 +298,8 @@ void ConvertKvCacheBlocksToLinear(const T**    src_k_block_ptrs,
 
     const auto smem_sz = sizeof(int) * batch_size;
 
+    // dbg(src_block_len, dst_block_len, head_num, head_dim, batch_size);
+
     auto fn = [&](auto head_dim) {
         KvCacheBlocksToLinearKernel<<<blocks, threads, smem_sz, st>>>(src_k_block_ptrs,
                                                                       src_v_block_ptrs,
@@ -289,6 +307,7 @@ void ConvertKvCacheBlocksToLinear(const T**    src_k_block_ptrs,
                                                                       dst_v_ptrs,
                                                                       src_cu_block_cnts,
                                                                       seq_lens,
+                                                                      src_offset,
                                                                       src_block_len,
                                                                       dst_block_len,
                                                                       head_num,
@@ -311,6 +330,7 @@ template void ConvertKvCacheBlocksToLinear(const half** src_k_block_ptrs,
                                            half**       dst_v_ptrs,
                                            const int*   src_cu_block_cnts,
                                            const int*   seq_lens,
+                                           int          src_offset,
                                            int          src_block_len,
                                            int          dst_block_len,
                                            int          head_num,
@@ -324,6 +344,7 @@ template void ConvertKvCacheBlocksToLinear(const float** src_k_block_ptrs,
                                            float**       dst_v_ptrs,
                                            const int*    src_cu_block_cnts,
                                            const int*    seq_lens,
+                                           int           src_offset,
                                            int           src_block_len,
                                            int           dst_block_len,
                                            int           head_num,

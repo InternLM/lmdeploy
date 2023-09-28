@@ -202,11 +202,11 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t
     params.v = reinterpret_cast<const DataType*>(p.v);
 
     params.stride   = p.stride;
-    params.finished = p.finished;
+    params.finished = (bool*)p.finished;
 
     params.k_cache_per_sample         = reinterpret_cast<DataType**>(p.per_sample_k_cache);
     params.v_cache_per_sample         = reinterpret_cast<DataType**>(p.per_sample_v_cache);
-    params.kv_cache_per_sample_offset = p.per_sample_kv_cache_offset;
+    params.kv_cache_per_sample_offset = p.layer_offset;
     params.batch_size                 = p.batch_size;
     params.beam_width                 = 1;
     params.memory_max_len             = p.max_seq_len;
@@ -215,7 +215,7 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t
     params.length_per_sample          = p.per_sample_length;  // max_input_length + current output length
 
     for (int i = 0; i < p.batch_size; ++i) {
-        params.timestep = std::max(params.timestep, p.cu_ctxlens[i + 1] - p.cu_ctxlens[i]);
+        params.timestep = std::max(p.per_sample_length[i], params.timestep);
     }
 
     std::cout << "timestep = " << params.timestep << "\n";

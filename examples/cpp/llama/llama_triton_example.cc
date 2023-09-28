@@ -80,7 +80,9 @@ broadCastRequest(const std::vector<int>& v_start_ids,
     if (node_id == 0) {
         memcpy(v_input_ids.data(), v_start_ids.data(), size_1 * sizeof(int));
         memcpy(v_input_lengths.data(), v_start_lengths.data(), size_2 * sizeof(int));
-        memcpy(v_input_bad_words.data(), v_bad_words.data(), size_bad_words * sizeof(int));
+        if (!v_input_bad_words.empty()) {
+            memcpy(v_input_bad_words.data(), v_bad_words.data(), size_bad_words * sizeof(int));
+        }
     }
     if (kUSE_MPI) {
         ft::mpi::barrier();

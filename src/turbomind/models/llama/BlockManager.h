@@ -61,14 +61,16 @@ public:
     // free -> active
     [[nodiscard]] std::vector<const Block*> Allocate(int count);
 
+    // decrease ref count
     // active -> cached
     [[maybe_unused]] int Release(const std::vector<const Block*>& bs);
 
+    // increase ref count
+    // cached -> active
+    void Retain(const std::vector<const Block*>& bs);
+
     // cached -> free
     void Evict(int count);
-
-    // active -> active
-    void Retain(const std::vector<const Block*>& bs);
 
     // increase timestamp in reversed order
     void Touch(const std::vector<const Block*>& bs);

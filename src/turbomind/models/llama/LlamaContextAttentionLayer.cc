@@ -29,6 +29,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/dbg.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
@@ -151,6 +152,14 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
 
     const auto padding_offset = input_tensors->at("padding_offset").getPtr<int>();
 
+    auto Show = [&](const T* x, size_t n) {
+        std::vector<T> vec(n);
+        cudaMemcpyAsync(vec.data(), x, sizeof(T) * n, cudaMemcpyDefault, stream_);
+        cudaStreamSynchronize(stream_);
+        std::vector<float> float_vec(vec.begin(), vec.end());
+        dbg(float_vec);
+    };
+
     /////////////////////////////////////////////
     /// allocate buffers
     allocateBuffer(batch_size, num_token, max_q_len, max_k_len);
@@ -184,6 +193,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    stream_);
     sync_check_cuda_error();
 
+    // [2, L, H, s, D]
     const size_t layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
     auto k_cache_ptrs = output_tensors->getPtr<T*>("key_cache");
@@ -219,9 +229,10 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     ConvertKvCacheBlocksToLinear((const T**)k_cache_ptrs,
                                  (const T**)v_cache_ptrs,
                                  tmp_k_ptrs,
-                                 tmp_k_ptrs,
+                                 tmp_v_ptrs,
                                  cu_block_counts,
-                                 history_length,
+                                 context_length,
+                                 layer_offset,
                                  kv_cache_block_len_,
                                  max_seq_len,
                                  local_kv_head_num_,
@@ -230,21 +241,22 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                  stream_);
     sync_check_cuda_error();
 
+    // dbg(kv_cache_block_len_, max_seq_len, local_kv_head_num_, size_per_head_, batch_size);
+    // void *kk, *vv;
+    // cudaMemcpyAsync(&kk, tmp_k_ptrs, sizeof(void*), cudaMemcpyDefault, stream_);
+    // cudaMemcpyAsync(&vv, tmp_v_ptrs, sizeof(void*), cudaMemcpyDefault, stream_);
+    // cudaStreamSynchronize(stream_);
+    // Show((const T*)kk, local_kv_head_num_ * max_seq_len * size_per_head_);
+    // Show((const T*)vv, local_kv_head_num_ * max_seq_len * size_per_head_);
+
     if (use_fmha_) {
-        fusedMultiHeadAttention(tmp_k_ptrs,
-                                tmp_k_ptrs,
-                                layer_offset,
-                                attention_mask,
-                                cu_seqlens,
-                                batch_size,
-                                max_q_len,
-                                max_k_len,
-                                max_seq_len);
+        fusedMultiHeadAttention(
+            tmp_k_ptrs, tmp_v_ptrs, 0, attention_mask, cu_seqlens, batch_size, max_q_len, max_k_len, max_seq_len);
     }
     else {
         unfusedMultiHeadAttention(tmp_k_ptrs,
-                                  tmp_k_ptrs,
-                                  layer_offset,
+                                  tmp_v_ptrs,
+                                  0,
                                   attention_mask,
                                   padding_offset,
                                   context_length,
@@ -255,6 +267,14 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   max_seq_len,
                                   quant_policy_,
                                   weights->past_kv_scale.data());
+    }
+
+    Compare(qkv_buf_3_, num_token * hidden_units_, Concat("qkv_buf_3", layer_id), kCmpRead, stream_);
+
+    // dbg(max_seq_len);
+
+    if (0) {
+        Show(qkv_buf_3_, num_token * hidden_units_);
     }
 
     //////////////////////////////////////////////

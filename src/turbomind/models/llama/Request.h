@@ -89,8 +89,11 @@ public:
 
     void Abort()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        abort_ = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            abort_ = true;
+        }
+        cv_.notify_all();
     }
 
 private:

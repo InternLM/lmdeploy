@@ -60,7 +60,7 @@ TEST_CASE("BlockManager")
     REQUIRE(m.cached_count() == 16);
 }
 
-TEST_CASE("SequenceManager")
+TEST_CASE("SequenceManager basic test")
 {
     Allocator<AllocatorType::CUDA> allocator(0);
 
@@ -86,9 +86,27 @@ TEST_CASE("SequenceManager")
     auto s2 = manager.Create(2);
     REQUIRE(manager.Contains(2));
 
-    outcome = manager.Materialize({s1, s2}, {128, 2560-1}, {2, 1}, 1);
+    outcome = manager.Materialize({s1, s2}, {128, 2559}, {2, 1}, 1);
     dbg(outcome);
+    REQUIRE(outcome.allocation == 20);
+    REQUIRE(outcome.swap_in == 1);
+    REQUIRE(outcome.swap_out == 1);
 
-    // outcome = manager.Materialize({s1, s2}, {128, 12800}, {1, 2}, 1);
-    // dbg(outcome);
+    auto s3 = manager.Create(3);
+    outcome = manager.Materialize({s1, s2, s3}, {127, 2559, 255}, {1, 100, 2}, 1);
+    dbg(outcome);
+}
+
+TEST_CASE("SequenceManager functional test")
+{
+    Allocator<AllocatorType::CUDA> allocator(0);
+    SequenceManager                manager(32, 32, 128, 128, 20, 4, 16, 0, &allocator);
+
+    auto seq = manager.Create(1);
+    for (int i = 0; i < 1024; ++i) {
+        auto outcome = manager.Materialize({seq}, {i}, {0}, 1);
+        if (outcome.allocation) {
+            dbg(i, outcome);
+        }
+    }
 }

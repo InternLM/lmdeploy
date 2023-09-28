@@ -233,18 +233,17 @@ __global__ void extend_kv_cache(T**          k_dst_ptrs,
     const auto k_val_src = reinterpret_cast<const uint4*>(k_src);
     const auto v_val_src = reinterpret_cast<const uint4*>(v_src);
 
-    // const auto val_dst = reinterpret_cast<uint4*>(v_dst[batch_id] + dst_layer_offset);
     const auto k_val_dst = (uint4*)((k_dst_ptrs + cu_block_cnt)[cache_block_index] + dst_layer_offset);
     const auto v_val_dst = (uint4*)((v_dst_ptrs + cu_block_cnt)[cache_block_index] + dst_layer_offset);
 
     if (seq_len_id < query_len) {
         // [B, H, s, D/x] -> [H, S[t:t+s], D/x]
-        const int64_t dst_idx = head_id * size_per_head_div_x * block_length +  // H
+        const int64_t dst_idx = head_id * block_length * size_per_head_div_x +  // H
                                 cache_block_offset * size_per_head_div_x +      // s + offset
                                 head_size_id;                                   // D/x
 
-        const int64_t src_idx = batch_id * head_num * size_per_head_div_x * max_q_len +  // B
-                                head_id * size_per_head_div_x * max_q_len +              // H
+        const int64_t src_idx = batch_id * head_num * max_q_len * size_per_head_div_x +  // B
+                                head_id * max_q_len * size_per_head_div_x +              // H
                                 seq_len_id * size_per_head_div_x +                       // s
                                 head_size_id;                                            // D/x
 

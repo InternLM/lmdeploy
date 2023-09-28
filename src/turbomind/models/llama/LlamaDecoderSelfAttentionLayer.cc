@@ -19,6 +19,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/DecoderSelfAttentionLayer.cc
 #include "src/turbomind/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
+#include "src/turbomind/kernels/decoder_mha/decoder_multihead_attention.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -211,16 +212,18 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
      *    \param value_cache [batch, local_head_num, memory_max_len, size_per_head]
      */
 
-    const T*    input_query_data      = input_tensors->getPtr<T>("input_query");
-    const int*  sequence_lengths_data = input_tensors->getPtr<int>("sequence_lengths");
-    const int*  total_padding_len     = input_tensors->getPtr<int>("total_padding_tokens");
-    const bool* finished_data         = input_tensors->getPtr<bool>("finished", nullptr);
-    const bool* masked_tokens_data    = input_tensors->getPtr<bool>("masked_tokens", nullptr);
-    const int*  cache_indir           = input_tensors->getPtr<int>("cache_indirection", nullptr);
+    const T*   input_query_data      = input_tensors->getPtr<T>("input_query");
+    const int* sequence_lengths_data = input_tensors->getPtr<int>("sequence_lengths");
+    // const int*  total_padding_len     = input_tensors->getPtr<int>("total_padding_tokens");
+    const bool* finished_data      = input_tensors->getPtr<bool>("finished", nullptr);
+    const bool* masked_tokens_data = input_tensors->getPtr<bool>("masked_tokens", nullptr);
+    const int*  cache_indir        = input_tensors->getPtr<int>("cache_indirection", nullptr);
 
     T*  hidden_features_data = output_tensors->getPtr<T>("attention_output");
     T** key_cache_ptrs       = output_tensors->getPtr<T*>("key_cache");
     T** value_cache_ptrs     = output_tensors->getPtr<T*>("value_cache");
+
+    int* cu_block_counts = input_tensors->at("cu_block_counts").getPtr<int>();
 
     const int layer_id = input_tensors->getVal<int>("layer_id");
 
@@ -238,51 +241,78 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
     POP_RANGE;
 
-    const auto kv_cache_layer_offset = layer_id * local_kv_head_num_ * max_seq_len * size_per_head_;
-    const int  memory_len            = max_seq_len;
+    const auto layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
+    // const int  memory_len   = max_seq_len;
 
-    fusedQKV_masked_attention_dispatch<T>(
-        qkv_buf_,
-        weights->qkv.bias,  // query_weight.bias,
-        nullptr,            // relative_attention_bias,
-        nullptr,
-        nullptr,
-        key_cache_ptrs,
-        value_cache_ptrs,
-        kv_cache_layer_offset,
-        cache_indir,
-        context_buf_,
-        finished_data,
-        sequence_lengths_data,  // NOTE: current seq len including padding (fixed after meeting the finished id)
-        batch_size,
-        batch_size,
-        beam_width,
-        local_head_num_,
-        local_kv_head_num_,
-        size_per_head_,
-        params_.rotray_embedding_dim,
-        params_.max_position_embeddings,
-        params_.use_dynamic_ntk,
-        params_.use_logn_attn,
-        memory_len,
-        nullptr,  // prefix_prompt_lengths
-        0,        // max_prefix_prompt_length
-        0,        // max_input_length, not used w/o linear_bias_slopes
-        input_tensors->getPtr<int>("total_padding_tokens", nullptr),
-        step,
-        1.f,                            // q_scaling
-        0,                              // relative_attention_bias_stride
-        nullptr,                        // linear_bias_slopes
-        nullptr,                        //  masked_tokens_data,
-        nullptr,                        // ia3_tasks
-        nullptr,                        // ia3_key_weights
-        nullptr,                        // ia3_value_weights
-        nullptr,                        // qkv_scale_out
-        nullptr,                        // attention_out_scale
-        quant_policy_,                  // int8_mode
-        weights->past_kv_scale.data(),  // attention kv scale
-        stream_);
-    sync_check_cuda_error();
+    DecoderMultiHeadAttentionParams<T> params{};
+
+    params.out    = context_buf_;
+    params.q      = qkv_buf_;
+    params.k      = params.q + local_head_num_ * size_per_head_;
+    params.v      = params.k + local_kv_head_num_ * size_per_head_;
+    params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
+
+    params.batch_size    = batch_size;
+    params.cu_block_cnts = cu_block_counts;  /// TODO
+
+    params.k_cache_block_ptrs  = (void**)key_cache_ptrs;
+    params.v_cache_block_ptrs  = (void**)value_cache_ptrs;
+    params.kv_cache_block_size = kv_cache_block_len_;
+
+    params.finished          = finished_data;
+    params.per_sample_length = sequence_lengths_data;
+
+    params.layer_offset = layer_offset;
+
+    params.num_heads     = local_head_num_;
+    params.num_kv_heads  = local_kv_head_num_;
+    params.size_per_head = size_per_head_;
+    params.inv_sqrt_dh   = 1.f / std::sqrt((float)params.size_per_head);
+
+    params.rotary_embedding_dim  = size_per_head_;
+    params.rotary_embedding_base = 10000.f;
+
+    LaunchDecoderMultiheadAttention<T, 128>(params);
+
+    // fusedQKV_masked_attention_dispatch<T>(
+    //     qkv_buf_,
+    //     weights->qkv.bias,  // query_weight.bias,
+    //     nullptr,            // relative_attention_bias,
+    //     nullptr,
+    //     nullptr,
+    //     key_cache_ptrs,
+    //     value_cache_ptrs,
+    //     kv_cache_layer_offset,
+    //     cache_indir,
+    //     context_buf_,
+    //     finished_data,
+    //     sequence_lengths_data,  // NOTE: current seq len including padding (fixed after
+    //     meeting the finished id) batch_size, batch_size, beam_width, local_head_num_,
+    //     local_kv_head_num_,
+    //     size_per_head_,
+    //     params_.rotray_embedding_dim,
+    //     params_.max_position_embeddings,
+    //     params_.use_dynamic_ntk,
+    //     params_.use_logn_attn,
+    //     memory_len,
+    //     nullptr,  // prefix_prompt_lengths
+    //     0,        // max_prefix_prompt_length
+    //     0,        // max_input_length, not used w/o linear_bias_slopes
+    //     input_tensors->getPtr<int>("total_padding_tokens", nullptr),
+    //     step,
+    //     1.f,                            // q_scaling
+    //     0,                              // relative_attention_bias_stride
+    //     nullptr,                        // linear_bias_slopes
+    //     nullptr,                        //  masked_tokens_data,
+    //     nullptr,                        // ia3_tasks
+    //     nullptr,                        // ia3_key_weights
+    //     nullptr,                        // ia3_value_weights
+    //     nullptr,                        // qkv_scale_out
+    //     nullptr,                        // attention_out_scale
+    //     quant_policy_,                  // int8_mode
+    //     weights->past_kv_scale.data(),  // attention kv scale
+    //     stream_);
+    // sync_check_cuda_error();
 
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
 

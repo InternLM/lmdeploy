@@ -16,7 +16,7 @@ SequenceManager::SequenceManager(size_t      layer_num,
                                  size_t      elem_bits,
                                  int         rank,
                                  IAllocator* allocator):
-    block_len_(block_len), rank_(rank)
+    block_len_(block_len)
 {
     constexpr int kBitsPerByte = 8;
 
@@ -37,8 +37,11 @@ const Sequence* SequenceManager::Create(uint64_t id)
         if (rank_ == 0) {
             TM_LOG_WARNING("[SequenceManager][Create] Removing conflicting ID %ld", (long)id);
         }
-        block_manager_->Release(it->second.blocks);
-        it->second = std::move(sequence);
+        auto& seq = it->second;
+        if (seq.status != Sequence::kCached) {
+            released_.insert(released_.end(), seq.blocks.begin(), seq.blocks.end());
+        }
+        seq = std::move(sequence);
     }
     else {
         it = sequences_.emplace_hint(it, id, std::move(sequence));
@@ -47,7 +50,36 @@ const Sequence* SequenceManager::Create(uint64_t id)
     return &it->second;
 }
 
-void SequenceManager::VerifyBlocks(Sequence& seq)
+const Sequence* SequenceManager::Get(uint64_t id)
+{
+    if (auto it = sequences_.find(id); it != sequences_.end()) {
+        auto& sequence = it->second;
+        return &it->second;
+    }
+    return nullptr;
+}
+
+bool SequenceManager::Contains(uint64_t id)
+{
+    return sequences_.find(id) != sequences_.end();
+}
+
+bool SequenceManager::Erase(uint64_t id)
+{
+    if (auto it = sequences_.find(id); it != sequences_.end()) {
+        auto& seq = it->second;
+        if (seq.status != Sequence::kCached) {
+            released_.insert(released_.end(), seq.blocks.begin(), seq.blocks.end());
+        }
+        sequences_.erase(it);
+    }
+    else {
+        throw std::out_of_range(std::to_string(id));
+    }
+    return false;
+}
+
+void SequenceManager::Verify(Sequence& seq, std::vector<const Block*>& retain)
 {
     FT_CHECK(seq.blocks.size() == seq.block_unique_ids.size());
     for (int i = 0; i < seq.blocks.size(); ++i) {
@@ -57,48 +89,21 @@ void SequenceManager::VerifyBlocks(Sequence& seq)
             break;
         }
     }
+    retain.insert(retain.end(), seq.blocks.begin(), seq.blocks.end());
+    seq.status    = Sequence::kLocked;
     seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_len_);
 }
 
-const Sequence* SequenceManager::Fetch(uint64_t id)
+void SequenceManager::Release(const Sequence& sequence)
 {
-    if (auto it = sequences_.find(id); it != sequences_.end()) {
-        auto& sequence = it->second;
-        return &it->second;
+    auto& seq = const_cast<Sequence&>(sequence);
+    if (seq.status == Sequence::kActive) {
+        block_manager_->Touch(seq.blocks);
     }
-
-    return nullptr;
-}
-
-bool SequenceManager::Erase(uint64_t id)
-{
-    if (auto it = sequences_.find(id); it != sequences_.end()) {
-        auto& seq = it->second;
-        if (seq.status != Sequence::kCached) {
-            if (released_.empty()) {
-                released_ = std::move(seq.blocks);
-            }
-            else {
-                released_.insert(released_.end(), seq.blocks.begin(), seq.blocks.end());
-            }
-        }
-        sequences_.erase(it);
+    if (seq.status != Sequence::kCached) {
+        released_.insert(released_.end(), seq.blocks.begin(), seq.blocks.end());
     }
-    else {
-        throw std::out_of_range(std::to_string(id));
-    }
-
-    return false;
-}
-
-void SequenceManager::Update(const Sequence& sequence)
-{
-    block_manager_->Touch(sequence.blocks);
-}
-
-bool SequenceManager::Contains(uint64_t id)
-{
-    return sequences_.find(id) != sequences_.end();
+    seq.status = Sequence::kCached;
 }
 
 namespace {
@@ -132,9 +137,9 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& v)
 
 std::ostream& operator<<(std::ostream& os, const Schedule& s)
 {
-    os << "Schedule { free=" << s.free << ", cached=" << s.cached << ", allocate=" << s.allocate
-       << ", evict=" << s.evict << ", preempt=" << s.preempt << ", active=" << s.active << ", victims=" << s.victims
-       << ", block_counts=" << s.block_counts << ", inactive=" << s.inactive << " }";
+    os << "free=" << s.free << ", cached=" << s.cached << ", allocate=" << s.allocate << ", evict=" << s.evict
+       << ", preempt=" << s.preempt << ", active=" << s.active << ", victims=" << s.victims
+       << ", block_counts=" << s.block_counts << ", inactive=" << s.inactive;
     return os;
 }
 
@@ -235,9 +240,8 @@ struct Transaction {
 
 std::ostream& operator<<(std::ostream& os, const Transaction& trans)
 {
-    os << "Transaction { index=" << trans.index_ << ", block_count=" << trans.block_count_
-       << ", allocate=" << trans.allocate_ << ", evict=" << trans.evict_ << ", preempt=" << trans.preempt_
-       << ", victims=" << trans.victims_ << " }";
+    os << "index=" << trans.index_ << ", block_count=" << trans.block_count_ << ", allocate=" << trans.allocate_
+       << ", evict=" << trans.evict_ << ", preempt=" << trans.preempt_ << ", victims=" << trans.victims_;
     return os;
 }
 
@@ -245,8 +249,8 @@ std::ostream& operator<<(std::ostream& os, const Transaction& trans)
 
 std::ostream& operator<<(std::ostream& os, const Sequence& seq)
 {
-    os << "Sequence { id=" << seq.id << ", status=" << seq.status << ", size(blocks)=" << seq.blocks.size()
-       << ", cache_len=" << seq.cache_len << ", size(random_state)=" << seq.random_state.size() << " }";
+    os << "id=" << seq.id << ", status=" << seq.status << ", size(blocks)=" << seq.blocks.size()
+       << ", cache_len=" << seq.cache_len << ", size(random_state)=" << seq.random_state.size();
     return os;
 }
 
@@ -260,14 +264,21 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
     auto    seqs = const_cast<Sequence* const*>(sequences.data());
     Outcome outcome{};
 
+    if (!released_.empty()) {
+        block_manager_->Release(released_);
+        released_.clear();
+    }
+
     // check validity of of cached blocks (blocks of active & locked seqs are always valid)
     if (need_verification_) {
+        need_verification_ = false;
+        std::vector<const Block*> retain;
         for (int i = 0; i < sequences.size(); ++i) {
             if (seqs[i]->status == Sequence::kCached) {
-                VerifyBlocks(*seqs[i]);
+                Verify(*seqs[i], retain);
             }
         }
-        need_verification_ = false;
+        block_manager_->Retain(retain);
     }
 
     // count required blocks based on block validity
@@ -280,7 +291,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
         total_required += required[i];
     }
 
-    dbg(required);
+    // dbg(required);
 
     // no new blocks required, exit early
     if (total_required == 0) {
@@ -325,13 +336,14 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
             if (sequences[idxs[v]]->status == Sequence::kCached) {
                 continue;
             }
+            dbg(v, idxs[v]);
             int preempt = trans.Preempt(v, idxs[v]);
             dbg(preempt);
             // Commit only when preemption actually free enough blocks for the sequence to run
             if (block_count <= preempt) {
                 // preempted blocks are in cached state
                 block_count -= trans.Evict(block_count);
-                j = v + 1;
+                j = v;
                 break;
             }
         }
@@ -340,7 +352,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
 
         if (block_count == 0) {
             trans.Commit();
-            active[i] = 1;
+            active[idx] = 1;
             if (seq.status != Sequence::kActive) {
                 ++outcome.swap_in;
             }
@@ -365,25 +377,20 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
     outcome.allocation = schedule.allocate;
 
     // release preempted blocks -> cached
-    {
-        std::vector<const Block*> blocks;
-        for (const auto& v : schedule.victims) {
-            auto& seq = *seqs[v];
-            block_manager_->Touch(seq.blocks);
-            seq.status = Sequence::kCached;
-            blocks.insert(blocks.end(), seq.blocks.begin(), seq.blocks.end());
-        }
-        block_manager_->Release(blocks);
+    for (const auto& v : schedule.victims) {
+        Release(*sequences[v]);
     }
+    block_manager_->Release(released_);
+    released_.clear();
 
     // evict cached blocks -> free
     if (schedule.evict) {
-        need_verification_ = true;
         block_manager_->Evict(schedule.evict);
+        need_verification_ = true;
     }
 
     // allocate & assign blocks
-    auto blocks = block_manager_->Allocate(schedule.allocate + schedule.evict);
+    auto blocks = block_manager_->Allocate(schedule.allocate);
     auto first  = blocks.begin();
 
     for (const auto& idx : schedule.active) {
@@ -391,7 +398,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
         sequence.status = Sequence::kActive;
 
         auto last = first + required[idx];
-        std::for_each(first, last, [&sequence](const Block* b) {
+        std::for_each(first, last, [&](const Block* b) {
             sequence.blocks.push_back(b);
             sequence.block_unique_ids.push_back(b->unique_id);
         });

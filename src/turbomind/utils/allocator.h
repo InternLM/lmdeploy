@@ -125,9 +125,15 @@ class Allocator;
 template<>
 class Allocator<AllocatorType::CUDA>: public IAllocator {
 private:
-    const int                          device_id_;
-    cudaStream_t                       stream_ = 0;  // initialize as default stream
-    std::unordered_map<void*, size_t>* pointer_mapping_;
+    enum class MemoryType
+    {
+        HOST,
+        DEVICE
+    };
+
+    const int                                                 device_id_;
+    cudaStream_t                                              stream_ = 0;  // initialize as default stream
+    std::unordered_map<void*, std::pair<size_t, MemoryType>>* pointer_mapping_;
 
     bool isExist(void* address) const
     {
@@ -136,10 +142,10 @@ private:
     ReallocType isReMalloc(void* address, size_t size) const
     {
         FT_CHECK(isExist(address));
-        if (pointer_mapping_->at(address) < size) {
+        if (pointer_mapping_->at(address).first < size) {
             return ReallocType::INCREASE;
         }
-        else if (pointer_mapping_->at(address) == size) {
+        else if (pointer_mapping_->at(address).first == size) {
             return ReallocType::REUSE;
         }
         else {
@@ -151,7 +157,7 @@ public:
     Allocator(int device_id): device_id_(device_id)
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-        pointer_mapping_ = new std::unordered_map<void*, size_t>();
+        pointer_mapping_ = new std::unordered_map<void*, std::pair<size_t, MemoryType>>();
 #if defined(CUDA_MEMORY_POOL_DISABLED)
         TM_LOG_WARNING(
             "Async cudaMalloc/Free is not supported before CUDA 11.2. Using Sync cudaMalloc/Free."
@@ -188,7 +194,9 @@ public:
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         while (!pointer_mapping_->empty()) {
-            free((void**)(&pointer_mapping_->begin()->first));
+            auto ptr           = pointer_mapping_->begin()->first;
+            auto size_and_type = pointer_mapping_->begin()->second;
+            free(&ptr, size_and_type.second == MemoryType::HOST);
         }
         delete pointer_mapping_;
     }
@@ -229,18 +237,19 @@ public:
         check_cuda_error(getSetDevice(o_device));
         TM_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
 
-        pointer_mapping_->insert({getAddress(ptr), size});
+        pointer_mapping_->insert({getAddress(ptr), {size, is_host ? MemoryType::HOST : MemoryType::DEVICE}});
 
         return ptr;
     }
 
-    void free(void** ptr, bool is_host = false) const
+    void free(void** ptr, bool _ = false) const
     {
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         void* address = getAddress(*ptr);
         if (*ptr != nullptr) {
             int o_device = 0;
             if (pointer_mapping_->count(address)) {
+                const auto is_host = pointer_mapping_->at(address).second == MemoryType::HOST;
                 TM_LOG_DEBUG("Free buffer %p", address);
                 check_cuda_error(getSetDevice(device_id_, &o_device));
                 if (is_host) {
@@ -361,7 +370,7 @@ public:
     {
         while (!pointer_mapping_->empty()) {
             void* ptr = pointer_mapping_->begin()->second.flat<uint8>().data();
-            free((void**)(&ptr));
+            free(&ptr);
         }
         pointer_mapping_->clear();
         delete pointer_mapping_;
@@ -454,7 +463,7 @@ public:
         TM_LOG_DEBUG(__PRETTY_FUNCTION__);
         while (!pointer_mapping_->empty()) {
             void* ptr = pointer_mapping_->begin()->second.data_ptr();
-            free((void**)(&ptr));
+            free(&ptr);
         }
         pointer_mapping_->clear();
         delete pointer_mapping_;

@@ -4,8 +4,6 @@
 
 namespace turbomind {
 
-// |<-- active -->|<-- pending -->|<-- new -->|
-
 struct Sequence {
 
     enum Status {
@@ -32,9 +30,6 @@ struct Sequence {
 
 class SequenceManager {
 public:
-    // allocate slack blocks to reduce block manager overhead
-    static constexpr int kSlackBlockNum = 1;
-
     explicit SequenceManager(size_t      layer_num,
                              size_t      head_num,
                              size_t      head_dim,
@@ -50,13 +45,13 @@ public:
 
     const Sequence* Create(uint64_t id);
 
-    const Sequence* Fetch(uint64_t id);
+    const Sequence* Get(uint64_t id);
 
-    void Update(const Sequence& seq);
+    bool Contains(uint64_t id);
 
     bool Erase(uint64_t id);
 
-    bool Contains(uint64_t id);
+    void Release(const Sequence& seq);
 
     struct Outcome {
         int allocation;
@@ -84,14 +79,8 @@ public:
         return block_manager_->max_block_count();
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const Outcome& oc)
-    {
-        os << "allocation: " << oc.allocation << ", swap-in: " << oc.swap_in << ", swap-out: " << oc.swap_out;
-        return os;
-    }
-
 private:
-    void VerifyBlocks(Sequence& seq);
+    void Verify(Sequence& seq, std::vector<const Block*>& retain);
 
 private:
     int    block_len_;
@@ -107,5 +96,11 @@ private:
 
     std::vector<const Block*> released_;
 };
+
+inline std::ostream& operator<<(std::ostream& os, const SequenceManager::Outcome& oc)
+{
+    os << "allocation: " << oc.allocation << ", swap-in: " << oc.swap_in << ", swap-out: " << oc.swap_out;
+    return os;
+}
 
 }  // namespace turbomind

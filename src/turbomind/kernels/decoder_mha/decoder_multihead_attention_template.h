@@ -113,19 +113,13 @@ struct DecoderMultiHeadAttentionKernel {
         timestep_ = params_.per_sample_length[batch_idx_];
 
         if constexpr (kUseBlockIter) {
-            k_cache_ptrs_ = params_.k_cache_block_ptrs + params_.cu_ctxlens[batch_idx_];
-            v_cache_ptrs_ = params_.v_cache_block_ptrs + params_.cu_ctxlens[batch_idx_];
-            // if (thread0()) {
-            //     printf("%d %p %p\n",
-            //            params_.cu_ctxlens[batch_idx_],
-            //            params_.k_cache_block_ptrs,
-            //            params_.v_cache_block_ptrs);
-            // }
+            k_cache_ptrs_ = params_.k_cache_block_ptrs + params_.cu_block_cnts[batch_idx_];
+            v_cache_ptrs_ = params_.v_cache_block_ptrs + params_.cu_block_cnts[batch_idx_];
         }
         else {
-            k_cache_ = (T*)params_.per_sample_k_cache[batch_idx_] + params.per_sample_kv_cache_offset
+            k_cache_ = (T*)params_.per_sample_k_cache[batch_idx_] + params.layer_offset
                        + head_idx_ * params_.max_seq_len * params_.size_per_head;
-            v_cache_ = (T*)params_.per_sample_v_cache[batch_idx_] + params.per_sample_kv_cache_offset
+            v_cache_ = (T*)params_.per_sample_v_cache[batch_idx_] + params.layer_offset
                        + head_idx_ * params_.max_seq_len * params_.size_per_head;
         }
     }
@@ -235,8 +229,10 @@ struct DecoderMultiHeadAttentionKernel {
                 // if (thread0()) {
                 //     printf("%d %d %p %p\n", block_index, block_offset, k_cache_ptrs_, v_cache_ptrs_);
                 // }
-                k_cache_ = (T*)k_cache_ptrs_[block_index] + head_idx_ * params_.kv_cache_block_size * kHeadDim;
-                v_cache_ = (T*)v_cache_ptrs_[block_index] + head_idx_ * params_.kv_cache_block_size * kHeadDim;
+                k_cache_ = (T*)k_cache_ptrs_[block_index] + params_.layer_offset
+                           + head_idx_ * params_.kv_cache_block_size * kHeadDim;
+                v_cache_ = (T*)v_cache_ptrs_[block_index] + params_.layer_offset
+                           + head_idx_ * params_.kv_cache_block_size * kHeadDim;
                 Store(&k_cache_[block_offset * kHeadDim + offset.x], frag_K);
                 Store(&v_cache_[block_offset * kHeadDim + offset.x], frag_V);
             }
@@ -302,6 +298,7 @@ struct DecoderMultiHeadAttentionKernel {
         if constexpr (kUseBlockIter) {
             iter_K = {k_cache_ptrs_,
                       params_.kv_cache_block_size,
+                      params_.layer_offset,
                       head_idx_,
                       smem_Kv_,
                       step,
@@ -490,6 +487,7 @@ struct DecoderMultiHeadAttentionKernel {
         if constexpr (kUseBlockIter) {
             iter_V = {v_cache_ptrs_,
                       params_.kv_cache_block_size,
+                      params_.layer_offset,
                       head_idx_,
                       smem_Kv_,
                       step,

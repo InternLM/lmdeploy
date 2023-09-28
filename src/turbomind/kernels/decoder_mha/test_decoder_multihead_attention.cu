@@ -26,9 +26,10 @@ T* align(T* ptr, size_t alignment)
 
 // [S/S, H, S, D] <-> [S/b, H, b, D]
 
-void TestBlocks(thrust::universal_vector<half>&  linear,
-                thrust::universal_vector<half>&  _blocks,
-                thrust::universal_vector<half*>& _ptrs,
+void TestBlocks(thrust::universal_vector<half>&  linear,          // linear data
+                thrust::universal_vector<half>&  _blocks,         // block data
+                thrust::universal_vector<half*>& _ptrs,           // block ptrs
+                thrust::universal_vector<int>&   _cu_block_cnts,  // cumulative block counts
                 int                              head_num,
                 int                              head_dim,
                 int                              block_size,
@@ -41,7 +42,7 @@ void TestBlocks(thrust::universal_vector<half>&  linear,
               << ", block_size = " << block_size << "\n";
 
     thrust::universal_vector<half>  blocks(batch_size * n_blocks * head_num * block_size * head_dim);
-    thrust::universal_vector<half*> ptrs(batch_size * n_blocks);
+    thrust::universal_vector<half*> ptrs(batch_size * n_blocks + 1);  // +1 padding
 
     std::vector<size_t> idxs(batch_size * n_blocks);
     std::iota(idxs.begin(), idxs.end(), 0);
@@ -64,6 +65,7 @@ void TestBlocks(thrust::universal_vector<half>&  linear,
                               ptrs.data().get(),
                               cu_block_cnts.data().get(),
                               seq_lens.data().get(),
+                              0,
                               seq_len,
                               block_size,
                               head_num,
@@ -78,6 +80,7 @@ void TestBlocks(thrust::universal_vector<half>&  linear,
                               _linear.data().get(),
                               cu_block_cnts.data().get(),
                               seq_lens.data().get(),
+                              0,
                               block_size,
                               seq_len,
                               head_num,
@@ -89,10 +92,11 @@ void TestBlocks(thrust::universal_vector<half>&  linear,
     std::cout << ">>> Compare\n";
     Compare(_linear.data().get(), linear.data().get(), head_dim, head_dim, batch_size * head_num * seq_len);
     std::cout << "<<< Compare\n";
-    std::exit(0);
+    // std::exit(0);
 
     _blocks.swap(blocks);
     _ptrs.swap(ptrs);
+    _cu_block_cnts.swap(cu_block_cnts);
 }
 
 int main(int argc, char* argv[])
@@ -102,7 +106,7 @@ int main(int argc, char* argv[])
     // constexpr int kHeadNum = 108 * 4;
     constexpr int kHeadNum     = 32;
     constexpr int kHeadDim     = 128;
-    constexpr int kBatchSize   = 64;
+    constexpr int kBatchSize   = 1;
     constexpr int kContextLen  = 511;
     constexpr int kSequenceLen = kContextLen + 1;
     constexpr int kBlockSz     = 128;
@@ -123,7 +127,6 @@ int main(int argc, char* argv[])
     thrust::universal_vector<int>   sequence_lengths(kBatchSize);
     thrust::universal_vector<void*> k_cache_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ptrs(kBatchSize);
-    thrust::universal_vector<int>   cu_ctxlens(kBatchSize + 1);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
@@ -164,13 +167,14 @@ int main(int argc, char* argv[])
 
     thrust::universal_vector<half>  k_blocks;
     thrust::universal_vector<half*> k_ptrs;
+    thrust::universal_vector<int>   cu_block_cnts;
 
-    TestBlocks(k_cache, k_blocks, k_ptrs, kHeadNum, kHeadDim, kBlockSz, kBatchSize);
+    TestBlocks(k_cache, k_blocks, k_ptrs, cu_block_cnts, kHeadNum, kHeadDim, kBlockSz, kBatchSize);
 
     thrust::universal_vector<half>  v_blocks;
     thrust::universal_vector<half*> v_ptrs;
 
-    TestBlocks(v_cache, v_blocks, v_ptrs, kHeadNum, kHeadDim, kBlockSz, kBatchSize);
+    TestBlocks(v_cache, v_blocks, v_ptrs, cu_block_cnts, kHeadNum, kHeadDim, kBlockSz, kBatchSize);
 
     thrust::universal_vector<half>  k_cache_ref = k_cache;
     thrust::universal_vector<half>  v_cache_ref = v_cache;
@@ -186,7 +190,6 @@ int main(int argc, char* argv[])
         v_cache_ptrs[i]     = v_cache.data().get() + i * v_cache.size() / kBatchSize;
         k_cache_ref_ptrs[i] = k_cache_ref.data().get() + i * k_cache_ref.size() / kBatchSize;
         v_cache_ref_ptrs[i] = v_cache_ref.data().get() + i * v_cache_ref.size() / kBatchSize;
-        cu_ctxlens[i + 1]   = cu_ctxlens[i] + kContextLen;
 
         // align(k_cache_ptrs[i], 256);
         // align(v_cache_ptrs[i], 256);
@@ -200,20 +203,20 @@ int main(int argc, char* argv[])
     params.v      = params.k + kHeadNum * kHeadDim;
     params.stride = 3 * kHeadNum * kHeadDim;
 
-    params.batch_size  = kBatchSize;
-    params.max_seq_len = kContextLen + 1;
-    params.cu_ctxlens  = cu_ctxlens.data().get();
+    params.batch_size    = kBatchSize;
+    params.max_seq_len   = kContextLen + 1;
+    params.cu_block_cnts = cu_block_cnts.data().get();
 
     printf("%d %d\n", (int)k_ptrs.size(), (int)v_ptrs.size());
     params.k_cache_block_ptrs  = (void**)k_ptrs.data().get();
     params.v_cache_block_ptrs  = (void**)v_ptrs.data().get();
     params.kv_cache_block_size = kBlockSz;
 
-    params.finished                   = finished.data().get();
-    params.per_sample_length          = sequence_lengths.data().get();
-    params.per_sample_k_cache         = k_cache_ref_ptrs.data().get();
-    params.per_sample_v_cache         = v_cache_ref_ptrs.data().get();
-    params.per_sample_kv_cache_offset = 0;
+    params.finished           = finished.data().get();
+    params.per_sample_length  = sequence_lengths.data().get();
+    params.per_sample_k_cache = k_cache_ref_ptrs.data().get();
+    params.per_sample_v_cache = v_cache_ref_ptrs.data().get();
+    params.layer_offset       = 0;
 
     params.num_heads     = kHeadNum;
     params.num_kv_heads  = kHeadNum;
@@ -228,10 +231,10 @@ int main(int argc, char* argv[])
     }
 
     cudaDeviceSynchronize();
-    // if (auto err = cudaGetLastError(); err != cudaSuccess) {
-    //     std::cout << cudaGetErrorString(err) << "\n";
-    //     return -1;
-    // }
+    if (auto err = cudaGetLastError(); err != cudaSuccess) {
+        std::cout << cudaGetErrorString(err) << "\n";
+        return -1;
+    }
     std::cout << "---------------------------------------------------\n";
 
     params.out                = output.data().get();
@@ -251,11 +254,34 @@ int main(int argc, char* argv[])
         }
     }
 
+    thrust::universal_vector<int> seq_lens(kBatchSize);
+    for (auto& x : seq_lens) {
+        x = kContextLen + 1;
+    }
+
     if (1) {
-        // ConvertBlocksToLinear(
-        //     (const half**)k_ptrs.data().get(), k_cache.data().get(), kBlockSz, kHeadNum, kHeadDim, kSequenceLen, 0);
-        // ConvertBlocksToLinear(
-        //     (const half**)v_ptrs.data().get(), v_cache.data().get(), kBlockSz, kHeadNum, kHeadDim, kSequenceLen, 0);
+        ConvertBlocksToLinear((const half**)k_ptrs.data().get(),
+                              k_cache.data().get(),
+                              cu_block_cnts.data().get(),
+                              seq_lens.data().get(),
+                              0,
+                              kBlockSz,
+                              kSequenceLen,
+                              kHeadNum,
+                              kHeadDim,
+                              kBatchSize,
+                              0);
+        ConvertBlocksToLinear((const half**)v_ptrs.data().get(),
+                              v_cache.data().get(),
+                              cu_block_cnts.data().get(),
+                              seq_lens.data().get(),
+                              0,
+                              kBlockSz,
+                              kSequenceLen,
+                              kHeadNum,
+                              kHeadDim,
+                              kBatchSize,
+                              0);
     }
 
     cudaDeviceSynchronize();

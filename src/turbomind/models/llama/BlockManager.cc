@@ -152,31 +152,42 @@ void BlockManager::Evict(int count)
 
 int BlockManager::Release(const std::vector<const Block*>& bs)
 {
-    std::vector<int> cached;
+    std::vector<int> idxs;
 
     for (const auto& p : bs) {
         auto& block = blocks_[p->id];
         FT_CHECK(is_active(block));
         if (--block.ref_count == 0) {
-            cached.push_back(block.id);
+            idxs.push_back(block.id);
         }
     }
 
-    std::sort(cached.begin(), cached.end());
+    std::sort(idxs.begin(), idxs.end());
 
-    Move(active_ids_, cached, cached_ids_);
+    Move(active_ids_, idxs, cached_ids_);
 
     dbg("[Release]", cached_ids_);
 
-    return cached.size();
+    return idxs.size();
 }
 
 void BlockManager::Retain(const std::vector<const Block*>& bs)
 {
+    std::vector<int> idxs;
+
     for (const auto& p : bs) {
-        FT_CHECK(is_active(*p));
-        ++const_cast<Block*>(p)->ref_count;
+        auto& block = blocks_[p->id];
+        FT_CHECK(is_cached(block));
+        if (++block.ref_count == 1) {
+            idxs.push_back(p->id);
+        }
     }
+
+    std::sort(idxs.begin(), idxs.end());
+
+    Move(cached_ids_, idxs, active_ids_);
+
+    dbg("[Retain]", active_ids_);
 }
 
 void BlockManager::Touch(const std::vector<const Block*>& bs)
@@ -214,8 +225,8 @@ std::ostream& operator<<(std::ostream& os, const BlockManager& manager)
 
 std::ostream& operator<<(std::ostream& os, const Block& block)
 {
-    os << "Block[id=" << block.id << ",ref_count=" << block.ref_count << ",unique_id=" << block.unique_id
-       << ",timestamp=" << block.timestamp << ",data=" << block.data << "]";
+    os << "id=" << block.id << ", ref_count=" << block.ref_count << ", unique_id=" << block.unique_id
+       << ", timestamp=" << block.timestamp << ", data=" << block.data;
     return os;
 }
 

@@ -17,20 +17,20 @@ struct DecoderMultiHeadAttentionParams {
     T* v_bias;
 
     // sequence-level buffers
-    int*  per_sample_length;
-    bool* finished;
+    const int*  per_sample_length;
+    const bool* finished;
 
     // kv cache
     void** per_sample_k_cache;  // [H, S, D]
     void** per_sample_v_cache;  // [H, S, D]
-    size_t per_sample_kv_cache_offset;
+    size_t layer_offset;
 
     /// cache layout M,[N,H,x,D]
     /// S: [s0/x, s1/x, s2/x, ..., sn-1/x], si <- block
     /// 1. [L,sum(S),H,x,D]
     void** k_cache_block_ptrs;  // X,[H,x,D]
     void** v_cache_block_ptrs;  // X,[H,x,D]
-    int*   cu_ctxlens;          // [B+1]
+    int*   cu_block_cnts;       // [B+1]
     int    kv_cache_block_size;
 
     // batch-level params
