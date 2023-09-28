@@ -93,6 +93,12 @@ public:
         cv_.notify_all();
     }
 
+    void open()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        closed_ = false;
+    }
+
 private:
     std::queue<std::shared_ptr<Request>> stop_queue_;
     std::queue<std::shared_ptr<Request>> infer_queue_;

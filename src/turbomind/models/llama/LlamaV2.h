@@ -49,6 +49,12 @@ public:
 
         // rank 0 sets flag to true if there are no more tasks in the request_queue
         bool should_stop = false;
+
+        void reset()
+        {
+            request_queue.open();
+            should_stop = false;
+        }
     };
 
     ~LlamaV2();
