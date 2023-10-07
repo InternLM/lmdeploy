@@ -37,13 +37,11 @@ def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
     sin = sin.to(q.device)
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
     sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-    cos = cos[position_ids]  # [bs, 1, seq_len, dim]
-    sin = sin[position_ids]  # [bs, 1, seq_len, dim]
     seq_length = position_ids[..., -1] + 1
-    cos = [s[:l] for s, l in zip(cos, seq_length)]
-    sin = [s[:l] for s, l in zip(sin, seq_length)]
-    cos = torch.cat(cos, 0).unsqueeze(1)
-    sin = torch.cat(sin, 0).unsqueeze(1)
+    position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
+    position_ids_1d = torch.cat(position_ids_1d)
+    cos = cos[position_ids_1d].unsqueeze(1)
+    sin = sin[position_ids_1d].unsqueeze(1)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
 
@@ -164,9 +162,16 @@ def attention_forward_with_paged_attention(
             query_states, key_states, value_states)
 
     kv_seq_length = position_ids[..., -1] + 1
-    q_seq_length = kv_seq_length - kv_seq_length.new_tensor(history_lengths)
-    q_start_loc = q_seq_length.cumsum(0)
-    q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+
+    q_seq_length = getattr(context, 'seq_length', None)
+    if q_seq_length is None:
+        q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
+            history_lengths)
+
+    q_start_loc = getattr(context, 'q_start_loc', None)
+    if q_start_loc is None:
+        q_start_loc = q_seq_length.cumsum(0)
+        q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
 
     fill_kv_cache(key_states,
                   value_states,
