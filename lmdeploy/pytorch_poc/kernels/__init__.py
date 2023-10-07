@@ -3,10 +3,9 @@ from .context_alibi_pagedattention import alibi_paged_attention_fwd
 from .context_biased_pagedattention import biased_paged_attention_fwd
 from .context_flashattention_nopad import context_attention_fwd
 from .context_pagedattention import paged_attention_fwd
+from .fill_kv_cache import fill_kv_cache
 
 __all__ = [
-    'context_attention_fwd',
-    'paged_attention_fwd',
-    'biased_paged_attention_fwd',
-    'alibi_paged_attention_fwd',
+    'context_attention_fwd', 'paged_attention_fwd',
+    'biased_paged_attention_fwd', 'alibi_paged_attention_fwd', 'fill_kv_cache'
 ]
