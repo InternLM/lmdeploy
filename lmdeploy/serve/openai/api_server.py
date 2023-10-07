@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+import random
 import time
 from http import HTTPStatus
 from typing import AsyncGenerator, Optional
@@ -13,7 +14,9 @@ from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, CompletionRequest, DeltaMessage,
+    ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
+    CompletionResponse, CompletionResponseChoice,
+    CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
     EmbeddingsRequest, EmbeddingsResponse, ErrorResponse, GenerateRequest,
     GenerateResponse, ModelCard, ModelList, ModelPermission, UsageInfo)
 
@@ -227,7 +230,7 @@ async def completions_v1(request: CompletionRequest,
                          raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
-    Refer to `https://platform.openai.com/docs/api-reference/completions/create`
+    Go to `https://platform.openai.com/docs/api-reference/completions/create`
     for the API specification.
 
     The request should be a JSON object with the following fields:
@@ -247,8 +250,6 @@ async def completions_v1(request: CompletionRequest,
     - user (str): A unique identifier representing your end-user.
 
     Additional arguments supported by LMDeploy:
-    - renew_session (bool): Whether renew the session. Can be used when the
-        session length is exceeded.
     - ignore_eos (bool): indicator for ignoring eos
 
     Currently we do not support the following features:
@@ -256,7 +257,7 @@ async def completions_v1(request: CompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    session_id = ip2id(raw_request.client.host)
+    session_id = random.randint(1, 10086)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -265,15 +266,16 @@ async def completions_v1(request: CompletionRequest,
     request_id = str(session_id)
     created_time = int(time.time())
 
-    result_generator = VariableInterface.async_engine.generate_openai(
+    result_generator = VariableInterface.async_engine.generate(
         request.prompt,
         session_id,
         True,  # always use stream to enable batching
+        sequence_start=True,
+        sequence_end=True,
         request_output_len=request.max_tokens if request.max_tokens else 512,
         stop=False,
         top_p=request.top_p,
         temperature=request.temperature,
-        renew_session=True,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         do_preprocess=False)
@@ -283,12 +285,12 @@ async def completions_v1(request: CompletionRequest,
         text: str,
         finish_reason: Optional[str] = None,
     ) -> str:
-        choice_data = ChatCompletionResponseStreamChoice(
+        choice_data = CompletionResponseStreamChoice(
             index=index,
-            delta=DeltaMessage(role='assistant', content=text),
+            text=text,
             finish_reason=finish_reason,
         )
-        response = ChatCompletionStreamResponse(
+        response = CompletionStreamResponse(
             id=request_id,
             created=created_time,
             model=model_name,
@@ -301,14 +303,14 @@ async def completions_v1(request: CompletionRequest,
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
         for i in range(request.n):
-            choice_data = ChatCompletionResponseStreamChoice(
+            choice_data = CompletionResponseStreamChoice(
                 index=i,
-                delta=DeltaMessage(role='assistant'),
+                text='',
                 finish_reason=None,
             )
-            chunk = ChatCompletionStreamResponse(id=request_id,
-                                                 choices=[choice_data],
-                                                 model=model_name)
+            chunk = CompletionStreamResponse(id=request_id,
+                                             choices=[choice_data],
+                                             model=model_name)
             data = chunk.model_dump_json(exclude_unset=True)
             yield f'data: {data}\n\n'
 
@@ -338,9 +340,9 @@ async def completions_v1(request: CompletionRequest,
         text += res.response
     assert final_res is not None
     choices = []
-    choice_data = ChatCompletionResponseChoice(
+    choice_data = CompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text),
+        text=text,
         finish_reason=final_res.finish_reason,
     )
     choices.append(choice_data)
@@ -354,7 +356,7 @@ async def completions_v1(request: CompletionRequest,
         completion_tokens=final_res.generate_token_len,
         total_tokens=total_tokens,
     )
-    response = ChatCompletionResponse(
+    response = CompletionResponse(
         id=request_id,
         created=created_time,
         model=model_name,
