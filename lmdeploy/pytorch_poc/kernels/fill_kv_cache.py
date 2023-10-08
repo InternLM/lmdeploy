@@ -134,7 +134,7 @@ def fill_kv_cache(k_states: Tensor,
             fill_cache_info['state_len'] = state_len
             fill_cache_info['cache_start'] = cache_start
             fill_cache_info['block_offsets1d'] = block_offsets1d
-        context.fill_cache_info = fill_cache_info
+            context.fill_cache_info = fill_cache_info
     else:
         state_start = fill_cache_info['state_start']
         state_len = fill_cache_info['state_len']
