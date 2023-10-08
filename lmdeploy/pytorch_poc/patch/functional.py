@@ -33,8 +33,8 @@ def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
     """
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
-    cos = cos.to(q.device)
-    sin = sin.to(q.device)
+    cos = cos.to(device=q.device, dtype=q.dtype)
+    sin = sin.to(device=q.device, dtype=q.dtype)
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
     sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
     seq_length = position_ids[..., -1] + 1

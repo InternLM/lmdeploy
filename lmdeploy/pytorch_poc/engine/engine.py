@@ -18,7 +18,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
-from transformers.utils import WEIGHTS_INDEX_NAME, cached_file
+from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
@@ -261,14 +261,20 @@ def _tp_model_loop(
                                                      torch_dtype=torch_dtype,
                                                      trust_remote_code=True)
 
-        torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
-        with open(torch_model_json_path, mode='r') as f:
-            torch_model_json = json.load(f)
+        try:
+            torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
+            with open(torch_model_json_path, mode='r') as f:
+                torch_model_json = json.load(f)
 
-        weight_map = torch_model_json['weight_map']
+            weight_map = torch_model_json['weight_map']
 
-        checkpoints = list(set(weight_map.values()))
-        checkpoints = [cached_file(model_path, ckpt) for ckpt in checkpoints]
+            checkpoints = list(set(weight_map.values()))
+            checkpoints = [
+                cached_file(model_path, ckpt) for ckpt in checkpoints
+            ]
+        except Exception:
+            logger.warning(f'load failed, try load from {WEIGHTS_NAME}.')
+            checkpoints = [cached_file(model_path, WEIGHTS_NAME)]
         patched_model = patch(
             model,
             extra_args=extra_args,

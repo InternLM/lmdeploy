@@ -9,6 +9,7 @@ import torch
 import torch.distributed as dist
 from addict import Addict
 from torch.distributed._tensor import DeviceMesh
+from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
 from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
@@ -26,6 +27,9 @@ MODULE_MAP = {
 # baichuan
 MODULE_MAP.update({
     'modeling_baichuan.Model':
+    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
+    (f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.Baichuan2-7B-Chat'
+     '.modeling_baichuan.BaichuanModel'):
     'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
     'modeling_baichuan.BaichuanModel':
     'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',  # noqa
