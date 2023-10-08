@@ -9,7 +9,7 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 ```
 
 然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
-我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
+我们一共提供五个 restful api，其中四个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
 ### python
@@ -106,8 +106,19 @@ curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
-    "messages": [{"role": "user", "content": "Hello! Ho are you?"}]
+    "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
+```
+
+Text Completions:
+
+```shell
+curl http://{server_ip}:{server_port}/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "model": "llama",
+  "prompt": "two steps to build a house:"
+}'
 ```
 
 Embeddings:

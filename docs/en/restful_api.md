@@ -7,12 +7,12 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 ```
 
 Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
-We provide four restful api in total. Three of them are in OpenAI format. However, we recommend users try
-our own api which provides more arguments for users to modify. The performance is comparatively better.
+We provide five restful api in total. Three of them are in OpenAI format. However, we recommend users try
+our own api `generate` which provides more arguments for users to modify. The performance is comparatively better.
 
 ### python
 
-Here is an example for our own api `generate`.
+Here is an example for api `generate`.
 
 ```python
 import json
@@ -104,8 +104,19 @@ curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
-    "messages": [{"role": "user", "content": "Hello! Ho are you?"}]
+    "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
+```
+
+Text Completions:
+
+```shell
+curl http://{server_ip}:{server_port}/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "model": "llama",
+  "prompt": "two steps to build a house:"
+}'
 ```
 
 Embeddings:
