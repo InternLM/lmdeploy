@@ -245,8 +245,6 @@ class AsyncEngine:
                         repetition_penalty=repetition_penalty,
                         ignore_eos=ignore_eos,
                         random_seed=seed if sequence_start else None):
-                    if stop is True:
-                        print('breaking point')
                     res, tokens = outputs[0]
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),
