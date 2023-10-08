@@ -108,7 +108,7 @@ def fill_kv_cache(k_states: Tensor,
             for mid in middle_block_nums
         ]
         remain_seq_lens = [
-            torch.cat([slen, last])
+            (torch.cat([slen, last]) if last != 0 else slen)
             for slen, last in zip(remain_seq_lens, last_seq_len.unsqueeze(-1))
         ]
         remain_block_offsets1d = [

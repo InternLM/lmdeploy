@@ -226,7 +226,7 @@ def attention_forward_with_paged_attention(
         else:
             raise ValueError(f'Unknown bias type: {bias_type}')
     hidden_size = num_heads * head_dim
-    attn_output = attn_output.reshape(-1, hidden_size)
+    attn_output = attn_output.reshape(*hidden_states.shape[:-1], hidden_size)
 
     if o_proj is not None:
         attn_output = o_proj(attn_output)
