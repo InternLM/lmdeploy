@@ -68,7 +68,6 @@ protected:
         size_t max_query_len;
         size_t max_key_len;
         int*   input_length{};
-        int*   history_length{};
         int*   context_length{};
 
         const std::vector<LlamaDecoderLayerWeight<T>*>* weights;

@@ -195,6 +195,9 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
     T* decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
     T* decoder_output = output_tensors->at("decoder_output").getPtr<T>();
 
+    int step = input_tensors->at("step").getVal<int>();
+    // Compare(decoder_input, sess.batch_size * hidden_units_, Concat("decoder_input", 0, step), kCmpRead, stream_);
+
     ////////////////////////////////////////////
     /// RMSNorm
     invokeRootMeanSquareNorm(decoder_output,

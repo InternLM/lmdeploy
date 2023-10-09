@@ -206,7 +206,7 @@ __global__ void extend_kv_cache(T**          k_dst_ptrs,
                                 const T*     v_src,
                                 const int*   cu_block_counts,
                                 const int*   query_length,
-                                const int*   history_length,
+                                const int*   context_length,
                                 const int    block_length,
                                 const size_t dst_layer_offset,
                                 const int    max_q_len,
@@ -215,7 +215,7 @@ __global__ void extend_kv_cache(T**          k_dst_ptrs,
 {
     const int batch_id     = blockIdx.y;
     const int query_len    = query_length[batch_id];
-    const int history_len  = history_length[batch_id];
+    const int history_len  = context_length[batch_id] - query_len;
     const int cu_block_cnt = cu_block_counts[batch_id];
 
     const int     head_id = blockIdx.z;
@@ -259,7 +259,7 @@ void invokeExtendKVCache(T**          k_dst_ptrs,
                          const T*     v_src,
                          const int*   cu_block_counts,
                          const int*   query_length,
-                         const int*   history_length,
+                         const int*   context_length,
                          int          batch_size,
                          int          block_length,
                          size_t       dst_layer_offset,
@@ -283,7 +283,7 @@ void invokeExtendKVCache(T**          k_dst_ptrs,
                                                    v_src,
                                                    cu_block_counts,
                                                    query_length,
-                                                   history_length,
+                                                   context_length,
                                                    block_length,
                                                    dst_layer_offset,
                                                    max_q_len,

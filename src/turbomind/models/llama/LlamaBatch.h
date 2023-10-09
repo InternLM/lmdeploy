@@ -51,19 +51,25 @@ public:
 
     void ProcessInferRequests(const Requests& requests);
 
-    bool Initialize();
+    [[nodiscard]] bool Initialize();
 
     void ContextDecode();
 
-    void InitializeSampling();
-    void InitializeGeneration();
+    struct GenerationState {
+        int max_init_ctx_len;
+        int step;
+    };
 
-    [[nodiscard]] bool Generate();
+    void            InitializeSampling();
+    GenerationState InitializeGeneration();
 
-    [[nodiscard]] auto Finish() -> std::vector<Signal>;
-    void               FinishRequest(int index, bool force_end);
+    [[nodiscard]] bool Generate(GenerationState& g);
 
-    void SetOutputTensors(int max_gen_step);
+    [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
+
+    void CompleteRequest(int index, bool is_stop_request, bool is_force_end);
+
+    void SetOutputTensors(const GenerationState& g);
 
     void
     OutputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
@@ -76,7 +82,7 @@ public:
 
     ~LlamaBatch()
     {
-        llama_->shared_state_->request_queue.Abort();
+        model_->shared_state_->request_queue.Abort();
 
         internal_thread_.join();
 
@@ -121,17 +127,25 @@ private:
     const bool debug_;
     const int  step_length_;
 
-    LlamaV2<T>* const llama_;
+    LlamaV2<T>* const model_;
 
     std::unique_ptr<SequenceManager> sequence_manager_;
 
-    T*   context_decoder_input_buf_{};   // CTXDEC
-    T*   context_decoder_output_buf_{};  // CTXDEC
+    ///////////////////////////////////////////////////////////////////
+    // k/v cache block buffers
+    int*       cu_block_counts_{};
+    uintptr_t* k_block_ptrs_{};
+    uintptr_t* v_block_ptrs_{};
+
+    ////////////////////////////////////////////////////////////////////
+    // context decoding temp buffers
+    T*   context_decoder_input_buf_{};
+    T*   context_decoder_output_buf_{};
     int* context_decoder_ids_buf_{};
-
-    T* decoder_input_buf_{};   // CTXDEC, GENERATE
-    T* decoder_output_buf_{};  // CTXDEC, GENERATE
-
+    int* input_ids_buf_{};
+    // lengths
+    int* input_length_buf_{};    // input + cache missed length
+    int* context_length_buf_{};  // history length + input_length
     // temp buffers used for block->linear kv-cache conversion
     T*     tmp_k_cache_buf_{};
     T*     tmp_v_cache_buf_{};
@@ -140,14 +154,10 @@ private:
     void** h_tmp_k_ptrs_{};
     void** h_tmp_v_ptrs_{};
 
-    int*       input_ids_buf_{};       // input token ids + cache missed token ids, CTXDEC
-    int*       input_length_buf_{};    // input + cache missed length, CTXDEC, GENERATE
-    int*       history_length_buf_{};  // history length, CTXDEC
-    int*       context_length_buf_{};  // history length + input_length, CTXDEC, GENERATE
-    int*       sequence_lengths_{};    // current sequence length
-    int*       cu_block_counts_{};
-    uintptr_t* k_block_ptrs_{};
-    uintptr_t* v_block_ptrs_{};
+    T*   decoder_input_buf_{};
+    T*   decoder_output_buf_{};
+    int* sequence_lengths_{};  // current sequence length
+    int* init_ctx_lens_{};
 
     float* logits_buf_{};        // combined logits
     float* local_logits_buf_{};  // tensor parallel local logits
@@ -161,10 +171,9 @@ private:
     uint32_t* seq_limit_len_{};
 
     // pinned buffers
-    int*       h_input_ids_buf_{};
-    int*       h_input_length_buf_{};
-    int*       h_history_length_buf_{};
-    int*       h_sequence_lengths_{};
+    int* h_input_ids_buf_{};
+    int* h_input_length_buf_{};
+    // int*       h_sequence_lengths_{};
     uint32_t*  h_seq_limit_len_{};
     int*       h_cu_block_counts_{};
     uintptr_t* h_k_block_ptrs_{};
@@ -190,9 +199,6 @@ private:
     static constexpr int kMaxStopBadWordsLen = 32;
 
     const DataType data_type_{};
-
-    int max_context_len_{};
-    int step_{};
 
     bool is_allocate_persistant_buffer_ = false;
     bool is_allocate_buffer_            = false;

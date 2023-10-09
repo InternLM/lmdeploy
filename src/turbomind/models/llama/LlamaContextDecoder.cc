@@ -110,13 +110,9 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
         {"padding_offset", {MEMORY_GPU, TYPE_INT32, {sess.token_num}, padding_offset_}},
         {"cu_seqlens", {MEMORY_GPU, TYPE_INT32, {sess.batch_size + 1}, cu_seqlens_}},
         {"input_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.input_length}},
-        {"history_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.history_length}},
         {"context_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.context_length}},
         {"cu_block_counts", input_tensors->at("cu_block_counts")},
         {"max_seq_len", input_tensors->at("max_seq_len")}};
-
-    // auto& k_cache = *sess.k_cache;
-    // auto& v_cache = *sess.v_cache;
 
     TensorMap self_attention_output_tensors{
         {"hidden_features", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_io}},
@@ -206,7 +202,6 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     sess.weights       = decoder_layer_weights;
 
     sess.input_length   = input_tensors->at("input_lengths").getPtr<int>();
-    sess.history_length = input_tensors->at("history_lengths").getPtr<int>();
     sess.context_length = input_tensors->at("context_lengths").getPtr<int>();
 
     T* decoder_input_output = input_tensors->at("decoder_input").getPtr<T>();

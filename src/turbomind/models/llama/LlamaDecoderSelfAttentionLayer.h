@@ -32,7 +32,7 @@ template<typename T>
 class LlamaDecoderSelfAttentionLayer {
 public:
     void freeBuffer();
-    void allocateBuffer(size_t batch_size, int key_len, int max_memory_len);
+    void allocateBuffer(size_t batch_size);
 
     LlamaDecoderSelfAttentionLayer(size_t                      head_num,
                                    size_t                      kv_head_num,

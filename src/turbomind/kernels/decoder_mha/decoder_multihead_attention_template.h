@@ -651,6 +651,11 @@ struct DecoderMultiHeadAttentionKernel {
             __syncthreads();
         }
 
+        // early exit if finished flag is set
+        if (params_.finished[batch_idx_]) {
+            return;
+        }
+
         // Compute attention for current step
         Prolugue();
 

@@ -110,7 +110,6 @@ private:
                        T*         context_decoder_output_buf,
                        const int* input_ids,
                        const int* input_length,
-                       const int* history_length,
                        const int* context_length,
                        const int* cu_block_counts,
                        size_t     token_num,

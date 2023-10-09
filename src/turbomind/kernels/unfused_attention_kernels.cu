@@ -855,7 +855,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                    T* QKV,
                                                    const T* __restrict qkv_bias,
                                                    const int* padding_offset,
-                                                   const int* history_length,
+                                                   const int* context_length,
                                                    const int* input_length,
                                                    int        batch_size,
                                                    int        seq_len,
@@ -927,8 +927,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
         }
     }
 
-    const int history_len = history_length[batch_idx];
-    const int context_len = history_len + input_length[batch_idx];
+    const int context_len = context_length[batch_idx];
+    const int history_len = context_len - input_length[batch_idx];
     const int timestep    = history_len + seq_idx;
 
     float rotary_emb_base = 10000.f;
@@ -982,7 +982,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                                                              QKV,                      \
                                                                                              qkv_bias,                 \
                                                                                              padding_offset,           \
-                                                                                             history_length,           \
+                                                                                             context_length,           \
                                                                                              input_length,             \
                                                                                              batch_size,               \
                                                                                              seq_len,                  \
@@ -1001,7 +1001,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     T*           QKV,
                                     const T*     qkv_bias,
                                     const int*   padding_offset,
-                                    const int*   history_length,
+                                    const int*   context_length,
                                     const int*   input_length,
                                     const int    batch_size,
                                     const int    seq_len,

@@ -145,7 +145,6 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     T* attention_mask  = input_tensors->at("attention_mask").getPtr<T>();
 
     const auto input_length    = input_tensors->at("input_lengths").getPtr<const int>();
-    const auto history_length  = input_tensors->at("history_lengths").getPtr<const int>();
     const auto context_length  = input_tensors->at("context_lengths").getPtr<const int>();
     int*       cu_seqlens      = input_tensors->at("cu_seqlens").getPtr<int>();
     int*       cu_block_counts = input_tensors->at("cu_block_counts").getPtr<int>();
@@ -178,7 +177,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    qkv_buf_,
                                    weights->qkv.bias,
                                    padding_offset,  // padding_offset,
-                                   history_length,  // used for applying rotary embedding
+                                   context_length,  // used for applying rotary embedding
                                    input_length,
                                    batch_size,
                                    max_q_len,  // seq_len
@@ -214,7 +213,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                         v_buf_2_,
                         cu_block_counts,
                         input_length,
-                        history_length,
+                        context_length,
                         batch_size,
                         kv_cache_block_len_,
                         layer_offset,
