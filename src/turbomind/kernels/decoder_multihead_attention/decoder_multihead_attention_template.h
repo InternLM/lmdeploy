@@ -36,7 +36,7 @@ struct DecoderMultiHeadAttentionKernel {
     using MapKv  = ThreadMapKv<kMaxHeadDim, kKeyPerIter, kVecKvSize, kThreadPerKey, kWarpCount>;
     using IterKv = turbomind::Iterator<T, MapKv, SliceLen, kStages, kUseBlockIter>;
 
-    static size_t GetDynamicSmemSize(int)
+    static constexpr size_t GetDynamicSmemSize()
     {
         size_t smem_kv_cache = IterKv::kSmemByteSize;
         size_t smem_kv_align = 128;
@@ -44,9 +44,6 @@ struct DecoderMultiHeadAttentionKernel {
         size_t smem_pr       = sizeof(float) * kHeadPerCta * kSliceLen;
         return smem_kv_align + smem_kv_cache + std::max(smem_qk, smem_pr);
     }
-
-    // using AccumType   = float;
-    // using ComputeType = float;
 
     using QkAccumType   = float;
     using QkComputeType = float;
@@ -69,6 +66,9 @@ struct DecoderMultiHeadAttentionKernel {
     int batch_idx_;
     int warp_id_;
     int lane_id_;
+
+    int  kv_head_idx_;
+    bool is_gqa_leader_;
 
     int timestep_;
     T*  k_cache_;  // [S, D]
@@ -105,10 +105,14 @@ struct DecoderMultiHeadAttentionKernel {
         smem_red_max_ = smem.red_max;
         smem_red_sum_ = smem.red_sum;
 
-        head_idx_  = blockIdx.x;
+        head_idx_  = blockIdx.x * kHeadPerCta;
         batch_idx_ = blockIdx.y;
         warp_id_   = threadIdx.x / WARP_SIZE;
         lane_id_   = threadIdx.x % WARP_SIZE;
+
+        const int gqa_group_size = params.num_heads / params.num_kv_heads;
+        kv_head_idx_             = head_idx_ / gqa_group_size;
+        is_gqa_leader_           = head_idx_ % gqa_group_size == 0;
 
         timestep_ = params_.per_sample_length[batch_idx_];
 
@@ -118,22 +122,11 @@ struct DecoderMultiHeadAttentionKernel {
         }
         else {
             k_cache_ = (T*)params_.per_sample_k_cache[batch_idx_] + params.layer_offset
-                       + head_idx_ * params_.max_seq_len * params_.size_per_head;
+                       + kv_head_idx_ * params_.max_seq_len * params_.size_per_head;
             v_cache_ = (T*)params_.per_sample_v_cache[batch_idx_] + params.layer_offset
-                       + head_idx_ * params_.max_seq_len * params_.size_per_head;
+                       + kv_head_idx_ * params_.max_seq_len * params_.size_per_head;
         }
     }
-
-    // [kkkk][vvvv][kkkk][vvvv][kkkk][vvvv][k][v]
-    // __device__ int is_last_iter_of_slice(int iter, int full, int partial)
-    // {
-    //     if (iter < full) {
-    //         return (iter + 1) % kIterPerSlice == 0;
-    //     }
-    //     else {
-    //         return (iter - full + 1) % partial == 0;
-    //     }
-    // }
 
     __device__ void Prolugue()
     {
@@ -147,7 +140,7 @@ struct DecoderMultiHeadAttentionKernel {
         using MapQ = ThreadMapQ<kMaxHeadDim, kHeadPerCta, kVecQSize, kWarpCount>;
 
         static constexpr int kQVecPerThread  = MapQ::kIterC;
-        static constexpr int kQHeadPerThread = MapQ::kIterS;  // > 1 when #warp < #head
+        static constexpr int kQHeadPerThread = MapQ::kIterS;  // > 1 when #warp < kCtaPerHead
 
         static_assert(kQVecPerThread == 1);
 
@@ -169,8 +162,8 @@ struct DecoderMultiHeadAttentionKernel {
             int qi = offset.y + s;
             Ldg(frag_Q[s], &params_.q[batch_idx_ * params_.stride + (head_idx_ + qi) * kHeadDim + di]);
         }
-        Ldg(frag_K, &params_.k[batch_idx_ * params_.stride + head_idx_ * kHeadDim + offset.x]);
-        Ldg(frag_V, &params_.v[batch_idx_ * params_.stride + head_idx_ * kHeadDim + offset.x]);
+        Ldg(frag_K, &params_.k[batch_idx_ * params_.stride + kv_head_idx_ * kHeadDim + offset.x]);
+        Ldg(frag_V, &params_.v[batch_idx_ * params_.stride + kv_head_idx_ * kHeadDim + offset.x]);
 
         if (params_.q_bias) {
             // load biases
@@ -183,8 +176,8 @@ struct DecoderMultiHeadAttentionKernel {
             }
             VecQ bias_K;
             VecQ bias_V;
-            Ldg(bias_K, &params_.k_bias[head_idx_ * kHeadDim + offset.x]);
-            Ldg(bias_V, &params_.v_bias[head_idx_ * kHeadDim + offset.x]);
+            Ldg(bias_K, &params_.k_bias[kv_head_idx_ * kHeadDim + offset.x]);
+            Ldg(bias_V, &params_.v_bias[kv_head_idx_ * kHeadDim + offset.x]);
 
             using namespace ops;
             // apply biases
@@ -222,7 +215,7 @@ struct DecoderMultiHeadAttentionKernel {
         }
 
         // store
-        if (warp_id_ == 0) {
+        if (warp_id_ == 0 && is_gqa_leader_) {
             if constexpr (kUseBlockIter) {
                 int block_index  = timestep_ / params_.kv_cache_block_size;
                 int block_offset = timestep_ % params_.kv_cache_block_size;
@@ -230,9 +223,9 @@ struct DecoderMultiHeadAttentionKernel {
                 //     printf("%d %d %p %p\n", block_index, block_offset, k_cache_ptrs_, v_cache_ptrs_);
                 // }
                 k_cache_ = (T*)k_cache_ptrs_[block_index] + params_.layer_offset
-                           + head_idx_ * params_.kv_cache_block_size * kHeadDim;
+                           + kv_head_idx_ * params_.kv_cache_block_size * kHeadDim;
                 v_cache_ = (T*)v_cache_ptrs_[block_index] + params_.layer_offset
-                           + head_idx_ * params_.kv_cache_block_size * kHeadDim;
+                           + kv_head_idx_ * params_.kv_cache_block_size * kHeadDim;
                 Store(&k_cache_[block_offset * kHeadDim + offset.x], frag_K);
                 Store(&v_cache_[block_offset * kHeadDim + offset.x], frag_V);
             }
@@ -299,7 +292,7 @@ struct DecoderMultiHeadAttentionKernel {
             iter_K = {k_cache_ptrs_,
                       params_.kv_cache_block_size,
                       params_.layer_offset,
-                      head_idx_,
+                      kv_head_idx_,
                       smem_Kv_,
                       step,
                       step + iter_length,
@@ -488,7 +481,7 @@ struct DecoderMultiHeadAttentionKernel {
             iter_V = {v_cache_ptrs_,
                       params_.kv_cache_block_size,
                       params_.layer_offset,
-                      head_idx_,
+                      kv_head_idx_,
                       smem_Kv_,
                       step,
                       step + iter_length,
@@ -680,7 +673,6 @@ struct DecoderMultiHeadAttentionKernel {
         using MapQ = ThreadMapQ<kMaxHeadDim, kHeadPerCta, kVecQSize, kWarpCount>;
 
         static constexpr int kQkvHeadPerThread = MapQ::kIterS;
-        static_assert(kQkvHeadPerThread == 1);
 
         int2 offset = MapQ::get_offset(warp_id_, lane_id_);
 
@@ -697,7 +689,7 @@ struct DecoderMultiHeadAttentionKernel {
             // float scale = 1.f;
             using namespace ops;
             VecQFloat frag_O = (VecQFloat&)smem_O_[qi * kMaxHeadDim + di] * scale;
-            /// FIXME: `(head_idx_ + qi)` doesn't look right
+
             Store(&params_.out[batch_idx_ * params_.num_heads * kHeadDim + (head_idx_ + qi) * kHeadDim + di],
                   cast<Dtype>(frag_O));
         }

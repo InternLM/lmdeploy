@@ -19,7 +19,7 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/DecoderSelfAttentionLayer.cc
 #include "src/turbomind/models/llama/LlamaDecoderSelfAttentionLayer.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
-#include "src/turbomind/kernels/decoder_mha/decoder_multihead_attention.h"
+#include "src/turbomind/kernels/decoder_multihead_attention/decoder_multihead_attention.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -134,7 +134,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.rotary_embedding_dim  = size_per_head_;
     params.rotary_embedding_base = 10000.f;
 
-    LaunchDecoderMultiheadAttention<T, 128>(params);
+    DispatchDecoderMultiheadAttention<T>(params);
 
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
 

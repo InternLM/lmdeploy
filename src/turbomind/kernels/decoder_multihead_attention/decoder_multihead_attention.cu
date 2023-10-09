@@ -23,26 +23,49 @@ bool Dump()
     return true;
 }
 
-template<typename T, int HeadDim>
-void LaunchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
+template<typename T, int HeadDim, int HeadPerCta>
+void InvokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
 {
-    using MHAType = DecoderMultiHeadAttentionKernel<T, 1, HeadDim, 16, HeadDim, 2048, 6>;
+    using MHAType = DecoderMultiHeadAttentionKernel<T, HeadPerCta, HeadDim, 16, HeadDim, 2048, 6>;
 
     [[maybe_unused]] static const bool init = Dump<MHAType>();
 
     dim3 block(MHAType::kWarpCount * WARP_SIZE);
-    dim3 grid(params.num_kv_heads, params.batch_size);
+    dim3 grid(params.num_heads / HeadPerCta, params.batch_size);
 
-    const size_t kDynamicSmemSize = MHAType::GetDynamicSmemSize(0);
+    static const size_t kDynSmemSize = MHAType::GetDynamicSmemSize();
     // std::cout << "dynamic shared memory size: " << kDynamicSmemSize << "\n";
 
     cudaFuncSetAttribute(
-        decoder_multihead_attention<MHAType>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynamicSmemSize);
+        decoder_multihead_attention<MHAType>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
 
-    decoder_multihead_attention<MHAType><<<grid, block, kDynamicSmemSize>>>(params);
+    decoder_multihead_attention<MHAType><<<grid, block, kDynSmemSize>>>(params);
 }
 
-template void LaunchDecoderMultiheadAttention<half, 128>(const DecoderMultiHeadAttentionParams<half>& params);
-template void LaunchDecoderMultiheadAttention<float, 128>(const DecoderMultiHeadAttentionParams<float>& params);
+template<typename T>
+void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
+{
+    static constexpr int HeadDim = 128;
+
+    FT_CHECK(params.size_per_head == HeadDim);
+
+    int group_size = params.num_heads / params.num_kv_heads;
+
+    if (group_size % 8 == 0) {
+        InvokeDecoderMultiheadAttention<T, HeadDim, 8>(params);
+    }
+    else if (group_size % 4 == 0) {
+        InvokeDecoderMultiheadAttention<T, HeadDim, 4>(params);
+    }
+    else if (group_size % 2 == 0) {
+        InvokeDecoderMultiheadAttention<T, HeadDim, 2>(params);
+    }
+    else {
+        InvokeDecoderMultiheadAttention<T, HeadDim, 1>(params);
+    }
+}
+
+template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<half>& params);
+template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<float>& params);
 
 }  // namespace turbomind

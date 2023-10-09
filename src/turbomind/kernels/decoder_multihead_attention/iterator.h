@@ -255,7 +255,6 @@ struct Iterator {
         const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
         constexpr int cp_size      = sizeof(AccessType);
         static_assert(cp_size == 16);
-        // cp.async.cg.shared.global.L2::256B
         asm volatile("{\n"
                      "  .reg .pred p;\n"
                      "  setp.ne.b32 p, %0, 0;\n"

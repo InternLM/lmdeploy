@@ -21,7 +21,7 @@
 
 #include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
-#include "src/turbomind/kernels/decoder_mha/kv_cache.h"
+#include "src/turbomind/kernels/decoder_multihead_attention/kv_cache.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"

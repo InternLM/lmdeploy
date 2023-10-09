@@ -3,7 +3,7 @@
 
 namespace turbomind {
 
-template<typename T, int HeadDim>
-void LaunchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params);
+template<typename T>
+void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params);
 
 }

@@ -71,4 +71,4 @@ set_property(TARGET custom_ar_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_subdirectory(gemm_s_f16)
-add_subdirectory(decoder_mha)
+add_subdirectory(decoder_multihead_attention)

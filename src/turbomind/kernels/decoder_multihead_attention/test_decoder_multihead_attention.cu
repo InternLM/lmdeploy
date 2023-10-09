@@ -244,7 +244,7 @@ int main(int argc, char* argv[])
     std::vector<thrust::universal_vector<half>> outputs;
 
     for (int i = 0; i < std::max(kTestIter, 10); ++i) {
-        LaunchDecoderMultiheadAttention<half, 128>(params);
+        DispatchDecoderMultiheadAttention<half>(params);
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
             return -1;
