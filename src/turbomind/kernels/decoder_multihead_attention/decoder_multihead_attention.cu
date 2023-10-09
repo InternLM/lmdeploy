@@ -49,16 +49,22 @@ void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>&
 
     FT_CHECK(params.size_per_head == HeadDim);
 
-    int group_size = params.num_heads / params.num_kv_heads;
+    if constexpr (std::is_same_v<T, half>) {
 
-    if (group_size % 8 == 0) {
-        InvokeDecoderMultiheadAttention<T, HeadDim, 8>(params);
-    }
-    else if (group_size % 4 == 0) {
-        InvokeDecoderMultiheadAttention<T, HeadDim, 4>(params);
-    }
-    else if (group_size % 2 == 0) {
-        InvokeDecoderMultiheadAttention<T, HeadDim, 2>(params);
+        int group_size = params.num_heads / params.num_kv_heads;
+
+        if (group_size % 8 == 0) {
+            InvokeDecoderMultiheadAttention<T, HeadDim, 8>(params);
+        }
+        else if (group_size % 4 == 0) {
+            InvokeDecoderMultiheadAttention<T, HeadDim, 4>(params);
+        }
+        else if (group_size % 2 == 0) {
+            InvokeDecoderMultiheadAttention<T, HeadDim, 2>(params);
+        }
+        else {
+            InvokeDecoderMultiheadAttention<T, HeadDim, 1>(params);
+        }
     }
     else {
         InvokeDecoderMultiheadAttention<T, HeadDim, 1>(params);
