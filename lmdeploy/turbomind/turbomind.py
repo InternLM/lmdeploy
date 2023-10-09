@@ -229,7 +229,7 @@ class TurboMindInstance:
                      request_output_len: int = 512,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
-                     step=1,
+                     step=0,
                      stop=False,
                      top_p=0.8,
                      top_k=40,
