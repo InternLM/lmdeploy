@@ -139,7 +139,17 @@ class ModelContext:
         k_caches: torch.Tensor,
         v_caches: torch.Tensor,
     ):
-        """fill cache."""
+        """Fill current key/value to cache.
+
+        Args:
+            k_states (torch.Tensor): [packed_seq_len, head, dim]
+            v_states (torch.Tensor): [packed_seq_len, head, dim]
+            start_loc (torch.Tensor): [bs]
+            seq_length (torch.Tensor): [bs]
+            k_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+            v_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+        """
+
         block_size = k_caches.size(1)
         block_offsets = self.block_offsets_list
 
@@ -231,6 +241,7 @@ def _tp_model_loop(
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
+    trust_remote_code=True,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -254,12 +265,14 @@ def _tp_model_loop(
     error_type = None
 
     try:
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(config)
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(config,
-                                                     torch_dtype=torch_dtype,
-                                                     trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(
+                config,
+                torch_dtype=torch_dtype,
+                trust_remote_code=trust_remote_code)
 
         try:
             torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
@@ -444,10 +457,12 @@ class Engine:
         scheduler_config: SchedulerConfig = None,
         cache_config: CacheConfig = None,
         tp: int = 1,
+        trust_remote_code=True,
     ) -> None:
+
         self.tp = tp
-        hf_config = AutoConfig.from_pretrained(model_path,
-                                               trust_remote_code=True)
+        hf_config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(hf_config)
         self.torch_dtype = torch_dtype
 
@@ -489,7 +504,7 @@ class Engine:
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     model_path,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=True)
+                    trust_remote_code=trust_remote_code)
                 hf_model.eval()
 
             self.patched_model = patch(

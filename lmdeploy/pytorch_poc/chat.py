@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import os
 import random
 
@@ -38,7 +39,8 @@ def main(
         temperature=0.8,
         repetition_penalty: float = 1.0,
         tp: int = 1,
-        stream_output=True):
+        stream_output=True,
+        trust_remote_code=True):
     """An example to perform model inference through the command line
     interface.
 
@@ -51,7 +53,9 @@ def main(
     """
     # tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(model_path)
-    tm_model = tm.Engine(model_path, tp=tp)
+    tm_model = tm.Engine(model_path,
+                         tp=tp,
+                         trust_remote_code=trust_remote_code)
     generator = tm_model.create_instance()
 
     nth_round = 1
