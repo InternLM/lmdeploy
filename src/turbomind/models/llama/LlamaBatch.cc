@@ -358,8 +358,6 @@ bool LlamaBatch<T>::Initialize()
             });
         }
 
-        Copy(state_->h_context_length, batch_size, context_length_buf_);
-
         if (1) {
             std::vector cu_block_cnts(h_cu_block_counts_, h_cu_block_counts_ + batch_size + 1);
             dbg(cu_block_cnts);
@@ -706,6 +704,7 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
         }
     }
 
+    Copy(state_->h_context_length, batch_size, context_length_buf_);  // also referenced in `SetOutputTensors`
     Copy(context_length_buf_, batch_size, sequence_lengths_);
     // `sequence_lengths_` will be increased by dynamic decode
     // note that in decoder and in output "sequence length" has different semantic
@@ -860,6 +859,7 @@ void LlamaBatch<T>::ContextDecode()
 
     const int context_decode_count = batch_size - base;
 
+    Copy(state_->h_context_length, batch_size, context_length_buf_);
     Copy(h_input_length_buf_, batch_size, input_length_buf_);
 
     check_cuda_error(cudaStreamSynchronize(stream_));
