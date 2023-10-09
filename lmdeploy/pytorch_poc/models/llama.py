@@ -71,6 +71,7 @@ class LlamaAttention(nn.Module):
             head_dim=self.head_dim,
             position_ids=position_ids,
             past_key_value=past_key_value,
+            context=context,
             q_proj=self.q_proj,
             k_proj=self.k_proj,
             v_proj=self.v_proj,
