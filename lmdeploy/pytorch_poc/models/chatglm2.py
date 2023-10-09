@@ -4,11 +4,17 @@
 from typing import List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
+from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
+from lmdeploy.pytorch_poc.dist_utils import (rowwise_parallelize_linear_fn,
+                                             try_to_local)
 from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
+
+from .functional import fill_kv_cache
 
 
 def split_tensor_along_last_dim(
@@ -70,6 +76,39 @@ class PatchedSelfAttention(nn.Module):
     the same size.
     """
 
+    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        """Distribution partition callback."""
+        if mod_name in ['query_key_value']:
+            sections = [
+                self.num_attention_heads_per_partition *
+                self.hidden_size_per_attention_head,
+                self.num_multi_query_groups_per_partition *
+                self.hidden_size_per_attention_head,
+                self.num_multi_query_groups_per_partition *
+                self.hidden_size_per_attention_head,
+            ]
+            for name, param in mod.named_parameters():
+                splited_param = param.split(sections, dim=0)
+                updated_param = []
+                for p in splited_param:
+                    dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
+                    dist_tensor = try_to_local(dist_tensor)
+                    updated_param.append(dist_tensor)
+                param = torch.cat(updated_param)
+                dist_param = torch.nn.Parameter(param)
+                mod.register_parameter(name, dist_param)
+        elif mod_name in ['dense']:
+            rowwise_parallelize_linear_fn(mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
+        dist.all_reduce(outputs[0])
+        return outputs
+
     def _contiguous_batching_forward(
         self,
         hidden_states: torch.Tensor,
@@ -90,40 +129,42 @@ class PatchedSelfAttention(nn.Module):
         # =====================
         # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
 
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
         origin_self = self
 
         context = self.context.context
         history_lengths = context.history_lengths
-
         mixed_x_layer = origin_self.query_key_value(hidden_states)
 
         if origin_self.multi_query_attention:
             (query_layer, key_layer, value_layer) = mixed_x_layer.split(
                 [
                     origin_self.num_attention_heads_per_partition *
-                    origin_self.hidden_size_per_attention_head,
+                    origin_self.hidden_size_per_attention_head // world_size,
                     origin_self.num_multi_query_groups_per_partition *
-                    origin_self.hidden_size_per_attention_head,
+                    origin_self.hidden_size_per_attention_head // world_size,
                     origin_self.num_multi_query_groups_per_partition *
-                    origin_self.hidden_size_per_attention_head,
+                    origin_self.hidden_size_per_attention_head // world_size,
                 ],
                 dim=-1,
             )
             query_layer = query_layer.view(query_layer.size()[:-1] + (
-                origin_self.num_attention_heads_per_partition,
+                origin_self.num_attention_heads_per_partition // world_size,
                 origin_self.hidden_size_per_attention_head,
             ))
             key_layer = key_layer.view(key_layer.size()[:-1] + (
-                origin_self.num_multi_query_groups_per_partition,
+                origin_self.num_multi_query_groups_per_partition // world_size,
                 origin_self.hidden_size_per_attention_head,
             ))
             value_layer = value_layer.view(value_layer.size()[:-1] + (
-                origin_self.num_multi_query_groups_per_partition,
+                origin_self.num_multi_query_groups_per_partition // world_size,
                 origin_self.hidden_size_per_attention_head,
             ))
         else:
             new_tensor_shape = mixed_x_layer.size()[:-1] + (
-                origin_self.num_attention_heads_per_partition,
+                origin_self.num_attention_heads_per_partition // world_size,
                 3 * origin_self.hidden_size_per_attention_head,
             )
             mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
@@ -131,7 +172,6 @@ class PatchedSelfAttention(nn.Module):
             # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
             (query_layer, key_layer,
              value_layer) = split_tensor_along_last_dim(mixed_x_layer, 3)
-
         # apply relative positional encoding (rotary embedding)
         if rotary_pos_emb is not None:
             query_layer = apply_rotary_pos_emb(query_layer, rotary_pos_emb)
@@ -151,15 +191,14 @@ class PatchedSelfAttention(nn.Module):
             history_lengths = q_seq_length.new_tensor(history_lengths)
             kv_seq_length = q_seq_length + history_lengths
             max_seq_len = q_seq_length.max().item()
-
-            context.fill_cache(
-                key_layer[0],
-                value_layer[0],
-                q_start_loc,
-                q_seq_length,
-                cache_k,
-                cache_v,
-            )
+            fill_kv_cache(key_layer[0],
+                          value_layer[0],
+                          cache_k,
+                          cache_v,
+                          q_start_loc,
+                          q_seq_length,
+                          block_offsets=context.block_offsets,
+                          history_lengths=history_lengths)
 
         if use_cache:
             kv_cache = (key_layer, value_layer)
@@ -223,6 +262,31 @@ class PatchedSelfAttention(nn.Module):
                 kv_cache,
                 use_cache,
             )
+
+
+class MLP(nn.Module):
+
+    @classmethod
+    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        """Distribution partition callback."""
+        if mod_name in ['dense_h_to_4h']:
+            for name, param in mod.named_parameters():
+                dist_tensor = distribute_tensor(param.unflatten(0, (2, -1)),
+                                                device_mesh, [Shard(1)])
+                dist_tensor = try_to_local(dist_tensor)
+                dist_param = torch.nn.Parameter(dist_tensor.flatten(0, 1))
+                mod.register_parameter(name, dist_param)
+        elif mod_name in ['dense_4h_to_h']:
+            rowwise_parallelize_linear_fn(mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
+        dist.all_reduce(outputs)
+        return outputs
 
 
 class PatchedChatGLMModel(nn.Module):
