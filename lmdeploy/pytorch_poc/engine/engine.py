@@ -25,8 +25,8 @@ from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerMessage, SchedulerSession)
+from lmdeploy.pytorch_poc.models import patch
 from lmdeploy.pytorch_poc.paging import Scheduler
-from lmdeploy.pytorch_poc.patch import patch
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
 from lmdeploy.utils import get_logger
 
@@ -1036,6 +1036,11 @@ class EngineInstance:
         self.response = Queue()
         self.req_count = 0
         self.owned_sessions: List[int] = list()
+
+    def __del__(self):
+        """Destructor."""
+        for session_id in self.owned_sessions:
+            self.end(session_id)
 
     def _send_req(self, req_type: RequestType, data: Any):
         """Send request to engine.

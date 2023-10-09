@@ -9,9 +9,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from lmdeploy.pytorch_poc.dist_utils import (rowwise_parallelize_linear_fn,
                                              try_to_local)
-from lmdeploy.pytorch_poc.patch.functional import \
-    attention_forward_with_paged_attention
 
+from .functional import attention_forward_with_paged_attention
 from .llama import apply_rotary_pos_emb
 
 
