@@ -457,17 +457,22 @@ class Mistral7BChat(BaseModel):
                  b_inst='[INST]',
                  e_inst='[/INST]',
                  session_len=4096,
-                 top_p=1.0,
-                 top_k=50,
-                 temperature=1.0,
                  **kwargs):
         super().__init__(**kwargs)
+        caps = ['completion', 'chat']
+        assert self.capability in caps, \
+            f'{self.capability} is not supported. ' \
+            f'The supported capabilities are: {caps}'
+        if self.capability == 'chat':
+            self.top_p = kwargs.get('top_p', 1.0)
+            self.temperature = kwargs.get('temperature', 1.0)
+            self.top_k = kwargs.get('top_k', 50)
+        elif self.capability == 'completion':
+            self.top_p = kwargs.get('top_p', 0.8)
+            self.temperature = kwargs.get('temperature', 0.7)
         self.b_inst = b_inst
         self.e_inst = e_inst
         self.session_len = session_len
-        self.top_p = top_p
-        self.top_k = top_k
-        self.temperature = temperature
 
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
