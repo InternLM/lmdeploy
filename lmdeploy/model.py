@@ -448,6 +448,66 @@ If a question does not make any sense, or is not factually coherent, explain why
         return ret
 
 
+# https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1#instruction-format
+@MODELS.register_module(name='mistral-7b')
+class Mistral7BChat(BaseModel):
+    """Chat template for Mistral-7B-Instruct-v0.1."""
+
+    def __init__(self,
+                 b_inst='[INST]',
+                 e_inst='[/INST]',
+                 session_len=4096,
+                 top_p=1.0,
+                 top_k=50,
+                 temperature=1.0,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.b_inst = b_inst
+        self.e_inst = e_inst
+        self.session_len = session_len
+        self.top_p = top_p
+        self.top_k = top_k
+        self.temperature = temperature
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'<s>{self.b_inst} {prompt} {self.e_inst}'
+        else:
+            return f'{self.b_inst} {prompt} {self.e_inst}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        _, users, assistants = self._translate_messages(messages)
+        ret = '<s>'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.b_inst} {user} {self.e_inst}{assistant}</s> '
+            else:
+                ret += f'{self.b_inst} {user} {self.e_inst}'
+        return ret
+
+
 @MODELS.register_module(name='qwen-7b')
 class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
