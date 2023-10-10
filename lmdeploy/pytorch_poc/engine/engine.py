@@ -18,7 +18,7 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
-from transformers.utils import WEIGHTS_INDEX_NAME, cached_file
+from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
@@ -106,12 +106,16 @@ class ModelContext:
         block_offsets: List[List[int]],
         history_lengths: List[int],
         position_ids: torch.Tensor,
+        q_start_loc: torch.Tensor,
+        seq_length: torch.Tensor,
         world_size: int = 1,
         device='cuda',
     ):
         self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
         self.position_ids = position_ids
+        self.q_start_loc = q_start_loc
+        self.seq_length = seq_length
         self.world_size = world_size
 
         # padding zero
@@ -270,14 +274,20 @@ def _tp_model_loop(
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code)
 
-        torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
-        with open(torch_model_json_path, mode='r') as f:
-            torch_model_json = json.load(f)
+        try:
+            torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
+            with open(torch_model_json_path, mode='r') as f:
+                torch_model_json = json.load(f)
 
-        weight_map = torch_model_json['weight_map']
+            weight_map = torch_model_json['weight_map']
 
-        checkpoints = list(set(weight_map.values()))
-        checkpoints = [cached_file(model_path, ckpt) for ckpt in checkpoints]
+            checkpoints = list(set(weight_map.values()))
+            checkpoints = [
+                cached_file(model_path, ckpt) for ckpt in checkpoints
+            ]
+        except Exception:
+            logger.warning(f'load failed, try load from {WEIGHTS_NAME}.')
+            checkpoints = [cached_file(model_path, WEIGHTS_NAME)]
         patched_model = patch(
             model,
             extra_args=extra_args,
@@ -387,6 +397,8 @@ def _tp_model_loop(
                     block_offsets=inputs['block_offsets'],
                     history_lengths=inputs['history_lengths'],
                     position_ids=inputs['position_ids'],
+                    q_start_loc=inputs['q_start_loc'],
+                    seq_length=inputs['seq_length'],
                     world_size=world_size,
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
@@ -747,6 +759,8 @@ class Engine:
                         block_offsets=inputs['block_offsets'],
                         history_lengths=inputs['history_lengths'],
                         position_ids=inputs['position_ids'],
+                        q_start_loc=inputs['q_start_loc'],
+                        seq_length=inputs['seq_length'],
                     ),
                     q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
                 )
