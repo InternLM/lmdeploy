@@ -52,7 +52,7 @@ def main(
         stream_output (bool): indicator for streaming output or not
     """
     # tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(model_path)
+    tokenizer = Tokenizer(model_path, trust_remote_code)
     tm_model = tm.Engine(model_path,
                          tp=tp,
                          trust_remote_code=trust_remote_code)
