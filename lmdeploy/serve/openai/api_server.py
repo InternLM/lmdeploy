@@ -107,8 +107,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
 
     Additional arguments supported by LMDeploy:
-    - renew_session (bool): Whether renew the session. Can be used when the
-        session length is exceeded.
     - ignore_eos (bool): indicator for ignoring eos
 
     Currently we do not support the following features:
