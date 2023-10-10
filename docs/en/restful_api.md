@@ -163,4 +163,4 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 
    - kindly provide unique session_id values when calling the `generate` API or else your requests may be associated with client IP addresses
 
-5. Both `generate` api and `v1/chat/completions` upport engaging in multiple rounds of conversation, where input `prompt` or `messages` consists of either single strings or entire chat histories.These inputs are interpreted using multi-turn dialogue modes. However, ff you want to turn the mode of and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function, or specify `renew_session: true` when making use of `v1/chat/completions`
+5. The `generate` api supports engaging in multiple rounds of conversation, where input `prompt` consists of either single strings or entire chat histories. However, if you want to turn the mode off and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function.

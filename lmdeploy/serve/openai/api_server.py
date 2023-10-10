@@ -117,7 +117,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    session_id = ip2id(raw_request.client.host)
+    session_id = random.randint(1, 10086)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -126,11 +126,12 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     request_id = str(session_id)
     created_time = int(time.time())
 
-    result_generator = VariableInterface.async_engine.generate_openai(
+    result_generator = VariableInterface.async_engine.generate(
         request.messages,
         session_id,
         True,  # always use stream to enable batching
-        request.renew_session,
+        sequence_start=True,
+        sequence_end=True,
         request_output_len=request.max_tokens if request.max_tokens else 512,
         stop=request.stop,
         top_p=request.top_p,
