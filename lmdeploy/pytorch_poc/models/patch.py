@@ -29,21 +29,21 @@ MODULE_MAP = {
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
     'transformers.models.falcon.modeling_falcon.FalconAttention':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
     'transformers.models.falcon.modeling_falcon.FalconModel':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
     'transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
     'modelling_RW.Attention':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconAttention',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
     'modelling_RW.RWModel':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconModel',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
     'modelling_RW.RotaryEmbedding':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconRotaryEmbedding',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
     'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
-    'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconForCausalLM',
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconForCausalLM',
     # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
-    # 'lmdeploy.pytorch_poc.patch.falcon.PatchedFalconDecoderLayer',
+    # 'lmdeploy.pytorch_poc.models.falcon.PatchedFalconDecoderLayer',
 })
 
 # baichuan
