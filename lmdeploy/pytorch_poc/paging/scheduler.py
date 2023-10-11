@@ -14,11 +14,8 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def _find_message_with_session_id(message_list: List[SchedulerSequence],
-                                  session_id: int):
-    return [
-        message for message in message_list if message.session_id == session_id
-    ]
+def _find_seq_with_session_id(group: List[SchedulerSequence], session_id: int):
+    return [seq for seq in group if seq.session_id == session_id]
 
 
 BlockTable = List[PhysicalTokenBlock]
@@ -31,6 +28,7 @@ class SchedulerOutput:
     running: List[SchedulerSequence]
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
+    copy_map: Dict[int, int]
     block_tables: List[BlockTable]
 
 
@@ -81,7 +79,7 @@ class Scheduler:
         return session
 
     def add_sequence(self, seq: SchedulerSequence):
-        """Add message.
+        """Add sequence.
 
         Args:
             seq (SchedulerSequence): New sequence.
@@ -152,10 +150,11 @@ class Scheduler:
             else:
                 return _try_swap_out_seqs(self.waiting)
 
+        block_size = self.cache_config.block_size
+
         # 1. running
         for seq in self.running:
             # token + 1
-            block_size = self.cache_config.block_size
             num_required_tokens = seq.num_required_tokens()
             seq.append_tokens(num_required_tokens, block_size)
 
@@ -176,7 +175,7 @@ class Scheduler:
                 # try free unused cache from hanging and waiting
                 do_running = False
                 while _try_swap_out():
-                    if self.block_manager.can_append_slot():
+                    if self.block_manager.can_append_slot(seq):
                         # append slot
                         self.block_manager.append_slot(seq)
                         _to_running(seq)
@@ -193,31 +192,40 @@ class Scheduler:
         self.waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
         while len(self.waiting) > 0 and len(running) < max_batches:
             seq = self.waiting[0]
+            num_required_tokens = seq.num_required_tokens()
+            seq.append_tokens(num_required_tokens, block_size)
 
             block_table = block_manager.get_block_table(seq)
             if block_table is not None:
-                num_required_tokens = seq.num_required_tokens()
-                seq.append_tokens(num_required_tokens, block_size)
                 if not block_manager.can_append_slot(seq):
-                    break
+                    can_append = False
+                    while _try_swap_out_seqs(self.hanging):
+                        if block_manager.can_append_slot(seq):
+                            can_append = True
+                            break
+                    if not can_append:
+                        break
                 if _need_swap_in(seq):
                     if block_manager.can_swap_in(seq):
                         swap_in_map.update(block_manager.swap_in(seq))
                     else:
                         break
                 block_manager.append_slot(seq)
-                self.waiting.pop(seq)
+                self.waiting.pop(0)
                 _to_running(seq)
             else:
-                if block_manager.can_allocate(seq):
-                    # update logical blocks of seq
-                    block_size = self.cache_config.block_size
-                    # allocate session memory
-                    block_manager.allocate(seq)
-                    self.waiting.pop(seq)
-                    _to_running(seq)
-                else:
-                    break
+                if not block_manager.can_allocate(seq):
+                    can_alloc = False
+                    while _try_swap_out_seqs(self.hanging):
+                        if block_manager.can_allocate(seq):
+                            can_alloc = True
+                            break
+                    if not can_alloc:
+                        break
+                # allocate session memory
+                block_manager.allocate(seq)
+                self.waiting.pop(0)
+                _to_running(seq)
 
         self.running = running
 
@@ -249,13 +257,15 @@ class Scheduler:
             session_id (int): The session id.
             status (MessageStatus): New status.
         """
+        assert session_id in self.sessions
         session = self.sessions[session_id]
         session.status = status
-        running_msg = _find_message_with_session_id(self.running, session_id)
-        waiting_msg = _find_message_with_session_id(self.waiting, session_id)
+        running_seq = _find_seq_with_session_id(self.running, session_id)
+        waiting_seq = _find_seq_with_session_id(self.waiting, session_id)
+        hanging_seq = _find_seq_with_session_id(self.hanging, session_id)
 
-        for msg in running_msg + waiting_msg:
-            msg.status = status
+        for seq in running_seq + waiting_seq + hanging_seq:
+            seq.status = status
 
     def stop_session(self, session_id: int):
         """Stop session.
@@ -277,52 +287,60 @@ class Scheduler:
         """Check if there are any unfinished message."""
         return self.waiting or self.running
 
-    def _remove_session(self, session_id: int):
-        """Remove session.
+    def _remove_sequence(self, seq: SchedulerSequence):
+        """Remove sequence(unsafe)
 
         Args:
-            session_id (int): The session id.
+            seq (SchedulerSequence): sequence to remove
         """
-        assert session_id in self.sessions
-        session = self.sessions.pop(session_id)
-        self.block_manager.free(session)
+        self.block_manager.free(seq)
+        seq.session.sequences.pop(seq.seq_id)
 
     def update(self):
         """Update scheduler status after one step.
 
         A full step inference should include:
-        1. schedule
-        2. forward
-        3. update
+        0. end unused sequence
+        1. schedule the running sequence
+        2. forward with the running sequence
+        3. update scheduler status
         """
+        seq_to_remove = []
         session_id_to_remove = set()
 
-        for msg in self.running:
-            session = self.sessions[msg.session_id]
-            session.history_length = sum(block.num_tokens
-                                         for block in session.logical_blocks)
-
-        def _update_queue(que: List[SchedulerSequence],
+        def _update_queue(group: List[SchedulerSequence],
                           expect_status: MessageStatus):
-            for msg in que:
-                if msg.status == expect_status:
+            for seq in group:
+                if seq.status == expect_status:
                     continue
 
-                if msg.status == MessageStatus.ENDED:
-                    session_id_to_remove.add(msg.session_id)
+                if seq.status == MessageStatus.WAITING:
+                    self.waiting.append(seq)
 
-            return [msg for msg in que if msg.status == expect_status]
+                if seq.status == MessageStatus.STOPPED:
+                    self.hanging.append(seq)
 
-        self.waiting = _update_queue(self.waiting, MessageStatus.WAITING)
+                # remove stopped session
+                if seq.status == MessageStatus.ENDED:
+                    seq_to_remove.append(seq)
+
+            return [seq for seq in group if seq.status == expect_status]
+
         self.running = _update_queue(self.running, MessageStatus.RUNNING)
+        self.waiting = _update_queue(self.waiting, MessageStatus.WAITING)
+        self.hanging = _update_queue(self.hanging, MessageStatus.STOPPED)
 
         for session_id, session in self.sessions.items():
             if session.status == MessageStatus.ENDED:
                 session_id_to_remove.add(session_id)
 
-        # remove session
+        # remove seqs
+        for seq in seq_to_remove:
+            self._remove_sequence(seq)
+
+        # remove sessions
         for session_id in session_id_to_remove:
-            self._remove_session(session_id)
+            self.sessions.pop(session_id)
 
     def get_block_tables(self, seqs: List[SchedulerSequence]):
         """get block table of the sequences."""

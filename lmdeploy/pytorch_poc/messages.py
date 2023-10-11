@@ -40,7 +40,6 @@ class MessageStatus(enum.Enum):
 
     WAITING = enum.auto()
     RUNNING = enum.auto()
-    SWAP_OUT = enum.auto()
     STOPPED = enum.auto()
     ENDED = enum.auto()
     ABORTED = enum.auto()
@@ -62,7 +61,8 @@ class SchedulerSession:
 
     def __init__(self, session_id: int) -> None:
         self.session_id = session_id
-        self.messages: Dict[SchedulerSequence] = dict()
+        self.status: MessageStatus = MessageStatus.RUNNING
+        self.sequences: Dict[SchedulerSequence] = dict()
 
     def add_sequence(
             self,
@@ -80,7 +80,7 @@ class SchedulerSession:
                                 remain_output_len=max_output_len,
                                 sampling_param=sampling_param,
                                 arrive_time=time.time())
-        self.messages[seq.seq_id] = seq
+        self.sequences[seq.seq_id] = seq
         return seq
 
     def fork_sequence(
@@ -106,7 +106,7 @@ class SchedulerSession:
             arrive_time=time.time(),
             meta=deepcopy(seq.meta))
 
-        self.messages[new_msg.seq_id] = new_msg
+        self.sequences[new_msg.seq_id] = new_msg
         return new_msg
 
 
@@ -132,7 +132,7 @@ class SchedulerSequence:
     @property
     def session_id(self) -> int:
         """get session id."""
-        return len(self.session.session_id)
+        return self.session.session_id
 
     def num_logical_tokens(self) -> int:
         if len(self.logical_blocks) == 0:
@@ -173,6 +173,7 @@ class SchedulerSequence:
 
     def update_token_ids(self, token_ids: Tensor):
         """Update token ids, old token ids will be added to history."""
-        self.history_token_ids = torch.cat([self.history_token_ids, token_ids])
+        self.history_token_ids = torch.cat(
+            [self.history_token_ids, self.token_ids])
         self.token_ids = token_ids
         self.arrive_time = time.time()
