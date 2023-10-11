@@ -133,20 +133,20 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
     yield (state_chatbot, disable_btn, enable_btn)
 
 
-def run_api_server(restful_api_url: str,
+def run_api_server(api_server_url: str,
                    server_name: str = 'localhost',
                    server_port: int = 6006,
                    batch_size: int = 32):
     """chat with AI assistant through web ui.
 
     Args:
-        restful_api_url (str): restufl api url
+        api_server_url (str): restufl api url
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
     """
-    InterFace.api_server_url = restful_api_url
-    model_names = get_model_list(f'{restful_api_url}/v1/models')
+    InterFace.api_server_url = api_server_url
+    model_names = get_model_list(f'{api_server_url}/v1/models')
     model_name = ''
     if isinstance(model_names, list) and len(model_names) > 0:
         model_name = model_names[0]

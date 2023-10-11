@@ -6,16 +6,15 @@ def run(model_path_or_server: str,
         server_name: str = 'localhost',
         server_port: int = 6006,
         batch_size: int = 32,
-        tp: int = 1,
-        restful_api: bool = False):
+        tp: int = 1):
     """chat with AI assistant through web ui.
 
     Args:
         model_path_or_server (str): the path of the deployed model or the
-            tritonserver URL or restful api URL. The former is for directly
-            running service with gradio. The latter is for running with
-            tritonserver by default. If the input URL is restful api. Please
-            enable another flag `restful_api`.
+            tritonserver URL or restful api URL. For example:
+            - ./workspace
+            - 0.0.0.0:23333
+            - http://0.0.0.0:23333
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
@@ -23,7 +22,7 @@ def run(model_path_or_server: str,
         restufl_api (bool): a flag for model_path_or_server
     """
     if ':' in model_path_or_server:
-        if restful_api:
+        if 'http:' in model_path_or_server:
             from lmdeploy.serve.gradio.api_server_decoupled import \
                 run_api_server
             run_api_server(model_path_or_server, server_name, server_port,

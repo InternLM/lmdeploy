@@ -98,17 +98,17 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --
 你可以用命令行，在控制台与 server 通信：
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
+python -m lmdeploy.serve.openai.api_client api_server_url
 ```
 
 或者，启动 gradio，在 webui 的聊天对话框中，与 codellama 交流：
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006
+python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
 ```
 
 关于 RESTful API的详细介绍，请参考[这份](../restful_api.md)文档。

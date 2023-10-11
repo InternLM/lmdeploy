@@ -137,8 +137,8 @@ curl http://{server_ip}:{server_port}/v1/embeddings \
 restful api 服务可以通过客户端测试，例如
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
+python -m lmdeploy.serve.openai.api_client api_server_url
 ```
 
 ### webui
@@ -146,10 +146,10 @@ python -m lmdeploy.serve.openai.api_client restful_api_url
 也可以直接用 webui 测试使用 restful-api。
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006
+python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
 ```
 
 ### FAQ

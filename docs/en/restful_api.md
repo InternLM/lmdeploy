@@ -135,8 +135,8 @@ curl http://{server_ip}:{server_port}/v1/embeddings \
 There is a client script for restful api server.
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
+python -m lmdeploy.serve.openai.api_client api_server_url
 ```
 
 ### webui
@@ -144,10 +144,10 @@ python -m lmdeploy.serve.openai.api_client restful_api_url
 You can also test restful-api through webui.
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006
+python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
 ```
 
 ### FAQ
@@ -163,4 +163,4 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 
    - kindly provide unique session_id values when calling the `generate` API or else your requests may be associated with client IP addresses
 
-5. The `generate` api supports engaging in multiple rounds of conversation, where input `prompt` consists of either single strings or entire chat histories. However, if you want to turn the mode off and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function.
+5. The `generate` api supports engaging in multiple rounds of conversation, where input argument `prompt` consists of either single strings or entire chat histories. However, if you want to turn the mode off and manage the chat history in clients, please set the input argument `sequence_end: true` when utilizing the `generate` function.

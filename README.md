@@ -153,17 +153,17 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --
 Then, you can communicate with it by command line,
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
+python -m lmdeploy.serve.openai.api_client api_server_url
 ```
 
 or webui,
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006
+python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
 ```
 
 Refer to [restful_api.md](docs/en/restful_api.md) for more details.
