@@ -109,6 +109,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
+    - session_id (int): if not specified, will set random value
 
     Currently we do not support the following features:
     - function_call (Users should implement this by themselves)
@@ -116,18 +117,19 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    session_id = random.randint(1, 10086)
+    if request.session_id == -1:
+        request.session_id = random.randint(1, 10086)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
 
     model_name = request.model
-    request_id = str(session_id)
+    request_id = str(request.session_id)
     created_time = int(time.time())
 
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
-        session_id,
+        request.session_id,
         True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
@@ -191,7 +193,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            VariableInterface.async_engine.stop_session(session_id)
+            VariableInterface.async_engine.stop_session(request.session_id)
             return create_error_response(HTTPStatus.BAD_REQUEST,
                                          'Client disconnected')
         final_res = res
@@ -251,24 +253,26 @@ async def completions_v1(request: CompletionRequest,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
+    - session_id (int): if not specified, will set random value
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    session_id = random.randint(1, 10086)
+    if request.session_id == -1:
+        request.session_id = random.randint(1, 10086)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
 
     model_name = request.model
-    request_id = str(session_id)
+    request_id = str(request.session_id)
     created_time = int(time.time())
 
     result_generator = VariableInterface.async_engine.generate(
         request.prompt,
-        session_id,
+        request.session_id,
         True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
@@ -333,7 +337,7 @@ async def completions_v1(request: CompletionRequest,
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            VariableInterface.async_engine.stop_session(session_id)
+            VariableInterface.async_engine.stop_session(request.session_id)
             return create_error_response(HTTPStatus.BAD_REQUEST,
                                          'Client disconnected')
         final_res = res
