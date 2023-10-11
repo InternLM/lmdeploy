@@ -77,9 +77,9 @@ def add_instruction(instruction, state_chatbot):
     return ('', state_chatbot)
 
 
-def run_server(triton_server_addr: str,
-               server_name: str = 'localhost',
-               server_port: int = 6006):
+def run_triton_server(triton_server_addr: str,
+                      server_name: str = 'localhost',
+                      server_port: int = 6006):
     """chat with AI assistant through web ui.
 
     Args:

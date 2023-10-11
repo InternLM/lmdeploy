@@ -133,10 +133,10 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
     yield (state_chatbot, disable_btn, enable_btn)
 
 
-def run_restful(restful_api_url: str,
-                server_name: str = 'localhost',
-                server_port: int = 6006,
-                batch_size: int = 32):
+def run_api_server(restful_api_url: str,
+                   server_name: str = 'localhost',
+                   server_port: int = 6006,
+                   batch_size: int = 32):
     """chat with AI assistant through web ui.
 
     Args:

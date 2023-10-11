@@ -24,13 +24,14 @@ def run(model_path_or_server: str,
     """
     if ':' in model_path_or_server:
         if restful_api:
-            from lmdeploy.serve.gradio.api_server_decoupled import run_restful
-            run_restful(model_path_or_server, server_name, server_port,
-                        batch_size)
+            from lmdeploy.serve.gradio.api_server_decoupled import \
+                run_api_server
+            run_api_server(model_path_or_server, server_name, server_port,
+                           batch_size)
         else:
             from lmdeploy.serve.gradio.triton_server_decoupled import \
-                run_server
-            run_server(model_path_or_server, server_name, server_port)
+                run_triton_server
+            run_triton_server(model_path_or_server, server_name, server_port)
     else:
         from lmdeploy.serve.gradio.turbomind_coupled import run_local
         run_local(model_path_or_server, server_name, server_port, batch_size,
