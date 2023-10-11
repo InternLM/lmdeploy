@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <math.h>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 
@@ -137,6 +138,12 @@ auto LlamaBatch<T>::ProcessStopRequests(const Requests& requests) -> std::vector
         }
         // clear output buffers (prevent leaking conversations) if request is successful
         if (ec == 0) {
+
+            if (rank_ == 0) {
+                std::unique_lock lock{output_mutex_};
+                output_cv_.wait(lock, [&] { return output_reqs_.empty(); });
+            }
+
             auto& output_ids      = r->outputs[rank_].at("output_ids");
             auto& sequence_length = r->outputs[rank_].at("sequence_length");
             Clear(output_ids.getPtr<int>(), output_ids.shape.at(2));
@@ -1036,14 +1043,41 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
     Copy(finished_buf_, batch_size, state_->h_finished);
     Copy(sequence_lengths_, batch_size, state_->h_context_length);
 
-    SetOutputTensors(g);
+    if (1) {
+        std::unique_lock<std::mutex> lock;
+        if (rank_ == 0) {
+            // wait for previous output operations
+            lock = std::unique_lock{output_mutex_};
+            output_cv_.wait(lock, [&] { return output_reqs_.empty(); });
+        }
 
-    check_cuda_error(cudaStreamSynchronize(stream_));
+        SetOutputTensors(g);
+        check_cuda_error(cudaStreamSynchronize(stream_));
 
-    for (int i = 0; i < batch_size; ++i) {
-        FT_CHECK(state_->requests[i] != nullptr);
-        if (state_->requests[i]->stream_cb && rank_ == 0) {
-            state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
+        if (rank_ == 0) {
+            // enqueue new output requests
+            for (int i = 0; i < batch_size; ++i) {
+                FT_CHECK(state_->requests[i] != nullptr);
+                if (state_->requests[i]->stream_cb) {
+                    output_reqs_.push_back(state_->requests[i]);
+                }
+            }
+            lock.unlock();
+            // notify output thread when we do have stream cbs to call
+            if (!output_reqs_.empty()) {
+                output_cv_.notify_one();
+            }
+        }
+    }
+    else {
+        SetOutputTensors(g);
+        check_cuda_error(cudaStreamSynchronize(stream_));
+
+        for (int i = 0; i < batch_size; ++i) {
+            FT_CHECK(state_->requests[i] != nullptr);
+            if (state_->requests[i]->stream_cb && rank_ == 0) {
+                state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
+            }
         }
     }
 
@@ -1235,6 +1269,36 @@ void LlamaBatch<T>::Start()
     int device_id = -1;
     check_cuda_error(cudaGetDevice(&device_id));
     internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this, device_id);
+    if (rank_ == 0) {
+        output_thread_ = std::thread(&LlamaBatch::OutputThreadEntry, this);
+    }
+}
+
+template<typename T>
+void LlamaBatch<T>::OutputThreadEntry()
+{
+    while (true) {
+        {
+            // wait for requests with stream cbs
+            std::unique_lock lock(output_mutex_);
+            output_cv_.wait(lock, [&] { return !output_reqs_.empty() || output_stop_token_; });
+
+            // invoke stream cbs
+            for (const auto& r : output_reqs_) {
+                r->stream_cb(&r->outputs[rank_].get());
+            }
+            output_reqs_.clear();
+
+            // stop requested
+            if (output_stop_token_) {
+                TM_LOG_INFO("[OutputThreadEntry] stop requested.");
+                break;
+            }
+        }
+        FT_CHECK(output_reqs_.empty());
+        // notify infer thread 0
+        output_cv_.notify_one();
+    }
 }
 
 template class LlamaBatch<half>;

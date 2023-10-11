@@ -9,6 +9,8 @@
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
+#include <condition_variable>
+#include <mutex>
 
 namespace turbomind {
 
@@ -86,6 +88,15 @@ public:
 
         internal_thread_.join();
 
+        if (output_thread_.joinable()) {
+            {
+                std::lock_guard lock{output_mutex_};
+                output_stop_token_ = true;
+            }
+            output_cv_.notify_one();
+            output_thread_.join();
+        }
+
         FreeBuffer();
     }
 
@@ -93,6 +104,8 @@ public:
 
 private:
     void InternalThreadEntry(int device_id);
+
+    void OutputThreadEntry();
 
     void UpdateSequenceStates(BatchState& state, int index);
 
@@ -213,6 +226,13 @@ private:
     IAllocator*      allocator_{};
 
     std::thread internal_thread_;
+
+    // async stream callback utils
+    std::thread             output_thread_;
+    std::mutex              output_mutex_;
+    std::condition_variable output_cv_;
+    Requests                output_reqs_;
+    bool                    output_stop_token_{false};
 };
 
 }  // namespace turbomind
