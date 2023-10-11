@@ -393,12 +393,23 @@ async def create_embeddings(request: EmbeddingsRequest,
 async def generate(request: GenerateRequest, raw_request: Request = None):
     """Generate completion for the request.
 
+    - On interactive mode, the chat history is kept on the server. Set
+    `sequence_start = True` and `sequence_end = False` for the first request,
+    Set `sequence_start = False` and `sequence_end = False` for the later
+    requests. Once the session length is reached, set `sequence_start = False`
+    and `sequence_end = True`. Then restart the above steps for a new session.
+
+    - On normal mode, no chat history is kept on the server. Set
+    `sequence_start = True` and `sequence_end = True` for all requests.
+
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - session_id: determine which instance will be called. If not specified
         with a value other than -1, using host ip directly.
-    - sequence_start (bool): indicator for starting a sequence.
-    - sequence_end (bool): indicator for ending a sequence
+    - sequence_start (bool): a flag to start the session. Set True to start
+        the session.
+    - sequence_end (bool): a flag to end the session. Set True to end the
+        session.
     - stream: whether to stream the results or not.
     - stop: whether to stop the session response or not.
     - request_output_len (int): output token nums
