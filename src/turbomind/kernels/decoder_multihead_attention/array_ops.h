@@ -413,7 +413,10 @@ struct ConvertKvCache<int8_t, float> {
     float scale_;
     float zero_;
 
-    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero) {}
+    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero)
+    {
+        zero_ = zero_ - 32896.f * scale_;
+    }
 
     template<int N>
     inline __device__ auto operator()(const Array<int8_t, N>& vi) const -> Array<float, N>
@@ -425,8 +428,8 @@ struct ConvertKvCache<int8_t, float> {
             vec       = fast_i2f_f32_s8((const Array<int8_t, 4>&)vi[i]);
             PRAGMA_UNROLL
             for (int j = 0; j < 4; ++j) {
-                // vec[j] = vec[j] * scale + zero;
-                vec[j] = vec[j] * scale_ + (zero_ - 32896.f * scale_);
+                vec[j] = vec[j] * scale_ + zero_;
+                // vec[j] = vec[j] * scale_ + (zero_ - 32896.f * scale_);
             }
         }
         return vo;
@@ -439,7 +442,10 @@ struct ConvertKvCache<int8_t, half> {
     float scale_;
     float zero_;
 
-    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero) {}
+    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero)
+    {
+        zero_ = zero_ - 32896.f * scale_;
+    }
 
     template<int N>
     inline __device__ auto operator()(const Array<int8_t, N>& vi) const -> Array<half, N>
@@ -451,8 +457,8 @@ struct ConvertKvCache<int8_t, half> {
             auto  tmp = fast_i2f_f32_s8((const Array<int8_t, 4>&)vi[i]);
             PRAGMA_UNROLL
             for (int j = 0; j < 4; ++j) {
-                // vec[j] = half(tmp[j] * scale + zero);
-                vec[j] = half(tmp[j] * scale_ + (zero_ - 32896.f * scale_));
+                vec[j] = half(tmp[j] * scale_ + zero_);
+                // vec[j] = half(tmp[j] * scale_ + (zero_ - 32896.f * scale_));
             }
         }
         return vo;

@@ -27,8 +27,14 @@ bool Dump()
 template<typename T, typename Tkv, int HeadDim, int HeadPerCta>
 void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
 {
-    // 2048_32x6 ~ 64k smem
+    // cpasync_2048_32x6 ~ 64k smem
     using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 6>;
+
+    // ld_kv16_2048_32x3 ~ 34k smem
+    // using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 3>;
+
+    // ld_kv8_2048_64x3 ~ 34k smem
+    // using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 64, HeadDim, 2048, 3>;
 
     [[maybe_unused]] static const bool init = Dump<MHAType>();
 
