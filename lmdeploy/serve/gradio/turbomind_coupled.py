@@ -103,6 +103,7 @@ async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
         reset_btn (bool): enable the reset button or not
         request (gr.Request): the request from a user
     """
+    yield (state_chatbot, disable_btn, disable_btn)
     session_id = threading.current_thread().ident
     if request is not None:
         session_id = ip2id(request.kwargs['client']['host'])
@@ -127,7 +128,7 @@ async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
                                                      sequence_start=True,
                                                      sequence_end=False):
         pass
-    return (state_chatbot, disable_btn, enable_btn)
+    yield (state_chatbot, disable_btn, enable_btn)
 
 
 def run_local(model_path: str,

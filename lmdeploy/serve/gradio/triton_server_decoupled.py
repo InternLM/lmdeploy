@@ -36,7 +36,7 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
         state_chatbot[-1] = (state_chatbot[-1][0], tokens)
         yield (state_chatbot, state_chatbot, enable_btn, disable_btn)
 
-    return (state_chatbot, state_chatbot, disable_btn, enable_btn)
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn)
 
 
 def reset_all_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
@@ -65,10 +65,11 @@ def cancel_func(
     reset_btn: gr.Button,
 ):
     """cancel the session."""
+    yield (llama_chatbot, state_chatbot, disable_btn, disable_btn)
     session_id = llama_chatbot._session.session_id
     llama_chatbot.cancel(session_id)
 
-    return (llama_chatbot, state_chatbot, disable_btn, enable_btn)
+    yield (llama_chatbot, state_chatbot, disable_btn, enable_btn)
 
 
 def add_instruction(instruction, state_chatbot):
@@ -104,7 +105,7 @@ def run_server(triton_server_addr: str,
                 placeholder='Please input the instruction',
                 label='Instruction')
             with gr.Row():
-                cancel_btn = gr.Button(value='Cancel')
+                cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
 
         send_event = instruction_txtbox.submit(
