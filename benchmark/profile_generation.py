@@ -18,7 +18,8 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
-from lmdeploy.turbomind import Tokenizer, TurboMind
+from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.turbomind import TurboMind
 
 
 def infer(model, session_id: int, input_ids: str, output_seqlen: int,
