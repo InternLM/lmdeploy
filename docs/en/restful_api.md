@@ -22,7 +22,7 @@ from typing import Iterable, List
 
 def get_streaming_response(prompt: str,
                            api_url: str,
-                           instance_id: int,
+                           session_id: int,
                            request_output_len: int,
                            stream: bool = True,
                            sequence_start: bool = True,
@@ -32,7 +32,7 @@ def get_streaming_response(prompt: str,
     pload = {
         'prompt': prompt,
         'stream': stream,
-        'instance_id': instance_id,
+        'session_id': session_id,
         'request_output_len': request_output_len,
         'sequence_start': sequence_start,
         'sequence_end': sequence_end,
@@ -41,7 +41,7 @@ def get_streaming_response(prompt: str,
     response = requests.post(
         api_url, headers=headers, json=pload, stream=stream)
     for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b'\0'):
+            chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
         if chunk:
             data = json.loads(chunk.decode('utf-8'))
             output = data['text']
@@ -91,7 +91,7 @@ curl http://{server_ip}:{server_port}/generate \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Hello! How are you?",
-    "instance_id": 1,
+    "session_id": 1,
     "sequence_start": true,
     "sequence_end": true
   }'
@@ -146,11 +146,10 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 
 2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
 
-3. When the request with the same `instance_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
+3. When the request with the same `session_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
 
 4. Requests were previously being handled sequentially rather than concurrently. To resolve this issue,
 
-   - kindly provide unique instance_id values when calling the `generate` API or else your requests may be associated with client IP addresses
-   - additionally, setting `stream=true` enables processing multiple requests simultaneously
+   - kindly provide unique session_id values when calling the `generate` API or else your requests may be associated with client IP addresses
 
 5. Both `generate` api and `v1/chat/completions` upport engaging in multiple rounds of conversation, where input `prompt` or `messages` consists of either single strings or entire chat histories.These inputs are interpreted using multi-turn dialogue modes. However, ff you want to turn the mode of and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function, or specify `renew_session: true` when making use of `v1/chat/completions`
