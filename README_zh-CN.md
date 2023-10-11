@@ -110,7 +110,7 @@ pip install lmdeploy
 
 # Make sure you have git-lfs installed (https://git-lfs.com)
 git lfs install
-git clone https://huggingface.co/internlm/internlm-chat-7b /path/to/internlm-chat-7b
+git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internlm-chat-7b
 
 # if you want to clone without large files – just their pointers
 # prepend your git clone with the following env var:
