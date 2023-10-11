@@ -24,7 +24,7 @@ from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
-                                           SchedulerMessage, SchedulerSession)
+                                           SchedulerSequence, SchedulerSession)
 from lmdeploy.pytorch_poc.models import patch
 from lmdeploy.pytorch_poc.paging import Scheduler
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
@@ -605,17 +605,17 @@ class Engine:
         """Add new session."""
         self.scheduler.add_session(session)
 
-    def add_message(self, message: SchedulerMessage):
+    def add_message(self, message: SchedulerSequence):
         """Add new message."""
         self.scheduler.add_message(message)
 
     def _make_inputs(self,
-                     messages: List[SchedulerMessage],
+                     messages: List[SchedulerSequence],
                      device: str = 'cuda'):
         """create model inputs from messages.
 
         Args:
-            messages (List[SchedulerMessage]): The input messages.
+            messages (List[SchedulerSequence]): The input messages.
             device (str): Device name.
         """
         sessions = self.scheduler.get_sessions(messages)
@@ -669,11 +669,11 @@ class Engine:
         self.scheduler.end_session(session_id)
         self.scheduler.update()
 
-    def _stoping_criteria(self, msg: SchedulerMessage, next_token_id: int):
+    def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
         """Check if the message should stop.
 
         Args:
-            msg (SchedulerMessage): The input message.
+            msg (SchedulerSequence): The input message.
             next_token_id (int): The next token id from inference result.
 
         Returns:
@@ -775,7 +775,7 @@ class Engine:
         # schedule
         schedule_output = self.scheduler.schedule()
 
-        running: List[SchedulerMessage] = schedule_output.running
+        running: List[SchedulerSequence] = schedule_output.running
         swap_in_map = schedule_output.swap_in_map
         swap_out_map = schedule_output.swap_out_map
         if len(running) == 0:
@@ -899,10 +899,10 @@ class Engine:
             sessions.append(sess)
             self.add_session(sess)
 
-        msgs: List[SchedulerMessage] = []
+        msgs: List[SchedulerSequence] = []
         for token_ids, sess in zip(prompt_token_ids, sessions):
-            msg = SchedulerMessage(token_ids=token_ids,
-                                   session_id=sess.session_id)
+            msg = SchedulerSequence(token_ids=token_ids,
+                                    session_id=sess.session_id)
             msgs.append(msg)
             self.scheduler.add_message(msg)
 
@@ -1001,7 +1001,7 @@ class Engine:
             # add message
             add_msg_reqs: List[Request] = reqs_by_type[RequestType.ADD_MESSAGE]
             for req in add_msg_reqs:
-                msg: SchedulerMessage = SchedulerMessage(**req.data)
+                msg: SchedulerSequence = SchedulerSequence(**req.data)
                 session_id = msg.session_id
                 if not _session_exist(session_id, req, resp_if_not_exist=True):
                     continue

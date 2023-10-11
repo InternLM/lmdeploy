@@ -69,7 +69,7 @@ class TestBlockManager:
 
         # test alloc
         token_ids = torch.tensor([1])
-        msg = sess.add_message(token_ids)
+        msg = sess.add_sequence(token_ids)
         msg.append_tokens(1, block_size)
         assert block_mgr.can_allocate(msg)
         block_mgr.allocate(msg)
@@ -85,7 +85,7 @@ class TestBlockManager:
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
 
         # alloc over limit
-        msg = sess.add_message(token_ids)
+        msg = sess.add_sequence(token_ids)
         msg.append_tokens(num_gpu_blocks * block_size + 1, block_size)
         assert not block_mgr.can_allocate(msg)
 
@@ -94,7 +94,7 @@ class TestBlockManager:
 
         # test append
         token_ids = torch.tensor([1])
-        msg = sess.add_message(token_ids)
+        msg = sess.add_sequence(token_ids)
         msg.append_tokens(1, block_size)
         block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
@@ -116,12 +116,12 @@ class TestBlockManager:
         sess = SchedulerSession(0)
 
         token_ids = torch.tensor([1])
-        from_msg = sess.add_message(token_ids)
+        from_msg = sess.add_sequence(token_ids)
         from_msg.append_tokens(block_size + 1, block_size)
         block_mgr.allocate(from_msg)
         from_block_table = block_mgr.get_block_table(from_msg)
 
-        to_msg = sess.fork_message(token_ids, from_msg)
+        to_msg = sess.fork_sequence(token_ids, from_msg)
         to_msg.append_tokens(1, block_size)
 
         # fork
@@ -144,7 +144,7 @@ class TestBlockManager:
         sess = SchedulerSession(0)
 
         token_ids = torch.tensor([1])
-        msg = sess.add_message(token_ids)
+        msg = sess.add_sequence(token_ids)
         msg.append_tokens(block_size + 1, block_size)
         block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
@@ -169,7 +169,7 @@ class TestBlockManager:
             assert block.device == 'gpu'
 
         swap_out_map = block_mgr.swap_out(msg)
-        msg_full = sess.add_message(token_ids)
+        msg_full = sess.add_sequence(token_ids)
         msg_full.append_tokens(block_size * 4, block_size)
         block_mgr.allocate(msg_full)
         assert not block_mgr.can_swap_out(msg_full)
