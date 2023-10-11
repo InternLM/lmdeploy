@@ -6,7 +6,8 @@ def run(model_path_or_server: str,
         server_name: str = 'localhost',
         server_port: int = 6006,
         batch_size: int = 32,
-        tp: int = 1):
+        tp: int = 1,
+        **kwargs):
     """chat with AI assistant through web ui.
 
     Args:
@@ -19,16 +20,14 @@ def run(model_path_or_server: str,
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
         tp (int): tensor parallel for Turbomind
-        restufl_api (bool): a flag for model_path_or_server
     """
     if ':' in model_path_or_server:
         if 'http:' in model_path_or_server:
-            from lmdeploy.serve.gradio.api_server_decoupled import \
-                run_api_server
+            from lmdeploy.serve.gradio.api_server_backend import run_api_server
             run_api_server(model_path_or_server, server_name, server_port,
                            batch_size)
         else:
-            from lmdeploy.serve.gradio.triton_server_decoupled import \
+            from lmdeploy.serve.gradio.triton_server_backend import \
                 run_triton_server
             run_triton_server(model_path_or_server, server_name, server_port)
     else:
