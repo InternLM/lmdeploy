@@ -34,8 +34,8 @@ void invokeCreateCausalMasks(
     T* mask, const int* q_lens, const int* k_lens, int max_q_len, int max_k_len, int batch_size, cudaStream_t stream);
 
 template<typename T>
-void invokeExtendKVCache(T**          k_dst_ptrs,
-                         T**          v_dst_ptrs,
+void invokeExtendKVCache(void**       k_dst_ptrs,
+                         void**       v_dst_ptrs,
                          const T*     k_src,
                          const T*     v_src,
                          const int*   cu_block_counts,

@@ -195,8 +195,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     // [2, L, H, s, D]
     const size_t layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
-    auto k_cache_ptrs = output_tensors->getPtr<T*>("key_cache");
-    auto v_cache_ptrs = output_tensors->getPtr<T*>("value_cache");
+    auto k_cache_ptrs = output_tensors->getPtr<void*>("key_cache");
+    auto v_cache_ptrs = output_tensors->getPtr<void*>("value_cache");
 
     auto tmp_k_ptrs = output_tensors->getPtr<T*>("tmp_k");
     auto tmp_v_ptrs = output_tensors->getPtr<T*>("tmp_v");
@@ -225,19 +225,23 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                         stream_);
     sync_check_cuda_error();
 
-    ConvertKvCacheBlocksToLinear((const T**)k_cache_ptrs,
-                                 (const T**)v_cache_ptrs,
-                                 tmp_k_ptrs,
-                                 tmp_v_ptrs,
-                                 cu_block_counts,
-                                 context_length,
-                                 layer_offset,
-                                 kv_cache_block_len_,
-                                 max_seq_len,
-                                 local_kv_head_num_,
-                                 size_per_head_,
-                                 batch_size,
-                                 stream_);
+    const int kv_cache_elem_bits = quant_policy_ & QuantPolicy::kCacheKVInt8 ? 8 : sizeof(T) * 8;
+
+    ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
+                                  (const void**)v_cache_ptrs,
+                                  (T**)tmp_k_ptrs,
+                                  (T**)tmp_v_ptrs,
+                                  cu_block_counts,
+                                  context_length,
+                                  layer_offset,
+                                  kv_cache_block_len_,
+                                  max_seq_len,
+                                  local_kv_head_num_,
+                                  size_per_head_,
+                                  batch_size,
+                                  quant_policy_,
+                                  weights->past_kv_scale.data(),
+                                  stream_);
     sync_check_cuda_error();
 
     // dbg(kv_cache_block_len_, max_seq_len, local_kv_head_num_, size_per_head_, batch_size);
@@ -378,7 +382,7 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_c
                            local_head_num_,
                            head_n_rep_,
                            stream_,
-                           quant,
+                           0,  // dequant handled in block->linear conversion
                            kv_scale);
     sync_check_cuda_error();
 

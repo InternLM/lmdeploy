@@ -5,33 +5,33 @@ namespace turbomind {
 template<typename T>
 struct DecoderMultiHeadAttentionParams {
     // token-level buffers, [B, qH + 2kvH, D] or [B, kvH, D]
-    T*  out;
-    T*  q;
-    T*  k;
-    T*  v;
+    T* __restrict__ out;
+    T* __restrict__ q;
+    T* __restrict__ k;
+    T* __restrict__ v;
     int stride;
 
     // bias, [qH, D] or [kvH, D]
-    T* q_bias;
-    T* k_bias;
-    T* v_bias;
+    T* __restrict__ q_bias;
+    T* __restrict__ k_bias;
+    T* __restrict__ v_bias;
 
     // sequence-level buffers
-    const int*  per_sample_length;
-    const bool* finished;
+    const int* __restrict__ per_sample_length;
+    const bool* __restrict__ finished;
 
     // kv cache
-    void** per_sample_k_cache;  // [H, S, D]
-    void** per_sample_v_cache;  // [H, S, D]
+    void** __restrict__ per_sample_k_cache;  // [H, S, D]
+    void** __restrict__ per_sample_v_cache;  // [H, S, D]
     size_t layer_offset;
 
     /// cache layout M,[N,H,x,D]
     /// S: [s0/x, s1/x, s2/x, ..., sn-1/x], si <- block
     /// 1. [L,sum(S),H,x,D]
-    void** k_cache_block_ptrs;  // X,[H,x,D]
-    void** v_cache_block_ptrs;  // X,[H,x,D]
-    int*   cu_block_cnts;       // [B+1]
-    int    kv_cache_block_size;
+    void** __restrict__ k_cache_block_ptrs;  // X,[H,x,D]
+    void** __restrict__ v_cache_block_ptrs;  // X,[H,x,D]
+    int* __restrict__ cu_block_cnts;         // [B+1]
+    int kv_cache_block_size;
 
     // batch-level params
     int batch_size;
@@ -51,6 +51,9 @@ struct DecoderMultiHeadAttentionParams {
 
     // log(n) attention
     bool use_logn_attn;
+
+    int   quant_policy;
+    float kv_quant_params[4];
 };
 
 }  // namespace turbomind

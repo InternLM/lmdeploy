@@ -30,11 +30,10 @@ void ConvertBlocksToLinear(const T**    src_block_ptrs,
                            int          batch_size,
                            cudaStream_t st);
 
-template<typename T>
-void ConvertKvCacheBlocksToLinear(const T**    src_k_block_ptrs,
-                                  const T**    src_v_block_ptrs,
-                                  T**          dst_k_ptrs,
-                                  T**          dst_v_ptrs,
+void ConvertKvCacheBlocksToLinear(const void** src_k_block_ptrs,
+                                  const void** src_v_block_ptrs,
+                                  void**       dst_k_ptrs,
+                                  void**       dst_v_ptrs,
                                   const int*   src_cu_block_cnts,
                                   const int*   seq_lens,
                                   int          src_offset,
@@ -43,6 +42,24 @@ void ConvertKvCacheBlocksToLinear(const T**    src_k_block_ptrs,
                                   int          head_num,
                                   int          head_dim,
                                   int          batch_size,
+                                  int          elem_bits,
                                   cudaStream_t st);
+
+template<typename T>
+void ConvertKvCacheBlocksToLinear2(const void** src_k_block_ptrs,
+                                   const void** src_v_block_ptrs,
+                                   T**          dst_k_ptrs,
+                                   T**          dst_v_ptrs,
+                                   const int*   src_cu_block_cnts,
+                                   const int*   seq_lens,
+                                   int          src_offset,
+                                   int          src_block_len,
+                                   int          dst_block_len,
+                                   int          head_num,
+                                   int          head_dim,
+                                   int          batch_size,
+                                   int          quant_policy,
+                                   const float* kv_params,
+                                   cudaStream_t st);
 
 }  // namespace turbomind

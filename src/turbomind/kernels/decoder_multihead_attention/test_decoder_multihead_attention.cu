@@ -89,10 +89,12 @@ void TestBlocks(thrust::universal_vector<half>&  linear,          // linear data
                               0);
     }
     cudaDeviceSynchronize();
-    std::cout << ">>> Compare\n";
-    Compare(_linear.data().get(), linear.data().get(), head_dim, head_dim, batch_size * head_num * seq_len);
-    std::cout << "<<< Compare\n";
-    // std::exit(0);
+
+    if (0) {
+        std::cout << ">>> Compare\n";
+        Compare(_linear.data().get(), linear.data().get(), head_dim, head_dim, batch_size * head_num * seq_len);
+        std::cout << "<<< Compare\n";
+    }
 
     _blocks.swap(blocks);
     _ptrs.swap(ptrs);
@@ -101,21 +103,17 @@ void TestBlocks(thrust::universal_vector<half>&  linear,          // linear data
 
 int main(int argc, char* argv[])
 {
+
     DecoderMultiHeadAttentionParams<half> params{};
 
-    // constexpr int kHeadNum = 108 * 4;
-    constexpr int kHeadNum     = 32;
+    constexpr int kHeadNum = 108;
+    // constexpr int kHeadNum     = 32;
     constexpr int kHeadDim     = 128;
-    constexpr int kBatchSize   = 1;
-    constexpr int kContextLen  = 511;
+    constexpr int kBatchSize   = 64;
+    constexpr int kContextLen  = 2047;
     constexpr int kSequenceLen = kContextLen + 1;
     constexpr int kBlockSz     = 128;
     constexpr int kTestIter    = 1;
-
-    // constexpr int kHeadNum     = 3;
-    // constexpr int kHeadDim     = 4;
-    // constexpr int kContextLen  = 7;
-    // constexpr int kSequenceLen = kContextLen + 1;
 
     RNG rng{};
 

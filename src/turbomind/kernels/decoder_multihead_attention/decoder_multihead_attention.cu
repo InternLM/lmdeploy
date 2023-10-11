@@ -1,4 +1,5 @@
 #include "decoder_multihead_attention_template.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 
 #include <iostream>
 
@@ -23,10 +24,11 @@ bool Dump()
     return true;
 }
 
-template<typename T, int HeadDim, int HeadPerCta>
-void InvokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
+template<typename T, typename Tkv, int HeadDim, int HeadPerCta>
+void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
 {
-    using MHAType = DecoderMultiHeadAttentionKernel<T, HeadPerCta, HeadDim, 16, HeadDim, 2048, 6>;
+    // 2048_32x6 ~ 64k smem
+    using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 6>;
 
     [[maybe_unused]] static const bool init = Dump<MHAType>();
 
@@ -51,23 +53,28 @@ void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>&
 
     if constexpr (std::is_same_v<T, half>) {
 
-        int group_size = params.num_heads / params.num_kv_heads;
+        //     int group_size = params.num_heads / params.num_kv_heads;
 
-        if (group_size % 8 == 0) {
-            InvokeDecoderMultiheadAttention<T, HeadDim, 8>(params);
-        }
-        else if (group_size % 4 == 0) {
-            InvokeDecoderMultiheadAttention<T, HeadDim, 4>(params);
-        }
-        else if (group_size % 2 == 0) {
-            InvokeDecoderMultiheadAttention<T, HeadDim, 2>(params);
+        //     if (group_size % 8 == 0) {
+        //         invokeDecoderMultiheadAttention<T, HeadDim, 8>(params);
+        //     }
+        //     else if (group_size % 4 == 0) {
+        //         invokeDecoderMultiheadAttention<T, HeadDim, 4>(params);
+        //     }
+        //     else if (group_size % 2 == 0) {
+        //         invokeDecoderMultiheadAttention<T, HeadDim, 2>(params);
+        //     }
+        //     else {
+        //         invokeDecoderMultiheadAttention<T, HeadDim, 1>(params);
+        //     }
+        // }
+        // else {
+        if (params.quant_policy & QuantPolicy::kCacheKVInt8) {
+            invokeDecoderMultiheadAttention<T, int8_t, HeadDim, 1>(params);
         }
         else {
-            InvokeDecoderMultiheadAttention<T, HeadDim, 1>(params);
+            invokeDecoderMultiheadAttention<T, T, HeadDim, 1>(params);
         }
-    }
-    else {
-        InvokeDecoderMultiheadAttention<T, HeadDim, 1>(params);
     }
 }
 

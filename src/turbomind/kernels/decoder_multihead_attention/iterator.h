@@ -70,8 +70,8 @@ struct Iterator {
 
     int head_idx_;
 
-    const T* src_;
-    T*       smem_;
+    const T* __restrict__ src_;
+    T* __restrict__ smem_;
 
     int smem_read_offset_;
 
@@ -250,11 +250,11 @@ struct Iterator {
     }
 #endif
 
-    static __device__ void CpAsync(T* dst, const T* src, bool mask)
+    static __device__ void CpAsync(T* __restrict__ dst, const T* __restrict__ src, bool mask)
     {
         const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
         constexpr int cp_size      = sizeof(AccessType);
-        static_assert(cp_size == 16);
+        // static_assert(cp_size == 16);
         asm volatile("{\n"
                      "  .reg .pred p;\n"
                      "  setp.ne.b32 p, %0, 0;\n"
@@ -265,7 +265,7 @@ struct Iterator {
                      "n"(cp_size));
     }
 
-    static __device__ void Copy(T* dst, const T* src, bool mask)
+    static __device__ void Copy(T* __restrict__ dst, const T* __restrict__ src, bool mask)
     {
         if (mask) {
             Ldg(*(AccessType*)dst, src);

@@ -134,6 +134,9 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.rotary_embedding_dim  = size_per_head_;
     params.rotary_embedding_base = 10000.f;
 
+    params.quant_policy = quant_policy_;
+    std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
+
     DispatchDecoderMultiheadAttention<T>(params);
 
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
