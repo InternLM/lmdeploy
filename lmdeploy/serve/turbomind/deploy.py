@@ -837,14 +837,23 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
     # convert weights from hf to turbomind
     model_params = {}
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
     _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
+    if len(_files) > 0:
+        _files = sorted(_files)
+        print(_files)
+
+        for _file in _files:
+            _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
+            _params.update(_tmp)
+    else:
+        from safetensors import safe_open
+        _files = [file for file in os.listdir(model_path) if file.endswith('.safetensors')]
+        print(_files)
+        for _file in _files:
+            with safe_open(osp.join(model_path, _file), framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    _params[key] = f.get_tensor(key)
 
     def get_tensor(name, trans=True):
         """return a transposed tensor according its name."""
