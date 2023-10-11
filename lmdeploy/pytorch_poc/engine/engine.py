@@ -3,7 +3,6 @@ import enum
 import itertools
 import json
 import os
-import os.path as osp
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -19,14 +18,15 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TemperatureLogitsWarper,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
+from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerMessage, SchedulerSession)
+from lmdeploy.pytorch_poc.models import patch
 from lmdeploy.pytorch_poc.paging import Scheduler
-from lmdeploy.pytorch_poc.patch import patch
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
 from lmdeploy.utils import get_logger
 
@@ -106,12 +106,16 @@ class ModelContext:
         block_offsets: List[List[int]],
         history_lengths: List[int],
         position_ids: torch.Tensor,
+        q_start_loc: torch.Tensor,
+        seq_length: torch.Tensor,
         world_size: int = 1,
         device='cuda',
     ):
         self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
         self.position_ids = position_ids
+        self.q_start_loc = q_start_loc
+        self.seq_length = seq_length
         self.world_size = world_size
 
         # padding zero
@@ -125,6 +129,73 @@ class ModelContext:
     def get_block_offsets(self):
         """return block offsets."""
         return self.block_offsets
+
+    def fill_cache(
+        self,
+        k_states: torch.Tensor,
+        v_states: torch.Tensor,
+        start_loc: torch.Tensor,
+        seq_length: torch.Tensor,
+        k_caches: torch.Tensor,
+        v_caches: torch.Tensor,
+    ):
+        """Fill current key/value to cache.
+
+        Args:
+            k_states (torch.Tensor): [packed_seq_len, head, dim]
+            v_states (torch.Tensor): [packed_seq_len, head, dim]
+            start_loc (torch.Tensor): [bs]
+            seq_length (torch.Tensor): [bs]
+            k_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+            v_caches (torch.Tensor): [num_blocks, block_size, head, dim]
+        """
+
+        block_size = k_caches.size(1)
+        block_offsets = self.block_offsets_list
+
+        history_lengths = torch.tensor(self.history_lengths)
+        first_free_block_offsets = history_lengths // block_size
+        first_token_offsets = history_lengths % block_size
+
+        for bid in range(len(history_lengths)):
+            loc = start_loc[bid]
+            seq_len = seq_length[bid]
+            b_offsets = block_offsets[bid]
+            free_offset = first_free_block_offsets[bid]
+            token_offset = first_token_offsets[bid]
+
+            assert 0 <= loc <= k_states.size(0)
+            assert 0 <= loc + seq_len <= k_states.size(0)
+
+            k_state = k_states[loc:loc + seq_len]
+            v_state = v_states[loc:loc + seq_len]
+
+            # fill remain(last non-full block)
+            block_id = b_offsets[free_offset]
+            fill_token_num = min(block_size - token_offset, seq_len)
+
+            assert 0 <= fill_token_num <= block_size
+
+            k_caches[block_id][token_offset:token_offset +
+                               fill_token_num] = k_state[:fill_token_num]
+            v_caches[block_id][token_offset:token_offset +
+                               fill_token_num] = v_state[:fill_token_num]
+
+            # update offset
+            seq_len = seq_len - fill_token_num
+            free_offset += 1
+            k_state = k_state[fill_token_num:]
+            v_state = v_state[fill_token_num:]
+
+            for seq_offset in range(0, seq_len, block_size):
+                token_num = min(seq_len - seq_offset, block_size)
+                block_id = b_offsets[free_offset]
+                k_caches[block_id][:token_num] = k_state[:token_num]
+                v_caches[block_id][:token_num] = v_state[:token_num]
+
+                free_offset += 1
+                k_state = k_state[token_num:]
+                v_state = v_state[token_num:]
 
 
 def _update_cache_config(model_config: ModelConfig,
@@ -170,6 +241,7 @@ def _tp_model_loop(
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
+    trust_remote_code=True,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -193,22 +265,29 @@ def _tp_model_loop(
     error_type = None
 
     try:
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(config)
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(config,
-                                                     torch_dtype=torch_dtype,
-                                                     trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(
+                config,
+                torch_dtype=torch_dtype,
+                trust_remote_code=trust_remote_code)
 
-        torch_model_json_path = osp.join(model_path,
-                                         'pytorch_model.bin.index.json')
-        with open(torch_model_json_path, mode='r') as f:
-            torch_model_json = json.load(f)
+        try:
+            torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
+            with open(torch_model_json_path, mode='r') as f:
+                torch_model_json = json.load(f)
 
-        weight_map = torch_model_json['weight_map']
+            weight_map = torch_model_json['weight_map']
 
-        checkpoints = list(set(weight_map.values()))
-        checkpoints = [osp.join(model_path, ckpt) for ckpt in checkpoints]
+            checkpoints = list(set(weight_map.values()))
+            checkpoints = [
+                cached_file(model_path, ckpt) for ckpt in checkpoints
+            ]
+        except Exception:
+            logger.warning(f'load failed, try load from {WEIGHTS_NAME}.')
+            checkpoints = [cached_file(model_path, WEIGHTS_NAME)]
         patched_model = patch(
             model,
             extra_args=extra_args,
@@ -318,6 +397,8 @@ def _tp_model_loop(
                     block_offsets=inputs['block_offsets'],
                     history_lengths=inputs['history_lengths'],
                     position_ids=inputs['position_ids'],
+                    q_start_loc=inputs['q_start_loc'],
+                    seq_length=inputs['seq_length'],
                     world_size=world_size,
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
@@ -376,11 +457,13 @@ class Engine:
         scheduler_config: SchedulerConfig = None,
         cache_config: CacheConfig = None,
         tp: int = 1,
+        trust_remote_code=True,
     ) -> None:
+
         self.tp = tp
         self.gpu_count = tp
-        hf_config = AutoConfig.from_pretrained(model_path,
-                                               trust_remote_code=True)
+        hf_config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(hf_config)
         self.torch_dtype = torch_dtype
 
@@ -392,14 +475,25 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        model_config = ModelConfig(
-            hf_config.hidden_size,
-            hf_config.num_hidden_layers,
-            hf_config.num_attention_heads,
-            bos_token_id=hf_config.bos_token_id,
-            eos_token_id=hf_config.eos_token_id,
-            dtype=torch_dtype,
-        )
+        if 'chatglm' in model_path:
+            model_config = ModelConfig(
+                hf_config.hidden_size // hf_config.num_attention_heads *
+                hf_config.multi_query_group_num,
+                hf_config.num_layers,
+                hf_config.multi_query_group_num,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
+        else:
+            model_config = ModelConfig(
+                hf_config.hidden_size,
+                hf_config.num_hidden_layers,
+                hf_config.num_attention_heads,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -411,7 +505,7 @@ class Engine:
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     model_path,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=True)
+                    trust_remote_code=trust_remote_code)
                 hf_model.eval()
 
             self.patched_model = patch(
@@ -651,6 +745,8 @@ class Engine:
                         block_offsets=inputs['block_offsets'],
                         history_lengths=inputs['history_lengths'],
                         position_ids=inputs['position_ids'],
+                        q_start_loc=inputs['q_start_loc'],
+                        seq_length=inputs['seq_length'],
                     ),
                     q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
                 )
@@ -940,6 +1036,11 @@ class EngineInstance:
         self.response = Queue()
         self.req_count = 0
         self.owned_sessions: List[int] = list()
+
+    def __del__(self):
+        """Destructor."""
+        for session_id in self.owned_sessions:
+            self.end(session_id)
 
     def _send_req(self, req_type: RequestType, data: Any):
         """Send request to engine.

@@ -58,6 +58,9 @@ def rowwise_parallelize_linear_fn(module: nn.Module,
         dist_tensor = distribute_tensor(param, device_mesh, dist_spec)
         if to_local:
             dist_tensor = try_to_local(dist_tensor)
+            if name == 'bias':
+                # rowwise linear would add bias more than ones.
+                dist_tensor /= device_mesh.size()
         dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
 

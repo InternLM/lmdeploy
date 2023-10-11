@@ -110,7 +110,7 @@ class HuggingFaceTokenizer:
         model_dir (str): the directory of the tokenizer model
     """
 
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, trust_remote_code=True):
         from transformers import AutoTokenizer, LlamaTokenizerFast
         model_file = osp.join(model_dir, 'tokenizer.model')
         backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
@@ -118,8 +118,8 @@ class HuggingFaceTokenizer:
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
             print('WARNING: Can not find tokenizer.json. '
                   'It may take long time to initialize the tokenizer.')
-        self.model = AutoTokenizer.from_pretrained(model_dir,
-                                                   trust_remote_code=True)
+        self.model = AutoTokenizer.from_pretrained(
+            model_dir, trust_remote_code=trust_remote_code)
         self.need_padding = isinstance(self.model, LlamaTokenizerFast)
         self._no_prefix_space_tokens = None
         # save tokenizer.json to reuse
@@ -223,7 +223,7 @@ class Tokenizer:
         model_file (str): the path of the tokenizer model
     """
 
-    def __init__(self, model_file: str):
+    def __init__(self, model_file: str, trust_remote_code=True):
         if model_file.endswith('.model'):
             model_folder = osp.split(model_file)[0]
         else:
@@ -238,7 +238,7 @@ class Tokenizer:
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
-            self.model = HuggingFaceTokenizer(model_folder)
+            self.model = HuggingFaceTokenizer(model_folder, trust_remote_code)
 
     @property
     def vocab_size(self):

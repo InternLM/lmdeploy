@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple
 
 import torch
 from torch import Tensor
 from torch import distributed as dist
 
 from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
-                                          paged_attention_fwd)
+                                          fill_kv_cache, paged_attention_fwd)
 
 
 def rotate_half(x: Tensor):
@@ -33,88 +33,19 @@ def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
     """
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
-    cos = cos.to(q.device)
-    sin = sin.to(q.device)
+    cos = cos.to(device=q.device, dtype=q.dtype)
+    sin = sin.to(device=q.device, dtype=q.dtype)
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
     sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-    cos = cos[position_ids]  # [bs, 1, seq_len, dim]
-    sin = sin[position_ids]  # [bs, 1, seq_len, dim]
     seq_length = position_ids[..., -1] + 1
-    cos = [s[:l] for s, l in zip(cos, seq_length)]
-    sin = [s[:l] for s, l in zip(sin, seq_length)]
-    cos = torch.cat(cos, 0).unsqueeze(1)
-    sin = torch.cat(sin, 0).unsqueeze(1)
+    position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
+    position_ids_1d = torch.cat(position_ids_1d)
+    cos = cos[position_ids_1d].unsqueeze(1)
+    sin = sin[position_ids_1d].unsqueeze(1)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
 
     return q_embed, k_embed
-
-
-def fill_kv_cache(
-    k_states: Tensor,
-    v_states: Tensor,
-    k_caches: Tensor,
-    v_caches: Tensor,
-    start_loc: Tensor,
-    seq_length: Tensor,
-    block_offsets: Tensor,
-    history_lengths: Sequence,
-):
-    """Fill key/value cache with current key value states.
-
-    Paged attention choose cache block by block tables. New key/value should be
-    filled into the cache blocks indicated by block tables.
-
-    Args:
-        k_states (Tensor): key states
-        v_states (Tensor): value states
-        k_caches (Tensor): key caches
-        v_caches (Tensor): value caches
-        start_loc (Tensor): state location of each data in batch
-        seq_length (Tensor): sequence length of each data in batch
-        block_offsets (Tensor): block table of blocks in key/value caches.
-        history_lengths (Sequence): Cache length in k_caches/v_caches.
-            Does not include data in k_states/v_states
-    """
-    block_size = k_caches.size(1)
-
-    history_lengths = torch.tensor(history_lengths)
-    first_free_block_offsets = history_lengths // block_size
-    first_token_offsets = history_lengths % block_size
-
-    for bid in range(len(history_lengths)):
-        loc = start_loc[bid]
-        seq_len = seq_length[bid]
-        b_offsets = block_offsets[bid]
-        free_offset = first_free_block_offsets[bid]
-        token_offset = first_token_offsets[bid]
-
-        k_state = k_states[loc:loc + seq_len]
-        v_state = v_states[loc:loc + seq_len]
-
-        # fill remain(last non-full block)
-        block_id = b_offsets[free_offset]
-        fill_token_num = min(block_size - token_offset, seq_len)
-        k_caches[block_id][token_offset:token_offset +
-                           fill_token_num] = k_state[:fill_token_num]
-        v_caches[block_id][token_offset:token_offset +
-                           fill_token_num] = v_state[:fill_token_num]
-
-        # update offset
-        seq_len = seq_len - fill_token_num
-        free_offset += 1
-        k_state = k_state[fill_token_num:]
-        v_state = v_state[fill_token_num:]
-
-        for seq_offset in range(0, seq_len, block_size):
-            token_num = min(seq_len - seq_offset, block_size)
-            block_id = b_offsets[free_offset]
-            k_caches[block_id][:token_num] = k_state[:token_num]
-            v_caches[block_id][:token_num] = v_state[:token_num]
-
-            free_offset += 1
-            k_state = k_state[token_num:]
-            v_state = v_state[token_num:]
 
 
 def generate_batched_mask(q_lens,
@@ -177,6 +108,7 @@ def attention_forward_with_paged_attention(
     head_dim: int,
     position_ids: torch.LongTensor,
     past_key_value: Tuple[Tensor],
+    context: Any = None,
     q_proj: Optional[Callable] = None,
     k_proj: Optional[Callable] = None,
     v_proj: Optional[Callable] = None,
@@ -230,19 +162,26 @@ def attention_forward_with_paged_attention(
             query_states, key_states, value_states)
 
     kv_seq_length = position_ids[..., -1] + 1
-    q_seq_length = kv_seq_length - kv_seq_length.new_tensor(history_lengths)
-    q_start_loc = q_seq_length.cumsum(0)
-    q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
-    fill_kv_cache(
-        key_states,
-        value_states,
-        past_key_value[0],
-        past_key_value[1],
-        q_start_loc,
-        q_seq_length,
-        block_offsets=block_offsets,
-        history_lengths=history_lengths,
-    )
+
+    q_seq_length = getattr(context, 'seq_length', None)
+    if q_seq_length is None:
+        q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
+            history_lengths)
+
+    q_start_loc = getattr(context, 'q_start_loc', None)
+    if q_start_loc is None:
+        q_start_loc = q_seq_length.cumsum(0)
+        q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+
+    fill_kv_cache(key_states,
+                  value_states,
+                  past_key_value[0],
+                  past_key_value[1],
+                  q_start_loc,
+                  q_seq_length,
+                  block_offsets=block_offsets,
+                  history_lengths=history_lengths,
+                  context=context)
     attn_output = torch.empty_like(query_states)
 
     block_size = past_key_value[0].size(1)
@@ -287,7 +226,7 @@ def attention_forward_with_paged_attention(
         else:
             raise ValueError(f'Unknown bias type: {bias_type}')
     hidden_size = num_heads * head_dim
-    attn_output = attn_output.reshape(-1, hidden_size)
+    attn_output = attn_output.reshape(*hidden_states.shape[:-1], hidden_size)
 
     if o_proj is not None:
         attn_output = o_proj(attn_output)

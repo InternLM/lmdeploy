@@ -9,28 +9,59 @@ import torch
 import torch.distributed as dist
 from addict import Addict
 from torch.distributed._tensor import DeviceMesh
+from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
 from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
+LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch_poc.models'
+
+# llama
 MODULE_MAP = {
     'transformers.models.llama.modeling_llama.LlamaAttention':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',
-    'modeling_baichuan.Model':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaModel',  # noqa
-    'modeling_baichuan.BaichuanModel':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanModel',  # noqa
-    'modeling_baichuan.Attention':
-    'lmdeploy.pytorch_poc.patch.baichuan.Attention',  # noqa
-    'modeling_baichuan.BaichuanAttention':
-    'lmdeploy.pytorch_poc.patch.baichuan.BaichuanAttention',  # noqa
-    'modeling_baichuan.MLP':
-    'lmdeploy.pytorch_poc.patch.llama.LlamaMLP',  # noqa
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
 }
+
+# baichuan
+MODULE_MAP.update({
+    'modeling_baichuan.Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
+    (f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.Baichuan2-7B-Chat'
+     '.modeling_baichuan.BaichuanModel'):
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
+    'modeling_baichuan.BaichuanModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanModel',  # noqa
+    'modeling_baichuan.Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.Attention',  # noqa
+    'modeling_baichuan.BaichuanAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanAttention',  # noqa
+    'modeling_baichuan.MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',  # noqa
+})
+
+# chatglm2
+MODULE_MAP.update({
+    'modeling_chatglm.SelfAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedSelfAttention',
+    'modeling_chatglm.ChatGLMModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMModel',
+    'modeling_chatglm.MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.MLP',
+})
+
+# internlm
+MODULE_MAP.update({
+    'modeling_internlm.InternLMAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.PatchedInternLMAttention',
+    'modeling_internlm.InternLMModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'modeling_internlm.InternLMMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+})
 
 
 def _get_rewrite_qualname(origin_qualname: str) -> str:
@@ -146,6 +177,17 @@ def _update_model(model: torch.nn.Module):
         model._update_model_fn()
 
 
+def _params_to_meta(model: torch.nn.Module):
+    """move parameters to meta device."""
+    # recursive over children
+    for _, child in model.named_children():
+        _params_to_meta(child)
+
+    for k, v in model.named_parameters(recurse=False):
+        model.register_parameter(
+            k, torch.nn.Parameter(v.to('meta'), requires_grad=False))
+
+
 def _load_state_dict(
     model: torch.nn.Module,
     state_dict: Dict[str, torch.Tensor] = None,
@@ -209,13 +251,18 @@ def _load_state_dict(
         if not in_state_dict:
             continue
 
-        if rank == 0:
-            new_param = torch.nn.Parameter(state_dict[full_k],
-                                           requires_grad=False).to(device)
-        else:
-            new_param = torch.nn.Parameter(torch.empty_like(v, device=device),
-                                           requires_grad=False)
-        model.register_parameter(k, new_param)
+        param_names = [
+            name for name, _ in model.named_parameters(recurse=False)
+        ]
+        if k in param_names:
+            if rank == 0:
+                new_param = torch.nn.Parameter(state_dict[full_k].to(v.dtype),
+                                               requires_grad=False).to(device)
+            else:
+                new_param = torch.nn.Parameter(torch.empty_like(v,
+                                                                device=device),
+                                               requires_grad=False)
+            model.register_parameter(k, new_param)
 
     # distribute module
     if world_size > 1:
@@ -289,6 +336,7 @@ def patch(
 
     # load checkpoint
     if checkpoints is not None:
+        _params_to_meta(model)
         device_mesh = DeviceMesh('cuda', list(range(world_size)))
         for ckpt in checkpoints:
             if rank == 0:
