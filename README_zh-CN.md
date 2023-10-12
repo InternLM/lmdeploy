@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/09\] TurboMind 支持 Qwen-14B
 - \[2023/09\] TurboMind 支持 InternLM-20B 模型
 - \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
 - \[2023/09\] TurboMind 支持 Baichuan2-7B
@@ -66,6 +67,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 | InternLM-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |   QWen-7B    |   Yes    | Yes  |   Yes   |  No   |  No  |
+|   QWen-14B   |   Yes    | Yes  |   Yes   |  No   |  No  |
 | Baichuan-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan2-7B |   Yes    | Yes  |   No    |  No   |  No  |
 |  Code Llama  |   Yes    | Yes  |   No    |  No   |  No  |

@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
 - \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide
 - \[2023/09\] TurboMind supports Baichuan2-7B
@@ -65,6 +66,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 | InternLM-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |   QWen-7B    |       Yes       | Yes  |   Yes   |  No   |  No  |
+|   QWen-14B   |       Yes       | Yes  |   Yes   |  No   |  No  |
 | Baichuan-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan2-7B |       Yes       | Yes  |   No    |  No   |  No  |
 |  Code Llama  |       Yes       | Yes  |   No    |  No   |  No  |
