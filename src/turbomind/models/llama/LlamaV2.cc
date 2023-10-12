@@ -260,7 +260,7 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
         {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}}};
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
-        {"decoder_output", {MEMORY_GPU, dtype, {bsz, max_input_len, hidden_units_}, context_decoder_output_buf}},
+        {"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, context_decoder_output_buf}},
         {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_cache_ptr}},
         {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
         {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_k_ptrs}},

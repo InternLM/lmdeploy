@@ -63,6 +63,11 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     void handleMissingParams();
 
+    void setFfiLock(ffi_api_lock_ctrl_t func)
+    {
+        ffi_lock_ = func;
+    }
+
     std::string toString() override;
     int         getTensorParaSize() override;
     int         getPipelineParaSize() override;
@@ -103,13 +108,14 @@ private:
 
     std::shared_ptr<typename ft::LlamaV2<T>::SharedState> shared_state_;
 
-    // weak_ptr is used so that the instances get released when all strong references are gone
-    std::vector<std::weak_ptr<LlamaTritonSharedModelInstance<T>>> shared_instances_;
-    std::deque<std::mutex>                                        shared_mutexes_;  // is locking really needed?
+    std::vector<std::shared_ptr<LlamaTritonSharedModelInstance<T>>> shared_instances_;
+    std::deque<std::mutex>                                          shared_mutexes_;  // is locking really needed?
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;
 
     std::string model_name_;
     std::string model_dir_;
+
+    ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
 };

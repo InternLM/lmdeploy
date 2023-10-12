@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import json
 import os
 import time
 from http import HTTPStatus
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, List, Optional
 
 import fire
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -15,8 +15,8 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse, ChatMessage, DeltaMessage, EmbeddingsRequest,
-    EmbeddingsResponse, ErrorResponse, GenerateRequest, ModelCard, ModelList,
-    ModelPermission, UsageInfo)
+    EmbeddingsResponse, ErrorResponse, GenerateRequest, GenerateResponse,
+    ModelCard, ModelList, ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -57,9 +57,10 @@ def create_error_response(status: HTTPStatus, message: str):
         status (HTTPStatus): HTTP status codes and reason phrases
         message (str): error message
     """
-    return JSONResponse(ErrorResponse(message=message,
-                                      type='invalid_request_error').dict(),
-                        status_code=status.value)
+    return JSONResponse(
+        ErrorResponse(message=message,
+                      type='invalid_request_error',
+                      code=status.value).model_dump())
 
 
 async def check_request(request) -> Optional[JSONResponse]:
@@ -69,6 +70,16 @@ async def check_request(request) -> Optional[JSONResponse]:
     ret = create_error_response(
         HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
     return ret
+
+
+def ip2id(host_ip: str):
+    """Convert host ip address to session id."""
+    if '.' in host_ip:  # IPv4
+        return int(host_ip.replace('.', '')[-8:])
+    if ':' in host_ip:  # IPv6
+        return int(host_ip.replace(':', '')[-8:], 16)
+    print('Warning, could not get session id from ip, set it 0')
+    return 0
 
 
 @app.post('/v1/chat/completions')
@@ -104,20 +115,19 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    instance_id = int(raw_request.client.host.replace('.', ''))
-
+    session_id = ip2id(raw_request.client.host)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
 
     model_name = request.model
-    request_id = str(instance_id)
+    request_id = str(session_id)
     created_time = int(time.time())
 
     result_generator = VariableInterface.async_engine.generate_openai(
         request.messages,
-        instance_id,
-        request.stream,
+        session_id,
+        True,  # always use stream to enable batching
         request.renew_session,
         request_output_len=request.max_tokens if request.max_tokens else 512,
         stop=request.stop,
@@ -125,15 +135,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
-
-    async def abort_request() -> None:
-        async for _ in VariableInterface.async_engine.generate_openai(
-                request.messages,
-                instance_id,
-                request.stream,
-                request.renew_session,
-                stop=True):
-            pass
 
     def create_stream_response_json(
         index: int,
@@ -151,7 +152,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             model=model_name,
             choices=[choice_data],
         )
-        response_json = response.json(ensure_ascii=False)
+        response_json = response.model_dump_json()
 
         return response_json
 
@@ -166,7 +167,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             chunk = ChatCompletionStreamResponse(id=request_id,
                                                  choices=[choice_data],
                                                  model=model_name)
-            data = chunk.json(exclude_unset=True, ensure_ascii=False)
+            data = chunk.model_dump_json(exclude_unset=True)
             yield f'data: {data}\n\n'
 
         async for res in result_generator:
@@ -179,27 +180,25 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     # Streaming response
     if request.stream:
-        background_tasks = BackgroundTasks()
-        # Abort the request if the client disconnects.
-        background_tasks.add_task(abort_request)
         return StreamingResponse(completion_stream_generator(),
-                                 media_type='text/event-stream',
-                                 background=background_tasks)
+                                 media_type='text/event-stream')
 
     # Non-streaming response
     final_res = None
+    text = ''
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            await abort_request()
+            VariableInterface.async_engine.stop_session(session_id)
             return create_error_response(HTTPStatus.BAD_REQUEST,
                                          'Client disconnected')
         final_res = res
+        text += res.response
     assert final_res is not None
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=final_res.response),
+        message=ChatMessage(role='assistant', content=text),
         finish_reason=final_res.finish_reason,
     )
     choices.append(choice_data)
@@ -253,7 +252,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
 
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
-    - instance_id: determine which instance will be called. If not specified
+    - session_id: determine which instance will be called. If not specified
         with a value other than -1, using host ip directly.
     - sequence_start (bool): indicator for starting a sequence.
     - sequence_end (bool): indicator for ending a sequence
@@ -271,14 +270,14 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
         1.0 means no penalty
     - ignore_eos (bool): indicator for ignoring eos
     """
-    if request.instance_id == -1:
-        instance_id = int(raw_request.client.host.replace('.', ''))
-        request.instance_id = instance_id
+    if request.session_id == -1:
+        session_id = ip2id(raw_request.client.host)
+        request.session_id = session_id
 
     generation = VariableInterface.async_engine.generate(
         request.prompt,
-        request.instance_id,
-        stream_response=request.stream,
+        request.session_id,
+        stream_response=True,  # always use stream to enable batching
         sequence_start=request.sequence_start,
         sequence_end=request.sequence_end,
         request_output_len=request.request_output_len,
@@ -292,23 +291,30 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
         async for out in generation:
-            ret = {
-                'text': out.response,
-                'tokens': out.generate_token_len,
-                'finish_reason': out.finish_reason
-            }
-            yield (json.dumps(ret) + '\0').encode('utf-8')
+            chunk = GenerateResponse(text=out.response,
+                                     tokens=out.generate_token_len,
+                                     finish_reason=out.finish_reason)
+            data = chunk.model_dump_json()
+            yield f'{data}\n'
 
     if request.stream:
-        return StreamingResponse(stream_results())
+        return StreamingResponse(stream_results(),
+                                 media_type='text/event-stream')
     else:
         ret = {}
+        text = ''
+        tokens = 0
+        finish_reason = None
         async for out in generation:
-            ret = {
-                'text': out.response,
-                'tokens': out.generate_token_len,
-                'finish_reason': out.finish_reason
-            }
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                VariableInterface.async_engine.stop_session(session_id)
+                return create_error_response(HTTPStatus.BAD_REQUEST,
+                                             'Client disconnected')
+            text += out.response
+            tokens = out.generate_token_len
+            finish_reason = out.finish_reason
+        ret = {'text': text, 'tokens': tokens, 'finish_reason': finish_reason}
         return JSONResponse(ret)
 
 
@@ -316,7 +322,11 @@ def main(model_path: str,
          server_name: str = 'localhost',
          server_port: int = 23333,
          instance_num: int = 32,
-         tp: int = 1):
+         tp: int = 1,
+         allow_origins: List[str] = ['*'],
+         allow_credentials: bool = True,
+         allow_methods: List[str] = ['*'],
+         allow_headers: List[str] = ['*']):
     """An example to perform model inference through the command line
     interface.
 
@@ -326,7 +336,20 @@ def main(model_path: str,
         server_port (int): server port
         instance_num (int): number of instances of turbomind model
         tp (int): tensor parallel
+        allow_origins (List[str]): a list of allowed origins for CORS
+        allow_credentials (bool): whether to allow credentials for CORS
+        allow_methods (List[str]): a list of allowed HTTP methods for CORS
+        allow_headers (List[str]): a list of allowed HTTP headers for CORS
     """
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+        )
+
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  instance_num=instance_num,
                                                  tp=tp)

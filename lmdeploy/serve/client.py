@@ -6,16 +6,23 @@ import fire
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
-def input_prompt():
-    """Input a prompt in the console interface."""
-    print('\ndouble enter to end input >>> ', end='')
-    sentinel = ''  # ends when this string is seen
+def input_prompt(model_name):
+    """Input a prompt in the consolo interface."""
+    if model_name == 'codellama':
+        print('\nenter !! to end the input >>>\n', end='')
+        sentinel = '!!'
+    else:
+        print('\ndouble enter to end input >>> ', end='')
+        sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
 
 def main(tritonserver_addr: str,
          session_id: int = 1,
-         stream_output: bool = True):
+         cap: str = 'chat',
+         sys_instruct: str = None,
+         stream_output: bool = True,
+         **kwargs):
     """An example to communicate with inference server through the command line
     interface.
 
@@ -23,15 +30,22 @@ def main(tritonserver_addr: str,
         tritonserver_addr (str): the address in format "ip:port" of
           triton inference server
         session_id (int): the identical id of a session
+        cap (str): the capability of a model. For example, codellama has
+            the ability among ['completion', 'infill', 'instruct', 'python']
+        sys_instruct (str): the content of 'system' role, which is used by
+            conversational model
         stream_output (bool): indicator for streaming output or not
+        **kwargs (dict): other arguments for initializing model's chat template
     """
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')
+    kwargs.update(capability=cap, system=sys_instruct)
     chatbot = Chatbot(tritonserver_addr,
                       log_level=log_level,
-                      display=stream_output)
+                      display=stream_output,
+                      **kwargs)
     nth_round = 1
     while True:
-        prompt = input_prompt()
+        prompt = input_prompt(chatbot.model_name)
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':

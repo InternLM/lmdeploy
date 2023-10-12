@@ -84,7 +84,7 @@ public:
 
     ~LlamaBatch()
     {
-        model_->shared_state_->request_queue.Abort();
+        model_->shared_state_->request_queue.close();
 
         internal_thread_.join();
 

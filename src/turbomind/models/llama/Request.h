@@ -45,6 +45,11 @@ public:
         futures.reserve(requests.size());
         {
             std::lock_guard<std::mutex> lock(mutex_);
+
+            if (closed_) {
+                throw std::runtime_error("Queue is closed");
+            }
+
             for (auto& r : requests) {
                 futures.push_back(r->signal.get_future());
                 if (r->stop_flag) {
@@ -67,8 +72,8 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex_);
         if (blocking) {
-            cv_.wait(lock, [this] { return !(stop_queue_.empty() && infer_queue_.empty()) || abort_; });
-            if (abort_) {
+            cv_.wait(lock, [this] { return !(stop_queue_.empty() && infer_queue_.empty()) || closed_; });
+            if (closed_) {
                 abort = true;
                 return;
             }
@@ -87,11 +92,11 @@ public:
         }
     }
 
-    void Abort()
+    void close()
     {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            abort_ = true;
+            closed_ = true;
         }
         cv_.notify_all();
     }
@@ -101,7 +106,7 @@ private:
     std::queue<std::shared_ptr<Request>> infer_queue_;
     std::mutex                           mutex_;
     std::condition_variable              cv_;
-    bool                                 abort_{false};
+    bool                                 closed_{false};
 };
 
 }  // namespace turbomind

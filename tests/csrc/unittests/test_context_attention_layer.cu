@@ -278,6 +278,8 @@ int main(int argc, const char* argv[])
     // auto* input_lengths  = (int*)allocator.malloc(sizeof(int) * batch_size, false);
     thrust::device_vector<int> input_lengths(batch_size);
     thrust::host_vector<int>   input_lengths_host(batch_size);
+    thrust::device_vector<int> kv_lengths(batch_size);
+    thrust::host_vector<int>   kv_lengths_host(batch_size);
 
     cudaRandomUniform<scalar_t>(query_ptr, batch_size * num_heads * seq_len * size_per_head);
     cudaRandomUniform<scalar_t>(key_ptr, batch_size * num_heads * key_len * size_per_head);
@@ -285,13 +287,12 @@ int main(int argc, const char* argv[])
     cudaRandomUniform<scalar_t>(mask_ptr, batch_size * seq_len * key_len);
 
     // create random length for batch
-    std::uniform_int_distribution<int> dist{seq_len / 2, seq_len};
-    auto                               gen = [&dist, &mersenne_engine]() { return dist(mersenne_engine); };
-    std::generate(begin(input_lengths_host), end(input_lengths_host), gen);
-    // for(int batch_id=0;batch_id<batch_size;++batch_id){
-    //     input_lengths_host[batch_id] = seq_len;
-    // }
-    thrust::copy(input_lengths_host.begin(), input_lengths_host.end(), input_lengths.begin());
+    {
+        std::uniform_int_distribution<int> dist{seq_len / 2, seq_len};
+        auto                               gen = [&dist, &mersenne_engine]() { return dist(mersenne_engine); };
+        std::generate(begin(input_lengths_host), end(input_lengths_host), gen);
+        thrust::copy(input_lengths_host.begin(), input_lengths_host.end(), input_lengths.begin());
+    }
     size_t  h_token_num = 0;
     size_t* h_pinned_token_num;
     auto    input_lengths_ptr = thrust::raw_pointer_cast(input_lengths.data());
@@ -306,10 +307,16 @@ int main(int argc, const char* argv[])
                                        stream);
     cudaFreeHost((void*)h_pinned_token_num);
 
-    int* k_lens = (int*)allocator.malloc(batch_size * sizeof(int));
-    deviceFill(k_lens, batch_size, key_len, stream);
+    {
+        std::uniform_int_distribution<int> dist{seq_len, key_len};
+        auto                               gen = [&dist, &mersenne_engine]() { return dist(mersenne_engine); };
+        std::generate(begin(kv_lengths_host), end(kv_lengths_host), gen);
+        thrust::copy(kv_lengths_host.begin(), kv_lengths_host.end(), kv_lengths.begin());
+    }
+    auto kv_lengths_ptr = thrust::raw_pointer_cast(kv_lengths.data());
+    // deviceFill(kv_lengths_ptr, batch_size, key_len, stream);
 
-    invokeCreateCausalMasks(mask_ptr, input_lengths_ptr, k_lens, seq_len, key_len, batch_size, stream);
+    invokeCreateCausalMasks(mask_ptr, input_lengths_ptr, kv_lengths_ptr, seq_len, key_len, batch_size, stream);
     // deviceFill(mask_ptr, batch_size*key_len*seq_len, scalar_t(1), stream);
 
     // compute gt
@@ -356,6 +363,8 @@ int main(int argc, const char* argv[])
                                              accum_buf_ptr,
                                              cu_seqlens_ptr,
                                              nullptr,
+                                             nullptr,
+                                             kv_lengths_ptr,
                                              1,
                                              layout_q,
                                              layout_k,
@@ -367,10 +376,10 @@ int main(int argc, const char* argv[])
     int num_rows = 8;
     // printf("query:\n");
     // printMatrix(query_ptr, num_rows, 8, size_per_head, true);
-    printf("expect:\n");
-    printMatrix(expect_out_ptr, num_rows, 8, size_per_head, true);
-    printf("actual:\n");
-    printMatrix(actual_out_ptr, num_rows, 8, size_per_head, true);
+    // printf("expect:\n");
+    // printMatrix(expect_out_ptr, num_rows, 8, size_per_head, true);
+    // printf("actual:\n");
+    // printMatrix(actual_out_ptr, num_rows, 8, size_per_head, true);
     checkResult(
         "all close:", actual_out_ptr, expect_out_ptr, batch_size * num_heads * seq_len * size_per_head, true, true);
 

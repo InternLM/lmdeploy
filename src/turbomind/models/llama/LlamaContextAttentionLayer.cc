@@ -186,6 +186,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    local_kv_head_num_,
                                    size_per_head_,
                                    params_.rotray_embedding_dim,
+                                   params_.rotary_embedding_base,
                                    params_.max_position_embeddings,
                                    params_.use_dynamic_ntk,
                                    params_.use_logn_attn,
@@ -253,8 +254,16 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     // Show((const T*)vv, local_kv_head_num_ * max_seq_len * size_per_head_);
 
     if (use_fmha_) {
-        fusedMultiHeadAttention(
-            tmp_k_ptrs, tmp_v_ptrs, 0, attention_mask, cu_seqlens, batch_size, max_q_len, max_k_len, max_seq_len);
+        fusedMultiHeadAttention(tmp_k_ptrs,
+                                tmp_v_ptrs,
+                                0,
+                                attention_mask,
+                                cu_seqlens,
+                                input_tensors->at("context_lengths").getPtr<int>(),
+                                batch_size,
+                                max_q_len,
+                                max_k_len,
+                                max_seq_len);
     }
     else {
         unfusedMultiHeadAttention(tmp_k_ptrs,
@@ -302,6 +311,7 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
                                                             size_t cache_layer_offset,
                                                             T*     attention_mask,
                                                             int*   cu_seqlens,
+                                                            int*   context_lengths,
                                                             int    batch_size,
                                                             int    max_q_len,
                                                             int    max_k_len,
@@ -318,13 +328,13 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
                     int(size_per_head_),
                     int(max_seq_len * size_per_head_),
                     false,
-                    int(cache_layer_offset),
+                    cache_layer_offset,
                     key_cache_ptrs};
     Layout layout_v{int(local_head_num_ * max_seq_len * size_per_head_),
                     int(size_per_head_),
                     int(max_seq_len * size_per_head_),
                     false,
-                    int(cache_layer_offset),
+                    cache_layer_offset,
                     val_cache_ptrs};
     Layout layout_o{
         int(local_head_num_ * max_q_len * size_per_head_),
@@ -342,6 +352,8 @@ void LlamaContextAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptr
                                              qk_buf_float_,
                                              cu_seqlens,
                                              nullptr,
+                                             nullptr,
+                                             context_lengths,
                                              group_size,
                                              layout_q,
                                              layout_k,

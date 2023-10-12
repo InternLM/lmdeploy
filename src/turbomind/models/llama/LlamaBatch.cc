@@ -1073,11 +1073,17 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         SetOutputTensors(g);
         check_cuda_error(cudaStreamSynchronize(stream_));
 
+        if (rank_ == 0 && model_->ffi_lock_) {
+            model_->ffi_lock_(1);
+        }
         for (int i = 0; i < batch_size; ++i) {
             FT_CHECK(state_->requests[i] != nullptr);
             if (state_->requests[i]->stream_cb && rank_ == 0) {
                 state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
             }
+        }
+        if (rank_ == 0 && model_->ffi_lock_) {
+            model_->ffi_lock_(0);
         }
     }
 
@@ -1214,9 +1220,10 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
         shared_state->barrier->wait();
 
         if (shared_state->abort) {
-            if (state_->size && rank_ == 0) {
-                TM_LOG_WARNING("Active request(s) present (%d) while exiting.", state_->size);
-            }
+            TM_LOG_INFO("[InternalThreadEntry] stop requested.");
+            // if (state_->size && rank_ == 0) {
+            //     TM_LOG_WARNING("Active request(s) present (%d) while exiting.", state_->size);
+            // }
             return;
         }
 
@@ -1283,9 +1290,15 @@ void LlamaBatch<T>::OutputThreadEntry()
             std::unique_lock lock(output_mutex_);
             output_cv_.wait(lock, [&] { return !output_reqs_.empty() || output_stop_token_; });
 
+            if (rank_ == 0 && model_->ffi_lock_) {
+                model_->ffi_lock_(1);
+            }
             // invoke stream cbs
             for (const auto& r : output_reqs_) {
                 r->stream_cb(&r->outputs[rank_].get());
+            }
+            if (rank_ == 0 && model_->ffi_lock_) {
+                model_->ffi_lock_(0);
             }
             output_reqs_.clear();
 

@@ -37,8 +37,8 @@
                                                          HAS_BEAMS,                                               \
                                                          QUANT_POLICY>;                                           \
     size_t smem_sz = mmha::smem_size_in_bytes<T>(params, THDS_PER_VALUE, THDS_PER_BLOCK);                              \
+    dim3   grid(params.num_heads, params.batch_size);                                                                  \
     cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);                                  \
-    dim3 grid(params.num_heads, params.batch_size);                                                                    \
     func<<<grid, THDS_PER_BLOCK, smem_sz, stream>>>(params)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
