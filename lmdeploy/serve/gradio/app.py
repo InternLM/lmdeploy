@@ -457,7 +457,7 @@ def run_local(model_path: str,
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
-        session_id = gr.State(random.randint(0,100000))
+        state_session_id = gr.State(random.randint(0,100000))
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -474,21 +474,21 @@ def run_local(model_path: str,
 
         send_event = instruction_txtbox.submit(
             chat_stream_local,
-            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn, session_id],
-            [state_chatbot, chatbot, cancel_btn, reset_btn, session_id])
+            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn, state_session_id],
+            [state_chatbot, chatbot, cancel_btn, reset_btn, state_session_id])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
             [],
             [instruction_txtbox],
         )
         cancel_btn.click(cancel_local_func,
-                         [state_chatbot, cancel_btn, reset_btn, session_id],
-                         [state_chatbot, cancel_btn, reset_btn, session_id],
+                         [state_chatbot, cancel_btn, reset_btn, state_session_id],
+                         [state_chatbot, cancel_btn, reset_btn, state_session_id],
                          cancels=[send_event])
 
         reset_btn.click(reset_local_func, 
-                        [instruction_txtbox, state_chatbot, session_id],
-                        [state_chatbot, chatbot, instruction_txtbox, session_id],
+                        [instruction_txtbox, state_chatbot, state_session_id],
+                        [state_chatbot, chatbot, instruction_txtbox, state_session_id],
                         cancels=[send_event])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
