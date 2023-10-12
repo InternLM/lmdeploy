@@ -400,7 +400,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
         state_chatbot,
         state_chatbot,
         gr.Textbox.update(value=''),
-        session_id
+        random.randint(0, 100000),
     )
 
 
