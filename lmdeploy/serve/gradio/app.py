@@ -344,7 +344,9 @@ async def chat_stream_local(
     Args:
         instruction (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        request (gr.Request): the request from a user
+        cancel_btn (gr.Button): the cancel button
+        reset_btn (gr.Button): the reset button
+        session_id (int): the session id
     """
     state_chatbot = state_chatbot + [(instruction, None)]
 
@@ -384,7 +386,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     Args:
         instruction_txtbox (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        request (gr.Request): the request from a user
+        session_id (int): the session id
     """
     state_chatbot = []
     # end the session
@@ -404,14 +406,16 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     )
 
 
-async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
+async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
                             reset_btn: gr.Button, session_id: int):
     """stop the session.
 
     Args:
         instruction_txtbox (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        request (gr.Request): the request from a user
+        cancel_btn (gr.Button): the cancel button
+        reset_btn (gr.Button): the reset button
+        session_id (int): the session id
     """
     # end the session
     async for out in InterFace.async_engine.generate('',
