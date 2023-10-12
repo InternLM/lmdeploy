@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+import random
 import threading
 import time
 from functools import partial
@@ -336,7 +337,7 @@ async def chat_stream_local(
     state_chatbot: Sequence,
     cancel_btn: gr.Button,
     reset_btn: gr.Button,
-    request: gr.Request,
+    session_id: int,
 ):
     """Chat with AI assistant.
 
@@ -345,14 +346,10 @@ async def chat_stream_local(
         state_chatbot (Sequence): the chatting history
         request (gr.Request): the request from a user
     """
-    session_id = threading.current_thread().ident
-    if request is not None:
-        session_id = ip2id(request.kwargs['client']['host'])
-    bot_summarized_response = ''
     state_chatbot = state_chatbot + [(instruction, None)]
 
     yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
-           f'{bot_summarized_response}'.strip())
+           session_id)
 
     async for outputs in InterFace.async_engine.generate(
             instruction,
@@ -373,14 +370,15 @@ async def chat_stream_local(
                                  state_chatbot[-1][1] + response
                                  )  # piece by piece
         yield (state_chatbot, state_chatbot, enable_btn, disable_btn,
-               f'{bot_summarized_response}'.strip())
+               session_id)
 
     yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
-           f'{bot_summarized_response}'.strip())
+           session_id)
 
 
 async def reset_local_func(instruction_txtbox: gr.Textbox,
-                           state_chatbot: gr.State, request: gr.Request):
+                           state_chatbot: gr.State, 
+                           session_id: int):
     """reset the session.
 
     Args:
@@ -389,10 +387,6 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
         request (gr.Request): the request from a user
     """
     state_chatbot = []
-
-    session_id = threading.current_thread().ident
-    if request is not None:
-        session_id = ip2id(request.kwargs['client']['host'])
     # end the session
     async for out in InterFace.async_engine.generate('',
                                                      session_id,
@@ -406,11 +400,12 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
         state_chatbot,
         state_chatbot,
         gr.Textbox.update(value=''),
+        session_id
     )
 
 
 async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
-                            reset_btn: gr.Button, request: gr.Request):
+                            reset_btn: gr.Button, session_id: int):
     """stop the session.
 
     Args:
@@ -418,9 +413,6 @@ async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
         state_chatbot (Sequence): the chatting history
         request (gr.Request): the request from a user
     """
-    session_id = threading.current_thread().ident
-    if request is not None:
-        session_id = ip2id(request.kwargs['client']['host'])
     # end the session
     async for out in InterFace.async_engine.generate('',
                                                      session_id,
@@ -442,7 +434,7 @@ async def cancel_local_func(state_chatbot: gr.State, cancel_btn: gr.Button,
                                                      sequence_start=True,
                                                      sequence_end=False):
         pass
-    return (state_chatbot, disable_btn, enable_btn)
+    return (state_chatbot, disable_btn, enable_btn, session_id)
 
 
 def run_local(model_path: str,
@@ -465,6 +457,7 @@ def run_local(model_path: str,
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
+        session_id = gr.State(random.randint(0,100000))
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -481,20 +474,21 @@ def run_local(model_path: str,
 
         send_event = instruction_txtbox.submit(
             chat_stream_local,
-            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn],
-            [state_chatbot, chatbot, cancel_btn, reset_btn])
+            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn, session_id],
+            [state_chatbot, chatbot, cancel_btn, reset_btn, session_id])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
             [],
             [instruction_txtbox],
         )
         cancel_btn.click(cancel_local_func,
-                         [state_chatbot, cancel_btn, reset_btn],
-                         [state_chatbot, cancel_btn, reset_btn],
+                         [state_chatbot, cancel_btn, reset_btn, session_id],
+                         [state_chatbot, cancel_btn, reset_btn, session_id],
                          cancels=[send_event])
 
-        reset_btn.click(reset_local_func, [instruction_txtbox, state_chatbot],
-                        [state_chatbot, chatbot, instruction_txtbox],
+        reset_btn.click(reset_local_func, 
+                        [instruction_txtbox, state_chatbot, session_id],
+                        [state_chatbot, chatbot, instruction_txtbox, session_id],
                         cancels=[send_event])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
