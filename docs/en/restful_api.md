@@ -10,49 +10,45 @@ Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for t
 We provide five restful api in total. Three of them are in OpenAI format. However, we recommend users try
 our own api `generate` which provides more arguments for users to modify. The performance is comparatively better.
 
+**Note** please, lmdeploy supports maintaining session histories on the server for `generate` api. We disable the
+feature by default.
+
+- On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
+  the same `session_id` (can't be -1, it's the default number) to `generate` for the following requests.
+
+  1. Set `sequence_start = True` and `sequence_end = False` for the first request,
+  2. Set `sequence_start = False` and `sequence_end = False` for the later
+     requests.
+  3. Once the session length limit is reached, the output `finish_reason` would be `'length'`.
+     Set `sequence_start = False` and `sequence_end = True` to end the session.
+     Then restart the above steps for a new session.
+
+- On normal mode, no chat history is kept on the server. Set
+  `sequence_start = True` and `sequence_end = True` for all requests.
+
+**Note** please, if you want to launch multiple requests, you'd better set different `session_id` for both
+`/v1/chat/completions` and `/generate` apis. Or, we will set them random values.
+
 ### python
 
-Here is an example for api `generate`.
+Here is an example for the above api.
 
 ```python
-import json
-import requests
-from typing import Iterable, List
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+messages = [{"role": "user", "content": "Say this is a test!"}]
+for item in api_client.chat_completions_v1(model=model_name, messages = messages):
+    print(item)
 
+for item in api_client.generate(prompt='hi'):
+    print(item)
 
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int,
-                           stream: bool = True,
-                           sequence_start: bool = True,
-                           sequence_end: bool = True,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
-    headers = {'User-Agent': 'Test Client'}
-    pload = {
-        'prompt': prompt,
-        'stream': stream,
-        'session_id': session_id,
-        'request_output_len': request_output_len,
-        'sequence_start': sequence_start,
-        'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
-    }
-    response = requests.post(
-        api_url, headers=headers, json=pload, stream=stream)
-    for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
-        if chunk:
-            data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            yield output, tokens
+for item in api_client.completions_v1(model=model_name, prompt='hi'):
+    print(item)
 
-
-for output, tokens in get_streaming_response(
-        "Hi, how are you?", "http://{server_ip}:{server_port}/generate", 0,
-        512):
-    print(output, end='')
+for item in api_client.embeddings_v1(model=model_name, input='hi'):
+    print(item)
 ```
 
 ### Java/Golang/Rust

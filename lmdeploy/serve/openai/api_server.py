@@ -401,8 +401,9 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     - On interactive mode, the chat history is kept on the server. Set
     `sequence_start = True` and `sequence_end = False` for the first request,
     Set `sequence_start = False` and `sequence_end = False` for the later
-    requests. Once the session length is reached, set `sequence_start = False`
-    and `sequence_end = True`. Then restart the above steps for a new session.
+    requests. Once the session length limit is reached, set
+    `sequence_start = False` and `sequence_end = True` to end the session.
+    Then restart the above steps for a new session.
 
     - On normal mode, no chat history is kept on the server. Set
     `sequence_start = True` and `sequence_end = True` for all requests.
@@ -430,8 +431,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     - ignore_eos (bool): indicator for ignoring eos
     """
     if request.session_id == -1:
-        session_id = ip2id(raw_request.client.host)
-        request.session_id = session_id
+        request.session_id = random.randint(1, 10086)
 
     generation = VariableInterface.async_engine.generate(
         request.prompt,
@@ -467,7 +467,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                VariableInterface.async_engine.stop_session(session_id)
+                VariableInterface.async_engine.stop_session(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Client disconnected')
             text += out.response

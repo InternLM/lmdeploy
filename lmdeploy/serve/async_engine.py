@@ -88,7 +88,7 @@ class AsyncEngine:
         session_id,
         stream_response=True,
         sequence_start=True,
-        sequence_end=False,
+        sequence_end=True,  # no interactive mode by default
         step=0,
         request_output_len=512,
         stop=False,

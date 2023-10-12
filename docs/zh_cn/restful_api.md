@@ -12,49 +12,37 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 我们一共提供五个 restful api，其中四个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
+**注意**，LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
+
+- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置一个相同 `session_id`(不为 -1，这是缺省值)。
+
+  1. 第一次请求设置 `sequence_start = True`，`sequence_end = False`。
+  2. 后续的请求设置`sequence_start = False`，`sequence_end = False`。
+  3. 当对话长度到达极限，会返回`finish_reason = 'length'`,
+     这时想继续使用请设置`sequence_start = False`，`sequence_end = True`终止该会话。然后重复上述步骤继续会话。
+
+- 非交互模式下，server 不保存历史记录，所有请求设置 `sequence_start = True`，`sequence_end = True`即可。
+
 ### python
 
-这是一个 python 示例，展示如何使用 `generate`。
+这是一个 python 示例，展示如何使用上述接口。
 
 ```python
-import json
-import requests
-from typing import Iterable, List
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+messages = [{"role": "user", "content": "Say this is a test!"}]
+for item in api_client.chat_completions_v1(model=model_name, messages = messages):
+    print(item)
 
+for item in api_client.generate(prompt='hi'):
+    print(item)
 
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int,
-                           stream: bool = True,
-                           sequence_start: bool = True,
-                           sequence_end: bool = True,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
-    headers = {'User-Agent': 'Test Client'}
-    pload = {
-        'prompt': prompt,
-        'stream': stream,
-        'session_id': session_id,
-        'request_output_len': request_output_len,
-        'sequence_start': sequence_start,
-        'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
-    }
-    response = requests.post(
-        api_url, headers=headers, json=pload, stream=stream)
-    for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
-        if chunk:
-            data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            yield output, tokens
+for item in api_client.completions_v1(model=model_name, prompt='hi'):
+    print(item)
 
-
-for output, tokens in get_streaming_response(
-        "Hi, how are you?", "http://{server_ip}:{server_port}/generate", 0,
-        512):
-    print(output, end='')
+for item in api_client.embeddings_v1(model=model_name, input='hi'):
+    print(item)
 ```
 
 ### Java/Golang/Rust

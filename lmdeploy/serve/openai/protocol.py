@@ -198,7 +198,7 @@ class GenerateRequest(BaseModel):
     prompt: Union[str, List[Dict[str, str]]]
     session_id: int = -1
     sequence_start: bool = True
-    sequence_end: bool = False
+    sequence_end: bool = True  # no interactive mode by default
     stream: bool = False
     stop: bool = False
     request_output_len: int = 512
