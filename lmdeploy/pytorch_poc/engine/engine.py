@@ -127,7 +127,6 @@ class ModelContext:
         self.block_offsets = block_offsets
 
         # update position_ids_1d
-        seq_length = position_ids[..., -1] + 1
         position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
         position_ids_1d = torch.cat(position_ids_1d)
         self.position_ids_1d = position_ids_1d
