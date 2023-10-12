@@ -601,13 +601,13 @@ class Engine:
         """
         return EngineInstance(self)
 
-    def add_session(self, session: SchedulerSession):
+    def add_session(self, session_id: int):
         """Add new session."""
-        self.scheduler.add_session(session)
+        self.scheduler.add_session(session_id)
 
     def add_message(self, message: SchedulerSequence):
         """Add new message."""
-        self.scheduler.add_message(message)
+        self.scheduler.add_sequence(message)
 
     def _make_inputs(self,
                      messages: List[SchedulerSequence],
@@ -618,8 +618,7 @@ class Engine:
             messages (List[SchedulerSequence]): The input messages.
             device (str): Device name.
         """
-        sessions = self.scheduler.get_sessions(messages)
-        history_lengths = [sess.history_length for sess in sessions]
+        history_lengths = [msg.history_len for msg in messages]
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -685,17 +684,17 @@ class Engine:
             if next_token_id == self.model_config.eos_token_id:
                 return True
 
+        # check stop words
         if (sampling_param.stop_words is not None
                 and next_token_id in sampling_param.stop_words):
             return True
 
         # check request_len
-        if msg.request_output_len >= msg.max_request_output_len:
+        if msg.remain_output_len <= 0:
             return True
 
         # check session len
-        session = self.scheduler.sessions[msg.session_id]
-        session_len = sum(block.num_tokens for block in session.logical_blocks)
+        session_len = sum(block.num_tokens for block in msg.logical_blocks)
         if session_len >= self.scheduler_config.max_session_len:
             return True
 
@@ -781,10 +780,9 @@ class Engine:
         if len(running) == 0:
             return dict()
 
-        sessions = self.scheduler.get_sessions(running)
         session_ids = [msg.session_id for msg in running]
-        req_ids = [msg.req_id for msg in running]
-        history_lengths = [sess.history_length for sess in sessions]
+        req_ids = [msg.meta['req_id'] for msg in running]
+        history_lengths = [msg.history_len for msg in running]
 
         # make batch
         inputs = self._make_inputs(running)
@@ -820,10 +818,10 @@ class Engine:
 
         # update scheduler
         for token, msg in zip(next_token_ids, running):
-            msg.token_ids = [token]
-            msg.request_output_len += 1
+            msg.update_token_ids(token)
+            msg.remain_output_len -= 1
             if self._stoping_criteria(msg, token):
-                self.stop_session(msg.session_id)
+                msg.status = MessageStatus.STOPPED
         self.scheduler.update()
 
         outputs: Dict[int, InferOutput] = dict()
@@ -901,10 +899,9 @@ class Engine:
 
         msgs: List[SchedulerSequence] = []
         for token_ids, sess in zip(prompt_token_ids, sessions):
-            msg = SchedulerSequence(token_ids=token_ids,
-                                    session_id=sess.session_id)
+            msg = sess.add_sequence(token_ids=token_ids)
             msgs.append(msg)
-            self.scheduler.add_message(msg)
+            self.scheduler.add_sequence(msg)
 
         outputs = self.step(True)
 
@@ -992,21 +989,32 @@ class Engine:
                 RequestType.ADD_SESSION]
             for req in add_session_reqs:
                 session_id = req.data['session_id']
-                session = SchedulerSession(session_id=session_id,
-                                           arrive_time=time.time())
                 if not _session_exist(session_id, req, resp_if_exist=True):
-                    self.add_session(session)
+                    self.add_session(session_id)
                     out_ques[session_id] = req.resp
 
             # add message
             add_msg_reqs: List[Request] = reqs_by_type[RequestType.ADD_MESSAGE]
             for req in add_msg_reqs:
-                msg: SchedulerSequence = SchedulerSequence(**req.data)
-                session_id = msg.session_id
                 if not _session_exist(session_id, req, resp_if_not_exist=True):
                     continue
-                else:
+                session_id = req.data['session_id']
+                sess = self.scheduler.sessions[session_id]
+                # TODO: support 1 session n sequence
+                if len(sess.sequences) == 0:
+                    sess.add_sequence(
+                        req.data['token_ids'],
+                        max_output_len=req.data['max_request_output_len'],
+                        sampling_param=req.data['sampling_param'])
+                    msg = next(iter(sess.sequences.values()))
                     self.add_message(msg)
+                else:
+                    msg = next(iter(sess.sequences.values()))
+                    msg.update_token_ids(req.data['token_ids'])
+                    msg.status = MessageStatus.WAITING
+                    self.scheduler.update()
+
+                msg.meta = dict(req_id=req.data['req_id'])
 
             # forward
             step_tokens: Dict[int, InferOutput] = self.step()

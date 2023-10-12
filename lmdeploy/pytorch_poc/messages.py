@@ -62,7 +62,7 @@ class SchedulerSession:
     def __init__(self, session_id: int) -> None:
         self.session_id = session_id
         self.status: MessageStatus = MessageStatus.RUNNING
-        self.sequences: Dict[SchedulerSequence] = dict()
+        self.sequences: Dict[int, SchedulerSequence] = dict()
 
     def add_sequence(
             self,
@@ -70,6 +70,10 @@ class SchedulerSession:
             max_output_len: int = 512,
             sampling_param: SamplingParam = None) -> 'SchedulerSequence':
         """Add a new message."""
+        if not isinstance(token_ids, Tensor):
+            token_ids = torch.tensor(token_ids)
+        if token_ids.dim() == 0:
+            token_ids = token_ids.unsqueeze(0)
         if sampling_param is None:
             sampling_param = SamplingParam()
 
@@ -92,6 +96,10 @@ class SchedulerSession:
         """Fork a new message from exist message."""
         if sampling_param is None:
             sampling_param = deepcopy(seq.sampling_param)
+        if not isinstance(token_ids, Tensor):
+            token_ids = torch.tensor(token_ids)
+        if token_ids.dim() == 0:
+            token_ids = token_ids.unsqueeze(0)
         assert seq.session == self
 
         new_msg = SchedulerSequence(
@@ -173,7 +181,16 @@ class SchedulerSequence:
 
     def update_token_ids(self, token_ids: Tensor):
         """Update token ids, old token ids will be added to history."""
-        self.history_token_ids = torch.cat(
-            [self.history_token_ids, self.token_ids])
+        if len(self.history_token_ids) == 0:
+            self.history_token_ids = self.token_ids
+        else:
+            self.history_token_ids = torch.cat([
+                self.history_token_ids,
+                self.token_ids.to(self.history_token_ids.device)
+            ])
+        if not isinstance(token_ids, Tensor):
+            token_ids = self.token_ids.new_tensor(token_ids)
+        if token_ids.dim() == 0:
+            token_ids = token_ids.unsqueeze(0)
         self.token_ids = token_ids
         self.arrive_time = time.time()
