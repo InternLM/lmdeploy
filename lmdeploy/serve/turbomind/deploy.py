@@ -77,6 +77,7 @@ def copy_triton_model_templates(_path: str):
         print(f'copy triton model templates from "{triton_models_path}" to '
               f'"{dst_path}" successfully')
         shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
+        shutil.copy(osp.join(dir_path, '_launch.py'), osp.join(_path, "launch.py"))
         return dst_path
     except Exception as e:
         print(f'copy triton model templates from "{triton_models_path}"'
