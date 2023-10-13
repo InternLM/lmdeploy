@@ -49,6 +49,10 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
 
 for item in api_client.embeddings_v1(model=model_name, input='hi'):
     print(item)
+
+outputs = api_client.completion_v1_concurrently(
+        model_name, ['hi', 'Say this is a test!'])
+print(outputs)
 ```
 
 ### Java/Golang/Rust
