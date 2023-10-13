@@ -78,6 +78,8 @@ def warmup(model,
                                           ignore_eos=True,
                                           sampling_param=sampling_param):
                 continue
+        if hasattr(chatbot, 'end'):  # for pytorch engine to restart a session
+            chatbot.end(session_id)
 
     _start = time.perf_counter()
     procs = []
@@ -142,8 +144,8 @@ def profile_throughput(model_path: str,
     # TODO: update to the multithread version
     for i in range(concurrency):
         proc = Thread(target=infer,
-                      args=(tm_model, i + 101, input_ids, output_seqlen,
-                            test_round, que, sampling_param))
+                      args=(tm_model, i, input_ids, output_seqlen, test_round,
+                            que, sampling_param))
         procs.append(proc)
         proc.start()
 
