@@ -965,7 +965,7 @@ def main(model_name: str,
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
 
-    assert ((tp & (tp - 1) == 0) and tp != 0), f'tp should be 2^n'
+    assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
     if model_format is None:
         model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
