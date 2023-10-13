@@ -46,7 +46,7 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: openmmlab/lmdeploy-builder:cuda11.8
-          options: -v ${{ github.workspace }}:/work
+          options: -v ${{ github.workspace }}:/work --cpus=1.8
           run: |
             cd /work
             source /opt/conda/bin/activate
