@@ -31,6 +31,7 @@ class APIClient:
         self.embeddings_v1_url = f'{api_server_url}/v1/embeddings'
         self.models_v1_url = f'{api_server_url}/v1/models'
         self._available_models = None
+        self._rounds = {}
 
     @property
     def available_models(self):
@@ -135,7 +136,7 @@ class APIClient:
         Args:
             prompt: the prompt to use for the generation.
             session_id: determine which instance will be called.
-                If not specified with a value other than -1, using host ip
+                If not specified with a value other than -1, using random value
                 directly.
             sequence_start (bool): a flag to start the session. Set True to
                 start the session.
@@ -269,6 +270,76 @@ class APIClient:
                 output = json.loads(decoded)
                 yield output
 
+    def chat(self,
+             prompt: str,
+             session_id: int,
+             request_output_len: int = 512,
+             stream: bool = False,
+             top_p: float = 0.8,
+             top_k: int = 40,
+             temperature: float = 0.8,
+             repetition_penalty: float = 1.0,
+             ignore_eos: bool = False):
+        """Chat with a unique session_id.
+
+        Args:
+            prompt: the prompt to use for the generation.
+            session_id: determine which instance will be called.
+                If not specified with a value other than -1, using random value
+                directly.
+            stream: whether to stream the results or not.
+            stop: whether to stop the session response or not.
+            request_output_len (int): output token nums
+            top_p (float): If set to float < 1, only the smallest set of most
+                probable tokens with probabilities that add up to top_p or
+                higher are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+                tokens to keep for top-k-filtering
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+                1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+
+        Yields:
+            text, tokens, finish_reason
+        """
+        assert session_id != -1, 'please set other value other than -1'
+        if str(session_id) not in self._rounds:
+            self._rounds[str(session_id)] = 1
+        for outputs in self.generate(
+                prompt,
+                session_id=session_id,
+                request_output_len=request_output_len,
+                sequence_start=(self._rounds[str(session_id)] == 1),
+                sequence_end=False,
+                stream=stream,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                ignore_eos=ignore_eos):
+            if outputs['finish_reason'] == 'length':
+                print('WARNING: exceed session max length.'
+                      ' Please end the session.')
+            yield outputs['text'], outputs['tokens'], outputs['finish_reason']
+        self._rounds[str(session_id)] += 1
+
+    def end_session(self, session_id: int):
+        """End the session with a unique session_id.
+
+        Args:
+            session_id: determine which instance will be called.
+                If not specified with a value other than -1, using random value
+                directly.
+        """
+        self._rounds[str(session_id)] = 1
+        for out in self.generate(prompt='',
+                                 session_id=session_id,
+                                 request_output_len=0,
+                                 sequence_start=False,
+                                 sequence_end=True):
+            pass
+
 
 def input_prompt():
     """Input a prompt in the consolo interface."""
@@ -314,32 +385,21 @@ def get_streaming_response(prompt: str,
 
 def main(api_server_url: str, session_id: int = 0):
     api_client = APIClient(api_server_url)
-    nth_round = 1
     while True:
         prompt = input_prompt()
         if prompt in ['exit', 'end']:
-            for outputs in api_client.generate('',
-                                               session_id=session_id,
-                                               request_output_len=0,
-                                               sequence_start=(nth_round == 1),
-                                               sequence_end=True):
-                pass
+            api_client.end_session(session_id)
             if prompt == 'exit':
                 exit(0)
         else:
-            for outputs in api_client.generate(prompt,
-                                               session_id=session_id,
-                                               request_output_len=512,
-                                               sequence_start=(nth_round == 1),
-                                               sequence_end=False,
-                                               stream=True):
-                if outputs['finish_reason'] == 'length':
-                    print('WARNING: exceed session max length.'
-                          ' Please end the session.')
+            for text, tokens, finish_reason in api_client.chat(
+                    prompt,
+                    session_id=session_id,
+                    request_output_len=512,
+                    stream=True):
+                if finish_reason == 'length':
                     continue
-                print(outputs['text'], end='')
-
-            nth_round += 1
+                print(text, end='')
 
 
 if __name__ == '__main__':

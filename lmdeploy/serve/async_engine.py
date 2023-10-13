@@ -60,6 +60,20 @@ class AsyncEngine:
             pass
         self.available[instance_id] = True
 
+    def end_session(self, session_id: int):
+        instance_id = session_id % self.instance_num
+        input_ids = self.tokenizer.encode('')
+        for outputs in self.generators[instance_id].stream_infer(
+                session_id,
+                input_ids,
+                request_output_len=0,
+                sequence_start=False,
+                sequence_end=True,
+                stop=True):
+            pass
+        self.steps[str(session_id)] = 0
+        self.available[instance_id] = True
+
     @contextmanager
     def safe_run(self, instance_id: int, session_id: Optional[int] = None):
         self.available[instance_id] = False
@@ -137,6 +151,8 @@ class AsyncEngine:
             finish_reason = 'length'
             yield GenOut('', self.steps[str(session_id)], len(input_ids), 0,
                          finish_reason)
+            if sequence_end is True and sequence_start is False:
+                self.end_session(session_id)
         else:
             generator = await self.get_generator(instance_id, stop)
             with self.safe_run(instance_id, session_id):

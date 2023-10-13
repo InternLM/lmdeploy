@@ -411,7 +411,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - session_id: determine which instance will be called. If not specified
-        with a value other than -1, using host ip directly.
+        with a value other than -1, using random value directly.
     - sequence_start (bool): a flag to start the session. Set True to start
         the session.
     - sequence_end (bool): a flag to end the session. Set True to end the
