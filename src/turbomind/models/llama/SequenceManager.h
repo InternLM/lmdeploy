@@ -33,7 +33,7 @@ public:
     explicit SequenceManager(size_t      layer_num,
                              size_t      head_num,
                              size_t      head_dim,
-                             size_t      block_len,
+                             size_t      block_seq_len,
                              double      block_count,
                              int         chunk_size,
                              size_t      elem_bits,
@@ -83,7 +83,7 @@ private:
     void Verify(Sequence& seq, std::vector<const Block*>& retain);
 
 private:
-    int    block_len_;
+    int    block_seq_len_;
     int    rank_;
     size_t val_offset_{};
 

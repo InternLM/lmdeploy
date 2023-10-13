@@ -82,7 +82,7 @@ size_t BlockManager::GetBlockCount(size_t block_size, double ratio)
     size_t free{};
     size_t total{};
     check_cuda_error(cudaMemGetInfo(&free, &total));
-    return static_cast<size_t>(free * ratio / block_size);
+    return static_cast<size_t>(total * ratio) / block_size;
 }
 
 void BlockManager::Move(std::vector<int>& src, const std::vector<int>& delta, std::vector<int>& dst)

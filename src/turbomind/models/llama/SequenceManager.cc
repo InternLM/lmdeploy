@@ -10,18 +10,18 @@ namespace turbomind {
 SequenceManager::SequenceManager(size_t      layer_num,
                                  size_t      head_num,
                                  size_t      head_dim,
-                                 size_t      block_len,
+                                 size_t      block_seq_len,
                                  double      block_count,
                                  int         chunk_size,
                                  size_t      elem_bits,
                                  int         rank,
                                  IAllocator* allocator):
-    block_len_(block_len)
+    block_seq_len_(block_seq_len)
 {
     constexpr int kBitsPerByte = 8;
 
-    // [2, L, H, block_len, D]
-    size_t block_size = 2UL * layer_num * head_num * block_len * head_dim * elem_bits / kBitsPerByte;
+    // [2, L, H, block_seq_len, D]
+    size_t block_size = 2UL * layer_num * head_num * block_seq_len * head_dim * elem_bits / kBitsPerByte;
 
     block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator);
 
@@ -91,7 +91,7 @@ void SequenceManager::Verify(Sequence& seq, std::vector<const Block*>& retain)
     }
     retain.insert(retain.end(), seq.blocks.begin(), seq.blocks.end());
     seq.status    = Sequence::kLocked;
-    seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_len_);
+    seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_seq_len_);
 }
 
 void SequenceManager::Release(const Sequence& sequence)
@@ -286,7 +286,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
     int              total_required{};
     for (int i = 0; i < sequences.size(); ++i) {
         int seq_len = context_lengths[i] + step_length;
-        int count   = (seq_len + block_len_ - 1) / block_len_ - static_cast<int>(seqs[i]->blocks.size());
+        int count   = (seq_len + block_seq_len_ - 1) / block_seq_len_ - static_cast<int>(seqs[i]->blocks.size());
         required[i] = std::max(0, count);
         total_required += required[i];
     }
