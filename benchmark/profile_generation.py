@@ -151,7 +151,8 @@ def profile_throughput(model_path: str,
           f'{token_latency_min:.2f}s, {token_latency_max:.2f}s, '
           f'{token_latency_ave:.2f}s\n'
           f'throughput: {throughput:.2f} token/s\n{"-" * 50}')
-    return tm_model.model_name, throughput, tm_model.gpu_count
+    return tm_model.model_name, throughput, tm_model.gpu_count, \
+        first_token_latency_ave
 
 
 class MemoryMonitor:
@@ -237,6 +238,7 @@ class ProfileResult:
     mem_per_proc: float
     mem_per_gpu: float
     mem_per_node: float
+    first_token_latency: float
 
 
 def parse_args():
@@ -291,7 +293,8 @@ def main():
                                      output_seqlen=completion_tokens,
                                      tp=args.tp)
             output = Pool(1).map(profile_target, (args.model_path, ))
-            model_name, throughput_per_proc, tp = output[0]
+            model_name, throughput_per_proc, tp, first_token_latency = output[
+                0]
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
             device_count = MemoryMonitor.device_count.value
@@ -305,20 +308,23 @@ def main():
                               device_count,
                               mem_per_proc=memory,
                               mem_per_gpu=memory / tp,
-                              mem_per_node=memory / tp * device_count))
+                              mem_per_node=memory / tp * device_count,
+                              first_token_latency=first_token_latency))
     with open(args.dst_csv, 'w') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
             'batch', 'prompt_tokens', 'completion_tokens',
             'throughput_per_proc(token/s)', 'throughput_per_node(token/s)',
-            'mem_per_proc(GB)', 'mem_per_gpu(GB)', 'mem_per_node(GB)'
+            'mem_per_proc(GB)', 'mem_per_gpu(GB)', 'mem_per_node(GB)',
+            '1st_token_latency(s)'
         ])
         for re in results:
             writer.writerow([
                 re.batch, re.prompt_tokens, re.completion_tokens,
                 f'{re.throughput_per_proc:.2f}',
                 f'{re.throughput_per_node:.2f}', f'{re.mem_per_proc:.2f}',
-                f'{re.mem_per_gpu:.2f}', f'{re.mem_per_node:.2f}'
+                f'{re.mem_per_gpu:.2f}', f'{re.mem_per_node:.2f}',
+                f'{re.first_token_latency:.3f}'
             ])
 
 
