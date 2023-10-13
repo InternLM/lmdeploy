@@ -1,4 +1,5 @@
 #pragma once
+#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -54,6 +55,8 @@ struct DecoderMultiHeadAttentionParams {
 
     int   quant_policy;
     float kv_quant_params[4];
+
+    cudaStream_t stream;
 };
 
 }  // namespace turbomind

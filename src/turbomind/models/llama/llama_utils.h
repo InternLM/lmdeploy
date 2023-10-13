@@ -2,6 +2,7 @@
 
 #pragma once
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 #include <cuda_runtime.h>
 #include <sstream>
 #include <string>
@@ -9,8 +10,7 @@
 
 namespace turbomind {
 
-enum QuantPolicy
-{
+enum QuantPolicy {
     kNone = 0x00,
     // reserve 0x01 and 0x02 for backward compatibility
     kReserve1 = 0x01,
@@ -19,8 +19,7 @@ enum QuantPolicy
     kCacheKVInt8 = 0x04,
 };
 
-enum CmpMode
-{
+enum CmpMode {
     kCmpNone,
     kCmpRead,
     kCmpWrite,
@@ -52,7 +51,7 @@ inline std::string to_string(std::string x)
 template<typename... Args>
 std::string Concat(std::string key, Args&&... args)
 {
-    std::vector<std::string> args_str{detail::to_string((Args &&) args)...};
+    std::vector<std::string> args_str{detail::to_string((Args&&)args)...};
     for (const auto& s : args_str) {
         key.append("_");
         key.append(s);
@@ -65,5 +64,17 @@ std::string format(const std::pair<std::string, Tensor>& p);
 size_t curandStateGetSize();
 
 bool isDebug();
+
+struct NvtxScope {
+    explicit NvtxScope(const std::string& name)
+    {
+        PUSH_RANGE(name.c_str());
+    }
+
+    ~NvtxScope()
+    {
+        POP_RANGE;
+    }
+};
 
 }  // namespace turbomind

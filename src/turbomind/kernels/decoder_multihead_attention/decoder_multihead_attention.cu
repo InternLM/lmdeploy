@@ -47,7 +47,7 @@ void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
     cudaFuncSetAttribute(
         decoder_multihead_attention<MHAType>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
 
-    decoder_multihead_attention<MHAType><<<grid, block, kDynSmemSize>>>(params);
+    decoder_multihead_attention<MHAType><<<grid, block, kDynSmemSize, params.stream>>>(params);
 }
 
 template<typename T>

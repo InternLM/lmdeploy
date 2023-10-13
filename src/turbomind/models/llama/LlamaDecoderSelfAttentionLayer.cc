@@ -99,9 +99,10 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     allocateBuffer(batch_size);
 
-    PUSH_RANGE("qkv_gemm");
-    linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
-    POP_RANGE;
+    {
+        NvtxScope scope("qkv_gemm");
+        linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
+    }
 
     const auto layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
     // const int  memory_len   = max_seq_len;
@@ -134,12 +135,20 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.rotary_embedding_dim  = size_per_head_;
     params.rotary_embedding_base = 10000.f;
 
+    params.stream = stream_;
+
     params.quant_policy = quant_policy_;
     std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
 
-    DispatchDecoderMultiheadAttention<T>(params);
+    {
+        NvtxScope scope("decoder_multihead_attention");
+        DispatchDecoderMultiheadAttention<T>(params);
+    }
 
-    linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
+    {
+        NvtxScope scope("o_gemm");
+        linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
+    }
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);

@@ -187,6 +187,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
 template<typename T>
 void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step)
 {
+    NvtxScope scope("embeddingLookup");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // ! This kernel can't be used in context decoding
     invokeEmbeddingLookupPosEncodingPadCount(embeddings,
@@ -318,6 +319,7 @@ void LlamaV2<T>::decoderForward(T*          decoder_output,
 template<typename T>
 void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size)
 {
+    NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     cudaDataType_t data_type = getCudaDataType<T>();
     float          alpha     = 1.f;
@@ -395,6 +397,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
                                size_t          token_ids_len,
                                size_t          batch_size)
 {
+    NvtxScope scope("dynamicDecode");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     int local_batch_size = (int)batch_size;
 

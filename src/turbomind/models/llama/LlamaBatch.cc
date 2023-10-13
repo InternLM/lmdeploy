@@ -245,6 +245,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 template<typename T>
 bool LlamaBatch<T>::Initialize()
 {
+    NvtxScope                                scope("initialize");
     std::vector<const Sequence*>             sequences;
     std::vector<Sequence::Status>            status;
     std::vector<uint64_t>                    priorities;
@@ -755,6 +756,7 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
 template<typename T>
 bool LlamaBatch<T>::Generate(GenerationState& g)
 {
+    NvtxScope scope("Generate");
     const int batch_size = state_->active_size;
 
     constexpr int kLogInterval = 10;
@@ -1215,6 +1217,8 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
                 RejectInvalidRequests(stop_requests, infer_requests);
             }
         }
+
+        NvtxScope scope("mainloop");
 
         // wait while rank-0 is dequeueing
         shared_state->barrier->wait();
