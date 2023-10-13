@@ -43,8 +43,7 @@ def chat_stream_restful(
             f'{InterFace.api_server_url}/generate',
             session_id=session_id,
             request_output_len=512,
-            sequence_start=(len(state_chatbot) == 1),
-            sequence_end=False):
+            interactive_mode=True):
         if finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
                        ' Please restart the session by reset button.')
@@ -84,8 +83,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
             f'{InterFace.api_server_url}/generate',
             session_id=session_id,
             request_output_len=0,
-            sequence_start=False,
-            sequence_end=True):
+            interactive_mode=False):
         pass
 
     return (
@@ -113,8 +111,6 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
                                       f'{InterFace.api_server_url}/generate',
                                       session_id=session_id,
                                       request_output_len=0,
-                                      sequence_start=False,
-                                      sequence_end=False,
                                       stop=True):
         pass
     time.sleep(0.5)
@@ -127,8 +123,7 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
                                       f'{InterFace.api_server_url}/generate',
                                       session_id=session_id,
                                       request_output_len=0,
-                                      sequence_start=True,
-                                      sequence_end=False):
+                                      interactive_mode=True):
         pass
     yield (state_chatbot, disable_btn, enable_btn)
 

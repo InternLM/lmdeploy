@@ -32,7 +32,6 @@ class APIClient:
         self.embeddings_v1_url = f'{api_server_url}/v1/embeddings'
         self.models_v1_url = f'{api_server_url}/v1/models'
         self._available_models = None
-        self._rounds = {}
 
     @property
     def available_models(self):
@@ -113,8 +112,7 @@ class APIClient:
     def generate(self,
                  prompt: Union[str, List[Dict[str, str]]],
                  session_id: int = -1,
-                 sequence_start: bool = True,
-                 sequence_end: bool = True,
+                 interactive_mode: bool = False,
                  stream: bool = False,
                  stop: bool = False,
                  request_output_len: int = 512,
@@ -126,25 +124,19 @@ class APIClient:
                  **kwargs):
         """Generate.
 
-        - On interactive mode, the chat history is kept on the server. Set
-        `sequence_start = True` and `sequence_end = False` for the first
-        request, Set `sequence_start = False` and `sequence_end = False` for
-        the later requests. Once the session length limit is reached, set
-        `sequence_start = False` and `sequence_end = True` to end the session.
-        Then restart the above steps for a new session.
-
+        - On interactive mode, the chat history is kept on the server. Please
+        set `interactive_mode = True`.
         - On normal mode, no chat history is kept on the server. Set
-        `sequence_start = True` and `sequence_end = True` for all requests.
+        `interactive_mode = False`.
 
         Args:
             prompt: the prompt to use for the generation.
             session_id: determine which instance will be called.
                 If not specified with a value other than -1, using random value
                 directly.
-            sequence_start (bool): a flag to start the session. Set True to
-                start the session.
-            sequence_end (bool): a flag to end the session. Set True to end the
-                session.
+            interactive_mode (bool): turn on interactive mode or not. On
+                interactive mode, session history is kept on the server (and
+                vice versa).
             stream: whether to stream the results or not.
             stop: whether to stop the session response or not.
             request_output_len (int): output token nums
@@ -348,26 +340,21 @@ class APIClient:
         Yields:
             text, tokens, finish_reason
         """
-        assert session_id != -1, 'please set other value other than -1'
-        if str(session_id) not in self._rounds:
-            self._rounds[str(session_id)] = 1
-        for outputs in self.generate(
-                prompt,
-                session_id=session_id,
-                request_output_len=request_output_len,
-                sequence_start=(self._rounds[str(session_id)] == 1),
-                sequence_end=False,
-                stream=stream,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=ignore_eos):
+        assert session_id != -1, 'please set a value other than -1'
+        for outputs in self.generate(prompt,
+                                     session_id=session_id,
+                                     request_output_len=request_output_len,
+                                     interactive_mode=True,
+                                     stream=stream,
+                                     top_k=top_k,
+                                     top_p=top_p,
+                                     temperature=temperature,
+                                     repetition_penalty=repetition_penalty,
+                                     ignore_eos=ignore_eos):
             if outputs['finish_reason'] == 'length':
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
             yield outputs['text'], outputs['tokens'], outputs['finish_reason']
-        self._rounds[str(session_id)] += 1
 
     def end_session(self, session_id: int):
         """End the session with a unique session_id.
@@ -377,12 +364,10 @@ class APIClient:
                 If not specified with a value other than -1, using random value
                 directly.
         """
-        self._rounds[str(session_id)] = 1
         for out in self.generate(prompt='',
                                  session_id=session_id,
                                  request_output_len=0,
-                                 sequence_start=False,
-                                 sequence_end=True):
+                                 interactive_mode=False):
             pass
 
 
@@ -398,8 +383,7 @@ def get_streaming_response(prompt: str,
                            session_id: int,
                            request_output_len: int = 512,
                            stream: bool = True,
-                           sequence_start: bool = True,
-                           sequence_end: bool = True,
+                           interactive_mode: bool = False,
                            ignore_eos: bool = False,
                            stop: bool = False) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
@@ -408,8 +392,7 @@ def get_streaming_response(prompt: str,
         'stream': stream,
         'session_id': session_id,
         'request_output_len': request_output_len,
-        'sequence_start': sequence_start,
-        'sequence_end': sequence_end,
+        'interactive_mode': interactive_mode,
         'ignore_eos': ignore_eos,
         'stop': stop
     }

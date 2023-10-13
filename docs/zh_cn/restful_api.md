@@ -15,13 +15,7 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 **注意**，LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
 
 - 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置一个相同 `session_id`(不为 -1，这是缺省值)。
-
-  1. 第一次请求设置 `sequence_start = True`，`sequence_end = False`。
-  2. 后续的请求设置`sequence_start = False`，`sequence_end = False`。
-  3. 当对话长度到达极限，会返回`finish_reason = 'length'`,
-     这时想继续使用请设置`sequence_start = False`，`sequence_end = True`终止该会话。然后重复上述步骤继续会话。
-
-- 非交互模式下，server 不保存历史记录，所有请求设置 `sequence_start = True`，`sequence_end = True`即可。
+- 非交互模式下，server 不保存历史记录。
 
 ### python
 
@@ -86,8 +80,7 @@ curl http://{server_ip}:{server_port}/generate \
   -d '{
     "prompt": "Hello! How are you?",
     "session_id": 1,
-    "sequence_start": true,
-    "sequence_end": true
+    "interactive_mode": true
   }'
 ```
 
@@ -151,11 +144,6 @@ python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
 
-3. 当同一个 `session_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`
+3. 当同一个 `session_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
 
-4. 如果感觉请求不是并发地被处理，而是一个一个地处理，请设置好以下参数：
-
-   - 不同的 session_id 传入 `generate` api。否则，我们将自动绑定会话 id 为请求端的 ip 地址编号。
-
-5. `generate` api 支持多轮对话。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
-   如果你想关闭这个功能，然后在客户端管理会话记录，请设置 `sequence_end: true` 传入 `generate`。
+4. `generate` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。

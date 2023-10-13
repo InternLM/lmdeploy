@@ -398,24 +398,17 @@ async def create_embeddings(request: EmbeddingsRequest,
 async def generate(request: GenerateRequest, raw_request: Request = None):
     """Generate completion for the request.
 
-    - On interactive mode, the chat history is kept on the server. Set
-    `sequence_start = True` and `sequence_end = False` for the first request,
-    Set `sequence_start = False` and `sequence_end = False` for the later
-    requests. Once the session length limit is reached, set
-    `sequence_start = False` and `sequence_end = True` to end the session.
-    Then restart the above steps for a new session.
-
+    - On interactive mode, the chat history is kept on the server. Please set
+    `interactive_mode = True`.
     - On normal mode, no chat history is kept on the server. Set
-    `sequence_start = True` and `sequence_end = True` for all requests.
+    `interactive_mode = False`.
 
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - session_id: determine which instance will be called. If not specified
         with a value other than -1, using random value directly.
-    - sequence_start (bool): a flag to start the session. Set True to start
-        the session.
-    - sequence_end (bool): a flag to end the session. Set True to end the
-        session.
+    - interactive_mode (bool): turn on interactive mode or not. On interactive
+        mode, session history is kept on the server (and vice versa).
     - stream: whether to stream the results or not.
     - stop: whether to stop the session response or not.
     - request_output_len (int): output token nums
@@ -433,12 +426,16 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     if request.session_id == -1:
         request.session_id = random.randint(1, 10086)
 
-    generation = VariableInterface.async_engine.generate(
+    async_engine = VariableInterface.async_engine
+    sequence_start = async_engine.steps.get(str(request.session_id), 0) == 0
+    sequence_end = not request.interactive_mode
+
+    generation = async_engine.generate(
         request.prompt,
         request.session_id,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=request.sequence_start,
-        sequence_end=request.sequence_end,
+        sequence_start=sequence_start,
+        sequence_end=sequence_end,
         request_output_len=request.request_output_len,
         top_p=request.top_p,
         top_k=request.top_k,
@@ -467,7 +464,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                VariableInterface.async_engine.stop_session(request.session_id)
+                async_engine.stop_session(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Client disconnected')
             text += out.response

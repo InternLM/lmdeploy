@@ -14,17 +14,9 @@ our own api `generate` which provides more arguments for users to modify. The pe
 feature by default.
 
 - On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
-  the same `session_id` (can't be -1, it's the default number) to `generate` for the following requests.
+  the same `session_id` (can't be -1, it's the default number) to `generate` for requests.
 
-  1. Set `sequence_start = True` and `sequence_end = False` for the first request,
-  2. Set `sequence_start = False` and `sequence_end = False` for the later
-     requests.
-  3. Once the session length limit is reached, the output `finish_reason` would be `'length'`.
-     Set `sequence_start = False` and `sequence_end = True` to end the session.
-     Then restart the above steps for a new session.
-
-- On normal mode, no chat history is kept on the server. Set
-  `sequence_start = True` and `sequence_end = True` for all requests.
+- On normal mode, no chat history is kept on the server.
 
 **Note** please, if you want to launch multiple requests, you'd better set different `session_id` for both
 `/v1/chat/completions` and `/generate` apis. Or, we will set them random values.
@@ -92,8 +84,7 @@ curl http://{server_ip}:{server_port}/generate \
   -d '{
     "prompt": "Hello! How are you?",
     "session_id": 1,
-    "sequence_start": true,
-    "sequence_end": true
+    "interactive_mode": true
   }'
 ```
 
@@ -157,10 +148,6 @@ python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
 
 2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
 
-3. When the request with the same `session_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
+3. When the request with the same `session_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `interactive_mode=false` to restart the session.
 
-4. Requests were previously being handled sequentially rather than concurrently. To resolve this issue,
-
-   - kindly provide unique session_id values when calling the `generate` API or else your requests may be associated with client IP addresses
-
-5. The `generate` api supports engaging in multiple rounds of conversation, where input argument `prompt` consists of either single strings or entire chat histories. However, if you want to turn the mode off and manage the chat history in clients, please set the input argument `sequence_end: true` when utilizing the `generate` function.
+4. The `generate` api disables engaging in multiple rounds of conversation by default. The input argument `prompt` consists of either single strings or entire chat histories.
