@@ -109,6 +109,10 @@ class Engine:
                         res, tokens = outputs[0]
                     self.tokenizer.decode(res)
 
+                # for pytorch engine to restart a session
+                if hasattr(model_inst, 'end'):
+                    model_inst.end(session_id)
+
     def process_request(self, requests, concurrency: int = 1):
         q = Queue()
         threads = []

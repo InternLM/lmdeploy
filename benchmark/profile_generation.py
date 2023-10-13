@@ -47,6 +47,10 @@ def infer(model,
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
+        # for pytorch engine to restart a session
+        if hasattr(chatbot, 'end'):
+            chatbot.end(session_id)
+
         # TODO: ignore first token
         first_token_latency = np.round(timestamps[0] - start, 2)
         if len(timestamps) == 1:
@@ -78,8 +82,9 @@ def warmup(model,
                                           ignore_eos=True,
                                           sampling_param=sampling_param):
                 continue
-        if hasattr(chatbot, 'end'):  # for pytorch engine to restart a session
-            chatbot.end(session_id)
+            # for pytorch engine to restart a session
+            if hasattr(chatbot, 'end'):
+                chatbot.end(session_id)
 
     _start = time.perf_counter()
     procs = []
