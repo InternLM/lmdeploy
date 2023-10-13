@@ -138,12 +138,10 @@ auto LlamaBatch<T>::ProcessStopRequests(const Requests& requests) -> std::vector
         }
         // clear output buffers (prevent leaking conversations) if request is successful
         if (ec == 0) {
-
             if (rank_ == 0) {
                 std::unique_lock lock{output_mutex_};
                 output_cv_.wait(lock, [&] { return output_reqs_.empty(); });
             }
-
             auto& output_ids      = r->outputs[rank_].at("output_ids");
             auto& sequence_length = r->outputs[rank_].at("sequence_length");
             Clear(output_ids.getPtr<int>(), output_ids.shape.at(2));
@@ -1294,23 +1292,27 @@ void LlamaBatch<T>::OutputThreadEntry()
             std::unique_lock lock(output_mutex_);
             output_cv_.wait(lock, [&] { return !output_reqs_.empty() || output_stop_token_; });
 
+            // stop requested
+            if (output_stop_token_) {
+                TM_LOG_INFO("[OutputThreadEntry] stop requested.");
+                break;
+            }
+
             if (rank_ == 0 && model_->ffi_lock_) {
+                TM_LOG_INFO("acquire GIL");
                 model_->ffi_lock_(1);
+                TM_LOG_INFO("acquire GIL success");
             }
             // invoke stream cbs
             for (const auto& r : output_reqs_) {
                 r->stream_cb(&r->outputs[rank_].get());
             }
             if (rank_ == 0 && model_->ffi_lock_) {
+                TM_LOG_INFO("release GIL");
                 model_->ffi_lock_(0);
+                TM_LOG_INFO("release GIL success");
             }
             output_reqs_.clear();
-
-            // stop requested
-            if (output_stop_token_) {
-                TM_LOG_INFO("[OutputThreadEntry] stop requested.");
-                break;
-            }
         }
         FT_CHECK(output_reqs_.empty());
         // notify infer thread 0
