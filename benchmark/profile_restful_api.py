@@ -1,6 +1,5 @@
 import json
 import multiprocessing as mp
-import os
 import random
 import time
 from typing import Iterable, List
@@ -8,8 +7,8 @@ from typing import Iterable, List
 import fire
 import numpy as np
 import requests
-from sentencepiece import SentencePieceProcessor
 
+from lmdeploy.turbomind.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 
@@ -43,20 +42,6 @@ def get_streaming_response(prompt: str,
             output = data['text']
             tokens = data['tokens']
             yield output, tokens
-
-
-class Tokenizer:
-
-    def __init__(self, model_path: str):
-        # reload tokenizer
-        assert os.path.isfile(model_path), model_path
-        self.sp_model = SentencePieceProcessor(model_file=model_path)
-
-    def encode(self, prompts: List):
-        prompts_token_ids = self.sp_model.Encode(prompts,
-                                                 add_bos=False,
-                                                 add_eos=False)
-        return [len(token_ids) for token_ids in prompts_token_ids]
 
 
 def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
@@ -132,8 +117,10 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
 
     start = time.perf_counter()
     tokenizer = Tokenizer(tokenizer_path)
-    prompts_token_lens = tokenizer.encode(prompts)
-    completions_token_lens = tokenizer.encode(completions)
+    prompts_token_lens = [len(tokenizer.encode(prompt)) for prompt in prompts]
+    completions_token_lens = [
+        len(tokenizer.encode(prompt)) for prompt in completions
+    ]
     print(f'elapsed time for tokenization: '
           f'{round(time.perf_counter() - start, 2)} s')
 

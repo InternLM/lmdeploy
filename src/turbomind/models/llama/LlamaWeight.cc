@@ -72,6 +72,10 @@ LlamaWeight<T>::~LlamaWeight()
 
     pre_decoder_embedding_table   = nullptr;
     post_decoder_embedding_kernel = nullptr;
+
+    for (auto& p : decoder_layer_weights) {
+        delete p;
+    }
 }
 
 template<typename T>

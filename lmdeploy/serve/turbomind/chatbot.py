@@ -18,6 +18,7 @@ from tritonclient.grpc.service_pb2 import ModelInferResponse
 from lmdeploy.model import MODELS
 from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
                                             prepare_tensor)
+from lmdeploy.utils import filter_suffix
 
 
 @dataclass
@@ -157,6 +158,8 @@ class Chatbot:
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
+            if status == StatusCode.TRITON_STREAM_END:  # remove stop_words
+                res = filter_suffix(res, self.model.stop_words)
             if status.value < 0:
                 break
             else:
@@ -346,6 +349,8 @@ class Chatbot:
                                                       sequence_end):
             if status.value < 0:
                 break
+            if status == StatusCode.TRITON_STREAM_END:  # remove stop_words
+                res = filter_suffix(res, self.model.stop_words)
         if status.value == 0:
             self._session.histories = \
                 self._session.histories + self._session.prompt + \
@@ -386,16 +391,23 @@ class Chatbot:
         token_ids, _ = self.preprocess('<EOS>')
         return token_ids[0][0]
 
-    def _stop_words(self, stop_words: List[int]):
+    def _stop_words(self, stop_words: List[str]):
         """return stop-words' token ids."""
         if stop_words is None:
             return None
         assert isinstance(stop_words, List) and \
-               all(isinstance(elem, int) for elem in stop_words), \
+               all(isinstance(elem, str) for elem in stop_words), \
                f'stop_words must be a list but got {type(stop_words)}'
         # each id in stop_words represents a stop word
         # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
         # detailed explanation about turbomind's stop_words
+        stop_words = [
+            int(self.preprocess(stop_word)[0][0][-1])
+            for stop_word in stop_words
+        ]
+        assert isinstance(stop_words, List) and \
+               all(isinstance(elem, int) for elem in stop_words), \
+               'invalid stop_words'
         stop_word_offsets = range(1, len(stop_words) + 1)
         stop_words = np.array([[stop_words,
                                 stop_word_offsets]]).astype(np.int32)

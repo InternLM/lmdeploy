@@ -3,11 +3,12 @@ import json
 import os
 import time
 from http import HTTPStatus
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, List, Optional
 
 import fire
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -60,7 +61,7 @@ def create_error_response(status: HTTPStatus, message: str):
     return JSONResponse(
         ErrorResponse(message=message,
                       type='invalid_request_error',
-                      code=status.value).dict())
+                      code=status.value).model_dump())
 
 
 async def check_request(request) -> Optional[JSONResponse]:
@@ -152,7 +153,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             model=model_name,
             choices=[choice_data],
         )
-        response_json = response.json(ensure_ascii=False)
+        response_json = response.model_dump_json()
 
         return response_json
 
@@ -167,7 +168,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             chunk = ChatCompletionStreamResponse(id=request_id,
                                                  choices=[choice_data],
                                                  model=model_name)
-            data = chunk.json(exclude_unset=True, ensure_ascii=False)
+            data = chunk.model_dump_json(exclude_unset=True)
             yield f'data: {data}\n\n'
 
         async for res in result_generator:
@@ -321,7 +322,11 @@ def main(model_path: str,
          server_name: str = 'localhost',
          server_port: int = 23333,
          instance_num: int = 32,
-         tp: int = 1):
+         tp: int = 1,
+         allow_origins: List[str] = ['*'],
+         allow_credentials: bool = True,
+         allow_methods: List[str] = ['*'],
+         allow_headers: List[str] = ['*']):
     """An example to perform model inference through the command line
     interface.
 
@@ -331,7 +336,20 @@ def main(model_path: str,
         server_port (int): server port
         instance_num (int): number of instances of turbomind model
         tp (int): tensor parallel
+        allow_origins (List[str]): a list of allowed origins for CORS
+        allow_credentials (bool): whether to allow credentials for CORS
+        allow_methods (List[str]): a list of allowed HTTP methods for CORS
+        allow_headers (List[str]): a list of allowed HTTP headers for CORS
     """
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+        )
+
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  instance_num=instance_num,
                                                  tp=tp)

@@ -42,7 +42,21 @@ wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/r
 
 python profile_serving.py \
     ${TritonServerAddress} \
-    /path/to/tokenizer \
+    /path/to/tokenizer \ # ends with .model for most models. Otherwise, please pass model_path/triton_models/tokenizer.
+    ShareGPT_V3_unfiltered_cleaned_split.json \
+    --concurrency 64
+```
+
+## profile restful api
+
+`profile_restful_api.py` is used to do benchmark on api server.
+
+```bash
+wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+
+python profile_restful_api.py \
+    ${ServerAddress} \
+    /path/to/tokenizer \ # ends with .model for most models. Otherwise, please pass model_path/triton_models/tokenizer.
     ShareGPT_V3_unfiltered_cleaned_split.json \
     --concurrency 64
 ```
