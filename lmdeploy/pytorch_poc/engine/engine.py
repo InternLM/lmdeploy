@@ -126,6 +126,11 @@ class ModelContext:
         block_offsets = pad_sequence(block_offsets, True)
         self.block_offsets = block_offsets
 
+        # update position_ids_1d
+        position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
+        position_ids_1d = torch.cat(position_ids_1d)
+        self.position_ids_1d = position_ids_1d
+
     def get_block_offsets(self):
         """return block offsets."""
         return self.block_offsets
@@ -1011,6 +1016,7 @@ class Engine:
 
             # forward
             step_tokens: Dict[int, InferOutput] = self.step()
+
             for session_id, out in step_tokens.items():
                 if out.finish:
                     resp_type = ResponseType.FINISH
