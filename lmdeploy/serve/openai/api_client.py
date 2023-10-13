@@ -97,9 +97,11 @@ class APIClient:
                                          delimiter=b'\n'):
             if chunk:
                 if stream:
-                    decoded = chunk.decode('utf-8')[6:]
-                    if decoded == '[DONE]':
+                    decoded = chunk.decode('utf-8')
+                    if decoded == 'data: [DONE]':
                         continue
+                    if decoded[:6] == 'data: ':
+                        decoded = decoded[6:]
                     output = json.loads(decoded)
                     yield output
                 else:
@@ -233,8 +235,10 @@ class APIClient:
             if chunk:
                 if stream:
                     decoded = chunk.decode('utf-8')[6:]
-                    if decoded == '[DONE]':
+                    if decoded == 'data: [DONE]':
                         continue
+                    if decoded[:6] == 'data: ':
+                        decoded = decoded[6:]
                     output = json.loads(decoded)
                     yield output
                 else:

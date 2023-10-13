@@ -478,7 +478,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
 
 
 def main(model_path: str,
-         server_name: str = 'localhost',
+         server_name: str = '0.0.0.0',
          server_port: int = 23333,
          instance_num: int = 32,
          tp: int = 1,

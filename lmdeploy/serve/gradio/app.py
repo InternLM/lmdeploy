@@ -3,7 +3,7 @@ import fire
 
 
 def run(model_path_or_server: str,
-        server_name: str = 'localhost',
+        server_name: str = '0.0.0.0',
         server_port: int = 6006,
         batch_size: int = 32,
         tp: int = 1,
