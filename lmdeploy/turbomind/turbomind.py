@@ -86,6 +86,7 @@ class TurboMind:
         node_num = 1
 
         # read meta from model path
+        assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
         self.session_len = 2048
         data_type = 'fp16'

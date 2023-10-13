@@ -972,7 +972,7 @@ def main(model_name: str,
             META's llama format, and 'hf' means huggingface format
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
-        tp (int): the number of GPUs used for tensor parallelism
+        tp (int): the number of GPUs used for tensor parallelism, should be 2^n
         quant_path (str): path of the quantized model, which can be None
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
@@ -980,6 +980,8 @@ def main(model_name: str,
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
+
+    assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
     if model_format is None:
         model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
