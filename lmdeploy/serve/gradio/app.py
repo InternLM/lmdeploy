@@ -350,8 +350,7 @@ async def chat_stream_local(
     """
     state_chatbot = state_chatbot + [(instruction, None)]
 
-    yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
-           session_id)
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn, session_id)
 
     async for outputs in InterFace.async_engine.generate(
             instruction,
@@ -374,13 +373,11 @@ async def chat_stream_local(
         yield (state_chatbot, state_chatbot, enable_btn, disable_btn,
                session_id)
 
-    yield (state_chatbot, state_chatbot, disable_btn, enable_btn,
-           session_id)
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn, session_id)
 
 
 async def reset_local_func(instruction_txtbox: gr.Textbox,
-                           state_chatbot: gr.State, 
-                           session_id: int):
+                           state_chatbot: gr.State, session_id: int):
     """reset the session.
 
     Args:
@@ -461,7 +458,7 @@ def run_local(model_path: str,
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
-        state_session_id = gr.State(random.randint(0,100000))
+        state_session_id = gr.State(random.randint(0, 100000))
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -476,24 +473,26 @@ def run_local(model_path: str,
                 cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
 
-        send_event = instruction_txtbox.submit(
-            chat_stream_local,
-            [instruction_txtbox, state_chatbot, cancel_btn, reset_btn, state_session_id],
-            [state_chatbot, chatbot, cancel_btn, reset_btn, state_session_id])
+        send_event = instruction_txtbox.submit(chat_stream_local, [
+            instruction_txtbox, state_chatbot, cancel_btn, reset_btn,
+            state_session_id
+        ], [state_chatbot, chatbot, cancel_btn, reset_btn, state_session_id])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
             [],
             [instruction_txtbox],
         )
-        cancel_btn.click(cancel_local_func,
-                         [state_chatbot, cancel_btn, reset_btn, state_session_id],
-                         [state_chatbot, cancel_btn, reset_btn, state_session_id],
-                         cancels=[send_event])
+        cancel_btn.click(
+            cancel_local_func,
+            [state_chatbot, cancel_btn, reset_btn, state_session_id],
+            [state_chatbot, cancel_btn, reset_btn, state_session_id],
+            cancels=[send_event])
 
-        reset_btn.click(reset_local_func, 
-                        [instruction_txtbox, state_chatbot, state_session_id],
-                        [state_chatbot, chatbot, instruction_txtbox, state_session_id],
-                        cancels=[send_event])
+        reset_btn.click(
+            reset_local_func,
+            [instruction_txtbox, state_chatbot, state_session_id],
+            [state_chatbot, chatbot, instruction_txtbox, state_session_id],
+            cancels=[send_event])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=batch_size, max_size=100,
