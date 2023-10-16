@@ -17,8 +17,12 @@ def rotate_half(x: Tensor):
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
-                         position_ids: Tensor):
+def apply_rotary_pos_emb(q: Tensor,
+                         k: Tensor,
+                         cos: Tensor,
+                         sin: Tensor,
+                         position_ids: Tensor,
+                         position_ids_1d: Tensor = None):
     """Apply rotary positional embedding on query and key.
 
     Args:
@@ -27,6 +31,7 @@ def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
         cos (Tensor): cosine matrix (seq_len, dim).
         sin (Tensor): sine matrix (seq_len, dim).
         position_ids (Tensor): Position ids of q and k.
+        position_ids_1d (Tensor): 1d Position ids.
 
     Returns:
         Tuple[Tensor, Tensor]: Embedded query and key.
@@ -37,9 +42,10 @@ def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor,
     sin = sin.to(device=q.device, dtype=q.dtype)
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
     sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-    seq_length = position_ids[..., -1] + 1
-    position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
-    position_ids_1d = torch.cat(position_ids_1d)
+    if position_ids_1d is None:
+        seq_length = position_ids[..., -1] + 1
+        position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
+        position_ids_1d = torch.cat(position_ids_1d)
     cos = cos[position_ids_1d].unsqueeze(1)
     sin = sin[position_ids_1d].unsqueeze(1)
     q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -182,6 +188,7 @@ def attention_forward_with_paged_attention(
                   block_offsets=block_offsets,
                   history_lengths=history_lengths,
                   context=context)
+
     attn_output = torch.empty_like(query_states)
 
     block_size = past_key_value[0].size(1)
