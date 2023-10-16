@@ -395,11 +395,13 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
                                                      sequence_end=True):
         pass
 
+    new_session_id = random.randint(0, 100000)
     return (
         state_chatbot,
         state_chatbot,
         gr.Textbox.update(value=''),
-        random.randint(0, 100000),
+        new_session_id,
+        new_session_id,
     )
 
 
@@ -458,10 +460,12 @@ def run_local(model_path: str,
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
-        state_session_id = gr.State(random.randint(0, 100000))
+        state_session_id = gr.State(-1)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
+
+            session_id_box = gr.Number(label='Session ID')
 
             chatbot = gr.Chatbot(
                 elem_id='chatbot',
@@ -488,11 +492,21 @@ def run_local(model_path: str,
             [state_chatbot, cancel_btn, reset_btn, state_session_id],
             cancels=[send_event])
 
-        reset_btn.click(
-            reset_local_func,
-            [instruction_txtbox, state_chatbot, state_session_id],
-            [state_chatbot, chatbot, instruction_txtbox, state_session_id],
-            cancels=[send_event])
+        reset_btn.click(reset_local_func,
+                        [instruction_txtbox, state_chatbot, state_session_id],
+                        [
+                            state_chatbot, chatbot, instruction_txtbox,
+                            session_id_box, state_session_id
+                        ],
+                        cancels=[send_event])
+
+        def init():
+            new_session_id = random.randint(0, 100000)
+            return [new_session_id, new_session_id]
+
+        demo.load(init,
+                  inputs=None,
+                  outputs=[state_session_id, session_id_box])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=batch_size, max_size=100,
