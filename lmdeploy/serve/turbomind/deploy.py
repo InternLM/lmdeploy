@@ -306,7 +306,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -435,7 +435,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -601,7 +601,7 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -831,7 +831,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
