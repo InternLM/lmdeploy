@@ -13,7 +13,7 @@ from transformers.modeling_outputs import \
 from transformers.models.falcon.modeling_falcon import build_alibi_tensor
 
 from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
-                                          paged_attention_fwd)
+                                          fill_kv_cache, paged_attention_fwd)
 
 
 # rotary pos emb helpers
@@ -42,25 +42,26 @@ class PatchedFalconRotaryEmbedding(nn.Module):
         self.sin_cached = self.sin_cached.type(dtype)
 
     def patched_cos_sin(self,
-                        position_ids: torch.Tensor,
+                        position_ids_1d: torch.Tensor,
                         device='cpu',
                         dtype=torch.bfloat16) -> torch.Tensor:
-        total_length = int(position_ids.max().item()) + 1
+        total_length = int(position_ids_1d.max().item()) + 1
 
         if (self.seq_len_cached is None) or (total_length >
                                              self.seq_len_cached):
             self._patched_set_cos_sin_cache(total_length, device, dtype)
         # position_ids.shape == [1, packed_seq_len]
+        # position_ids_1d.shape == [packed_seq_len]
         return (
-            self.cos_cached[:, position_ids[0], None, :],
-            self.sin_cached[:, position_ids[0], None, :],
+            self.cos_cached[:, position_ids_1d, None, :],
+            self.sin_cached[:, position_ids_1d, None, :],
         )
 
     def _contiguous_batching_forward(self, query: torch.Tensor,
                                      key: torch.Tensor,
-                                     position_ids: torch.Tensor):
+                                     position_ids_1d: torch.Tensor):
         # batch, seq_len, *_ = query.shape
-        cos, sin = self.patched_cos_sin(position_ids,
+        cos, sin = self.patched_cos_sin(position_ids_1d,
                                         device=query.device,
                                         dtype=query.dtype)
         return (
@@ -94,6 +95,7 @@ class PatchedFalconAttention(nn.Module):
     ):
         # prepare inputs for continuous batch forwarding
         context = self.context.context
+
         history_lengths = context.history_lengths
         q_start_loc, q_seq_length = self.context.q_seq_info
         history_lengths = q_seq_length.new_tensor(history_lengths)
@@ -104,13 +106,15 @@ class PatchedFalconAttention(nn.Module):
             hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
+        # TODO: need further check when using TP
         (query_layer, key_layer, value_layer) = self._split_heads(fused_qkv)
 
         batch_size, query_length, _, _ = query_layer.shape
 
         if isinstance(self.maybe_rotary, nn.Module):
+            position_ids_1d = self.context.context.position_ids_1d
             query_layer, key_layer = self.maybe_rotary(query_layer, key_layer,
-                                                       position_ids)
+                                                       position_ids_1d)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -118,14 +122,15 @@ class PatchedFalconAttention(nn.Module):
             #  - key: [batch_size * self.num_heads, kv_length, head_dim]
             #  - value: [batch_size * self.num_heads, kv_length, head_dim]
 
-            context.fill_cache(
-                key_layer[0],
-                value_layer[0],
-                q_start_loc,
-                q_seq_length,
-                past_key,
-                past_value,
-            )
+            fill_kv_cache(key_layer.contiguous(),
+                          value_layer.contiguous(),
+                          past_key,
+                          past_value,
+                          q_start_loc,
+                          q_seq_length,
+                          block_offsets=context.block_offsets,
+                          history_lengths=context.history_lengths,
+                          context=context)
 
         if use_cache:
             present = (key_layer, value_layer)
