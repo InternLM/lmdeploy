@@ -196,7 +196,6 @@ class LlamaModel(nn.Module):
                 output_attentions=output_attentions,
                 use_cache=use_cache,
             )
-
             hidden_states = layer_outputs[0]
 
             if use_cache:

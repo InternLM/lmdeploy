@@ -7,51 +7,10 @@ from torch import Tensor
 from torch import distributed as dist
 
 from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
-                                          fill_kv_cache, paged_attention_fwd)
+                                          apply_rotary_pos_emb, fill_kv_cache,
+                                          paged_attention_fwd)
 
-
-def rotate_half(x: Tensor):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., :x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(q: Tensor,
-                         k: Tensor,
-                         cos: Tensor,
-                         sin: Tensor,
-                         position_ids: Tensor,
-                         position_ids_1d: Tensor = None):
-    """Apply rotary positional embedding on query and key.
-
-    Args:
-        q (Tensor): Query state.
-        k (Tensor): Key state.
-        cos (Tensor): cosine matrix (seq_len, dim).
-        sin (Tensor): sine matrix (seq_len, dim).
-        position_ids (Tensor): Position ids of q and k.
-        position_ids_1d (Tensor): 1d Position ids.
-
-    Returns:
-        Tuple[Tensor, Tensor]: Embedded query and key.
-    """
-    # The first two dimensions of cos and sin are always 1,
-    # so we can `squeeze` them.
-    cos = cos.to(device=q.device, dtype=q.dtype)
-    sin = sin.to(device=q.device, dtype=q.dtype)
-    cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
-    sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-    if position_ids_1d is None:
-        seq_length = position_ids[..., -1] + 1
-        position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
-        position_ids_1d = torch.cat(position_ids_1d)
-    cos = cos[position_ids_1d].unsqueeze(1)
-    sin = sin[position_ids_1d].unsqueeze(1)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-
-    return q_embed, k_embed
+apply_rotary_pos_emb = apply_rotary_pos_emb
 
 
 def generate_batched_mask(q_lens,
@@ -155,6 +114,7 @@ def attention_forward_with_paged_attention(
         assert q_proj is not None
         assert k_proj is not None
         assert v_proj is not None
+
         query_states = q_proj(hidden_states)
         key_states = k_proj(hidden_states)
         value_states = v_proj(hidden_states)
