@@ -4,8 +4,6 @@ import os
 import os.path as osp
 import random
 
-import fire
-
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
 from lmdeploy.tokenizer import Tokenizer
@@ -157,4 +155,6 @@ def main(model_path,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

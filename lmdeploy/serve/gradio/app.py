@@ -5,7 +5,6 @@ import time
 from functools import partial
 from typing import Sequence
 
-import fire
 import gradio as gr
 
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -539,4 +538,6 @@ def run(model_path_or_server: str,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(run)

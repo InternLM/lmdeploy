@@ -2,8 +2,6 @@
 
 import subprocess
 
-import fire
-
 
 def get_llama_gemm():
     import os.path as osp
@@ -30,4 +28,6 @@ def main(head_num: int = 32,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

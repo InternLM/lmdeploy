@@ -51,7 +51,6 @@ import itertools
 import logging
 from typing import Optional
 
-import fire
 import torch
 from transformers import GenerationConfig, PreTrainedModel
 
@@ -205,6 +204,8 @@ def main(
 
 
 def cli():
+    import fire
+
     fire.Fire(main)
 
 

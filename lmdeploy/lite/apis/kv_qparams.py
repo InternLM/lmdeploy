@@ -2,7 +2,6 @@
 from pathlib import Path
 from typing import Union
 
-import fire
 import numpy as np
 import torch
 
@@ -120,5 +119,6 @@ def main(work_dir: str,
 
 
 if __name__ == '__main__':
+    import fire
 
     fire.Fire(main)

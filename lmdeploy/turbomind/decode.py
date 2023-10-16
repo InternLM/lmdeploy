@@ -2,7 +2,6 @@
 import os
 import os.path as osp
 
-import fire
 import torch
 
 from lmdeploy import turbomind as tm
@@ -37,4 +36,6 @@ def main(model_path, inputs):
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)
