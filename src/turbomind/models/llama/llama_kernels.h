@@ -77,6 +77,16 @@ void invokeGatherOutput(int*         output_ids,
                         int          batch_size,
                         cudaStream_t stream);
 
+void invokeUpdateOutput(int**        request_output_ids_ptrs,
+                        int**        request_seqlen_ptrs,
+                        const int*   output_ids,
+                        const int*   sequence_lengths,
+                        const int*   request_output_ids_lens,
+                        int          max_session_len,
+                        bool         token_generated,
+                        int          batch_size,
+                        cudaStream_t stream);
+
 void invokeMyCopyInt(int* dst, const int* src, size_t count, cudaStream_t st);
 
 template<typename T>

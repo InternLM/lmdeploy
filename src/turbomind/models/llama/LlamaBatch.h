@@ -84,6 +84,7 @@ public:
 
     ~LlamaBatch()
     {
+        TM_LOG_ERROR("~LlamaBatch()");
         model_->shared_state_->request_queue.close();
 
         internal_thread_.join();
@@ -182,6 +183,13 @@ private:
     int*      end_ids_buf_{};
     bool*     finished_buf_{};
     uint32_t* seq_limit_len_{};
+
+    int** request_output_ids_ptrs_{};
+    int*  request_output_ids_lens_{};
+    int** request_seqlen_ptrs_{};
+    int** h_request_output_ids_ptrs_{};
+    int*  h_request_output_ids_lens_{};
+    int** h_request_seqlen_ptrs_{};
 
     // pinned buffers
     int* h_input_ids_buf_{};

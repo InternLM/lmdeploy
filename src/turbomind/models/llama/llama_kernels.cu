@@ -553,10 +553,57 @@ void invokeGatherOutput(int*         output_ids,
                         int          batch_size,
                         cudaStream_t stream)
 {
-    int block_size = 512;
+    int block_size = 128;
     int grid_size  = batch_size;
     gatherOutput<<<grid_size, block_size, 0, stream>>>(
         output_ids, ids, context_length, max_context_len, max_gen_step, max_output_len, batch_size);
+}
+
+__global__ void updateOutput(int**      request_output_ids_ptrs,
+                             int**      request_seqlen_ptrs,
+                             const int* output_ids,
+                             const int* sequence_lengths,
+                             const int* request_output_ids_lens,
+                             int        max_session_len,
+                             bool       token_generated)
+{
+    const int batch_id = blockIdx.x;
+
+    auto request_output_ids = request_output_ids_ptrs[batch_id];
+    auto request_seqlen     = request_seqlen_ptrs[batch_id];
+
+    output_ids += max_session_len * batch_id;
+
+    const int seqlen     = sequence_lengths[batch_id];
+    const int output_len = min(seqlen, request_output_ids_lens[batch_id]);
+
+    for (int i = threadIdx.x; i < output_len; i += blockDim.x) {
+        request_output_ids[i] = output_ids[i];
+    }
+
+    *request_seqlen = seqlen;
+}
+
+void invokeUpdateOutput(int**        request_output_ids_ptrs,
+                        int**        request_seqlen_ptrs,
+                        const int*   output_ids,
+                        const int*   sequence_lengths,
+                        const int*   request_output_ids_lens,
+                        int          max_session_len,
+                        bool         token_generated,
+                        int          batch_size,
+                        cudaStream_t stream)
+{
+    constexpr int block_size = 128;
+    const int     grid_size  = batch_size;
+
+    updateOutput<<<grid_size, block_size, 0, stream>>>(request_output_ids_ptrs,
+                                                       request_seqlen_ptrs,
+                                                       output_ids,
+                                                       sequence_lengths,
+                                                       request_output_ids_lens,
+                                                       max_session_len,
+                                                       token_generated);
 }
 
 #define VERSION_SWITCH(VERSION, CONST_NAME, ...)                                                                       \

@@ -7,6 +7,7 @@
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -471,6 +472,10 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     finished_buf_  = (bool*)allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false);
     seq_limit_len_ = (uint32_t*)allocator_->reMalloc(seq_limit_len_, sizeof(uint32_t) * batch_size, false);
 
+    request_output_ids_ptrs_ = (int**)allocator_->reMalloc(request_output_ids_ptrs_, sizeof(int*) * batch_size, true);
+    request_output_ids_lens_ = (int*)allocator_->reMalloc(request_output_ids_lens_, sizeof(int) * batch_size, true);
+    request_seqlen_ptrs_     = (int**)allocator_->reMalloc(request_seqlen_ptrs_, sizeof(int*) * batch_size, true);
+
     is_allocate_buffer_ = true;
 }
 
@@ -530,6 +535,13 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
 
         h_seq_limit_len_ =
             (uint32_t*)allocator_->reMalloc(h_seq_limit_len_, sizeof(uint32_t) * max_batch_size, false, true);
+
+        h_request_output_ids_ptrs_ =
+            (int**)allocator_->reMalloc(h_request_output_ids_ptrs_, sizeof(int*) * max_batch_size, true, true);
+        h_request_output_ids_lens_ =
+            (int*)allocator_->reMalloc(h_request_output_ids_lens_, sizeof(int) * max_batch_size, true, true);
+        h_request_seqlen_ptrs_ =
+            (int**)allocator_->reMalloc(h_request_seqlen_ptrs_, sizeof(int*) * max_batch_size, true, true);
     }
 
     is_allocate_persistant_buffer_ = true;
@@ -578,6 +590,10 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&finished_buf_);
         allocator_->free((void**)&seq_limit_len_);
 
+        allocator_->free((void**)&request_output_ids_ptrs_);
+        allocator_->free((void**)&request_output_ids_lens_);
+        allocator_->free((void**)&request_seqlen_ptrs_);
+
         is_allocate_buffer_ = false;
     }
 
@@ -595,6 +611,11 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&h_input_ids_buf_, true);
         allocator_->free((void**)&h_input_length_buf_, true);
         allocator_->free((void**)&h_seq_limit_len_, true);
+
+        allocator_->free((void**)&h_request_output_ids_ptrs_, true);
+        allocator_->free((void**)&h_request_output_ids_lens_, true);
+        allocator_->free((void**)&h_request_seqlen_ptrs_, true);
+
         is_allocate_persistant_buffer_ = false;
     }
 }
@@ -729,6 +750,23 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     Copy(h_seq_limit_len_, batch_size, seq_limit_len_);
     Copy(state_->h_finished, batch_size, finished_buf_);
 
+    for (int i = 0; i < batch_size; ++i) {
+        Tensor& output_ids         = state_->requests[i]->outputs[rank_].at("output_ids");
+        int*    req_output_ids_ptr = output_ids.getPtr<int>();
+        int*    req_seqlen_ptr     = state_->requests[i]->outputs[rank_].getPtr<int>("sequence_length");
+
+        h_request_output_ids_ptrs_[i] = req_output_ids_ptr;
+        h_request_output_ids_lens_[i] = output_ids.shape.at(2);
+        h_request_seqlen_ptrs_[i]     = req_seqlen_ptr;
+
+        FT_CHECK(h_request_output_ids_ptrs_[i]);
+        FT_CHECK(h_request_output_ids_lens_[i]);
+        FT_CHECK(h_request_seqlen_ptrs_[i]);
+    }
+    Copy(h_request_output_ids_ptrs_, batch_size, request_output_ids_ptrs_);
+    Copy(h_request_output_ids_lens_, batch_size, request_output_ids_lens_);
+    Copy(h_request_seqlen_ptrs_, batch_size, request_seqlen_ptrs_);
+
     // ! range of step_ [1, 2 * session_len]
     // consider a sequence with context_len == session_len and another sequence with context_len == 1 and
     // request_output_len == session_len - 1 => step_ will loop in [session_len, 2 * session_len)
@@ -849,7 +887,7 @@ void LlamaBatch<T>::ContextDecode()
     for (int i = 0; i < batch_size; ++i) {
         if (state_->is_swap_in[i]) {
             const auto& seq = *state_->sequences[i];
-            dbg(state_->h_context_length[i], seq.cache_len);
+            dbg(std::tuple(i, state_->h_context_length[i], seq.cache_len));
             if (const int missing = state_->h_context_length[i] - seq.cache_len; missing > 1) {
                 base = base < 0 ? i : base;
                 dbg(seq.tokens, seq.cache_len);
@@ -918,7 +956,8 @@ void LlamaBatch<T>::ContextDecode()
         int              max_input_len{};
         auto             input_ids = context_decoder_ids_buf_;
         for (int i = first; i < last; ++i) {
-            input_ids        = Copy(input_ids_buf_ + i * session_len_, h_input_length_buf_[i], input_ids);
+            input_ids = Copy(input_ids_buf_ + i * session_len_, h_input_length_buf_[i], input_ids);
+            dbg(i, h_input_length_buf_[i]);
             h_tmp_k_ptrs_[i] = k_ptr;
             h_tmp_v_ptrs_[i] = v_ptr;
             k_ptr += model_->local_kv_head_num_ * max_context_cnts[k] * model_->size_per_head_;
@@ -1037,15 +1076,17 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
 template<typename T>
 auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
 {
+    NvtxScope scope("Finish");
     const int batch_size = state_->active_size;
 
     // secure info needed by `Initialize()`
     Copy(finished_buf_, batch_size, state_->h_finished);
     Copy(sequence_lengths_, batch_size, state_->h_context_length);
 
-    if (1) {
+    if constexpr (0) {
         std::unique_lock<std::mutex> lock;
         if (rank_ == 0) {
+            NvtxScope _("acquire_outputs");
             // wait for previous output operations
             lock = std::unique_lock{output_mutex_};
             output_cv_.wait(lock, [&] { return output_reqs_.empty(); });
@@ -1055,6 +1096,7 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         check_cuda_error(cudaStreamSynchronize(stream_));
 
         if (rank_ == 0) {
+            NvtxScope _("signal_output_thread");
             // enqueue new output requests
             for (int i = 0; i < batch_size; ++i) {
                 FT_CHECK(state_->requests[i] != nullptr);
@@ -1073,17 +1115,20 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         SetOutputTensors(g);
         check_cuda_error(cudaStreamSynchronize(stream_));
 
-        if (rank_ == 0 && model_->ffi_lock_) {
-            model_->ffi_lock_(1);
-        }
-        for (int i = 0; i < batch_size; ++i) {
-            FT_CHECK(state_->requests[i] != nullptr);
-            if (state_->requests[i]->stream_cb && rank_ == 0) {
-                state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
+        {
+            NvtxScope _("output_cb");
+            if (rank_ == 0 && model_->ffi_lock_) {
+                model_->ffi_lock_(1);
             }
-        }
-        if (rank_ == 0 && model_->ffi_lock_) {
-            model_->ffi_lock_(0);
+            for (int i = 0; i < batch_size; ++i) {
+                FT_CHECK(state_->requests[i] != nullptr);
+                if (state_->requests[i]->stream_cb && rank_ == 0) {
+                    state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
+                }
+            }
+            if (rank_ == 0 && model_->ffi_lock_) {
+                model_->ffi_lock_(0);
+            }
         }
     }
 
@@ -1096,10 +1141,13 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
     }
 
     std::vector<Signal> signals;
-    for (int i = 0; i < batch_size; ++i) {
-        if (state_->requests[i] && state_->h_finished[i]) {
-            CompleteRequest(i, false, false);
-            signals.push_back([r = std::move(state_->requests[i])] { r->signal.set_value(0); });
+    {
+        NvtxScope _("prepare_completion_signal");
+        for (int i = 0; i < batch_size; ++i) {
+            if (state_->requests[i] && state_->h_finished[i]) {
+                CompleteRequest(i, false, false);
+                signals.push_back([r = std::move(state_->requests[i])] { r->signal.set_value(0); });
+            }
         }
     }
     return signals;
@@ -1108,6 +1156,7 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
 template<typename T>
 void LlamaBatch<T>::SetOutputTensors(const GenerationState& g)
 {
+    NvtxScope scope("SetOutputTensors");
     // dbg(g.max_init_ctx_len);
     const auto batch_size = state_->active_size;
     // [s,b] -> [b,s] and skip padding in [context_len, max_context_len)
@@ -1121,17 +1170,30 @@ void LlamaBatch<T>::SetOutputTensors(const GenerationState& g)
                        stream_);
     sync_check_cuda_error();
 
-    /// TODO: fuse the loop into a single kernel
-    for (int i = 0; i < batch_size; ++i) {
-        if (state_->requests[i]) {
-            auto& output_ids      = state_->requests[i]->outputs[rank_].at("output_ids");
-            auto& sequence_length = state_->requests[i]->outputs[rank_].at("sequence_length");
-            Copy(state_->output_ids + i * session_len_, output_ids.shape.at(2), output_ids.getPtr<int>());
-            Copy(sequence_lengths_ + i, 1, sequence_length.getPtr<int>());
-            if (g.step > g.max_init_ctx_len) {  // +1 for newly generated token
-                invokePlusScalar(sequence_length.getPtr<int>(), 1, 1, stream_);
-            }
-        }
+    if constexpr (1) {
+        invokeUpdateOutput(request_output_ids_ptrs_,
+                           request_seqlen_ptrs_,
+                           state_->output_ids,
+                           sequence_lengths_,
+                           request_output_ids_lens_,
+                           session_len_,
+                           g.step > g.max_init_ctx_len,
+                           batch_size,
+                           stream_);
+        sync_check_cuda_error();
+    }
+    else {
+        // for (int i = 0; i < batch_size; ++i) {
+        //     if (state_->requests[i]) {
+        //         auto& output_ids      = state_->requests[i]->outputs[rank_].at("output_ids");
+        //         auto& sequence_length = state_->requests[i]->outputs[rank_].at("sequence_length");
+        //         Copy(state_->output_ids + i * session_len_, output_ids.shape.at(2), output_ids.getPtr<int>());
+        //         Copy(sequence_lengths_ + i, 1, sequence_length.getPtr<int>());
+        //         if (g.step > g.max_init_ctx_len) {  // +1 for newly generated token
+        //             invokePlusScalar(sequence_length.getPtr<int>(), 1, 1, stream_);
+        //         }
+        //     }
+        // }
     }
 }
 
@@ -1275,6 +1337,7 @@ void LlamaBatch<T>::BarrierSignalRequests(Barrier& barrier, const std::vector<Si
 template<typename T>
 void LlamaBatch<T>::Start()
 {
+    TM_LOG_ERROR("LlamaBatch<T>::Start()");
     int device_id = -1;
     check_cuda_error(cudaGetDevice(&device_id));
     internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this, device_id);
@@ -1291,11 +1354,11 @@ void LlamaBatch<T>::OutputThreadEntry()
             // wait for requests with stream cbs
             std::unique_lock lock(output_mutex_);
             output_cv_.wait(lock, [&] { return !output_reqs_.empty() || output_stop_token_; });
-
+            // NvtxScope _("output_callback");
             // stop requested
             if (output_stop_token_) {
                 TM_LOG_INFO("[OutputThreadEntry] stop requested.");
-                break;
+                return;
             }
 
             if (rank_ == 0 && model_->ffi_lock_) {

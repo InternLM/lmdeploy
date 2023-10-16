@@ -281,7 +281,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   weights->past_kv_scale.data());
     }
 
-    Compare(qkv_buf_3_, num_token * hidden_units_, Concat("qkv_buf_3", layer_id), kCmpRead, stream_);
+    // Compare(qkv_buf_3_, num_token * hidden_units_, Concat("qkv_buf_3", layer_id), kCmpRead, stream_);
 
     // dbg(max_seq_len);
 

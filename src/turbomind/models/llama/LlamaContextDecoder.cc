@@ -209,8 +209,8 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
     allocateBuffer(sess.batch_size, sess.token_num, sess.max_query_len, sess.max_key_len);
 
+    // dbg(padding_offset_);
     FT_CHECK(padding_offset_);
-    dbg(padding_offset_);
 
     size_t tmp_token_num{};
     invokeGetPaddingOffsetAndCuSeqLens(h_pinned_token_num_ptr_,
@@ -234,8 +234,8 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                             stream_);
     sync_check_cuda_error();
 
-    Compare(
-        decoder_input_output, sess.token_num * hidden_units_, Concat("context_decoder_input", 0), kCmpRead, stream_);
+    // Compare(
+    //     decoder_input_output, sess.token_num * hidden_units_, Concat("context_decoder_input", 0), kCmpRead, stream_);
 
     /////////////////////////////////////////////
     /// RMSNorm

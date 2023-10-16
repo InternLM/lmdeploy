@@ -150,7 +150,7 @@ public:
                        std::vector<int>&                   ref_count):
         seqs_(seqs), idxs_(idxs), ref_count_(ref_count)
     {
-        dbg(seqs.size());
+        // dbg(seqs.size());
         released_.resize(seqs.size());
         ptr_ = released_.size();
     }
@@ -336,9 +336,9 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
             if (sequences[idxs[v]]->status == Sequence::kCached) {
                 continue;
             }
-            dbg(v, idxs[v]);
+            // dbg(v, idxs[v]);
             int preempt = trans.Preempt(v, idxs[v]);
-            dbg(preempt);
+            // dbg(preempt);
             // Commit only when preemption actually free enough blocks for the sequence to run
             if (block_count <= preempt) {
                 // preempted blocks are in cached state
@@ -348,7 +348,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
             }
         }
 
-        dbg(block_count, trans);
+        // dbg(block_count, trans);
 
         if (block_count == 0) {
             trans.Commit();
@@ -368,7 +368,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
         }
     }
 
-    dbg(schedule);
+    // dbg(schedule);
 
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule is ready, time to execute it. (locked -> cached -> free -> locked)
