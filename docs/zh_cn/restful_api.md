@@ -19,28 +19,49 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 
 ### python
 
-这是一个 python 示例，展示如何使用上述接口。
+我们将这些服务的客户端功能集成在 `APIClient` 类中。下面是一些例子，展示如何在客户端调用 `api_server` 服务。
+如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 messages = [{"role": "user", "content": "Say this is a test!"}]
-for item in api_client.chat_completions_v1(model=model_name, messages = messages):
+for item in api_client.chat_completions_v1(model=model_name, messages=messages):
     print(item)
+```
 
-for item in api_client.generate(prompt='hi'):
-    print(item)
+对于 `/v1/completions` 接口，我们还特别提供了在单客户端批量推理接口，可以接受传入一个 `prompt` 列表。如果你想用 `/v1/completions` 接口，你可以尝试：
 
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
 for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
-
-for item in api_client.embeddings_v1(model=model_name, input='hi'):
-    print(item)
-
 outputs = api_client.completion_v1_concurrently(
         model_name, ['hi', 'Say this is a test!'])
 print(outputs)
+```
+
+类似地，如果要使用 `/v1/embeddings` 接口，也可以用 `APIClient`：
+
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+for item in api_client.embeddings_v1(model=model_name, input='hi'):
+    print(item)
+```
+
+对于`generate` 接口，我们提供两个模式，一个是普通模式，默认开启，一个是交互对话模式，默认关闭。模式可以通过 `interactive_mode` 布尔量参数控制。下面是一个普通模式的例子，
+如果要体验交互模式，将 `interactive_mode=True` 传入即可。
+
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+for item in api_client.generate(prompt='hi'):
+    print(item)
 ```
 
 ### Java/Golang/Rust

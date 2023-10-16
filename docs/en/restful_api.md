@@ -23,28 +23,49 @@ feature by default.
 
 ### python
 
-Here is an example for the above api.
+We have integrated the client-side functionalities of these services into the `APIClient` class. Below are some examples demonstrating how to invoke the `api_server` service on the client side.
+
+If you want to use the `/v1/chat/completions` endpoint, you can try the following code:
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 messages = [{"role": "user", "content": "Say this is a test!"}]
-for item in api_client.chat_completions_v1(model=model_name, messages = messages):
+for item in api_client.chat_completions_v1(model=model_name, messages=messages):
     print(item)
+```
 
-for item in api_client.generate(prompt='hi'):
-    print(item)
+For the `/v1/completions` endpoint, we also offer a special batch inference interface for single clients that can accept a list of `prompt`. If you want to use the `/v1/completions` endpoint, you can try:
 
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
 for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
-
-for item in api_client.embeddings_v1(model=model_name, input='hi'):
-    print(item)
-
 outputs = api_client.completion_v1_concurrently(
         model_name, ['hi', 'Say this is a test!'])
 print(outputs)
+```
+
+Similarly, if you want to use the `/v1/embeddings` endpoint, you can also use APIClient:
+
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+for item in api_client.embeddings_v1(model=model_name, input='hi'):
+    print(item)
+```
+
+For the `generate` endpoint, we provide two modes, one is the normal mode, which is enabled by default, and the other is the interactive conversation mode, which is turned off by default. The mode can be controlled by the `interactive_mode` boolean parameter. The following is an example of normal mode. If you want to experience the interactive mode, simply pass in `interactive_mode=True`.
+
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+for item in api_client.generate(prompt='hi'):
+    print(item)
 ```
 
 ### Java/Golang/Rust
