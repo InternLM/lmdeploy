@@ -249,13 +249,13 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   cuda_device_prop_ptr.get());
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
-        LlamaTritonSharedModelInstance<T>{std::move(llama),
-                                          shared_weights_[device_id],
-                                          std::move(allocator),
+        LlamaTritonSharedModelInstance<T>{std::move(allocator),
                                           std::move(cublas_algo_map),
                                           std::move(cublas_wrapper_mutex),
                                           std::move(cublas_wrapper),
                                           std::move(cuda_device_prop_ptr),
+                                          shared_weights_[device_id],
+                                          std::move(llama),
                                           session_len_});
 }
 
@@ -273,7 +273,7 @@ LlamaTritonModel<T>::createModelInstance(int                                    
     std::shared_ptr<LlamaTritonSharedModelInstance<T>> instance;
     {
         std::lock_guard<std::mutex> lock(shared_mutexes_[device_id]);
-        instance = shared_instances_[device_id].lock();
+        instance = shared_instances_[device_id];
         if (!instance) {
             instance = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
             instance->llm->setFfiLock(ffi_lock_);
@@ -347,7 +347,7 @@ LlamaTritonModel<T>::createNcclParams(const int node_id, const int device_id_sta
     // create nccl group when there are non-occupied devices
     for (int i = 0; i < device_count; ++i) {
         std::lock_guard<std::mutex> lock(shared_mutexes_[i]);
-        if (shared_instances_[i].expired()) {
+        if (shared_instances_[i] == nullptr) {
             need_nccl_params = true;
             break;
         }

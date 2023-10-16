@@ -17,7 +17,7 @@ python -m lmdeploy.pytorch.chat $PATH_TO_HF_MODEL
 ```shell
 python -m lmdeploy.pytorch.chat \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
-    --temperature 0 --max-histroy 0
+    --temperature 0 --max-history 0
 ```
 
 **Example 3**: Accelerate with deepspeed inference

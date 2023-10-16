@@ -29,13 +29,13 @@ namespace ft = turbomind;
 
 template<typename T>
 struct LlamaTritonSharedModelInstance {
-    std::unique_ptr<ft::LlamaV2<T>>                         llm;
-    std::shared_ptr<ft::LlamaWeight<T>>                     llm_weight;
     std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator;
     std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map;
     std::unique_ptr<std::mutex>                             cublas_wrapper_mutex;
     std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper;
     std::unique_ptr<cudaDeviceProp>                         cuda_device_prop_ptr;
+    std::shared_ptr<ft::LlamaWeight<T>>                     llm_weight;
+    std::unique_ptr<ft::LlamaV2<T>>                         llm;
     const int                                               session_len;
 };
 

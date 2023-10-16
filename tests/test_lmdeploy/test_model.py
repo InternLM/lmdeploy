@@ -133,7 +133,7 @@ def test_codellama_infilling():
 '''
     _prompt = model.get_prompt(prompt)
     assert _prompt.find('<FILL>') == -1
-    assert model.stop_words == [32010]
+    assert model.stop_words == ['<EOT>']
 
     model = MODELS.get('codellama')(capability='infilling', suffix_first=True)
     _prompt = model.get_prompt(prompt)

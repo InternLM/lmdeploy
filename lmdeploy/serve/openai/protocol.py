@@ -28,7 +28,7 @@ class ModelPermission(BaseModel):
     allow_fine_tuning: bool = False
     organization: str = '*'
     group: Optional[str] = None
-    is_blocking: str = False
+    is_blocking: bool = False
 
 
 class ModelCard(BaseModel):
@@ -84,7 +84,7 @@ class ChatCompletionResponseChoice(BaseModel):
     """Chat completion response choices."""
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal['stop', 'length']]
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -107,7 +107,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     """Chat completion response stream choice."""
     index: int
     delta: DeltaMessage
-    finish_reason: Optional[Literal['stop', 'length']]
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -142,7 +142,7 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[int] = None
-    finish_reason: Optional[Literal['stop', 'length']]
+    finish_reason: Optional[Literal['stop', 'length']] = None
 
 
 class CompletionResponse(BaseModel):
@@ -190,7 +190,7 @@ class EmbeddingsResponse(BaseModel):
 class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: Union[str, List[Dict[str, str]]]
-    instance_id: int = -1
+    session_id: int = -1
     sequence_start: bool = True
     sequence_end: bool = False
     stream: bool = False
@@ -201,3 +201,10 @@ class GenerateRequest(BaseModel):
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
+
+
+class GenerateResponse(BaseModel):
+    """Generate response."""
+    text: str
+    tokens: int
+    finish_reason: Optional[Literal['stop', 'length']] = None

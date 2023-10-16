@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
 - \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide
 - \[2023/09\] TurboMind supports Baichuan2-7B
@@ -65,6 +66,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 | InternLM-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |   QWen-7B    |       Yes       | Yes  |   Yes   |  No   |  No  |
+|   QWen-14B   |       Yes       | Yes  |   Yes   |  No   |  No  |
 | Baichuan-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan2-7B |       Yes       | Yes  |   No    |  No   |  No  |
 |  Code Llama  |       Yes       | Yes  |   No    |  No   |  No  |
@@ -109,7 +111,7 @@ pip install lmdeploy
 
 # Make sure you have git-lfs installed (https://git-lfs.com)
 git lfs install
-git clone https://huggingface.co/internlm/internlm-chat-7b /path/to/internlm-chat-7b
+git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internlm-chat-7b
 
 # if you want to clone without large files – just their pointers
 # prepend your git clone with the following env var:
@@ -234,7 +236,7 @@ LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight
 [Click here](./docs/en/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
 
 > **Warning**<br />
-> runtime Tensor Parallel for quantilized model is not available. Please setup `--tp` on `deploy` to enable static TP.
+> runtime Tensor Parallel for quantized model is not available. Please setup `--tp` on `deploy` to enable static TP.
 
 ## Contributing
 

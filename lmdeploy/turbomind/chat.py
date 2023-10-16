@@ -8,7 +8,7 @@ import fire
 
 from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -123,7 +123,7 @@ def main(model_path,
             step = 0
             seed = random.getrandbits(64)
         else:
-            prompt = model.get_prompt(prompt, nth_round)
+            prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
             if step + len(input_ids) >= tm_model.session_len:
                 print('WARNING: exceed session max length.'
