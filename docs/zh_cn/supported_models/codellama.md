@@ -90,7 +90,7 @@ TBD
 ```shell
 # --instance_num: turbomind推理实例的个数。可理解为支持的最大并发数
 # --tp: 在 tensor parallel时，使用的GPU数量
-lmdeploy serve api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 打开 `http://{server_ip}:{server_port}`，即可访问 swagger，查阅 RESTful API 的详细信息。
@@ -107,8 +107,8 @@ lmdeploy serve api_client restful_api_url
 ```shell
 # restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 localhost 6006 --restful_api True
-lmdeploy serve gradio restful_api_url server_ip --restful_api True
+# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${port} --restful_api True
 ```
 
 关于 RESTful API的详细介绍，请参考[这份](../restful_api.md)文档。

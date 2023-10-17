@@ -7,7 +7,7 @@ class SubCliServe(object):
 
     def gradio(self,
                model_path_or_server: str,
-               server_name: str = 'localhost',
+               server_name: str = '0.0.0.0',
                server_port: int = 6006,
                batch_size: int = 32,
                tp: int = 1,
@@ -48,7 +48,7 @@ class SubCliServe(object):
 
     def api_server(self,
                    model_path: str,
-                   server_name: str = 'localhost',
+                   server_name: str = '0.0.0.0',
                    server_port: int = 23333,
                    instance_num: int = 32,
                    tp: int = 1,

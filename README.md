@@ -150,7 +150,7 @@ lmdeploy serve gradio ./workspace
 Launch inference server by:
 
 ```shell
-lmdeploy serve api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,

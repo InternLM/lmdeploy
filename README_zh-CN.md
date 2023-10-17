@@ -150,7 +150,7 @@ lmdeploy serve gradio ./workspace
 使用下面的命令启动推理服务：
 
 ```shell
-lmdeploy serve api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 你可以通过命令行方式与推理服务进行对话：
@@ -165,8 +165,8 @@ lmdeploy serve api_client restful_api_url
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 localhost 6006 --restful_api True
-lmdeploy serve gradio restful_api_url server_ip --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${port} --restful_api True
 ```
 
 更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。

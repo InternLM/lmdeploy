@@ -3,7 +3,7 @@
 ### Launch Service
 
 ```shell
-lmdeploy serve api_server ./workspace 0.0.0.0 server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port 6006 --instance_num 32 --tp 1
 ```
 
 Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
@@ -135,7 +135,7 @@ You can also test restful-api through webui.
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 localhost 6006 --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
 lmdeploy serve gradio restful_api_url server_ip --restful_api True
 ```
 
