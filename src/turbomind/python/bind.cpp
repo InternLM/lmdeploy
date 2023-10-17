@@ -344,13 +344,25 @@ PYBIND11_MODULE(_turbomind, m)
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
+                auto gil_control = [state = PyGILState_STATE{}](int op) mutable {
+                    if (op) {
+                        state = PyGILState_Ensure();
+                    }
+                    else {
+                        PyGILState_Release(state);
+                    }
+                };
                 if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
-                    return std::make_shared<LlamaTritonModel<half>>(
+                    auto model = std::make_shared<LlamaTritonModel<half>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                    model->setFfiLock(gil_control);
+                    return model;
                 }
                 else {
-                    return std::make_shared<LlamaTritonModel<float>>(
+                    auto model = std::make_shared<LlamaTritonModel<float>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                    model->setFfiLock(gil_control);
+                    return model;
                 }
             },
             "model_dir"_a,

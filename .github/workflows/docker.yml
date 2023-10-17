@@ -24,13 +24,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      - name: Check disk space
-        run: |
-          rm -rf ${GITHUB_WORKSPACE}/.git
-          cat /proc/cpuinfo  | grep -ic proc
-          free
-          df -h
-          df . -h
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
       - name: Get docker info
         run: |
           docker info

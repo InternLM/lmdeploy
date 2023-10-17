@@ -70,10 +70,10 @@ struct LlamaAttentionKernel:
         scalar_t** v_batch_seqs_ptr = nullptr;
         output_t** o_batch_seqs_ptr = nullptr;
 
-        int q_batch_seqs_offset = 0;
-        int k_batch_seqs_offset = 0;
-        int v_batch_seqs_offset = 0;
-        int o_batch_seqs_offset = 0;
+        size_t q_batch_seqs_offset = 0;
+        size_t k_batch_seqs_offset = 0;
+        size_t v_batch_seqs_offset = 0;
+        size_t o_batch_seqs_offset = 0;
 
         int32_t group_size = 1;
 
@@ -81,7 +81,7 @@ struct LlamaAttentionKernel:
 
         template<typename ptr_t>
         CUTLASS_DEVICE void
-        update_batched_ptr(ptr_t& data_ptr, ptr_t* batch_seq_ptr, int batch_seq_offset, int batch_id, int strideB)
+        update_batched_ptr(ptr_t& data_ptr, ptr_t* batch_seq_ptr, size_t batch_seq_offset, int batch_id, int strideB)
         {
             if (batch_seq_ptr != nullptr)
                 data_ptr = batch_seq_ptr[batch_id] + batch_seq_offset;

@@ -8,7 +8,7 @@ import fire
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
 from lmdeploy.pytorch_poc.messages import SamplingParam
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
