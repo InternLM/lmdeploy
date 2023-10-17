@@ -18,13 +18,10 @@ class LlamaRMSNorm(nn.Module):
     """Rewrite RMSNorm."""
 
     def forward(self, hidden_states):
-        import math
-        var_weight = math.sqrt(hidden_states.size(-1))
-        input_dtype = hidden_states.dtype
-        variance = hidden_states.norm(dim=-1, keepdim=True).clamp_min(
-            self.variance_epsilon)
-        weight = self.weight.to(input_dtype) * var_weight / variance
-        ret = weight * hidden_states
+        # torch.nn.functional.normalize based implementation might leads
+        # to wrong output
+        from lmdeploy.pytorch_poc.kernels import rms_norm
+        ret = rms_norm(hidden_states, self.weight, self.variance_epsilon)
 
         return ret
 
