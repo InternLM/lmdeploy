@@ -14,6 +14,21 @@ from .functional import (apply_rotary_pos_emb,
                          attention_forward_with_paged_attention)
 
 
+class LlamaRMSNorm(nn.Module):
+    """Rewrite RMSNorm."""
+
+    def forward(self, hidden_states):
+        import math
+        var_weight = math.sqrt(hidden_states.size(-1))
+        input_dtype = hidden_states.dtype
+        variance = hidden_states.norm(dim=-1, keepdim=True).clamp_min(
+            self.variance_epsilon)
+        weight = self.weight.to(input_dtype) * var_weight / variance
+        ret = weight * hidden_states
+
+        return ret
+
+
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 

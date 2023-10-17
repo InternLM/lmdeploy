@@ -4,77 +4,81 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+
 @triton.jit
-def apply_rotary_pos_emb_kernel(Q,
-                                COS,
-                                SIN,
-                                POS,
-                                Q_EMB,
-                                seq_len,
-                                stride_qh: tl.constexpr,
-                                BLOCK: tl.constexpr,
-                                BLOCK_N: tl.constexpr,
-                                ):
+def apply_rotary_pos_emb_kernel(
+    Q,
+    COS,
+    SIN,
+    POS,
+    Q_EMB,
+    seq_len,
+    stride_qh: tl.constexpr,
+    BLOCK: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
     seq_block_id = tl.program_id(0)
     head_id = tl.program_id(1)
 
-    pos_offset = seq_block_id*BLOCK + tl.arange(0, BLOCK)
-    pos_ids = tl.load(POS+pos_offset, pos_offset<seq_len, other=-1)
+    pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
+    pos_ids = tl.load(POS + pos_offset, pos_offset < seq_len, other=-1)
 
     feat_size = BLOCK_N * 2
     feat_offset_l = tl.arange(0, BLOCK_N)
     feat_offset_h = BLOCK_N + feat_offset_l
     cs_offset_l = pos_ids[:, None] * feat_size + feat_offset_l[None, :]
     cs_offset_h = pos_ids[:, None] * feat_size + feat_offset_h[None, :]
-    pos_ids_mask = pos_ids[:, None]>=0
-    cos_l = tl.load(COS+cs_offset_l, mask=pos_ids_mask)
-    cos_h = tl.load(COS+cs_offset_h, mask=pos_ids_mask)
-    sin_l = tl.load(SIN+cs_offset_l, mask=pos_ids_mask)
-    sin_h = tl.load(SIN+cs_offset_h, mask=pos_ids_mask)
+    pos_ids_mask = pos_ids[:, None] >= 0
+    cos_l = tl.load(COS + cs_offset_l, mask=pos_ids_mask)
+    cos_h = tl.load(COS + cs_offset_h, mask=pos_ids_mask)
+    sin_l = tl.load(SIN + cs_offset_l, mask=pos_ids_mask)
+    sin_h = tl.load(SIN + cs_offset_h, mask=pos_ids_mask)
     q_offset_seq = pos_offset[:, None] * stride_qh + head_id * feat_size
     q_offset_l = q_offset_seq + feat_offset_l[None, :]
     q_offset_h = q_offset_seq + feat_offset_h[None, :]
 
-    pos_mask = pos_offset[:, None]<seq_len
-    q_l = tl.load(Q+q_offset_l, mask=pos_mask)
-    q_h = tl.load(Q+q_offset_h, mask=pos_mask)
+    pos_mask = pos_offset[:, None] < seq_len
+    q_l = tl.load(Q + q_offset_l, mask=pos_mask)
+    q_h = tl.load(Q + q_offset_h, mask=pos_mask)
 
     q_emb_l = q_l * cos_l - q_h * sin_l
     q_emb_h = q_h * cos_h + q_l * sin_h
 
-    tl.store(Q_EMB+q_offset_l, q_emb_l, mask=pos_mask)
-    tl.store(Q_EMB+q_offset_h, q_emb_h, mask=pos_mask)
+    tl.store(Q_EMB + q_offset_l, q_emb_l, mask=pos_mask)
+    tl.store(Q_EMB + q_offset_h, q_emb_h, mask=pos_mask)
+
 
 @triton.jit
-def apply_rotary_pos_emb_qk_kernel(Q,
-                                K,
-                                COS,
-                                SIN,
-                                POS,
-                                Q_EMB,
-                                K_EMB, 
-                                seq_len,
-                                stride_qh: tl.constexpr,
-                                stride_kh: tl.constexpr,
-                                BLOCK: tl.constexpr,
-                                BLOCK_N: tl.constexpr,
-                                ):
+def apply_rotary_pos_emb_qk_kernel(
+    Q,
+    K,
+    COS,
+    SIN,
+    POS,
+    Q_EMB,
+    K_EMB,
+    seq_len,
+    stride_qh: tl.constexpr,
+    stride_kh: tl.constexpr,
+    BLOCK: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
     seq_block_id = tl.program_id(0)
     head_id = tl.program_id(1)
 
-    pos_offset = seq_block_id*BLOCK + tl.arange(0, BLOCK)
-    pos_ids = tl.load(POS+pos_offset, pos_offset<seq_len, other=-1)
+    pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
+    pos_ids = tl.load(POS + pos_offset, pos_offset < seq_len, other=-1)
 
     feat_size = BLOCK_N * 2
     feat_offset_l = tl.arange(0, BLOCK_N)
     feat_offset_h = BLOCK_N + feat_offset_l
     cs_offset_l = pos_ids[:, None] * feat_size + feat_offset_l[None, :]
     cs_offset_h = pos_ids[:, None] * feat_size + feat_offset_h[None, :]
-    pos_ids_mask = pos_ids[:, None]>=0
-    cos_l = tl.load(COS+cs_offset_l, mask=pos_ids_mask)
-    cos_h = tl.load(COS+cs_offset_h, mask=pos_ids_mask)
-    sin_l = tl.load(SIN+cs_offset_l, mask=pos_ids_mask)
-    sin_h = tl.load(SIN+cs_offset_h, mask=pos_ids_mask)
+    pos_ids_mask = pos_ids[:, None] >= 0
+    cos_l = tl.load(COS + cs_offset_l, mask=pos_ids_mask)
+    cos_h = tl.load(COS + cs_offset_h, mask=pos_ids_mask)
+    sin_l = tl.load(SIN + cs_offset_l, mask=pos_ids_mask)
+    sin_h = tl.load(SIN + cs_offset_h, mask=pos_ids_mask)
 
     q_offset_seq = pos_offset[:, None] * stride_qh + head_id * feat_size
     q_offset_l = q_offset_seq + feat_offset_l[None, :]
@@ -83,21 +87,21 @@ def apply_rotary_pos_emb_qk_kernel(Q,
     k_offset_l = k_offset_seq + feat_offset_l[None, :]
     k_offset_h = k_offset_seq + feat_offset_h[None, :]
 
-    pos_mask = pos_offset[:, None]<seq_len
-    q_l = tl.load(Q+q_offset_l, mask=pos_mask)
-    q_h = tl.load(Q+q_offset_h, mask=pos_mask)
-    k_l = tl.load(K+k_offset_l, mask=pos_mask)
-    k_h = tl.load(K+k_offset_h, mask=pos_mask)
+    pos_mask = pos_offset[:, None] < seq_len
+    q_l = tl.load(Q + q_offset_l, mask=pos_mask)
+    q_h = tl.load(Q + q_offset_h, mask=pos_mask)
+    k_l = tl.load(K + k_offset_l, mask=pos_mask)
+    k_h = tl.load(K + k_offset_h, mask=pos_mask)
 
     q_emb_l = q_l * cos_l - q_h * sin_l
     q_emb_h = q_h * cos_h + q_l * sin_h
     k_emb_l = k_l * cos_l - k_h * sin_l
     k_emb_h = k_h * cos_h + k_l * sin_h
 
-    tl.store(Q_EMB+q_offset_l, q_emb_l, mask=pos_mask)
-    tl.store(Q_EMB+q_offset_h, q_emb_h, mask=pos_mask)
-    tl.store(K_EMB+k_offset_l, k_emb_l, mask=pos_mask)
-    tl.store(K_EMB+k_offset_h, k_emb_h, mask=pos_mask)
+    tl.store(Q_EMB + q_offset_l, q_emb_l, mask=pos_mask)
+    tl.store(Q_EMB + q_offset_h, q_emb_h, mask=pos_mask)
+    tl.store(K_EMB + k_offset_l, k_emb_l, mask=pos_mask)
+    tl.store(K_EMB + k_offset_h, k_emb_h, mask=pos_mask)
 
 
 def apply_rotary_pos_emb(q: Tensor,
@@ -140,37 +144,45 @@ def apply_rotary_pos_emb(q: Tensor,
 
     if num_heads_k == num_heads_q:
         grid = [triton.cdiv(seq_len, BLOCK), num_heads_q]
-        apply_rotary_pos_emb_qk_kernel[grid](
-            q,k,cos, sin, position_ids_1d, q_embed, k_embed,
-            seq_len=seq_len,
-            stride_qh=q.stride(-3),
-            stride_kh=k.stride(-3),
-            BLOCK=BLOCK,
-            BLOCK_N=q.size(-1)//2,
-            num_warps=num_warps,
-            num_stages=num_stages
-        )
+        apply_rotary_pos_emb_qk_kernel[grid](q,
+                                             k,
+                                             cos,
+                                             sin,
+                                             position_ids_1d,
+                                             q_embed,
+                                             k_embed,
+                                             seq_len=seq_len,
+                                             stride_qh=q.stride(-3),
+                                             stride_kh=k.stride(-3),
+                                             BLOCK=BLOCK,
+                                             BLOCK_N=q.size(-1) // 2,
+                                             num_warps=num_warps,
+                                             num_stages=num_stages)
 
     else:
         grid_q = [triton.cdiv(seq_len, BLOCK), num_heads_q]
         grid_k = [triton.cdiv(seq_len, BLOCK), num_heads_k]
-        apply_rotary_pos_emb_kernel[grid_q](
-            q, cos, sin, position_ids_1d, q_embed,
-            seq_len=seq_len,
-            stride_qh=q.stride(-3),
-            BLOCK=BLOCK,
-            BLOCK_N=q.size(-1)//2,
-            num_warps=num_warps,
-            num_stages=num_stages
-        )
-        apply_rotary_pos_emb_kernel[grid_k](
-            k, cos, sin, position_ids_1d, k_embed,
-            seq_len=seq_len,
-            stride_qh=k.stride(-3),
-            BLOCK=BLOCK,
-            BLOCK_N=k.size(-1)//2,
-            num_warps=num_warps,
-            num_stages=num_stages
-        )
+        apply_rotary_pos_emb_kernel[grid_q](q,
+                                            cos,
+                                            sin,
+                                            position_ids_1d,
+                                            q_embed,
+                                            seq_len=seq_len,
+                                            stride_qh=q.stride(-3),
+                                            BLOCK=BLOCK,
+                                            BLOCK_N=q.size(-1) // 2,
+                                            num_warps=num_warps,
+                                            num_stages=num_stages)
+        apply_rotary_pos_emb_kernel[grid_k](k,
+                                            cos,
+                                            sin,
+                                            position_ids_1d,
+                                            k_embed,
+                                            seq_len=seq_len,
+                                            stride_qh=k.stride(-3),
+                                            BLOCK=BLOCK,
+                                            BLOCK_N=k.size(-1) // 2,
+                                            num_warps=num_warps,
+                                            num_stages=num_stages)
 
     return q_embed, k_embed
