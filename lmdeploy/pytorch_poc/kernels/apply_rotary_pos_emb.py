@@ -24,25 +24,26 @@ def apply_rotary_pos_emb_kernel(Q,
     feat_size = BLOCK_N * 2
     feat_offset_l = tl.arange(0, BLOCK_N)
     feat_offset_h = BLOCK_N + feat_offset_l
-    cs_offset_l = pos_ids * feat_size + feat_offset_l[None, :]
-    cs_offset_h = pos_ids * feat_size + feat_offset_h[None, :]
+    cs_offset_l = pos_ids[:, None] * feat_size + feat_offset_l[None, :]
+    cs_offset_h = pos_ids[:, None] * feat_size + feat_offset_h[None, :]
+    pos_ids_mask = pos_ids[:, None]>=0
+    cos_l = tl.load(COS+cs_offset_l, mask=pos_ids_mask)
+    cos_h = tl.load(COS+cs_offset_h, mask=pos_ids_mask)
+    sin_l = tl.load(SIN+cs_offset_l, mask=pos_ids_mask)
+    sin_h = tl.load(SIN+cs_offset_h, mask=pos_ids_mask)
     q_offset_seq = pos_offset[:, None] * stride_qh + head_id * feat_size
     q_offset_l = q_offset_seq + feat_offset_l[None, :]
     q_offset_h = q_offset_seq + feat_offset_h[None, :]
 
-    cos_l = tl.load(COS+cs_offset_l, mask=pos_ids[:, None]>=0)
-    cos_h = tl.load(COS+cs_offset_h, mask=pos_ids[:, None]>=0)
-    sin_l = tl.load(SIN+cs_offset_l, mask=pos_ids[:, None]>=0)
-    sin_h = tl.load(SIN+cs_offset_h, mask=pos_ids[:, None]>=0)
-
-    q_l = tl.load(Q+q_offset_l, mask=pos_offset[:, None]<seq_len)
-    q_h = tl.load(Q+q_offset_h, mask=pos_offset[:, None]<seq_len)
+    pos_mask = pos_offset[:, None]<seq_len
+    q_l = tl.load(Q+q_offset_l, mask=pos_mask)
+    q_h = tl.load(Q+q_offset_h, mask=pos_mask)
 
     q_emb_l = q_l * cos_l - q_h * sin_l
     q_emb_h = q_h * cos_h + q_l * sin_h
 
-    tl.store(Q_EMB+q_offset_l, q_emb_l, mask=pos_offset[:, None]<seq_len)
-    tl.store(Q_EMB+q_offset_h, q_emb_h, mask=pos_offset[:, None]<seq_len)
+    tl.store(Q_EMB+q_offset_l, q_emb_l, mask=pos_mask)
+    tl.store(Q_EMB+q_offset_h, q_emb_h, mask=pos_mask)
 
 @triton.jit
 def apply_rotary_pos_emb_qk_kernel(Q,
@@ -66,13 +67,14 @@ def apply_rotary_pos_emb_qk_kernel(Q,
 
     feat_size = BLOCK_N * 2
     feat_offset_l = tl.arange(0, BLOCK_N)
-    feat_offset_h = tl.arange(BLOCK_N, BLOCK_N * 2)
+    feat_offset_h = BLOCK_N + feat_offset_l
     cs_offset_l = pos_ids[:, None] * feat_size + feat_offset_l[None, :]
     cs_offset_h = pos_ids[:, None] * feat_size + feat_offset_h[None, :]
-    cos_l = tl.load(COS+cs_offset_l, mask=pos_ids[:, None]>=0)
-    cos_h = tl.load(COS+cs_offset_h, mask=pos_ids[:, None]>=0)
-    sin_l = tl.load(SIN+cs_offset_l, mask=pos_ids[:, None]>=0)
-    sin_h = tl.load(SIN+cs_offset_h, mask=pos_ids[:, None]>=0)
+    pos_ids_mask = pos_ids[:, None]>=0
+    cos_l = tl.load(COS+cs_offset_l, mask=pos_ids_mask)
+    cos_h = tl.load(COS+cs_offset_h, mask=pos_ids_mask)
+    sin_l = tl.load(SIN+cs_offset_l, mask=pos_ids_mask)
+    sin_h = tl.load(SIN+cs_offset_h, mask=pos_ids_mask)
 
     q_offset_seq = pos_offset[:, None] * stride_qh + head_id * feat_size
     q_offset_l = q_offset_seq + feat_offset_l[None, :]
@@ -81,20 +83,21 @@ def apply_rotary_pos_emb_qk_kernel(Q,
     k_offset_l = k_offset_seq + feat_offset_l[None, :]
     k_offset_h = k_offset_seq + feat_offset_h[None, :]
 
-    q_l = tl.load(Q+q_offset_l, mask=pos_offset[:, None]<seq_len)
-    q_h = tl.load(Q+q_offset_h, mask=pos_offset[:, None]<seq_len)
-    k_l = tl.load(K+k_offset_l, mask=pos_offset[:, None]<seq_len)
-    k_h = tl.load(K+k_offset_h, mask=pos_offset[:, None]<seq_len)
+    pos_mask = pos_offset[:, None]<seq_len
+    q_l = tl.load(Q+q_offset_l, mask=pos_mask)
+    q_h = tl.load(Q+q_offset_h, mask=pos_mask)
+    k_l = tl.load(K+k_offset_l, mask=pos_mask)
+    k_h = tl.load(K+k_offset_h, mask=pos_mask)
 
     q_emb_l = q_l * cos_l - q_h * sin_l
     q_emb_h = q_h * cos_h + q_l * sin_h
     k_emb_l = k_l * cos_l - k_h * sin_l
     k_emb_h = k_h * cos_h + k_l * sin_h
 
-    tl.store(Q_EMB+q_offset_l, q_emb_l, mask=pos_offset[:, None]<seq_len)
-    tl.store(Q_EMB+q_offset_h, q_emb_h, mask=pos_offset[:, None]<seq_len)
-    tl.store(K_EMB+k_offset_l, k_emb_l, mask=pos_offset[:, None]<seq_len)
-    tl.store(K_EMB+k_offset_h, k_emb_h, mask=pos_offset[:, None]<seq_len)
+    tl.store(Q_EMB+q_offset_l, q_emb_l, mask=pos_mask)
+    tl.store(Q_EMB+q_offset_h, q_emb_h, mask=pos_mask)
+    tl.store(K_EMB+k_offset_l, k_emb_l, mask=pos_mask)
+    tl.store(K_EMB+k_offset_h, k_emb_h, mask=pos_mask)
 
 
 def apply_rotary_pos_emb(q: Tensor,
@@ -116,6 +119,8 @@ def apply_rotary_pos_emb(q: Tensor,
     Returns:
         Tuple[Tensor, Tensor]: Embedded query and key.
     """
+    q = q.contiguous()
+    k = k.contiguous()
     cos = cos.to(device=q.device, dtype=q.dtype)
     sin = sin.to(device=q.device, dtype=q.dtype)
     if position_ids_1d is None:
@@ -145,6 +150,7 @@ def apply_rotary_pos_emb(q: Tensor,
             num_warps=num_warps,
             num_stages=num_stages
         )
+
     else:
         grid_q = [triton.cdiv(seq_len, BLOCK), num_heads_q]
         grid_k = [triton.cdiv(seq_len, BLOCK), num_heads_k]
