@@ -491,9 +491,6 @@ class Falcon(BaseModel):
     def __init__(self):
         super().__init__()
 
-    def get_prompt(self, prompt, sequence_start=True):
-        return prompt
-
     def update_input_ids(self, input_ids: List):
         if len(input_ids) == 0:
             # avoid empty input to model
