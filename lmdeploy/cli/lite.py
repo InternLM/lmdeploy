@@ -11,17 +11,15 @@ class SubCliLite(object):
                  w_sym: bool = False,
                  w_group_size: int = 128,
                  device: str = 'cuda'):
-        """
+        """Perform weight quantization using AWQ algorithm.
+
         Args:
-            model:
-            work_dir:
-            w_bits:
-            w_sym:
-            w_group_size:
-            device:
-
-        Returns:
-
+            model (str): The path of model in hf format.
+            work_dir (str): The working directory to save results.
+            w_bits (int): Bit number for weight quantization.
+            w_sym (bool): Whether to do symmetric quantization.
+            w_group_size (int): Group size for weight quantization statistics.
+            device (str): Device type of running.
         """
         from lmdeploy.lite.apis.auto_awq import auto_awq
 
@@ -39,8 +37,7 @@ class SubCliLite(object):
                   calib_seqlen: int = 2048,
                   work_dir: str = './work_dir',
                   device: str = 'cuda') -> None:
-        """The main function for loading the model and performing calibration
-        on a given dataset.
+        """Perform calibration on a given dataset.
 
         Args:
             model (str): The model to be loaded.
@@ -73,13 +70,13 @@ class SubCliLite(object):
         """Export key and value stats.
 
         Args:
-            work_dir (Union[str, Path]): Directory path where the stats
+            work_dir (str): Directory path where the stats
                 are saved.
-            turbomind_dir (Union[str, Path]): Directory path where to
+            turbomind_dir (str): Directory path where to
                 save the results.
             kv_bits (int, optional): Number of bits for quantization.
                 Defaults to 8.
-            kv_sym (bool, optional): Whether to use symmetric quantizaiton.
+            kv_sym (bool, optional): Whether to use symmetric quantization.
                 Defaults to False.
             num_tp (int, optional): Number of tensor parallelism.
                 Defaults to 1.
@@ -91,3 +88,13 @@ class SubCliLite(object):
                        kv_bits=kv_bits,
                        kv_sym=kv_sym,
                        num_tp=num_tp)
+
+    def get_small_sharded_hf(self, src_dir: str, dst_dir: str):
+        """Convert a hugging face model to the smallest sharded one.
+
+        Args:
+            src_dir (str): The directory of the input HF model.
+            dst_dir (str): The directory to save new  model.
+        """
+        from lmdeploy.lite.apis.get_small_sharded_hf import main as run_sharded
+        run_sharded(src_dir, dst_dir)
