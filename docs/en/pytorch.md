@@ -9,13 +9,13 @@ This submodule allow user to chat with language model through command line, and 
 **Example 1**: Chat with default setting
 
 ```shell
-python -m lmdeploy.pytorch.chat $PATH_TO_HF_MODEL
+lmdeploy chat torch $PATH_TO_HF_MODEL
 ```
 
 **Example 2**: Disable sampling and chat history
 
 ```shell
-python -m lmdeploy.pytorch.chat \
+lmdeploy chat torch \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
     --temperature 0 --max-history 0
 ```
@@ -23,7 +23,7 @@ python -m lmdeploy.pytorch.chat \
 **Example 3**: Accelerate with deepspeed inference
 
 ```shell
-python -m lmdeploy.pytorch.chat \
+lmdeploy chat torch \
     $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
     --accel deepspeed
 ```
