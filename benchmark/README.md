@@ -23,10 +23,14 @@ python profile_throughput.py \
 
 `profile_generation.py` perform benchmark with dummy data.
 
+```shell
+pip install nvidia-ml-py
+```
+
 ```bash
 python profile_generation.py \
- /path/to/your/model \
- --concurrency 8 --input_seqlen 0 --output_seqlen 2048
+ --model-path /path/to/your/model \
+ --concurrency 1 8 --prompt-tokens 0 512 --completion-tokens 2048 512
 ```
 
 ## profile serving
@@ -38,7 +42,21 @@ wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/r
 
 python profile_serving.py \
     ${TritonServerAddress} \
-    /path/to/tokenizer \
+    /path/to/tokenizer \ # ends with .model for most models. Otherwise, please pass model_path/triton_models/tokenizer.
+    ShareGPT_V3_unfiltered_cleaned_split.json \
+    --concurrency 64
+```
+
+## profile restful api
+
+`profile_restful_api.py` is used to do benchmark on api server.
+
+```bash
+wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+
+python profile_restful_api.py \
+    ${ServerAddress} \
+    /path/to/tokenizer \ # ends with .model for most models. Otherwise, please pass model_path/triton_models/tokenizer.
     ShareGPT_V3_unfiltered_cleaned_split.json \
     --concurrency 64
 ```

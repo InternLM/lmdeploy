@@ -69,7 +69,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 
 ## GPU Memory Test
 
-The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) model.
+The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b-v1_1) model.
 Testing method:
 
 1. Use `deploy.py` to convert the model, modify the maximum concurrency in the `workspace` configuration; adjust the number of requests in `llama_config.ini`.
@@ -93,7 +93,7 @@ As can be seen, the fp16 version requires 1030MB of GPU memory for each concurre
 
 ## Accuracy Test
 
-The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) command model.
+The test object is the [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b-v1_1) command model.
 
 Below is the result of PTQ quantization of `kCacheKVInt8` method with only 128 randomly selected data from the c4 dataset. The accuracy was tested using [opencompass](https://github.com/InternLM/opencompass) before and after quantization.
 

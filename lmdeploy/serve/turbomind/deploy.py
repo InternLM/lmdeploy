@@ -11,6 +11,7 @@ from pathlib import Path
 import fire
 import safetensors
 import torch
+from safetensors.torch import load_file
 from sentencepiece import SentencePieceProcessor
 
 import lmdeploy
@@ -108,6 +109,35 @@ def tokenizer_info_qwen(model_dir: str):
     return n_words, bos_id, eos_id
 
 
+def load_checkpoint(model_path):
+    """Load checkpoint files into torch format.
+
+    Args:
+        model_path (str): the checkpoint folder
+    Returns:
+        Dict[str, torch.Tensor]: weight in torch format
+    """
+    suffixes = ['.safetensors', '.bin']
+    for suffix in suffixes:
+        files = [
+            file for file in os.listdir(model_path) if file.endswith(suffix)
+        ]
+        if len(files) > 0:
+            break
+
+    assert len(files) > 0, f'could not find checkpoints in {model_path}'
+    files = sorted(files)
+    print(files)
+    params = {}
+    for file in files:
+        if file.endswith('.bin'):
+            tmp = torch.load(osp.join(model_path, file), map_location='cpu')
+        else:
+            tmp = load_file(osp.join(model_path, file))
+        params.update(tmp)
+    return params
+
+
 def export(model_name: str,
            num_layer: int,
            norm_eps: float,
@@ -122,6 +152,7 @@ def export(model_name: str,
            max_position_embeddings: int = 0,
            use_dynamic_ntk: int = 0,
            use_logn_attn: int = 0,
+           rope_theta: float = 10000.0,
            tokenizer_info=tokenizer_info_sp):
     """Export deploying information to a config file.
 
@@ -213,6 +244,7 @@ def export(model_name: str,
         vocab_size=_vocab_size,
         num_layer=num_layer,
         rotary_embedding=size_per_head,
+        rope_theta=rope_theta,
         inter_size=inter_size,
         norm_eps=norm_eps,
         attn_bias=int(attn_bias),
@@ -233,7 +265,8 @@ def export(model_name: str,
         # extra attention params
         max_position_embeddings=max_position_embeddings,
         use_dynamic_ntk=int(use_dynamic_ntk),
-        use_logn_attn=int(use_logn_attn)))
+        use_logn_attn=int(use_logn_attn),
+    ))
 
     config = configparser.ConfigParser()
     for section, key_values in cfg.items():
@@ -273,7 +306,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -402,7 +435,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -415,6 +448,10 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
+            max_position_embeddings = int(
+                model_arg.get('max_position_embeddings', 0))
+            repo_scaling = bool(model_arg.get('rope_scaling', False))
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -430,14 +467,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     _qweight = 'weight'
     _suffixes = [_qweight, 'bias']
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
-    _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _params = load_checkpoint(model_path)
 
     def get_tensor(name):
         """return tensor according its name."""
@@ -525,8 +555,23 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     for ft, hf in other:
         model_params[ft] = get_tensor(hf)
 
-    return export(model_name, num_layer, norm_eps, kv_head_num, model_params,
-                  tokenizer_path, triton_models_path, tp)
+    if model_name == 'baichuan2-7b':
+        # https://huggingface.co/baichuan-inc/Baichuan2-7B-Base/blob/main/modeling_baichuan.py#L507
+        # https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat/blob/main/modeling_baichuan.py#L507
+        model_params['output.weight'] = torch.nn.functional.normalize(
+            model_params['output.weight'])
+
+    return export(model_name,
+                  num_layer,
+                  norm_eps,
+                  kv_head_num,
+                  model_params,
+                  tokenizer_path,
+                  triton_models_path,
+                  tp,
+                  max_position_embeddings=max_position_embeddings,
+                  use_dynamic_ntk=repo_scaling,
+                  rope_theta=rope_theta)
 
 
 def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
@@ -556,7 +601,7 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -569,6 +614,7 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -756,7 +802,8 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                   triton_models_path,
                   tp,
                   weight_type='int4',
-                  group_size=group_size)
+                  group_size=group_size,
+                  rope_theta=rope_theta)
 
 
 def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
@@ -784,7 +831,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -797,6 +844,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
             config = json.load(f)
             num_layer = config['num_hidden_layers']
             norm_eps = config['layer_norm_epsilon']
+            rope_theta = float(config.get('rotary_emb_base', 10000.0))
             if 'num_key_value_heads' in config:
                 kv_head_num = config['num_key_value_heads']
             else:
@@ -812,14 +860,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
     # convert weights from hf to turbomind
     model_params = {}
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
-    _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _params = load_checkpoint(model_path)
 
     def get_tensor(name, trans=True):
         """return a transposed tensor according its name."""
@@ -884,6 +925,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
                   max_position_embeddings=seq_length,
                   use_dynamic_ntk=use_dynamic_ntk,
                   use_logn_attn=use_logn_attn,
+                  rope_theta=rope_theta,
                   tokenizer_info=tokenizer_info_qwen)
 
 
@@ -930,7 +972,7 @@ def main(model_name: str,
             META's llama format, and 'hf' means huggingface format
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
-        tp (int): the number of GPUs used for tensor parallelism
+        tp (int): the number of GPUs used for tensor parallelism, should be 2^n
         quant_path (str): path of the quantized model, which can be None
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
@@ -938,6 +980,8 @@ def main(model_name: str,
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
+
+    assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
     if model_format is None:
         model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
