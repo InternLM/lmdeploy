@@ -106,7 +106,7 @@ or through webui after launching gradio,
 # api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
 # example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006
-python -m lmdeploy.serve.gradio.app api_server_url gradio_ui_ip gradio_ui_port
+python -m lmdeploy.serve.gradio.app api_server_url gradio_server_ip gradio_server_port
 ```
 
 Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../restful_api.md).
