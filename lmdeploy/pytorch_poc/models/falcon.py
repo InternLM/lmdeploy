@@ -96,14 +96,11 @@ class PatchedFalconAttention(nn.Module):
 
         if mod_name in ['query_key_value']:
             if self.multi_query:
-                print(mod.weight.shape)
-                # print(mod.bias.shape)
 
                 world_size = dist.get_world_size()
 
                 weight = mod.weight.reshape(-1, self.head_dim,
                                             self.hidden_size)
-                print(weight.shape)
                 q_weight = weight[:self.num_heads]
                 k_weight = weight[self.num_heads:self.num_heads + 1]
                 v_weight = weight[self.num_heads + 1:self.num_heads + 2]
@@ -135,11 +132,6 @@ class PatchedFalconAttention(nn.Module):
                         bias_shards.append(v_bias)
                     mod.bias.data = torch.cat(bias_shards, dim=0)
 
-            # print(mod.weight.shape)
-            # print(mod.bias.shape)
-
-            # print(mod)
-            # exit()
             colwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
                                           to_local=True)
@@ -176,10 +168,12 @@ class PatchedFalconAttention(nn.Module):
         same memory storage as `fused_qkv`
 
         Args:
-            fused_qkv (`torch.tensor`, *required*): [batch_size, seq_length, num_heads * 3 * head_dim]
+            fused_qkv (`torch.tensor`, *required*):
+                [batch_size, seq_length, num_heads * 3 * head_dim]
 
         Returns:
-            query: [batch_size, seq_length, num_heads, head_dim] key: [batch_size, seq_length, num_heads, head_dim]
+            query: [batch_size, seq_length, num_heads, head_dim]
+            key: [batch_size, seq_length, num_heads, head_dim]
             value: [batch_size, seq_length, num_heads, head_dim]
         """
         if not self.multi_query:
@@ -196,8 +190,9 @@ class PatchedFalconAttention(nn.Module):
             if not dist.is_initialized:
                 num_head = self.num_heads
             else:
-                # this trick will, for example, split 11 into [4,4,3]
-                # following the way column parallel linear splitting non-dividable dims
+                # this trick will, for example, split 11 into [4, 4, 3]
+                # following the way column parallel linear splitting
+                # non-dividable dims
                 num_head = self.num_heads - dist.get_rank() - 1
                 num_head = 1 + num_head // dist.get_world_size()
             fused_qkv = fused_qkv.view(batch_size, seq_length, num_head + 2,
@@ -227,10 +222,8 @@ class PatchedFalconAttention(nn.Module):
 
         fused_qkv = self.query_key_value(
             hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
-        # logger.debug(f'fused_qkv {fused_qkv.size()} \n%s', fused_qkv.mean(-1))
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
-        # TODO: need further check when using TP
         (query_layer, key_layer, value_layer) = self._split_heads(fused_qkv)
 
         batch_size, query_length, _, _ = query_layer.shape
@@ -239,12 +232,6 @@ class PatchedFalconAttention(nn.Module):
             position_ids_1d = self.context.context.position_ids_1d
             query_layer, key_layer = self.maybe_rotary(query_layer, key_layer,
                                                        position_ids_1d)
-
-        # logger.debug(f'query_layer {query_layer.size()} \n%s',
-        #  query_layer.mean(-1))
-        # logger.debug(f'key_layer {key_layer.size()} \n%s', key_layer.mean(-1))
-        # logger.debug(f'value_layer {value_layer.size()} \n%s',
-        #  value_layer.mean(-1))
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -271,12 +258,7 @@ class PatchedFalconAttention(nn.Module):
         block_offsets = context.block_offsets
         block_size = past_key.size(1)
 
-        # logger.debug(f'past_key {past_key.size()} \n%s', past_key[0].mean(-1))
-        # logger.debug(f'past_value {past_value.size()} \n%s',
-        #  past_value[0].mean(-1))
-
         if alibi is None:
-            # logger.debug('no alibi')
             paged_attention_fwd(q=query_layer,
                                 k=past_key,
                                 v=past_value,
@@ -289,7 +271,6 @@ class PatchedFalconAttention(nn.Module):
                                 BLOCK=block_size)
 
         else:
-            # logger.debug('alibi')
             alibi_paged_attention_fwd(q=query_layer,
                                       k=past_key,
                                       v=past_value,
@@ -302,15 +283,9 @@ class PatchedFalconAttention(nn.Module):
                                       alibi_scale=self.inv_norm_factor,
                                       BLOCK=block_size)
 
-        # logger.debug(f'attn_output {attn_output.size()} \n%s',
-        #  attn_output.mean(-1))
-
         attn_output = attn_output.reshape(batch_size, query_length, -1)
 
         output_tensor = self.dense(attn_output)
-
-        # logger.debug(f'output_tensor {output_tensor.size()} \n%s',
-        #  output_tensor.mean(-1))
 
         if output_attentions:
             return output_tensor, present, None
@@ -427,14 +402,8 @@ class PatchedFalconModel(nn.Module):
             alibi = None
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
-            # logger.debug(
-            # f'====SeqLen {+input_ids.size(1)} Decode Layer {i}=======')
-
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states, )
-
-            # logger.debug(f'input hidden_states {hidden_states.size()}\n%s',
-            #  hidden_states.mean(-1))
 
             outputs = block(
                 hidden_states,
@@ -448,9 +417,6 @@ class PatchedFalconModel(nn.Module):
             )
 
             hidden_states = outputs[0]
-
-            # logger.debug(f'output hidden_states {hidden_states.size()}\n%s',
-            #  hidden_states.mean(-1))
 
             if output_attentions:
                 all_self_attentions = all_self_attentions + (
