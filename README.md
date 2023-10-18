@@ -63,6 +63,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 | :----------: | :-------------: | :--: | :-----: | :---: | :--: |
 |    Llama     |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |    Llama2    |       Yes       | Yes  |   Yes   |  Yes  |  No  |
+|    SOLAR     |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |   QWen-7B    |       Yes       | Yes  |   Yes   |  No   |  No  |
