@@ -5,12 +5,16 @@ import torch
 class TestRMSNorm:
 
     @pytest.fixture(scope='class')
-    def input(self):
-        yield torch.rand(4, 8, dtype=torch.float16, device='cuda')
+    def dtype(self, request):
+        yield request.param
 
     @pytest.fixture(scope='class')
-    def weight(self):
-        yield torch.rand(8, dtype=torch.float16, device='cuda')
+    def input(self, dtype):
+        yield torch.rand(4, 8, dtype=dtype, device='cuda')
+
+    @pytest.fixture(scope='class')
+    def weight(self, dtype):
+        yield torch.rand(8, dtype=dtype, device='cuda')
 
     @pytest.fixture(scope='class')
     def eps(self):
@@ -24,6 +28,9 @@ class TestRMSNorm:
         input = input * torch.rsqrt(variance + eps)
         return weight * input.to(input_dtype)
 
+    @pytest.mark.parametrize('dtype',
+                             [torch.bfloat16, torch.float16, torch.float32],
+                             indirect=True)
     def test_rms_norm(self, input, weight, eps, gt):
         from lmdeploy.pytorch_poc.kernels import rms_norm
 

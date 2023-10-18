@@ -10,7 +10,7 @@ from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
                                           apply_rotary_pos_emb, fill_kv_cache,
                                           paged_attention_fwd)
 
-apply_rotary_pos_emb = apply_rotary_pos_emb
+__all__ = ['apply_rotary_pos_emb']
 
 
 def generate_batched_mask(q_lens,
