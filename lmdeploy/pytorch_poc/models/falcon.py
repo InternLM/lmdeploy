@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# Adapter from:
+# Adapted from:
 # https://huggingface.co/tiiuae/falcon-7b-instruct
 # https://github.com/huggingface/transformers/blob/v4.33-release/src/transformers/models/falcon/modeling_falcon.py  # noqa
 
