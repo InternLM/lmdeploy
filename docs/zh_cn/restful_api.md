@@ -24,7 +24,7 @@ from typing import Iterable, List
 
 def get_streaming_response(prompt: str,
                            api_url: str,
-                           instance_id: int,
+                           session_id: int,
                            request_output_len: int,
                            stream: bool = True,
                            sequence_start: bool = True,
@@ -34,7 +34,7 @@ def get_streaming_response(prompt: str,
     pload = {
         'prompt': prompt,
         'stream': stream,
-        'instance_id': instance_id,
+        'session_id': session_id,
         'request_output_len': request_output_len,
         'sequence_start': sequence_start,
         'sequence_end': sequence_end,
@@ -43,7 +43,7 @@ def get_streaming_response(prompt: str,
     response = requests.post(
         api_url, headers=headers, json=pload, stream=stream)
     for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b'\0'):
+            chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
         if chunk:
             data = json.loads(chunk.decode('utf-8'))
             output = data['text']
@@ -93,7 +93,7 @@ curl http://{server_ip}:{server_port}/generate \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Hello! How are you?",
-    "instance_id": 1,
+    "session_id": 1,
     "sequence_start": true,
     "sequence_end": true
   }'
@@ -148,12 +148,11 @@ python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
 
-3. 当同一个 `instance_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`
+3. 当同一个 `session_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`
 
 4. 如果感觉请求不是并发地被处理，而是一个一个地处理，请设置好以下参数：
 
-   - 不同的 instance_id 传入 `generate` api。否则，我们将自动绑定会话 id 为请求端的 ip 地址编号。
-   - 设置 `stream=true` 使模型在前向传播时可以允许其他请求进入被处理
+   - 不同的 session_id 传入 `generate` api。否则，我们将自动绑定会话 id 为请求端的 ip 地址编号。
 
 5. `generate` api 和 `v1/chat/completions` 均支持多轮对话。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
    两个 api 都是默认开启多伦对话的，如果你想关闭这个功能，然后在客户端管理会话记录，请设置 `sequence_end: true` 传入 `generate`，或者设置

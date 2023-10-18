@@ -107,7 +107,8 @@ class Attention(nn.Module):
                 kv_seq_len = max_seq_len + max(history_lengths)
                 cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
                 query_states, key_states = apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, position_ids)
+                    query_states, key_states, cos, sin, position_ids,
+                    getattr(context, 'position_ids_1d', None))
             return query_states, key_states, value_states
 
         attn_output = attention_forward_with_paged_attention(

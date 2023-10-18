@@ -30,7 +30,7 @@ class AsyncEngine:
 
     def __init__(self, model_path, instance_num=32, tp=1) -> None:
         from lmdeploy import turbomind as tm
-        from lmdeploy.turbomind.tokenizer import Tokenizer
+        from lmdeploy.tokenizer import Tokenizer
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
@@ -47,14 +47,31 @@ class AsyncEngine:
         self.starts = [None] * instance_num
         self.steps = {}
 
-    @contextmanager
-    def safe_run(self, instance_id: int, stop: bool = False):
-        self.available[instance_id] = False
-        yield
+    def stop_session(self, session_id: int):
+        instance_id = session_id % self.instance_num
+        input_ids = self.tokenizer.encode('')
+        for outputs in self.generators[instance_id].stream_infer(
+                session_id,
+                input_ids,
+                request_output_len=0,
+                sequence_start=False,
+                sequence_end=False,
+                stop=True):
+            pass
         self.available[instance_id] = True
 
-    async def get_embeddings(self, prompt):
-        prompt = self.model.get_prompt(prompt)
+    @contextmanager
+    def safe_run(self, instance_id: int, session_id: Optional[int] = None):
+        self.available[instance_id] = False
+        try:
+            yield
+        except (Exception, asyncio.CancelledError) as e:  # noqa
+            self.stop_session(session_id)
+        self.available[instance_id] = True
+
+    async def get_embeddings(self, prompt, do_prerpocess=False):
+        if do_prerpocess:
+            prompt = self.model.get_prompt(prompt)
         input_ids = self.tokenizer.encode(prompt)
         return input_ids
 
@@ -68,7 +85,7 @@ class AsyncEngine:
     async def generate(
         self,
         messages,
-        instance_id,
+        session_id,
         stream_response=True,
         sequence_start=True,
         sequence_end=False,
@@ -85,7 +102,7 @@ class AsyncEngine:
 
         Args:
             messages (str | List): chat history or prompt
-            instance_id (int): actually request host ip
+            session_id (int): the session id
             stream_response (bool): whether return responses streamingly
             request_output_len (int): output token nums
             sequence_start (bool): indicator for starting a sequence
@@ -102,8 +119,7 @@ class AsyncEngine:
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
         """
-        session_id = instance_id
-        instance_id %= self.instance_num
+        instance_id = session_id % self.instance_num
         if str(session_id) not in self.steps:
             self.steps[str(session_id)] = 0
         if step != 0:
@@ -112,14 +128,14 @@ class AsyncEngine:
         prompt = self.model.messages2prompt(messages, sequence_start)
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
-        if not sequence_end and self.steps[str(session_id)] + len(
+        if self.steps[str(session_id)] + len(
                 input_ids) >= self.tm_model.session_len:
             finish_reason = 'length'
             yield GenOut('', self.steps[str(session_id)], len(input_ids), 0,
                          finish_reason)
         else:
             generator = await self.get_generator(instance_id, stop)
-            with self.safe_run(instance_id):
+            with self.safe_run(instance_id, session_id):
                 response_size = 0
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
@@ -188,14 +204,14 @@ class AsyncEngine:
         instance_id %= self.instance_num
         sequence_start = False
         generator = await self.get_generator(instance_id)
-        self.available[instance_id] = False
         if renew_session:  # renew a session
             empty_input_ids = self.tokenizer.encode('')
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=[empty_input_ids],
                                                   request_output_len=0,
                                                   sequence_start=False,
-                                                  sequence_end=True):
+                                                  sequence_end=True,
+                                                  stop=True):
                 pass
             self.steps[str(session_id)] = 0
         if str(session_id) not in self.steps:
@@ -212,31 +228,31 @@ class AsyncEngine:
             yield GenOut('', self.steps[str(session_id)], len(input_ids), 0,
                          finish_reason)
         else:
-            response_size = 0
-            async for outputs in generator.async_stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    stream_output=stream_response,
-                    request_output_len=request_output_len,
-                    sequence_start=(sequence_start),
-                    sequence_end=False,
-                    step=self.steps[str(session_id)],
-                    stop=stop,
-                    top_k=top_k,
-                    top_p=top_p,
-                    temperature=temperature,
-                    repetition_penalty=repetition_penalty,
-                    ignore_eos=ignore_eos,
-                    random_seed=seed if sequence_start else None):
-                res, tokens = outputs[0]
-                # decode res
-                response = self.tokenizer.decode(res.tolist(),
-                                                 offset=response_size)
-                # response, history token len, input token len, gen token len
-                yield GenOut(response, self.steps[str(session_id)],
-                             len(input_ids), tokens, finish_reason)
-                response_size = tokens
+            with self.safe_run(instance_id, session_id):
+                response_size = 0
+                async for outputs in generator.async_stream_infer(
+                        session_id=session_id,
+                        input_ids=[input_ids],
+                        stream_output=stream_response,
+                        request_output_len=request_output_len,
+                        sequence_start=(sequence_start),
+                        sequence_end=False,
+                        step=self.steps[str(session_id)],
+                        stop=stop,
+                        top_k=top_k,
+                        top_p=top_p,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
+                        ignore_eos=ignore_eos,
+                        random_seed=seed if sequence_start else None):
+                    res, tokens = outputs[0]
+                    # decode res
+                    response = self.tokenizer.decode(res.tolist(),
+                                                     offset=response_size)
+                    # response, history len, input len, generation len
+                    yield GenOut(response, self.steps[str(session_id)],
+                                 len(input_ids), tokens, finish_reason)
+                    response_size = tokens
 
-            # update step
-            self.steps[str(session_id)] += len(input_ids) + tokens
-        self.available[instance_id] = True
+                # update step
+                self.steps[str(session_id)] += len(input_ids) + tokens

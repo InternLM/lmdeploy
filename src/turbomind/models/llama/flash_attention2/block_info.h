@@ -15,10 +15,14 @@ struct BlockInfo {
     __device__ BlockInfo(const Params& params, const int bidb):
         sum_s_q(!Varlen || params.cu_seqlens_q == nullptr ? -1 : params.cu_seqlens_q[bidb]),
         sum_s_k(!Varlen || params.cu_seqlens_k == nullptr ? -1 : params.cu_seqlens_k[bidb]),
-        actual_seqlen_q(!Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q :
-                                                                    params.cu_seqlens_q[bidb + 1] - sum_s_q),
-        actual_seqlen_k(!Varlen || params.cu_seqlens_k == nullptr ? params.seqlen_k :
-                                                                    params.cu_seqlens_k[bidb + 1] - sum_s_k)
+        actual_seqlen_q(params.actual_seqlen_q == nullptr ?
+                            (!Varlen || params.cu_seqlens_q == nullptr ? params.seqlen_q :
+                                                                         params.cu_seqlens_q[bidb + 1] - sum_s_q) :
+                            params.actual_seqlen_q[bidb]),
+        actual_seqlen_k(params.actual_seqlen_k == nullptr ?
+                            (!Varlen || params.cu_seqlens_k == nullptr ? params.seqlen_k :
+                                                                         params.cu_seqlens_k[bidb + 1] - sum_s_k) :
+                            params.actual_seqlen_k[bidb])
     {
     }
 

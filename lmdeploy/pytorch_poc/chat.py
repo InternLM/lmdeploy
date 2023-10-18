@@ -8,7 +8,7 @@ import fire
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
 from lmdeploy.pytorch_poc.messages import SamplingParam
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -52,7 +52,7 @@ def main(
         stream_output (bool): indicator for streaming output or not
     """
     # tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(model_path)
+    tokenizer = Tokenizer(model_path, trust_remote_code)
     tm_model = tm.Engine(model_path,
                          tp=tp,
                          trust_remote_code=trust_remote_code)
