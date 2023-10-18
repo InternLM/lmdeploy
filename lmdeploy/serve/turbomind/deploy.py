@@ -984,7 +984,7 @@ def main(model_name: str,
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
     if model_format is None:
-        model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
+        model_format = 'qwen' if model_name.startswith('qwen') else 'hf'
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
