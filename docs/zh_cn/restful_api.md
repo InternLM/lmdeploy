@@ -14,7 +14,7 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 
 **注意**，LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
 
-- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置一个相同 `session_id`(不为 -1，这是缺省值)。
+- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置`interactive_mode = True`, `session_id`保持相同 (不为 -1，这是缺省值)。
 - 非交互模式下，server 不保存历史记录。
 
 ### python

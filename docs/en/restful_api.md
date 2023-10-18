@@ -7,14 +7,14 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 ```
 
 Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
-We provide five restful api in total. Three of them are in OpenAI format. However, we recommend users try
+We provide five restful api in total. Four of them are in OpenAI format. However, we recommend users try
 our own api `generate` which provides more arguments for users to modify. The performance is comparatively better.
 
 **Note** please, lmdeploy supports maintaining session histories on the server for `generate` api. We disable the
 feature by default.
 
 - On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
-  the same `session_id` (can't be -1, it's the default number) to `generate` for requests.
+  `interactive_mode = True` and the same `session_id` (can't be -1, it's the default number) to `generate` for requests.
 
 - On normal mode, no chat history is kept on the server.
 
