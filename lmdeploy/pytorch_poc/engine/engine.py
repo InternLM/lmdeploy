@@ -479,7 +479,22 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
-        if 'chatglm' in model_path:
+        if 'falcon' in model_path:
+            if hf_config.multi_query:
+                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+                kv_head = 1
+            else:
+                kv_dim = hf_config.hidden_size
+                kv_head = hf_config.num_attention_heads
+            model_config = ModelConfig(
+                kv_dim,
+                hf_config.num_hidden_layers,
+                kv_head,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                dtype=torch_dtype,
+            )
+        elif 'chatglm' in model_path:
             model_config = ModelConfig(
                 hf_config.hidden_size // hf_config.num_attention_heads *
                 hf_config.multi_query_group_num,

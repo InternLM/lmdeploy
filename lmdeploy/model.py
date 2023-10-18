@@ -593,6 +593,19 @@ class CodeLlama(Llama2):
         return super().messages2prompt(messages, sequence_start)
 
 
+@MODELS.register_module(name='falcon')
+class Falcon(BaseModel):
+
+    def __init__(self):
+        super().__init__()
+
+    def update_input_ids(self, input_ids: List):
+        if len(input_ids) == 0:
+            # avoid empty input to model
+            input_ids = [11]
+        return input_ids
+
+
 @MODELS.register_module(name='chatglm2-6b')
 class ChatGLM2(BaseModel):
 
