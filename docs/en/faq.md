@@ -17,7 +17,7 @@ It may have been caused by the following reasons.
 1. You haven't installed lmdeploy's precompiled package. `_turbomind` is the pybind package of c++ turbomind, which involves compilation. It is recommended that you install the precompiled one.
 
 ```shell
-pip install lmdeploy
+pip install lmdeploy[all]
 ```
 
 2. If you have installed it and still encounter this issue, it is probably because you are executing turbomind-related command in the root directory of lmdeploy source code. Switching to another directory will fix it
@@ -26,7 +26,7 @@ pip install lmdeploy
 
 ### libnccl.so.2 not found
 
-Make sure you have install lmdeploy (>=v0.0.5) through `pip install lmdeploy`.
+Make sure you have install lmdeploy (>=v0.0.5) through `pip install lmdeploy[all]`.
 
 If the issue still exists after lmdeploy installation, add the path of `libnccl.so.2` to environment variable LD_LIBRARY_PATH.
 

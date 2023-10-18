@@ -101,7 +101,7 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 使用 pip ( python 3.8+) 安装 LMDeploy，或者[源码安装](./docs/zh_cn/build.md)
 
 ```shell
-pip install lmdeploy
+pip install lmdeploy[all]
 ```
 
 ### 部署 InternLM
@@ -182,6 +182,7 @@ bash workspace/service_docker_up.sh
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
+python3 -m pip install tritonclient[grpc]
 lmdeploy serve triton_client {server_ip_addresss}:33337
 ```
 

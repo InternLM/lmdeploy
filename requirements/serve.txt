@@ -1,5 +1,3 @@
-accelerate
-datasets
 fastapi
 shortuuid
 uvicorn

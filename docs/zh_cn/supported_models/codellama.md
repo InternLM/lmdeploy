@@ -26,7 +26,7 @@
 
 ```shell
 # 安装 lmdeploy
-python3 -m pip install lmdeploy
+python3 -m pip install lmdeploy[all]
 
 # 转模型格式
 lmdeploy convert codellama /path/of/codellama/model

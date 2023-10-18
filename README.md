@@ -100,7 +100,7 @@ And the request throughput of TurboMind is 30% higher than vLLM.
 Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 
 ```shell
-pip install lmdeploy
+pip install lmdeploy[all]
 ```
 
 ### Deploy InternLM
@@ -182,6 +182,7 @@ bash workspace/service_docker_up.sh
 Then, you can communicate with the inference server by command line,
 
 ```shell
+python3 -m pip install tritonclient[grpc]
 lmdeploy serve triton_client {server_ip_addresss}:33337
 ```
 
