@@ -29,7 +29,7 @@ Based on the above table, download the model that meets your requirements. Execu
 python3 -m pip install lmdeploy
 
 # convert weight layout
-lmdeploy serve convert codellama /the/path/of/codellama/model
+lmdeploy convert codellama /the/path/of/codellama/model
 ```
 
 Then, you can communicate with codellama in consolo by following instructions in next sections
