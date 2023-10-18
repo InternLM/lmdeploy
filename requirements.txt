@@ -1,17 +1,3 @@
-accelerate
-datasets
-fastapi
-fire
-gradio
-mmengine
-numpy
-pybind11
-safetensors
-sentencepiece
-setuptools
-shortuuid
-tiktoken
-torch
-transformers>=4.33.0
-tritonclient[all]
-uvicorn
+-r requirements/build.txt
+-r requirements/runtime.txt
+-r requirements/optional.txt
