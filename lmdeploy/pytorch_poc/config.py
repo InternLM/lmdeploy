@@ -31,6 +31,7 @@ class ModelConfig:
     bos_token_id: int
     eos_token_id: int
     dtype: str
+    multi_query_attention: bool = False
 
     def get_head_size(self):
         return self.hidden_size // self.num_heads

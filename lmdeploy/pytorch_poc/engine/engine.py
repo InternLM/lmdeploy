@@ -493,7 +493,7 @@ class Engine:
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 dtype=torch_dtype,
-            )
+                multi_query_attention=hf_config.multi_query)
         elif 'chatglm' in model_path:
             model_config = ModelConfig(
                 hf_config.hidden_size // hf_config.num_attention_heads *

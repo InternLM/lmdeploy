@@ -3,17 +3,24 @@
 # https://huggingface.co/tiiuae/falcon-7b-instruct
 # https://github.com/huggingface/transformers/blob/v4.33-release/src/transformers/models/falcon/modeling_falcon.py  # noqa
 
+import logging
 from typing import Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.utils.checkpoint
+from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import \
     BaseModelOutputWithPastAndCrossAttentions
 from transformers.models.falcon.modeling_falcon import build_alibi_tensor
 
+from lmdeploy.pytorch_poc.dist_utils import (colwise_parallelize_linear_fn,
+                                             rowwise_parallelize_linear_fn)
 from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
                                           fill_kv_cache, paged_attention_fwd)
+
+logger = logging.getLogger()
 
 
 # rotary pos emb helpers
@@ -82,6 +89,122 @@ class PatchedFalconRotaryEmbedding(nn.Module):
 
 class PatchedFalconAttention(nn.Module):
 
+    # @classmethod
+    def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        """Distribution partition callback."""
+
+        if mod_name in ['query_key_value']:
+            if self.multi_query:
+                print(mod.weight.shape)
+                # print(mod.bias.shape)
+
+                world_size = dist.get_world_size()
+
+                weight = mod.weight.reshape(-1, self.head_dim,
+                                            self.hidden_size)
+                print(weight.shape)
+                q_weight = weight[:self.num_heads]
+                k_weight = weight[self.num_heads:self.num_heads + 1]
+                v_weight = weight[self.num_heads + 1:self.num_heads + 2]
+                q_weight_shards = torch.tensor_split(q_weight,
+                                                     world_size,
+                                                     dim=0)
+                weight_shards = []
+                for q in q_weight_shards:
+                    print(q.shape)
+                    weight_shards.append(q)
+                    weight_shards.append(k_weight)
+                    weight_shards.append(v_weight)
+                mod.weight.data = torch.cat(weight_shards, dim=0)
+                # here we force the weight to be 3D
+
+                if mod.bias:
+                    # no bias for 7b-instruct
+                    bias = mod.bias.reshape(-1, self.head_dim)
+                    q_bias = bias[:self.num_heads]
+                    k_bias = bias[self.num_heads:self.num_heads + 1]
+                    v_bias = bias[self.num_heads + 1:self.num_heads + 2]
+                    q_bias_shards = torch.tensor_split(q_bias,
+                                                       world_size,
+                                                       dim=0)
+                    bias_shards = []
+                    for q in q_bias_shards:
+                        bias_shards.append(q)
+                        bias_shards.append(k_bias)
+                        bias_shards.append(v_bias)
+                    mod.bias.data = torch.cat(bias_shards, dim=0)
+
+            # print(mod.weight.shape)
+            # print(mod.bias.shape)
+
+            # print(mod)
+            # exit()
+            colwise_parallelize_linear_fn(mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+
+            if self.multi_query:
+                mod.weight.data = mod.weight.data.reshape(-1, self.hidden_size)
+                if mod.bias:
+                    mod.weight.data = mod.weight.data.reshape(self.hidden_size)
+
+            print(dist.get_rank(), mod.weight.shape)
+
+        elif mod_name in ['dense']:
+            if self.multi_query:
+                mod.weight.data = mod.weight.reshape(self.hidden_size, -1,
+                                                     self.head_dim)
+
+            rowwise_parallelize_linear_fn(mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+
+            if self.multi_query:
+                mod.weight.data = mod.weight.reshape(self.hidden_size, -1)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
+        dist.all_reduce(outputs[0])
+        return outputs
+
+    def _split_heads(
+        self, fused_qkv: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Split the last dimension into (num_heads, head_dim), results share
+        same memory storage as `fused_qkv`
+
+        Args:
+            fused_qkv (`torch.tensor`, *required*): [batch_size, seq_length, num_heads * 3 * head_dim]
+
+        Returns:
+            query: [batch_size, seq_length, num_heads, head_dim] key: [batch_size, seq_length, num_heads, head_dim]
+            value: [batch_size, seq_length, num_heads, head_dim]
+        """
+        if not self.multi_query:
+            # e.g. rw-1b model
+            batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
+            fused_qkv = fused_qkv.view(batch_size, seq_length,
+                                       self.num_heads // dist.get_world_size(),
+                                       3, self.head_dim)
+            return fused_qkv[..., 0, :], fused_qkv[..., 1, :], fused_qkv[...,
+                                                                         2, :]
+        else:
+            # e.g. 7b-instruct model
+            batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
+            if not dist.is_initialized:
+                num_head = self.num_heads
+            else:
+                # this trick will, for example, split 11 into [4,4,3]
+                # following the way column parallel linear splitting non-dividable dims
+                num_head = self.num_heads - dist.get_rank() - 1
+                num_head = 1 + num_head // dist.get_world_size()
+            fused_qkv = fused_qkv.view(batch_size, seq_length, num_head + 2,
+                                       self.head_dim)
+            return fused_qkv[..., :-2, :], fused_qkv[..., [-2], :], fused_qkv[
+                ..., [-1], :]
+
     def _contiguous_batching_forward(
         self,
         hidden_states: torch.Tensor,
@@ -104,6 +227,7 @@ class PatchedFalconAttention(nn.Module):
 
         fused_qkv = self.query_key_value(
             hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
+        # logger.debug(f'fused_qkv {fused_qkv.size()} \n%s', fused_qkv.mean(-1))
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         # TODO: need further check when using TP
@@ -115,6 +239,12 @@ class PatchedFalconAttention(nn.Module):
             position_ids_1d = self.context.context.position_ids_1d
             query_layer, key_layer = self.maybe_rotary(query_layer, key_layer,
                                                        position_ids_1d)
+
+        # logger.debug(f'query_layer {query_layer.size()} \n%s',
+        #  query_layer.mean(-1))
+        # logger.debug(f'key_layer {key_layer.size()} \n%s', key_layer.mean(-1))
+        # logger.debug(f'value_layer {value_layer.size()} \n%s',
+        #  value_layer.mean(-1))
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -141,7 +271,12 @@ class PatchedFalconAttention(nn.Module):
         block_offsets = context.block_offsets
         block_size = past_key.size(1)
 
+        # logger.debug(f'past_key {past_key.size()} \n%s', past_key[0].mean(-1))
+        # logger.debug(f'past_value {past_value.size()} \n%s',
+        #  past_value[0].mean(-1))
+
         if alibi is None:
+            # logger.debug('no alibi')
             paged_attention_fwd(q=query_layer,
                                 k=past_key,
                                 v=past_value,
@@ -154,6 +289,7 @@ class PatchedFalconAttention(nn.Module):
                                 BLOCK=block_size)
 
         else:
+            # logger.debug('alibi')
             alibi_paged_attention_fwd(q=query_layer,
                                       k=past_key,
                                       v=past_value,
@@ -166,9 +302,15 @@ class PatchedFalconAttention(nn.Module):
                                       alibi_scale=self.inv_norm_factor,
                                       BLOCK=block_size)
 
+        # logger.debug(f'attn_output {attn_output.size()} \n%s',
+        #  attn_output.mean(-1))
+
         attn_output = attn_output.reshape(batch_size, query_length, -1)
 
         output_tensor = self.dense(attn_output)
+
+        # logger.debug(f'output_tensor {output_tensor.size()} \n%s',
+        #  output_tensor.mean(-1))
 
         if output_attentions:
             return output_tensor, present, None
@@ -196,6 +338,28 @@ class PatchedFalconAttention(nn.Module):
             return self._contiguous_batching_forward(
                 hidden_states, position_ids, alibi, attention_mask, layer_past,
                 head_mask, use_cache, output_attentions)
+
+
+class PatchedFalconMLP(nn.Module):
+
+    @classmethod
+    def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
+                                 device_mesh: DeviceMesh):
+        """Distribution partition callback."""
+        if mod_name in ['dense_h_to_4h']:
+            colwise_parallelize_linear_fn(mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+        elif mod_name in ['dense_4h_to_h']:
+            rowwise_parallelize_linear_fn(mod,
+                                          device_mesh=device_mesh,
+                                          to_local=True)
+
+    @classmethod
+    def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
+        """Distribution output hook."""
+        dist.all_reduce(outputs)
+        return outputs
 
 
 class PatchedFalconModel(nn.Module):
@@ -263,8 +427,14 @@ class PatchedFalconModel(nn.Module):
             alibi = None
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
+            # logger.debug(
+            # f'====SeqLen {+input_ids.size(1)} Decode Layer {i}=======')
+
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states, )
+
+            # logger.debug(f'input hidden_states {hidden_states.size()}\n%s',
+            #  hidden_states.mean(-1))
 
             outputs = block(
                 hidden_states,
@@ -278,6 +448,9 @@ class PatchedFalconModel(nn.Module):
             )
 
             hidden_states = outputs[0]
+
+            # logger.debug(f'output hidden_states {hidden_states.size()}\n%s',
+            #  hidden_states.mean(-1))
 
             if output_attentions:
                 all_self_attentions = all_self_attentions + (

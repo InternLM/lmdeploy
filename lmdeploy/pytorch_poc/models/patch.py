@@ -34,16 +34,18 @@ MODULE_MAP.update({
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
     'transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
+    'transformers.models.falcon.modeling_falcon.FalconMLP':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconMLP',
     'modelling_RW.Attention':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
+    'modelling_RW.MLP':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconMLP',
     'modelling_RW.RWModel':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
     'modelling_RW.RotaryEmbedding':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
     'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconForCausalLM',
-    # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
-    # 'lmdeploy.pytorch_poc.models.falcon.PatchedFalconDecoderLayer',
 })
 
 # baichuan

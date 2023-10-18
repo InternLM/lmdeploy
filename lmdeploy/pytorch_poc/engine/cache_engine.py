@@ -66,8 +66,9 @@ class CacheEngine:
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
         num_heads = self.num_heads
-        if local:
-            assert self.num_heads % self.world_size == 0
+        if local and not self.model_config.multi_query_attention:
+            assert self.num_heads % self.world_size == 0, \
+                f'num_heads: {self.num_heads}, world_size: {self.world_size}'
             num_heads = self.num_heads // self.world_size
         return (
             self.block_size,
@@ -79,8 +80,9 @@ class CacheEngine:
                               local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
         num_heads = self.num_heads
-        if local:
-            assert self.num_heads % self.world_size == 0
+        if local and not self.model_config.multi_query_attention:
+            assert self.num_heads % self.world_size == 0, \
+                f'num_heads: {self.num_heads}, world_size: {self.world_size}'
             num_heads = self.num_heads // self.world_size
         return (
             self.block_size,
