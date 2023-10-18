@@ -16,7 +16,7 @@ class SentencePieceTokenizer:
     def __init__(self, model_file: str):
         from sentencepiece import SentencePieceProcessor
         self.model = SentencePieceProcessor(model_file=model_file)
-        self._no_prefix_space_tokens = None
+        self._prefix_space_tokens = None
 
     @property
     def vocab_size(self):
@@ -34,20 +34,20 @@ class SentencePieceTokenizer:
         return self.model.eos_id()
 
     @property
-    def no_prefix_space_tokens(self):
+    def prefix_space_tokens(self):
         """tokens without prefix space."""
-        if self._no_prefix_space_tokens is None:
+        if self._prefix_space_tokens is None:
             vocab = self.model.IdToPiece(list(range(self.vocab_size)))
-            self._no_prefix_space_tokens = {
+            self._prefix_space_tokens = {
                 i
-                for i, tok in enumerate(vocab) if not tok.startswith('▁')
+                for i, tok in enumerate(vocab) if tok.startswith('▁')
             }
-        return self._no_prefix_space_tokens
+        return self._prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
         """maybe add prefix space for incremental decoding."""
-        if len(tokens) and tokens[0] not in self.no_prefix_space_tokens\
-                and not decoded.startswith(' '):
+        if len(tokens) and not decoded.startswith(' ') and\
+                tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
@@ -121,7 +121,7 @@ class HuggingFaceTokenizer:
                   'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
-        self._no_prefix_space_tokens = None
+        self._prefix_space_tokens = None
         # save tokenizer.json to reuse
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
             if hasattr(self.model, 'backend_tokenizer'):
@@ -150,21 +150,21 @@ class HuggingFaceTokenizer:
         return self.model.eos_token_id
 
     @property
-    def no_prefix_space_tokens(self):
+    def prefix_space_tokens(self):
         """tokens without prefix space."""
-        if self._no_prefix_space_tokens is None:
+        if self._prefix_space_tokens is None:
             vocab = self.model.convert_ids_to_tokens(
                 list(range(self.vocab_size)))
-            self._no_prefix_space_tokens = {
+            self._prefix_space_tokens = {
                 i
-                for i, tok in enumerate(vocab) if not tok.startswith('▁')
+                for i, tok in enumerate(vocab) if tok.startswith('▁')
             }
-        return self._no_prefix_space_tokens
+        return self._prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
         """maybe add prefix space for incremental decoding."""
-        if len(tokens) and tokens[0] not in self.no_prefix_space_tokens\
-                and not decoded.startswith(' '):
+        if len(tokens) and not decoded.startswith(' ') and\
+                tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
