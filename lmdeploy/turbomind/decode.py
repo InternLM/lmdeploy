@@ -6,7 +6,7 @@ import fire
 import torch
 
 from lmdeploy import turbomind as tm
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 

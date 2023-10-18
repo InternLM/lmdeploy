@@ -14,7 +14,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 # TODO: find another way import _turbomind
@@ -86,6 +86,7 @@ class TurboMind:
         node_num = 1
 
         # read meta from model path
+        assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
         self.session_len = 2048
         data_type = 'fp16'

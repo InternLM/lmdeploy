@@ -8,7 +8,8 @@ from typing import List, Tuple
 
 import fire
 
-from lmdeploy.turbomind import Tokenizer, TurboMind
+from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.turbomind import TurboMind
 
 
 def sample_requests(

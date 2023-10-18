@@ -7,7 +7,7 @@ import fire
 import numpy as np
 
 from lmdeploy.serve.openai.api_client import get_streaming_response
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 

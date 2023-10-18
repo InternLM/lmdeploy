@@ -30,7 +30,7 @@ class AsyncEngine:
 
     def __init__(self, model_path, instance_num=32, tp=1) -> None:
         from lmdeploy import turbomind as tm
-        from lmdeploy.turbomind.tokenizer import Tokenizer
+        from lmdeploy.tokenizer import Tokenizer
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)

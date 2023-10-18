@@ -448,6 +448,7 @@ If a question does not make any sense, or is not factually coherent, explain why
         return ret
 
 
+@MODELS.register_module(name='qwen-14b')
 @MODELS.register_module(name='qwen-7b')
 class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
