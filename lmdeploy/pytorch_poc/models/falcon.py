@@ -145,8 +145,6 @@ class PatchedFalconAttention(nn.Module):
                 if mod.bias:
                     mod.weight.data = mod.weight.data.reshape(self.hidden_size)
 
-            print(dist.get_rank(), mod.weight.shape)
-
         elif mod_name in ['dense']:
             if self.multi_query:
                 mod.weight.data = mod.weight.reshape(self.hidden_size, -1,
