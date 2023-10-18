@@ -109,12 +109,15 @@ class PatchedFalconAttention(nn.Module):
                                                      dim=0)
                 weight_shards = []
                 for q in q_weight_shards:
-                    print(q.shape)
+                    # only shard q heads but
+                    # copy single k/v head to all ranks
                     weight_shards.append(q)
                     weight_shards.append(k_weight)
                     weight_shards.append(v_weight)
                 mod.weight.data = torch.cat(weight_shards, dim=0)
-                # here we force the weight to be 3D
+                # here we keep the weight to be 3D,
+                # so that column parallel will split it
+                # into integer-numbered heads
 
                 if mod.bias:
                     # no bias for 7b-instruct
@@ -137,6 +140,7 @@ class PatchedFalconAttention(nn.Module):
                                           to_local=True)
 
             if self.multi_query:
+                # return to 2D for later matmul
                 mod.weight.data = mod.weight.data.reshape(-1, self.hidden_size)
                 if mod.bias:
                     mod.weight.data = mod.weight.data.reshape(self.hidden_size)
