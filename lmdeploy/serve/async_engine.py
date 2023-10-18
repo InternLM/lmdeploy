@@ -55,7 +55,7 @@ class AsyncEngine:
                 input_ids,
                 request_output_len=0,
                 sequence_start=False,
-                sequence_end=False,
+                sequence_end=True,
                 stop=True):
             pass
         self.available[instance_id] = True
