@@ -33,6 +33,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -121,7 +122,18 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                                                               elem_bits,
                                                               tensor_para_.rank_,
                                                               allocator);
-    batch_                = std::make_unique<LlamaBatch<T>>(
+
+    const size_t max_session_len = sequence_manager->max_block_count() * cache_block_seq_len;
+    if (max_session_len < session_len) {
+        if (tensor_para.rank_ == 0) {
+            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
+                           session_len,
+                           max_session_len);
+        }
+        session_len = max_session_len;
+    }
+
+    batch_ = std::make_unique<LlamaBatch<T>>(
         max_batch_size, max_context_token_num, session_len, std::move(sequence_manager), this);
 
     initialize(attn_params, kv_head_num, use_context_fmha, quant_policy);
