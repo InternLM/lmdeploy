@@ -19,8 +19,8 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
     CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
-    EmbeddingsRequest, EmbeddingsResponse, ErrorResponse, GenerateRequest,
-    GenerateResponse, ModelCard, ModelList, ModelPermission, UsageInfo)
+    ErrorResponse, GenerateRequest, GenerateResponse, ModelCard, ModelList,
+    ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -381,29 +381,6 @@ async def completions_v1(request: CompletionRequest,
     )
 
     return response
-
-
-@app.post('/v1/embeddings')
-async def create_embeddings(request: EmbeddingsRequest,
-                            raw_request: Request = None):
-    """Creates embeddings for the text."""
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    embedding = await VariableInterface.async_engine.get_embeddings(
-        request.input)
-    data = [{'object': 'embedding', 'embedding': embedding, 'index': 0}]
-    token_num = len(embedding)
-    return EmbeddingsResponse(
-        data=data,
-        model=request.model,
-        usage=UsageInfo(
-            prompt_tokens=token_num,
-            total_tokens=token_num,
-            completion_tokens=None,
-        ),
-    ).dict(exclude_none=True)
 
 
 @app.post('/generate')

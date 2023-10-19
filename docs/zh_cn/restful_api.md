@@ -9,10 +9,9 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 ```
 
 然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
-我们一共提供五个 restful api，其中四个仿照 OpenAI 的形式。
+我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。
 
 - /v1/chat/completions
-- /v1/embeddings
 - /v1/models
 - /v1/completions
 
@@ -45,16 +44,6 @@ from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 for item in api_client.completions_v1(model=model_name, prompt='hi'):
-    print(item)
-```
-
-类似地，如果要使用 `/v1/embeddings` 接口，也可以用 `APIClient`：
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-for item in api_client.embeddings_v1(model=model_name, input='hi'):
     print(item)
 ```
 
@@ -129,17 +118,6 @@ curl http://{server_ip}:{server_port}/v1/completions \
   "model": "llama",
   "prompt": "two steps to build a house:"
 }'
-```
-
-Embeddings:
-
-```bash
-curl http://{server_ip}:{server_port}/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "internlm-chat-7b",
-    "input": "Hello world!"
-  }'
 ```
 
 ### CLI client

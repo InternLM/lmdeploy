@@ -28,7 +28,6 @@ class APIClient:
         self.generate_url = f'{api_server_url}/generate'
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
-        self.embeddings_v1_url = f'{api_server_url}/v1/embeddings'
         self.models_v1_url = f'{api_server_url}/v1/models'
         self._available_models = None
 
@@ -237,34 +236,6 @@ class APIClient:
                     decoded = chunk.decode('utf-8')
                     output = json.loads(decoded)
                     yield output
-
-    def embeddings_v1(self,
-                      model: str,
-                      input: Union[str, List[Any]],
-                      user: Optional[str] = None,
-                      **kwargs):
-        """Embeddings.
-
-        Args:
-            model (str): the model name.
-            input (str): prompt or chat history.
-            user (str): A unique identifier representing your end-user.
-
-        Yields:
-            json objects in openai formats
-        """
-        pload = dict(model=model, input=input, user=user)
-        headers = {'content-type': 'application/json'}
-        response = requests.post(self.embeddings_v1_url,
-                                 headers=headers,
-                                 json=pload)
-        for chunk in response.iter_lines(chunk_size=8192,
-                                         decode_unicode=False,
-                                         delimiter=b'\n'):
-            if chunk:
-                decoded = chunk.decode('utf-8')
-                output = json.loads(decoded)
-                yield output
 
     def chat(self,
              prompt: str,

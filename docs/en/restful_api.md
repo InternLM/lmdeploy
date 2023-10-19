@@ -7,10 +7,9 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 ```
 
 Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
-We provide five restful api in total. Four of them are in OpenAI format.
+We provide four restful api in total. Three of them are in OpenAI format.
 
 - /v1/chat/completions
-- /v1/embeddings
 - /v1/models
 - /v1/completions
 
@@ -50,16 +49,6 @@ from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 for item in api_client.completions_v1(model=model_name, prompt='hi'):
-    print(item)
-```
-
-Similarly, if you want to use the `/v1/embeddings` endpoint, you can also use APIClient:
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-model_name = api_client.available_models[0]
-for item in api_client.embeddings_v1(model=model_name, input='hi'):
     print(item)
 ```
 
@@ -133,17 +122,6 @@ curl http://{server_ip}:{server_port}/v1/completions \
   "model": "llama",
   "prompt": "two steps to build a house:"
 }'
-```
-
-Embeddings:
-
-```bash
-curl http://{server_ip}:{server_port}/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "internlm-chat-7b",
-    "input": "Hello world!"
-  }'
 ```
 
 ### CLI client
