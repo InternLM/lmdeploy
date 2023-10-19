@@ -385,8 +385,8 @@ async def completions_v1(request: CompletionRequest,
 
 @app.post('/generate',
           tags=['deprecated'],
-          description='please use /v1/interactive/completions')
-@app.post('/v1/interactive/completions')
+          description='please use /v1/chat/interactive')
+@app.post('/v1/chat/interactive')
 async def interactive_completions(request: GenerateRequest,
                                   raw_request: Request = None):
     """Generate completion for the request.

@@ -114,7 +114,7 @@ def main(server_addr: str,
          concurrency: int = 1,
          session_len: int = 2048,
          samples: int = 1000):
-    api_url = server_addr + '/v1/interactive/completions'
+    api_url = server_addr + '/v1/chat/interactive'
     warmup(api_url, concurrency, session_len - 1)
     req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,
                                     session_len)

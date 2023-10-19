@@ -25,8 +25,7 @@ class APIClient:
 
     def __init__(self, api_server_url: str, **kwargs):
         self.api_server_url = api_server_url
-        self.intractive_completions_v1_url = f'{api_server_url}'\
-                                             f'/v1/interactive/completions'
+        self.chat_intractive_v1_url = f'{api_server_url}/v1/chat/interactive'
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
         self.models_v1_url = f'{api_server_url}/v1/models'
@@ -109,19 +108,19 @@ class APIClient:
                     output = json.loads(decoded)
                     yield output
 
-    def interactive_completions_v1(self,
-                                   prompt: Union[str, List[Dict[str, str]]],
-                                   session_id: int = -1,
-                                   interactive_mode: bool = False,
-                                   stream: bool = False,
-                                   stop: bool = False,
-                                   request_output_len: int = 512,
-                                   top_p: float = 0.8,
-                                   top_k: int = 40,
-                                   temperature: float = 0.8,
-                                   repetition_penalty: float = 1.0,
-                                   ignore_eos: bool = False,
-                                   **kwargs):
+    def chat_interactive_v1(self,
+                            prompt: Union[str, List[Dict[str, str]]],
+                            session_id: int = -1,
+                            interactive_mode: bool = False,
+                            stream: bool = False,
+                            stop: bool = False,
+                            request_output_len: int = 512,
+                            top_p: float = 0.8,
+                            top_k: int = 40,
+                            temperature: float = 0.8,
+                            repetition_penalty: float = 1.0,
+                            ignore_eos: bool = False,
+                            **kwargs):
         """Interactive completions.
 
         - On interactive mode, the chat history is kept on the server. Please
@@ -160,7 +159,7 @@ class APIClient:
             if k[:2] != '__' and k not in ['self']
         }
         headers = {'content-type': 'application/json'}
-        response = requests.post(self.intractive_completions_v1_url,
+        response = requests.post(self.chat_intractive_v1_url,
                                  headers=headers,
                                  json=pload,
                                  stream=stream)
@@ -273,7 +272,7 @@ class APIClient:
             text, tokens, finish_reason
         """
         assert session_id != -1, 'please set a value other than -1'
-        for outputs in self.interactive_completions_v1(
+        for outputs in self.chat_interactive_v1(
                 prompt,
                 session_id=session_id,
                 request_output_len=request_output_len,
@@ -297,10 +296,10 @@ class APIClient:
                 If not specified with a value other than -1, using random value
                 directly.
         """
-        for out in self.interactive_completions_v1(prompt='',
-                                                   session_id=session_id,
-                                                   request_output_len=0,
-                                                   interactive_mode=False):
+        for out in self.chat_interactive_v1(prompt='',
+                                            session_id=session_id,
+                                            request_output_len=0,
+                                            interactive_mode=False):
             pass
 
 
