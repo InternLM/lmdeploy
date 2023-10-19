@@ -16,7 +16,7 @@ class SentencePieceTokenizer:
     def __init__(self, model_file: str):
         from sentencepiece import SentencePieceProcessor
         self.model = SentencePieceProcessor(model_file=model_file)
-        self._no_prefix_space_tokens = None
+        self._prefix_space_tokens = None
 
     @property
     def vocab_size(self):
@@ -34,19 +34,20 @@ class SentencePieceTokenizer:
         return self.model.eos_id()
 
     @property
-    def no_prefix_space_tokens(self):
+    def prefix_space_tokens(self):
         """tokens without prefix space."""
-        if self._no_prefix_space_tokens is None:
+        if self._prefix_space_tokens is None:
             vocab = self.model.IdToPiece(list(range(self.vocab_size)))
-            self._no_prefix_space_tokens = {
+            self._prefix_space_tokens = {
                 i
-                for i, tok in enumerate(vocab) if not tok.startswith('▁')
+                for i, tok in enumerate(vocab) if tok.startswith('▁')
             }
-        return self._no_prefix_space_tokens
+        return self._prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
         """maybe add prefix space for incremental decoding."""
-        if len(tokens) and tokens[0] not in self.no_prefix_space_tokens:
+        if len(tokens) and not decoded.startswith(' ') and\
+                tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
@@ -111,8 +112,7 @@ class HuggingFaceTokenizer:
     """
 
     def __init__(self, model_dir: str):
-        from transformers import (AutoTokenizer, CodeLlamaTokenizerFast,
-                                  LlamaTokenizerFast)
+        from transformers import AutoTokenizer
         model_file = osp.join(model_dir, 'tokenizer.model')
         backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
         model_file_exists = osp.exists(model_file)
@@ -121,9 +121,7 @@ class HuggingFaceTokenizer:
                   'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
-        self.need_padding = isinstance(self.model, LlamaTokenizerFast) \
-            or isinstance(self.model, CodeLlamaTokenizerFast)
-        self._no_prefix_space_tokens = None
+        self._prefix_space_tokens = None
         # save tokenizer.json to reuse
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
             if hasattr(self.model, 'backend_tokenizer'):
@@ -132,9 +130,12 @@ class HuggingFaceTokenizer:
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir,
                                               'generation_config.json')
-            with open(generation_config_file, 'r') as f:
-                cfg = json.load(f)
-                self.model.eos_token_id = cfg['eos_token_id']
+            if osp.exists(generation_config_file):
+                with open(generation_config_file, 'r') as f:
+                    cfg = json.load(f)
+                    self.model.eos_token_id = cfg['eos_token_id']
+            elif hasattr(self.model, 'eod_id'):  # Qwen remote
+                self.model.eos_token_id = self.model.eod_id
 
     @property
     def vocab_size(self):
@@ -152,21 +153,22 @@ class HuggingFaceTokenizer:
         return self.model.eos_token_id
 
     @property
-    def no_prefix_space_tokens(self):
+    def prefix_space_tokens(self):
         """tokens without prefix space."""
-        if self._no_prefix_space_tokens is None:
+        if self._prefix_space_tokens is None:
             vocab = self.model.convert_ids_to_tokens(
                 list(range(self.vocab_size)))
-            self._no_prefix_space_tokens = {
+            self._prefix_space_tokens = {
                 i
-                for i, tok in enumerate(vocab) if not tok.startswith('▁')
+                for i, tok in enumerate(vocab)
+                if tok.startswith('▁' if isinstance(tok, str) else b' ')
             }
-        return self._no_prefix_space_tokens
+        return self._prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
         """maybe add prefix space for incremental decoding."""
-        if self.need_padding and len(
-                tokens) and tokens[0] not in self.no_prefix_space_tokens:
+        if len(tokens) and not decoded.startswith(' ') and\
+                tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
