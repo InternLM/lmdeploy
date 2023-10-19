@@ -3,7 +3,7 @@
 
 #include "src/turbomind/utils/allocator.h"
 
-#include "src/turbomind/utils/dbg.h"
+#include "src/turbomind/utils/debug_utils.h"
 #include <catch2/catch_test_macros.hpp>
 #include <iterator>
 

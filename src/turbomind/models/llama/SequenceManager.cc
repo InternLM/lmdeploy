@@ -1,6 +1,6 @@
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/utils/allocator.h"
-#include "src/turbomind/utils/dbg.h"
+#include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include <ctime>
 #include <stdexcept>

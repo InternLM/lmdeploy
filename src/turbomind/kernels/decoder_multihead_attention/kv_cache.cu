@@ -2,7 +2,7 @@
 // #include "cute/tensor.hpp"
 #include "src/turbomind/kernels/decoder_multihead_attention/array_ops.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include "src/turbomind/utils/dbg.h"
+#include "src/turbomind/utils/debug_utils.h"
 #include <cuda_fp16.h>
 #include <type_traits>
 

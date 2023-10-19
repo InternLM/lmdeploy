@@ -1,6 +1,6 @@
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/dbg.h"
+#include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
 #include <iterator>

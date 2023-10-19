@@ -274,35 +274,6 @@ struct Iterator {
 
     __device__ void Prefetch(bool mask)
     {
-        // if (blockIdx.x == 0 && threadIdx.x == 0 && mask) {
-        //     int  c    = src_offset_ % ThreadMap::kC;
-        //     int  s    = src_offset_ / ThreadMap::kC;
-        //     bool fuck = src_offset_ >= 128 * 4096;
-        //     printf("%d %d %d %d %s\n", (int)threadIdx.x, c, s, offset_s_, fuck ? "FUCK" : "");
-        // }
-
-        // if (blockIdx.x == 0 && threadIdx.x == 0) {
-        //     int  c    = dst_offset_ % ThreadMap::kC;
-        //     int  s    = dst_offset_ / ThreadMap::kC;
-        //     bool fuck = (dst_offset_ >= Stages * kSizePerTile);
-        //     printf("%d %d %d %s\n", c, s, dst_offset_, fuck ? "FUCK" : "");
-        // }
-
-        // if (init_offset_ / ThreadMap::kC == 0) {
-        //     int k = dst_offset_ / (ThreadMap::kS * ThreadMap::kC);
-        //     int s = dst_offset_ % (ThreadMap::kS * ThreadMap::kC) / ThreadMap::kC;
-        //     int c = dst_offset_ % ThreadMap::kC;
-        //     printf("tid=%d, k=%d, s=%d, c=%d, offset_s=%d, valid_s=%d, init_s=%d, mask=%d\n",
-        //            threadIdx.x,
-        //            k,
-        //            s,
-        //            c,
-        //            offset_s_,
-        //            (int)is_valid_s_,
-        //            init_offset_ / ThreadMap::kC,
-        //            (int)mask);
-        // }
-
         CpAsync(smem_ + dst_offset_, src_ + src_offset_, mask);
         // Copy(smem_ + dst_offset_, src_ + src_offset_, mask);
     }
