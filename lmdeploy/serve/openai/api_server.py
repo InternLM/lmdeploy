@@ -383,8 +383,12 @@ async def completions_v1(request: CompletionRequest,
     return response
 
 
-@app.post('/generate')
-async def generate(request: GenerateRequest, raw_request: Request = None):
+@app.post('/generate',
+          tags=['deprecated'],
+          description='please use /v1/interactive/completions')
+@app.post('/v1/interactive/completions')
+async def interactive_completions(request: GenerateRequest,
+                                  raw_request: Request = None):
     """Generate completion for the request.
 
     - On interactive mode, the chat history is kept on the server. Please set

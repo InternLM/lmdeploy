@@ -15,7 +15,7 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 - /v1/models
 - /v1/completions
 
-不过，我们建议用户用我们提供的另一个 API: `generate`。
+不过，我们建议用户用我们提供的另一个 API: `/v1/interactive/completions`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
 ### python
@@ -42,7 +42,7 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
 ```
 
-LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
+LMDeploy 的 `/v1/interactive/completions` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
 
 - 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置`interactive_mode = True`, `session_id`保持相同 (不为 -1，这是缺省值)。
 - 非交互模式下，server 不保存历史记录。
@@ -147,6 +147,6 @@ python -m lmdeploy.serve.gradio.app api_server_url gradio_server_ip gradio_serve
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
 
-3. 当同一个 `session_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
+3. 当同一个 `session_id` 的请求给 `/v1/interactive/completions` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
 
-4. `generate` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
+4. `/v1/interactive/completions` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。

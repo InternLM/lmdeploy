@@ -25,7 +25,8 @@ class APIClient:
 
     def __init__(self, api_server_url: str, **kwargs):
         self.api_server_url = api_server_url
-        self.generate_url = f'{api_server_url}/generate'
+        self.intractive_completions_v1_url = f'{api_server_url}'\
+                                             f'/v1/interactive/completions'
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
         self.models_v1_url = f'{api_server_url}/v1/models'
@@ -108,20 +109,20 @@ class APIClient:
                     output = json.loads(decoded)
                     yield output
 
-    def generate(self,
-                 prompt: Union[str, List[Dict[str, str]]],
-                 session_id: int = -1,
-                 interactive_mode: bool = False,
-                 stream: bool = False,
-                 stop: bool = False,
-                 request_output_len: int = 512,
-                 top_p: float = 0.8,
-                 top_k: int = 40,
-                 temperature: float = 0.8,
-                 repetition_penalty: float = 1.0,
-                 ignore_eos: bool = False,
-                 **kwargs):
-        """Generate.
+    def interactive_completions_v1(self,
+                                   prompt: Union[str, List[Dict[str, str]]],
+                                   session_id: int = -1,
+                                   interactive_mode: bool = False,
+                                   stream: bool = False,
+                                   stop: bool = False,
+                                   request_output_len: int = 512,
+                                   top_p: float = 0.8,
+                                   top_k: int = 40,
+                                   temperature: float = 0.8,
+                                   repetition_penalty: float = 1.0,
+                                   ignore_eos: bool = False,
+                                   **kwargs):
+        """Interactive completions.
 
         - On interactive mode, the chat history is kept on the server. Please
         set `interactive_mode = True`.
@@ -159,7 +160,7 @@ class APIClient:
             if k[:2] != '__' and k not in ['self']
         }
         headers = {'content-type': 'application/json'}
-        response = requests.post(self.generate_url,
+        response = requests.post(self.intractive_completions_v1_url,
                                  headers=headers,
                                  json=pload,
                                  stream=stream)
@@ -272,16 +273,17 @@ class APIClient:
             text, tokens, finish_reason
         """
         assert session_id != -1, 'please set a value other than -1'
-        for outputs in self.generate(prompt,
-                                     session_id=session_id,
-                                     request_output_len=request_output_len,
-                                     interactive_mode=True,
-                                     stream=stream,
-                                     top_k=top_k,
-                                     top_p=top_p,
-                                     temperature=temperature,
-                                     repetition_penalty=repetition_penalty,
-                                     ignore_eos=ignore_eos):
+        for outputs in self.interactive_completions_v1(
+                prompt,
+                session_id=session_id,
+                request_output_len=request_output_len,
+                interactive_mode=True,
+                stream=stream,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                ignore_eos=ignore_eos):
             if outputs['finish_reason'] == 'length':
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
@@ -295,10 +297,10 @@ class APIClient:
                 If not specified with a value other than -1, using random value
                 directly.
         """
-        for out in self.generate(prompt='',
-                                 session_id=session_id,
-                                 request_output_len=0,
-                                 interactive_mode=False):
+        for out in self.interactive_completions_v1(prompt='',
+                                                   session_id=session_id,
+                                                   request_output_len=0,
+                                                   interactive_mode=False):
             pass
 
 
