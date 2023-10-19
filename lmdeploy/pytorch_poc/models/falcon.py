@@ -189,7 +189,7 @@ class PatchedFalconAttention(nn.Module):
         else:
             # e.g. 7b-instruct model
             batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
-            if not dist.is_initialized:
+            if not dist.is_initialized():
                 num_head = self.num_heads
             else:
                 # this trick will, for example, split 11 into [4, 4, 3]
