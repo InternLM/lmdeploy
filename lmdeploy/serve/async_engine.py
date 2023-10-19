@@ -48,6 +48,7 @@ class AsyncEngine:
         self.steps = {}
 
     def stop_session(self, session_id: int):
+        """Stop a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
         for outputs in self.generators[instance_id].stream_infer(
@@ -61,6 +62,7 @@ class AsyncEngine:
         self.available[instance_id] = True
 
     def end_session(self, session_id: int):
+        """Clear a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
         for outputs in self.generators[instance_id].stream_infer(
@@ -76,6 +78,7 @@ class AsyncEngine:
 
     @contextmanager
     def safe_run(self, instance_id: int, session_id: Optional[int] = None):
+        """A context manager to make sure server's safe running."""
         self.available[instance_id] = False
         try:
             yield

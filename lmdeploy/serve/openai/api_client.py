@@ -33,6 +33,7 @@ class APIClient:
 
     @property
     def available_models(self):
+        """Show available models."""
         if self._available_models is not None:
             return self._available_models
         response = requests.get(self.models_v1_url)

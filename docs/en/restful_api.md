@@ -16,14 +16,6 @@ We provide four restful api in total. Three of them are in OpenAI format.
 However, we recommend users try
 our own api `generate` which provides more arguments for users to modify. The performance is comparatively better.
 
-**Note** please, lmdeploy supports maintaining session histories on the server for `generate` api. We disable the
-feature by default.
-
-- On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
-  `interactive_mode = True` and the same `session_id` (can't be -1, it's the default number) to `generate` for requests.
-
-- On normal mode, no chat history is kept on the server.
-
 **Note** please, if you want to launch multiple requests, you'd better set different `session_id` for both
 `/v1/chat/completions` and `/generate` apis. Or, we will set them random values.
 
@@ -52,7 +44,14 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
 ```
 
-For the `generate` endpoint, we provide two modes, one is the normal mode, which is enabled by default, and the other is the interactive conversation mode, which is turned off by default. The mode can be controlled by the `interactive_mode` boolean parameter. The following is an example of normal mode. If you want to experience the interactive mode, simply pass in `interactive_mode=True`.
+Lmdeploy supports maintaining session histories on the server for `generate` api. We disable the
+feature by default.
+
+- On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
+  `interactive_mode = True` and the same `session_id` (can't be -1, it's the default number) to `generate` for requests.
+- On normal mode, no chat history is kept on the server.
+
+The interactive mode can be controlled by the `interactive_mode` boolean parameter. The following is an example of normal mode. If you want to experience the interactive mode, simply pass in `interactive_mode=True`.
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient

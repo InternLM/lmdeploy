@@ -18,11 +18,6 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 不过，我们建议用户用我们提供的另一个 API: `generate`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
-**注意**，LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
-
-- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置`interactive_mode = True`, `session_id`保持相同 (不为 -1，这是缺省值)。
-- 非交互模式下，server 不保存历史记录。
-
 ### python
 
 我们将这些服务的客户端功能集成在 `APIClient` 类中。下面是一些例子，展示如何在客户端调用 `api_server` 服务。
@@ -47,7 +42,12 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
 ```
 
-对于`generate` 接口，我们提供两个模式，一个是普通模式，默认开启，一个是交互对话模式，默认关闭。模式可以通过 `interactive_mode` 布尔量参数控制。下面是一个普通模式的例子，
+LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
+
+- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置`interactive_mode = True`, `session_id`保持相同 (不为 -1，这是缺省值)。
+- 非交互模式下，server 不保存历史记录。
+
+交互模式可以通过 `interactive_mode` 布尔量参数控制。下面是一个普通模式的例子，
 如果要体验交互模式，将 `interactive_mode=True` 传入即可。
 
 ```python
