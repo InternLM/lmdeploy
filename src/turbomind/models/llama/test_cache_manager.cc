@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "BlockManager.h"
 #include "SequenceManager.h"
 

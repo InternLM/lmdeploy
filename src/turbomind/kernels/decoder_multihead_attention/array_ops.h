@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #pragma once
 
 #include "src/turbomind/kernels/gemm_s_f16/common.h"

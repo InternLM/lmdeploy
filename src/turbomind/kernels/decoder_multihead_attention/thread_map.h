@@ -1,4 +1,7 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #pragma once
+
 #include "../gemm_s_f16/common.h"
 #include "src/turbomind/kernels/custom_ar_kernels.h"
 

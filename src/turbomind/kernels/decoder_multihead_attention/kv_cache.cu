@@ -1,5 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "../gemm_s_f16/common.h"
-// #include "cute/tensor.hpp"
 #include "src/turbomind/kernels/decoder_multihead_attention/array_ops.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/debug_utils.h"

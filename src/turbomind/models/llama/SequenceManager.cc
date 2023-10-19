@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/debug_utils.h"

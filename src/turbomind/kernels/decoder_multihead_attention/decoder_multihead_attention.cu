@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "decoder_multihead_attention_template.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 

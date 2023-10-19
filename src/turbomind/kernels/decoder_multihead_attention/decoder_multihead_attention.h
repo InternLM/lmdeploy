@@ -1,3 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
 
 #include "decoder_multihead_attention_params.h"
 

@@ -1,4 +1,4 @@
-
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include "decoder_multihead_attention.h"
 #include "kv_cache.h"
