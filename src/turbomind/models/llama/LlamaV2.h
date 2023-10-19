@@ -137,7 +137,6 @@ private:
                         int         ite,
                         int         sum_seq_len,
                         int         max_seq_len,
-                        size_t      session_len,
                         size_t      batch_size);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);

@@ -288,7 +288,6 @@ void LlamaV2<T>::decoderForward(T*          decoder_output,
                                 int         ite,
                                 int         sum_seq_len,
                                 int         max_seq_len,
-                                size_t      session_len,
                                 size_t      batch_size)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);

@@ -304,6 +304,8 @@ bool LlamaBatch<T>::Initialize()
             return sequences[idx]->status == Sequence::kActive;  // present status
         });
 
+        FT_CHECK_WITH_INFO(active_end != idxs.begin(), "No enough blocks.");
+
         // move swap-ins to the back
         auto swapin_beg = std::stable_partition(idxs.begin(), active_end, [&](int idx) {
             return status[idx] == Sequence::kActive;  // past status
@@ -831,7 +833,6 @@ bool LlamaBatch<T>::Generate(GenerationState& g)
                            0,
                            g.sum_seq_len,
                            g.max_seq_len,
-                           session_len_,
                            batch_size);
 
     model_->postDecodeEmbedding(logits_buf_,  //
