@@ -66,7 +66,8 @@ def tp_m_s4(x: torch.Tensor, tp: int):
 
 
 def get_cuda_tensor(tensors):
-    return [x.cuda() for x in tensors if x is not None]
+    result = map(lambda x: x.cuda() if x is not None else x, tensors)
+    return (*result, )
 
 
 @OUTPUT_MODELS.register_module(name='w4a16')
