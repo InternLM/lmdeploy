@@ -130,9 +130,12 @@ class HuggingFaceTokenizer:
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir,
                                               'generation_config.json')
-            with open(generation_config_file, 'r') as f:
-                cfg = json.load(f)
-                self.model.eos_token_id = cfg['eos_token_id']
+            if osp.exists(generation_config_file):
+                with open(generation_config_file, 'r') as f:
+                    cfg = json.load(f)
+                    self.model.eos_token_id = cfg['eos_token_id']
+            elif hasattr(self.model, 'eod_id'):  # Qwen remote
+                self.model.eos_token_id = self.model.eod_id
 
     @property
     def vocab_size(self):
@@ -157,7 +160,8 @@ class HuggingFaceTokenizer:
                 list(range(self.vocab_size)))
             self._prefix_space_tokens = {
                 i
-                for i, tok in enumerate(vocab) if tok.startswith('▁')
+                for i, tok in enumerate(vocab)
+                if tok.startswith('▁' if isinstance(tok, str) else b' ')
             }
         return self._prefix_space_tokens
 
