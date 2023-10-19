@@ -176,6 +176,11 @@ class AsyncEngine:
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),
                                                      offset=response_size)
+                    # utf-8 char at the end means it's a potential unfinished
+                    # byte sequence, continue to concate it with the next
+                    # sequence and decode them together
+                    if response.endswith('�'):
+                        continue
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.steps[str(session_id)],

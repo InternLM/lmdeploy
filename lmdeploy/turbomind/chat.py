@@ -145,6 +145,11 @@ def main(model_path,
                 res, tokens = outputs[0]
                 # decode res
                 response = tokenizer.decode(res.tolist(), offset=response_size)
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence, continue to concate it with the next
+                # sequence and decode them together
+                if response.endswith('�'):
+                    continue
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
                 response_size = tokens
