@@ -51,6 +51,7 @@ def _fwd_kernel(
     K,
     V,
     sm_scale,
+    alibi_scale,
     B_Start_Loc,
     B_Seqlen,
     B_kvlen,
@@ -134,8 +135,9 @@ def _fwd_kernel(
         qk *= sm_scale
 
         mask = start_n + offs_n[None, :]
-        bias = mask.to(tl.float32) * head_slope
+        bias = mask.to(tl.float32) * (head_slope * alibi_scale)
         qk += bias
+
         # NOTE: inf - inf = nan, and nan will leads to error
         qk = tl.where(
             (history_len + offs_m[:, None]) >= mask,
@@ -191,6 +193,7 @@ def alibi_paged_attention_fwd(
     max_input_len: int,
     head_offset: int = 0,
     num_heads: int = -1,
+    alibi_scale: float = 1.0,
     BLOCK: int = 64,
 ):
     """Paged attention forward with alibi bias.
@@ -230,6 +233,7 @@ def alibi_paged_attention_fwd(
         k,
         v,
         sm_scale,
+        alibi_scale,
         b_start_loc,
         b_seq_len,
         b_kv_seq_len,
@@ -257,4 +261,5 @@ def alibi_paged_attention_fwd(
         num_warps=num_warps,
         num_stages=1,
     )
+
     return

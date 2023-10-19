@@ -93,7 +93,8 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TM_LOG_INFO("NCCL group_id = %d", tensor_para_.group_id_);
 
-    vocab_size_padded_ = (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
+    vocab_size_padded_ =
+        (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
 
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
@@ -125,6 +126,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
+    shared_state_->request_queue.close();
     internal_thread_.join();
 
     delete decoder_;
@@ -171,7 +173,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
                                                           vocab_size_padded_,
-                                                          0,            // end_id, deprecated
+                                                          0,  // end_id, deprecated
                                                           stream_,
                                                           cublas_wrapper_,
                                                           allocator_,
@@ -254,7 +256,7 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
     };
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
-        {"decoder_output", {MEMORY_GPU, dtype, {bsz, max_input_len, hidden_units_}, context_decoder_output_buf}},
+        {"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, context_decoder_output_buf}},
         {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_cache_ptr}},
         {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
         {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
@@ -447,11 +449,23 @@ void LlamaV2<T>::internalThreadEntry(int device_id)
 
             request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty);
 
+            // request queue was closed
+            // and there are no unprocessed requests in the queue
+            if (is_empty && infer_requests.empty() && stop_requests.empty()) {
+                // rank 0 sets flag
+                shared_state_->should_stop = true;
+            }
+
             batch_.verifyRequests(stop_requests, infer_requests);
         }
 
         // wait while rank-0 is dequeueing
         shared_state_->barrier->wait();
+
+        // exit if job is done
+        if (shared_state_->should_stop) {
+            return;
+        }
 
         bool modified = false;
 
@@ -485,8 +499,6 @@ void LlamaV2<T>::internalThreadEntry(int device_id)
             batch_.finish();
         }
     }
-
-    FT_CHECK(0);
 }
 
 template<typename T>

@@ -34,6 +34,8 @@
 #include "src/turbomind/utils/nccl_utils.h"
 #include <unordered_map>
 
+using ffi_api_lock_ctrl_t = std::function<void(int)>;
+
 namespace turbomind {
 
 template<typename T>
@@ -44,6 +46,9 @@ public:
         std::vector<std::shared_ptr<Request>> stop_requests;
         RequestQueue                          request_queue;
         std::shared_ptr<Barrier>              barrier;
+
+        // rank 0 sets flag to true if there are no more tasks in the request_queue
+        bool should_stop = false;
     };
 
     ~LlamaV2();
@@ -89,6 +94,11 @@ public:
     size_t vocab_size() const noexcept
     {
         return vocab_size_;
+    }
+
+    void setFfiLock(ffi_api_lock_ctrl_t func)
+    {
+        ffi_lock_ = func;
     }
 
 private:
@@ -188,6 +198,8 @@ private:
     std::shared_ptr<SharedState> shared_state_;
 
     std::thread internal_thread_;
+
+    ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
 };
 
 }  // namespace turbomind

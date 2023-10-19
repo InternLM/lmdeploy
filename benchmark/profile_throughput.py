@@ -9,7 +9,7 @@ from typing import List, Tuple
 
 import fire
 
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 
 def sample_requests(

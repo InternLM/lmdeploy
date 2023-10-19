@@ -3,7 +3,7 @@
 from typing import Dict, List
 
 from lmdeploy.pytorch_poc.block import PhysicalTokenBlock
-from lmdeploy.pytorch_poc.messages import SchedulerSession
+from lmdeploy.pytorch_poc.messages import SchedulerSequence
 
 
 class BlockAllocator:
@@ -73,35 +73,35 @@ class BlockManager:
 
         self.block_tables: Dict[int, BlockTable] = {}
 
-    def get_block_table(self, session: SchedulerSession):
-        """Get the block table of given session.
+    def get_block_table(self, msg: SchedulerSequence):
+        """Get the block table of given msg.
 
         Args:
-            session (SchedulerSession): The session to get block table.
+            msg (SchedulerSequence): The msg to get block table.
         """
-        session_id = session.session_id
-        if session_id in self.block_tables:
-            return self.block_tables[session_id]
+        seq_id = msg.seq_id
+        if seq_id in self.block_tables:
+            return self.block_tables[seq_id]
         else:
             return None
 
-    def can_allocate(self, session: SchedulerSession):
-        """Return if physical block can be allocated for given session."""
-        required_blocks = len(session.logical_blocks)
+    def can_allocate(self, msg: SchedulerSequence):
+        """Return if physical block can be allocated for given message."""
+        required_blocks = len(msg.logical_blocks)
         return required_blocks <= self.gpu_allocator.get_num_free_blocks()
 
-    def allocate(self, session: SchedulerSession):
-        """Allocate physical blocks for given session according to logical
+    def allocate(self, msg: SchedulerSequence):
+        """Allocate physical blocks for given message according to logical
         blocks."""
-        assert session.session_id not in self.block_tables
+        assert msg.seq_id not in self.block_tables
         block_table: BlockTable = []
-        logical_blocks = session.logical_blocks
+        logical_blocks = msg.logical_blocks
 
         for _ in logical_blocks:
             phy_block = self.gpu_allocator.allocate()
             block_table.append(phy_block)
 
-        self.block_tables[session.session_id] = block_table
+        self.block_tables[msg.seq_id] = block_table
 
     def _free_block_table(self, block_table: BlockTable):
         """Free physical blocks of given block table."""
@@ -113,52 +113,104 @@ class BlockManager:
             else:
                 raise ValueError(f'Can not free block {block}.')
 
-    def free(self, session: SchedulerSession):
+    def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the session."""
-        session_id = session.session_id
-        if session_id not in self.block_tables:
+        seq_id = msg.seq_id
+        if seq_id not in self.block_tables:
             return
 
-        block_table = self.block_tables[session_id]
+        block_table = self.block_tables[seq_id]
         self._free_block_table(block_table)
-        self.block_tables.pop(session_id)
+        self.block_tables.pop(seq_id)
 
-    def can_append_slot(self, session: SchedulerSession):
-        """Return true if the session can append new slot."""
-        session_id = session.session_id
-        num_blocks = len(session.logical_blocks)
-        assert session_id in self.block_tables
-        block_table = self.block_tables[session_id]
+    def can_append_slot(self, msg: SchedulerSequence):
+        """Return true if the message can append new slot."""
+        seq_id = msg.seq_id
+        num_blocks = len(msg.logical_blocks)
+        assert seq_id in self.block_tables
+        block_table = self.block_tables[seq_id]
+        gpu_block_table = [
+            block for block in block_table if block.device == 'gpu'
+        ]
         return num_blocks - len(
-            block_table) <= self.gpu_allocator.get_num_free_blocks()
+            gpu_block_table) <= self.gpu_allocator.get_num_free_blocks()
 
-    def append_slot(self, session: SchedulerSession):
-        """Append new slot to session."""
-        session_id = session.session_id
-        logical_blocks = session.logical_blocks
+    def append_slot(self, msg: SchedulerSequence):
+        """Append new slot to message."""
+        seq_id = msg.seq_id
+        logical_blocks = msg.logical_blocks
 
-        assert session_id in self.block_tables
-        block_table = self.block_tables[session_id]
+        assert seq_id in self.block_tables
+        block_table = self.block_tables[seq_id]
 
         while len(logical_blocks) > len(block_table):
             block = self.gpu_allocator.allocate()
             block_table.append(block)
 
-    def _can_swap(self, session: SchedulerSession, allocator: BlockAllocator):
+    def can_fork(self, from_msg: SchedulerSequence):
+        """Return true if blocks can be folked."""
+        seq_id = from_msg.seq_id
+        assert seq_id in self.block_tables
+        logical_blocks = from_msg.logical_blocks
+        if logical_blocks[-1].is_full():
+            # every block can be shared
+            return True
+
+        block_table = self.block_tables[seq_id]
+        device = block_table[-1].device
+        if device == 'cpu':
+            allocator = self.cpu_allocator
+        elif device == 'gpu':
+            allocator = self.gpu_allocator
+        else:
+            raise ValueError(f'Unknown device {device}')
+        return allocator.get_num_free_blocks() >= 1
+
+    def fork(self, from_msg: SchedulerSequence, to_msg: SchedulerSequence):
+        """Fork new message."""
+        from_msg_id = from_msg.seq_id
+        from_block_table = self.block_tables[from_msg_id]
+
+        block_table: BlockTable = []
+        for block in from_block_table[:-1]:
+            block.ref_count += 1
+            block_table.append(block)
+
+        # process last block
+        from_logical_blocks = from_msg.logical_blocks
+        last_block = from_block_table[-1]
+        copy_map: Dict[int, int] = dict()
+        if from_logical_blocks[-1].is_full():
+            last_block.ref_count += 1
+            block_table.append(last_block)
+        else:
+            device = last_block.device
+            if device == 'cpu':
+                allocator = self.cpu_allocator
+            elif device == 'gpu':
+                allocator = self.gpu_allocator
+            block = allocator.allocate()
+            block_table.append(block)
+            copy_map[last_block.block_id] = block.block_id
+
+        self.block_tables[to_msg.seq_id] = block_table
+        return copy_map
+
+    def _can_swap(self, msg: SchedulerSequence, allocator: BlockAllocator):
         """Check if swap can be performed."""
-        block_table = self.get_block_table(session)
+        block_table = self.get_block_table(msg)
         assert block_table is not None
 
         num_free_blocks = allocator.get_num_free_blocks()
         return num_free_blocks > len(block_table)
 
-    def can_swap_in(self, session: SchedulerSession):
-        """Check if the session can be swapped in."""
-        return self._can_swap(session, self.gpu_allocator)
+    def can_swap_in(self, msg: SchedulerSequence):
+        """Check if the message can be swapped in."""
+        return self._can_swap(msg, self.gpu_allocator)
 
-    def swap_in(self, session: SchedulerSession):
-        """Swap the session into GPU."""
-        block_table = self.get_block_table(session)
+    def swap_in(self, msg: SchedulerSequence):
+        """Swap the message into GPU."""
+        block_table = self.get_block_table(msg)
         assert block_table is not None
 
         swap_map: Dict[int, int] = {}
@@ -172,13 +224,13 @@ class BlockManager:
 
         return swap_map
 
-    def can_swap_out(self, session: SchedulerSession):
-        """Check if the session can be swap out."""
-        return self._can_swap(session, self.cpu_allocator)
+    def can_swap_out(self, msg: SchedulerSequence):
+        """Check if the message can be swap out."""
+        return self._can_swap(msg, self.cpu_allocator)
 
-    def swap_out(self, session: SchedulerSession):
-        """Swap the session out to host."""
-        block_table = self.get_block_table(session)
+    def swap_out(self, msg: SchedulerSequence):
+        """Swap the message out to host."""
+        block_table = self.get_block_table(msg)
         assert block_table is not None
 
         swap_map: Dict[int, int] = {}

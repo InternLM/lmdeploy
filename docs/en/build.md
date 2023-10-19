@@ -18,4 +18,5 @@
   ```shell
   mkdir build && cd build
   sh ../generate.sh
+  make -j$(nproc) && make install
   ```

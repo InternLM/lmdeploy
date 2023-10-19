@@ -16,7 +16,7 @@ constexpr int D_DIM     = 2;
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct Qkv_params {
-    using index_t = uint32_t;
+    using index_t = size_t;
     // The QKV matrices.
     void* __restrict__ q_ptr;
     void* __restrict__ k_ptr;
@@ -25,8 +25,8 @@ struct Qkv_params {
     // batched ptr inputs.
     void** __restrict__ k_batched_ptr = nullptr;
     void** __restrict__ v_batched_ptr = nullptr;
-    int k_batched_offset              = 0;
-    int v_batched_offset              = 0;
+    size_t k_batched_offset           = 0;
+    size_t v_batched_offset           = 0;
 
     // The stride between rows of the Q, K and V matrices.
     index_t q_batch_stride;
@@ -71,6 +71,10 @@ struct Flash_fwd_params: public Qkv_params {
     // array of length b+1 holding starting offset of each sequence.
     int* __restrict__ cu_seqlens_q;
     int* __restrict__ cu_seqlens_k;
+
+    // array of length b with actual length of each sequence
+    int* __restrict__ actual_seqlen_q;
+    int* __restrict__ actual_seqlen_k;
 
     void* __restrict__ blockmask;
 

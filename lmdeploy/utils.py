@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
-from typing import Optional
+from typing import List, Optional
 
 logger_initialized = {}
 
@@ -77,3 +77,21 @@ def get_logger(name: str,
     logger_initialized[name] = True
 
     return logger
+
+
+def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
+    """Filter response with suffixes.
+
+    Args:
+        response (str): generated response by LLMs.
+        suffixes (str): a list of suffixes to be deleted.
+
+    Return:
+        str: a clean response.
+    """
+    if suffixes is None:
+        return response
+    for item in suffixes:
+        if response.endswith(item):
+            response = response[:len(response) - len(item)]
+    return response

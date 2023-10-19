@@ -69,7 +69,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 
 ## 显存测试
 
-测试对象为 [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) 模型。
+测试对象为 [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b-v1_1) 模型。
 测试方法：
 
 1. 使用 `deploy.py` 转换模型，修改 `workspace` 配置中的最大并发数；调整 `llama_config.ini` 中的请求数
@@ -93,7 +93,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 
 ## 精度测试
 
-测试对象为 [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) 指令模型。
+测试对象为 [internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b-v1_1) 指令模型。
 
 以下是 `kCacheKVInt8` 方法仅从 c4 数据集，随机选择 128 条数据 PTQ 量化。量化前后均使用 [opencompass](https://github.com/InternLM/opencompass) 测试精度。
 

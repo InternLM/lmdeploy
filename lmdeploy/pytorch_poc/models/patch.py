@@ -26,6 +26,26 @@ MODULE_MAP = {
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
 }
 
+# Falcon Models in transformer / on hub
+MODULE_MAP.update({
+    'transformers.models.falcon.modeling_falcon.FalconAttention':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
+    'transformers.models.falcon.modeling_falcon.FalconModel':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
+    'transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
+    'modelling_RW.Attention':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
+    'modelling_RW.RWModel':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
+    'modelling_RW.RotaryEmbedding':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
+    'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconForCausalLM',
+    # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
+    # 'lmdeploy.pytorch_poc.models.falcon.PatchedFalconDecoderLayer',
+})
+
 # baichuan
 MODULE_MAP.update({
     'modeling_baichuan.Model':
@@ -142,6 +162,7 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
         logger.debug(
             f'Rewrite module {origin_qualname} with {rewrite_qualname}.')
         cls_type = _class_from_qualname(rewrite_qualname)
+        new_class_name = cls_type.__name__
 
         # directly return origin model is not cool
         # origin model would be registered as a submodule
@@ -156,7 +177,7 @@ def _patch(model: torch.nn.Module, context: Addict) -> torch.nn.Module:
 
         attrs = dict(cls_type.__dict__)
         attrs.update(dict(context=context, origin_mod=get_origin_mod))
-        new_type = type(class_name, (type(model), ), attrs)
+        new_type = type(new_class_name, (type(model), ), attrs)
         model = copy(model)
         model.__class__ = new_type
 
@@ -331,7 +352,6 @@ def patch(
 
     _patch_context = Addict()
 
-    # patch model
     model = _patch(model, _patch_context)
 
     # load checkpoint
@@ -359,21 +379,28 @@ def patch(
     extra_args_str = ' '.join(f'{arg}=None,' for arg in extra_args)
     context_update_str = ' '.join(f'{arg}={arg},' for arg in extra_args)
 
-    wrap_forward_src = f"""\
+    wrap_forward_src = f"""
 from functools import wraps
-old_forward = model.forward
+# old_forward = model.forward
+old_forward = type(model).forward
 @wraps(old_forward)
-def wrap_forward(*args, {extra_args_str} **kwargs):
+def wrap_forward(self, *args, {extra_args_str} **kwargs):
     global _patch_context
     _patch_context.update({context_update_str})
 
-    output = old_forward(*args, **kwargs)
+    output = old_forward(self, *args, **kwargs)
 
     _patch_context.clear()
 
     return output
-model.forward = wrap_forward
-    """
+# model.forward = wrap_forward
+
+attrs = dict(type(model).__dict__)
+attrs.update(dict(forward=wrap_forward))
+class_name  = model.__class__.__name__
+new_type = type(class_name, (type(model), ), attrs)
+model.__class__ = new_type
+"""
 
     exec(wrap_forward_src, dict(_patch_context=_patch_context, model=model))
 

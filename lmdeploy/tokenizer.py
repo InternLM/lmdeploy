@@ -111,7 +111,8 @@ class HuggingFaceTokenizer:
     """
 
     def __init__(self, model_dir: str, trust_remote_code=True):
-        from transformers import AutoTokenizer, LlamaTokenizerFast
+        from transformers import (AutoTokenizer, CodeLlamaTokenizerFast,
+                                  LlamaTokenizerFast)
         model_file = osp.join(model_dir, 'tokenizer.model')
         backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
         model_file_exists = osp.exists(model_file)
@@ -120,7 +121,8 @@ class HuggingFaceTokenizer:
                   'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(
             model_dir, trust_remote_code=trust_remote_code)
-        self.need_padding = isinstance(self.model, LlamaTokenizerFast)
+        self.need_padding = isinstance(self.model, LlamaTokenizerFast) \
+            or isinstance(self.model, CodeLlamaTokenizerFast)
         self._no_prefix_space_tokens = None
         # save tokenizer.json to reuse
         if not osp.exists(backend_tokenizer_file) and model_file_exists:

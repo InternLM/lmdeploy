@@ -6,8 +6,6 @@ PLAT_NAME="$2"
 DOCKER_TAG="$3"
 OUTPUT_DIR="$4"
 
-GIT_REMOTE=${GIT_REMOTE:-https://github.com/InternLM/lmdeploy}
-GIT_BRANCH=${GIT_BRANCH:-main}
 DOCKER_IMAGE="openmmlab/lmdeploy-builder:${DOCKER_TAG}"
 export USERID=$(id -u)
 export GROUPID=$(id -g)
@@ -20,8 +18,7 @@ docker run --rm -it \
     --env PLAT_NAME="${PLAT_NAME}" \
     --env USERID="${USERID}" \
     --env GROUPID="${GROUPID}" \
-    --env GIT_BRANCH="${GIT_BRANCH}" \
-    --env GIT_REMOTE="${GIT_REMOTE}" \
+    --volume "$(pwd)/../../:/lmdeploy" \
     --volume "$(pwd)/${OUTPUT_DIR}:/lmdeploy_build" \
     --volume "$(pwd)/entrypoint_build.sh:/entrypoint_build.sh" \
     --entrypoint /entrypoint_build.sh \
