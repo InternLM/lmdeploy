@@ -72,3 +72,5 @@ work_dir*/
 *.out
 *.csv
 *.pkl
+
+!CMakeLists.txt

@@ -22,7 +22,7 @@ template<typename T>
 struct minus {
     __device__ T operator()(T a, T b)
     {
-        return a + b;
+        return a - b;
     }
 };
 
