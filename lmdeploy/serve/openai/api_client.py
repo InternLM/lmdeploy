@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 import json
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -171,46 +170,6 @@ class APIClient:
                 decoded = chunk.decode('utf-8')
                 output = json.loads(decoded)
                 yield output
-
-    def completion_v1_concurrently(
-            self,
-            model: str,
-            prompts: List[str],
-            suffix: Optional[str] = None,
-            temperature: Optional[float] = 0.7,
-            n: Optional[int] = 1,
-            max_tokens: Optional[int] = 16,
-            top_p: Optional[float] = 1.0,
-            user: Optional[str] = None,
-            # additional argument of lmdeploy
-            repetition_penalty: Optional[float] = 1.0,
-            ignore_eos: Optional[bool] = False,
-            **kwargs):
-        """A function for completion_v1 on concurrency."""
-        concurrency = len(prompts)
-        outputs = [''] * concurrency
-
-        async def get_response(id):
-            # We need to_thread here because completions_v1 is synchronous.
-            response = await asyncio.to_thread(lambda: next(
-                self.completions_v1(model,
-                                    prompts[id],
-                                    suffix=suffix,
-                                    temperature=temperature,
-                                    n=n,
-                                    max_tokens=max_tokens,
-                                    top_p=top_p,
-                                    user=user,
-                                    repetition_penalty=repetition_penalty,
-                                    ignore_eos=ignore_eos)))
-            outputs[id] = response
-
-        async def gather():
-            tasks = [get_response(id) for id in range(concurrency)]
-            await asyncio.gather(*tasks)
-
-        asyncio.get_event_loop().run_until_complete(gather())
-        return outputs
 
     def completions_v1(
             self,

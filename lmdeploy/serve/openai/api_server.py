@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os
 import random
 import time
@@ -269,20 +270,25 @@ async def completions_v1(request: CompletionRequest,
     model_name = request.model
     request_id = str(request.session_id)
     created_time = int(time.time())
-
-    result_generator = VariableInterface.async_engine.generate(
-        request.prompt,
-        request.session_id,
-        True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
-        request_output_len=request.max_tokens if request.max_tokens else 512,
-        stop=False,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
-        do_preprocess=False)
+    if isinstance(request.prompt, str):
+        request.prompt = [request.prompt]
+    generators = []
+    for i in range(len(request.prompt)):
+        result_generator = VariableInterface.async_engine.generate(
+            request.prompt[i],
+            request.session_id + i,
+            True,  # always use stream to enable batching
+            sequence_start=True,
+            sequence_end=True,
+            request_output_len=request.max_tokens
+            if request.max_tokens else 512,
+            stop=False,
+            top_p=request.top_p,
+            temperature=request.temperature,
+            repetition_penalty=request.repetition_penalty,
+            ignore_eos=request.ignore_eos,
+            do_preprocess=False)
+        generators.append(result_generator)
 
     def create_stream_response_json(
         index: int,
@@ -306,24 +312,25 @@ async def completions_v1(request: CompletionRequest,
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
-        for i in range(request.n):
-            choice_data = CompletionResponseStreamChoice(
-                index=i,
-                text='',
-                finish_reason=None,
-            )
-            chunk = CompletionStreamResponse(id=request_id,
-                                             choices=[choice_data],
-                                             model=model_name)
-            data = chunk.model_dump_json(exclude_unset=True)
-            yield f'data: {data}\n\n'
+        for generator in generators:
+            for i in range(request.n):
+                choice_data = CompletionResponseStreamChoice(
+                    index=i,
+                    text='',
+                    finish_reason=None,
+                )
+                chunk = CompletionStreamResponse(id=request_id,
+                                                 choices=[choice_data],
+                                                 model=model_name)
+                data = chunk.model_dump_json(exclude_unset=True)
+                yield f'data: {data}\n\n'
 
-        async for res in result_generator:
-            response_json = create_stream_response_json(
-                index=0,
-                text=res.response,
-            )
-            yield f'data: {response_json}\n\n'
+            async for res in generator:
+                response_json = create_stream_response_json(
+                    index=0,
+                    text=res.response,
+                )
+                yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -332,34 +339,39 @@ async def completions_v1(request: CompletionRequest,
                                  media_type='text/event-stream')
 
     # Non-streaming response
-    final_res = None
-    text = ''
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            VariableInterface.async_engine.stop_session(request.session_id)
-            return create_error_response(HTTPStatus.BAD_REQUEST,
-                                         'Client disconnected')
-        final_res = res
-        text += res.response
-    assert final_res is not None
+    usage = UsageInfo()
     choices = []
-    choice_data = CompletionResponseChoice(
-        index=0,
-        text=text,
-        finish_reason=final_res.finish_reason,
-    )
-    choices.append(choice_data)
 
-    total_tokens = sum([
-        final_res.history_token_len, final_res.input_token_len,
-        final_res.generate_token_len
-    ])
-    usage = UsageInfo(
-        prompt_tokens=final_res.input_token_len,
-        completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
-    )
+    async def _inner_call(i, generator):
+        final_res = None
+        text = ''
+        async for res in generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                VariableInterface.async_engine.stop_session(request.session_id)
+                return create_error_response(HTTPStatus.BAD_REQUEST,
+                                             'Client disconnected')
+            final_res = res
+            text += res.response
+        assert final_res is not None
+        choice_data = CompletionResponseChoice(
+            index=0,
+            text=text,
+            finish_reason=final_res.finish_reason,
+        )
+        choices.append(choice_data)
+
+        total_tokens = sum([
+            final_res.history_token_len, final_res.input_token_len,
+            final_res.generate_token_len
+        ])
+        usage.prompt_tokens += final_res.input_token_len
+        usage.completion_tokens += final_res.generate_token_len
+        usage.total_tokens += total_tokens
+
+    await asyncio.gather(
+        *[_inner_call(i, generators[i]) for i in range(len(generators))])
+
     response = CompletionResponse(
         id=request_id,
         created=created_time,

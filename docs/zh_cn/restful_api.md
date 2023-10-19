@@ -9,7 +9,14 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --in
 ```
 
 然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
-我们一共提供五个 restful api，其中四个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
+我们一共提供五个 restful api，其中四个仿照 OpenAI 的形式。
+
+- /v1/chat/completions
+- /v1/embeddings
+- /v1/models
+- /v1/completions
+
+不过，我们建议用户用我们提供的另一个 API: `generate`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
 **注意**，LMDeploy 的 `generate` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
@@ -31,7 +38,7 @@ for item in api_client.chat_completions_v1(model=model_name, messages=messages):
     print(item)
 ```
 
-对于 `/v1/completions` 接口，我们还特别提供了在单客户端批量推理接口，可以接受传入一个 `prompt` 列表。如果你想用 `/v1/completions` 接口，你可以尝试：
+如果你想用 `/v1/completions` 接口，你可以尝试：
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
@@ -39,9 +46,6 @@ api_client = APIClient('http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
-outputs = api_client.completion_v1_concurrently(
-        model_name, ['hi', 'Say this is a test!'])
-print(outputs)
 ```
 
 类似地，如果要使用 `/v1/embeddings` 接口，也可以用 `APIClient`：
