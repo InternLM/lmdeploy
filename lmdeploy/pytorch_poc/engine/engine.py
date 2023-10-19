@@ -24,7 +24,7 @@ from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
-                                           SchedulerMessage, SchedulerSession)
+                                           SchedulerSequence, SchedulerSession)
 from lmdeploy.pytorch_poc.models import patch
 from lmdeploy.pytorch_poc.paging import Scheduler
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
@@ -621,25 +621,24 @@ class Engine:
         """
         return EngineInstance(self)
 
-    def add_session(self, session: SchedulerSession):
+    def add_session(self, session_id: int):
         """Add new session."""
-        self.scheduler.add_session(session)
+        self.scheduler.add_session(session_id)
 
-    def add_message(self, message: SchedulerMessage):
+    def add_message(self, message: SchedulerSequence):
         """Add new message."""
-        self.scheduler.add_message(message)
+        self.scheduler.add_sequence(message)
 
     def _make_inputs(self,
-                     messages: List[SchedulerMessage],
+                     messages: List[SchedulerSequence],
                      device: str = 'cuda'):
         """create model inputs from messages.
 
         Args:
-            messages (List[SchedulerMessage]): The input messages.
+            messages (List[SchedulerSequence]): The input messages.
             device (str): Device name.
         """
-        sessions = self.scheduler.get_sessions(messages)
-        history_lengths = [sess.history_length for sess in sessions]
+        history_lengths = [msg.history_len for msg in messages]
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -688,11 +687,11 @@ class Engine:
         self.scheduler.end_session(session_id)
         self.scheduler.update()
 
-    def _stoping_criteria(self, msg: SchedulerMessage, next_token_id: int):
+    def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
         """Check if the message should stop.
 
         Args:
-            msg (SchedulerMessage): The input message.
+            msg (SchedulerSequence): The input message.
             next_token_id (int): The next token id from inference result.
 
         Returns:
@@ -704,17 +703,17 @@ class Engine:
             if next_token_id == self.model_config.eos_token_id:
                 return True
 
+        # check stop words
         if (sampling_param.stop_words is not None
                 and next_token_id in sampling_param.stop_words):
             return True
 
         # check request_len
-        if msg.request_output_len >= msg.max_request_output_len:
+        if msg.remain_output_len <= 0:
             return True
 
         # check session len
-        session = self.scheduler.sessions[msg.session_id]
-        session_len = sum(block.num_tokens for block in session.logical_blocks)
+        session_len = sum(block.num_tokens for block in msg.logical_blocks)
         if session_len >= self.scheduler_config.max_session_len:
             return True
 
@@ -794,16 +793,15 @@ class Engine:
         # schedule
         schedule_output = self.scheduler.schedule()
 
-        running: List[SchedulerMessage] = schedule_output.running
+        running: List[SchedulerSequence] = schedule_output.running
         swap_in_map = schedule_output.swap_in_map
         swap_out_map = schedule_output.swap_out_map
         if len(running) == 0:
             return dict()
 
-        sessions = self.scheduler.get_sessions(running)
         session_ids = [msg.session_id for msg in running]
-        req_ids = [msg.req_id for msg in running]
-        history_lengths = [sess.history_length for sess in sessions]
+        req_ids = [msg.meta['req_id'] for msg in running]
+        history_lengths = [msg.history_len for msg in running]
 
         # make batch
         inputs = self._make_inputs(running)
@@ -839,10 +837,10 @@ class Engine:
 
         # update scheduler
         for token, msg in zip(next_token_ids, running):
-            msg.token_ids = [token]
-            msg.request_output_len += 1
+            msg.update_token_ids(token)
+            msg.remain_output_len -= 1
             if self._stoping_criteria(msg, token):
-                self.stop_session(msg.session_id)
+                msg.status = MessageStatus.STOPPED
         self.scheduler.update()
 
         outputs: Dict[int, InferOutput] = dict()
@@ -918,12 +916,11 @@ class Engine:
             sessions.append(sess)
             self.add_session(sess)
 
-        msgs: List[SchedulerMessage] = []
+        msgs: List[SchedulerSequence] = []
         for token_ids, sess in zip(prompt_token_ids, sessions):
-            msg = SchedulerMessage(token_ids=token_ids,
-                                   session_id=sess.session_id)
+            msg = sess.add_sequence(token_ids=token_ids)
             msgs.append(msg)
-            self.scheduler.add_message(msg)
+            self.scheduler.add_sequence(msg)
 
         outputs = self.step(True)
 
@@ -1011,21 +1008,32 @@ class Engine:
                 RequestType.ADD_SESSION]
             for req in add_session_reqs:
                 session_id = req.data['session_id']
-                session = SchedulerSession(session_id=session_id,
-                                           arrive_time=time.time())
                 if not _session_exist(session_id, req, resp_if_exist=True):
-                    self.add_session(session)
+                    self.add_session(session_id)
                     out_ques[session_id] = req.resp
 
             # add message
             add_msg_reqs: List[Request] = reqs_by_type[RequestType.ADD_MESSAGE]
             for req in add_msg_reqs:
-                msg: SchedulerMessage = SchedulerMessage(**req.data)
-                session_id = msg.session_id
                 if not _session_exist(session_id, req, resp_if_not_exist=True):
                     continue
-                else:
+                session_id = req.data['session_id']
+                sess = self.scheduler.sessions[session_id]
+                # TODO: support 1 session n sequence
+                if len(sess.sequences) == 0:
+                    sess.add_sequence(
+                        req.data['token_ids'],
+                        max_output_len=req.data['max_request_output_len'],
+                        sampling_param=req.data['sampling_param'])
+                    msg = next(iter(sess.sequences.values()))
                     self.add_message(msg)
+                else:
+                    msg = next(iter(sess.sequences.values()))
+                    msg.update_token_ids(req.data['token_ids'])
+                    msg.status = MessageStatus.WAITING
+                    self.scheduler.update()
+
+                msg.meta = dict(req_id=req.data['req_id'])
 
             # forward
             step_tokens: Dict[int, InferOutput] = self.step()

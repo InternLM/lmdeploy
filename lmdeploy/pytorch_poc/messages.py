@@ -1,7 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+import time
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, List, Sequence
+from typing import Any, Dict, List, Sequence
+
+import torch
+from torch import Tensor
 
 from lmdeploy.pytorch_poc.block import LogicalTokenBlock
 
@@ -35,23 +40,118 @@ class MessageStatus(enum.Enum):
 
     WAITING = enum.auto()
     RUNNING = enum.auto()
-    SWAP_OUT = enum.auto()
     STOPPED = enum.auto()
     ENDED = enum.auto()
-    FINISHED = enum.auto()
     ABORTED = enum.auto()
+
+
+_SEQ_COUNT = 0
+
+
+def _new_msg_id():
+    """get a new message id."""
+    global _SEQ_COUNT
+    seq_id = _SEQ_COUNT
+    _SEQ_COUNT += 1
+    return seq_id
 
 
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, arrive_time: float = 0.0) -> None:
+    def __init__(self, session_id: int) -> None:
         self.session_id = session_id
-        self.logical_blocks: Sequence[LogicalTokenBlock] = []
-        self.block_table = {}
-        self.status: MessageStatus = MessageStatus.WAITING
-        self.arrive_time: float = arrive_time
-        self.history_length: int = 0
+        self.status: MessageStatus = MessageStatus.RUNNING
+        self.sequences: Dict[int, SchedulerSequence] = dict()
+
+    def add_sequence(
+            self,
+            token_ids: Tensor,
+            max_output_len: int = 512,
+            sampling_param: SamplingParam = None) -> 'SchedulerSequence':
+        """Add a new message."""
+        if not isinstance(token_ids, Tensor):
+            token_ids = torch.tensor(token_ids)
+        if token_ids.dim() == 0:
+            token_ids = token_ids.unsqueeze(0)
+        if sampling_param is None:
+            sampling_param = SamplingParam()
+
+        seq = SchedulerSequence(seq_id=_new_msg_id(),
+                                token_ids=token_ids,
+                                session=self,
+                                status=MessageStatus.WAITING,
+                                remain_output_len=max_output_len,
+                                sampling_param=sampling_param,
+                                arrive_time=time.time())
+        self.sequences[seq.seq_id] = seq
+        return seq
+
+    def fork_sequence(
+            self,
+            token_ids: Tensor,
+            seq: 'SchedulerSequence',
+            max_output_len: int = 512,
+            sampling_param: SamplingParam = None) -> 'SchedulerSequence':
+        """Fork a new message from exist message."""
+        if sampling_param is None:
+            sampling_param = deepcopy(seq.sampling_param)
+        if not isinstance(token_ids, Tensor):
+            token_ids = torch.tensor(token_ids)
+        if token_ids.dim() == 0:
+            token_ids = token_ids.unsqueeze(0)
+        assert seq.session == self
+
+        new_msg = SchedulerSequence(
+            seq_id=_new_msg_id(),
+            token_ids=token_ids,
+            session=self,
+            history_token_ids=seq.history_token_ids.clone(),
+            status=seq.status,
+            remain_output_len=max_output_len,
+            logical_blocks=deepcopy(seq.logical_blocks),
+            sampling_param=sampling_param,
+            arrive_time=time.time(),
+            meta=deepcopy(seq.meta))
+
+        self.sequences[new_msg.seq_id] = new_msg
+        return new_msg
+
+
+@dataclass
+class SchedulerSequence:
+    """Scheduler message."""
+    seq_id: int
+    token_ids: Tensor
+    session: SchedulerSession
+    history_token_ids: Tensor = field(default=torch.empty(0, dtype=torch.long))
+    remain_output_len: int = 0
+    sampling_param: SamplingParam = field(default_factory=SamplingParam)
+    status: MessageStatus = MessageStatus.WAITING
+    logical_blocks: Sequence[LogicalTokenBlock] = field(default_factory=list)
+    arrive_time: float = 0.0
+    meta: Any = None
+
+    @property
+    def history_len(self) -> int:
+        """get history length."""
+        return len(self.history_token_ids)
+
+    @property
+    def session_id(self) -> int:
+        """get session id."""
+        return self.session.session_id
+
+    def num_logical_tokens(self) -> int:
+        if len(self.logical_blocks) == 0:
+            return 0
+        else:
+            return sum(block.num_tokens for block in self.logical_blocks)
+
+    def num_required_tokens(self) -> int:
+        num_all_tokens = len(self.token_ids) + self.history_len
+        num_logical_tokens = self.num_logical_tokens()
+        return num_all_tokens - num_logical_tokens
 
     def append_tokens(self, num_tokens: int, block_size: int):
         """Append new tokens, update logical blocks.
@@ -79,16 +179,18 @@ class SchedulerSession:
             logical_block.append_tokens(num_tokens=num_tokens)
             self.logical_blocks.append(logical_block)
 
-
-@dataclass
-class SchedulerMessage:
-    """Scheduler message."""
-
-    token_ids: Sequence
-    session_id: int
-    status: MessageStatus = MessageStatus.WAITING
-    max_request_output_len: int = 0
-    request_output_len: int = 0
-    meta: Any = None
-    req_id: int = 0
-    sampling_param: SamplingParam = field(default_factory=SamplingParam)
+    def update_token_ids(self, token_ids: Tensor):
+        """Update token ids, old token ids will be added to history."""
+        if len(self.history_token_ids) == 0:
+            self.history_token_ids = self.token_ids
+        else:
+            self.history_token_ids = torch.cat([
+                self.history_token_ids,
+                self.token_ids.to(self.history_token_ids.device)
+            ])
+        if not isinstance(token_ids, Tensor):
+            token_ids = self.token_ids.new_tensor(token_ids)
+        if token_ids.dim() == 0:
+            token_ids = token_ids.unsqueeze(0)
+        self.token_ids = token_ids
+        self.arrive_time = time.time()

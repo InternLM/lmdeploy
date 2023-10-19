@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from lmdeploy.pytorch_poc.block import PhysicalTokenBlock
 from lmdeploy.pytorch_poc.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch_poc.messages import (MessageStatus, SchedulerMessage,
+from lmdeploy.pytorch_poc.messages import (MessageStatus, SchedulerSequence,
                                            SchedulerSession)
 from lmdeploy.pytorch_poc.paging.block_manager import BlockManager
 from lmdeploy.utils import get_logger
@@ -14,11 +14,8 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def _find_message_with_session_id(message_list: List[SchedulerMessage],
-                                  session_id: int):
-    return [
-        message for message in message_list if message.session_id == session_id
-    ]
+def _find_seq_with_session_id(group: List[SchedulerSequence], session_id: int):
+    return [seq for seq in group if seq.session_id == session_id]
 
 
 BlockTable = List[PhysicalTokenBlock]
@@ -28,9 +25,10 @@ BlockTable = List[PhysicalTokenBlock]
 class SchedulerOutput:
     """Output of schedule."""
 
-    running: List[SchedulerMessage]
+    running: List[SchedulerSequence]
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
+    copy_map: Dict[int, int]
     block_tables: List[BlockTable]
 
 
@@ -47,10 +45,10 @@ class Scheduler:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
-        self.waiting: List[SchedulerMessage] = []
-        self.running: List[SchedulerMessage] = []
-        self.swapped: List[SchedulerMessage] = []
-        self.aborted: List[SchedulerMessage] = []
+        self.waiting: List[SchedulerSequence] = []
+        self.running: List[SchedulerSequence] = []
+        self.hanging: List[SchedulerSequence] = []
+        self.aborted: List[SchedulerSequence] = []
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = BlockManager(
@@ -59,163 +57,196 @@ class Scheduler:
             cache_config.num_cpu_blocks,
         )
 
-    def _set_message_status(self, message: SchedulerMessage,
+    def _set_message_status(self, message: SchedulerSequence,
                             status: MessageStatus):
         """Set status of message.
 
         Args:
-            message (SchedulerMessage): message to setup status.
+            message (SchedulerSequence): message to setup status.
             status (MessageStatus): New message status.
         """
-        session_id = message.session_id
-        session = self.sessions[session_id]
-
         message.status = status
-        session.status = status
 
-    def add_session(self, session: SchedulerSession):
+    def add_session(self, session_id: int):
         """Add new session.
 
         Args:
-            session (SchedulerSession): New session.
+            session_id (int): New session id.
         """
-        assert session.session_id not in self.sessions
-        self.sessions[session.session_id] = session
+        assert session_id not in self.sessions
+        session = SchedulerSession(session_id)
+        self.sessions[session_id] = session
+        return session
 
-    def get_sessions(self, messages: List[SchedulerMessage]):
-        """Get sessions by message.
+    def add_sequence(self, seq: SchedulerSequence):
+        """Add sequence.
 
         Args:
-            messages (List[SchedulerMessage]): Messages
-
-        Returns:
-            List[SchedulerSession]: Sessions of input messages.
+            seq (SchedulerSequence): New sequence.
         """
-        return [self.sessions[msg.session_id] for msg in messages]
-
-    def add_message(self, message: SchedulerMessage):
-        """Add message.
-
-        Args:
-            message (SchedulerMessage): New message.
-        """
-        assert (message.session_id
-                in self.sessions), f'Unknown session id {message.session_id}'
+        assert (seq.session_id
+                in self.sessions), f'Unknown session id {seq.session_id}'
 
         # push message to waiting queue
-        self._set_message_status(message, MessageStatus.WAITING)
-        if message.max_request_output_len == 0:
-            message.max_request_output_len = (
-                self.scheduler_config.max_request_output_len)
-        self.waiting.append(message)
+        self._set_message_status(seq, MessageStatus.WAITING)
+        if seq.remain_output_len <= 0:
+            seq.remain_output_len = \
+                self.scheduler_config.max_request_output_len
+        self.waiting.append(seq)
 
     def _schedule(self):
         """Schedule next step.
 
         Running is the messages to perform inference. Swap in/swap out is the
         table used to perform memory paging (between host and device)
+
+        The schedule follow steps:
+        1. Try allocate resources for all running sequence. If there are no
+            enough resources, try `swap out` caches of hanging and waiting
+            sequence. If there are still no enough resources, move the sequence
+            to waiting.
+        2. Check if sequence in the waiting list can be moved to running
         """
-        running: List[SchedulerMessage] = []
+        running: List[SchedulerSequence] = []
         swap_out_map: Dict[int, int] = {}
         swap_in_map: Dict[int, int] = {}
+        copy_map: Dict[int, int] = {}
+        block_manager = self.block_manager
 
-        def _get_session(msg: SchedulerMessage):
-            session_id = msg.session_id
-            assert session_id in self.sessions
-            return self.sessions[session_id]
+        def _to_running(seq: SchedulerSequence):
+            self._set_message_status(seq, MessageStatus.RUNNING)
+            running.append(seq)
 
-        def _to_running(msg: SchedulerMessage):
-            self._set_message_status(msg, MessageStatus.RUNNING)
-            running.append(msg)
+        def _can_swap_out(seq: SchedulerSequence):
+            block_table = block_manager.get_block_table(seq)
+            if block_table is None or len(block_table) == 0:
+                return False
+            first_block = block_table[0]
+            device = first_block.device
+            return device == 'gpu'
 
-        # check if running can be appended
-        for msg in self.running:
-            session = _get_session(msg)
-            # token + 1
-            block_size = self.cache_config.block_size
-            session.append_tokens(1, block_size)
+        def _need_swap_in(seq: SchedulerSequence):
+            block_table = block_manager.get_block_table(seq)
+            if block_table is None or len(block_table) == 0:
+                return False
+            first_block = block_table[0]
+            device = first_block.device
+            return device == 'cpu'
 
-            if len(session.logical_blocks) > self.block_manager.num_gpu_blocks:
-                logger.warning(f'session {session.session_id} '
-                               'reach max gpu size.')
-                self._set_message_status(msg, MessageStatus.ABORTED)
-                self.aborted.append(msg)
-            if self.block_manager.can_append_slot(session):
-                # append slot
-                self.block_manager.append_slot(session)
-                _to_running(msg)
+        def _try_swap_out_seqs(seqs: List[SchedulerSequence]):
+            for seq in seqs:
+                if not _can_swap_out(seq):
+                    continue
+                if not block_manager.can_swap_out(seq):
+                    continue
+                swap_out_map.update(block_manager.swap_out(seq))
+                return True
+
+            return False
+
+        def _try_swap_out():
+            if _try_swap_out_seqs(self.hanging):
+                return True
             else:
-                # swap out
-                assert self.block_manager.can_swap_out(
-                    session), 'Can not swap out'
-                tmp_map = self.block_manager.swap_out(session)
-                swap_out_map.update(tmp_map)
-                self._set_message_status(msg, MessageStatus.SWAP_OUT)
-                self.swapped.append(msg)
+                return _try_swap_out_seqs(self.waiting)
+
+        block_size = self.cache_config.block_size
+
+        # 1. running
+        for seq in self.running:
+            # token + 1
+            num_required_tokens = seq.num_required_tokens()
+            seq.append_tokens(num_required_tokens, block_size)
+
+            if len(seq.logical_blocks) > self.block_manager.num_gpu_blocks:
+                # Reach max gpu cache size.
+                logger.warning(f'session[{seq.session_id}] '
+                               f'sequence[{seq.seq_id}] '
+                               'reach max gpu size.')
+                self._set_message_status(seq, MessageStatus.ABORTED)
+                self.block_manager.free(seq)
+                self.aborted.append(seq)
+
+            if self.block_manager.can_append_slot(seq):
+                # append slot
+                self.block_manager.append_slot(seq)
+                _to_running(seq)
+            else:
+                # try free unused cache from hanging and waiting
+                do_running = False
+                while _try_swap_out():
+                    if self.block_manager.can_append_slot(seq):
+                        # append slot
+                        self.block_manager.append_slot(seq)
+                        _to_running(seq)
+                        do_running = True
+                        break
+                if not do_running:
+                    # move to waiting
+                    self._set_message_status(seq, MessageStatus.WAITING)
+                    self.waiting.append(seq)
 
         max_batches = self.scheduler_config.max_batches
-        # swap in
-        while len(self.swapped) > 0 and len(running) < max_batches:
-            msg = self.swapped[0]
-            session = _get_session(msg)
 
-            if self.block_manager.can_swap_in(session):
-                self.swapped.pop(0)
-                tmp_map = self.block_manager.swap_in(session)
-                swap_in_map.update(tmp_map)
-                _to_running(msg)
-            else:
-                break
-
-        # check waiting list
+        # 2. waiting
+        self.waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
         while len(self.waiting) > 0 and len(running) < max_batches:
-            msg = self.waiting[0]
-            session = _get_session(msg)
+            seq = self.waiting[0]
+            num_required_tokens = seq.num_required_tokens()
+            seq.append_tokens(num_required_tokens, block_size)
 
-            enable_running = False
-            if self.block_manager.get_block_table(session):
-                if self.block_manager.can_append_slot(session):
-                    msg_length = len(msg.token_ids)
-                    block_size = self.cache_config.block_size
-                    session.append_tokens(msg_length, block_size)
-                    self.block_manager.append_slot(session)
-                    enable_running = True
-            else:
-                if self.block_manager.can_allocate(session):
-                    # update logical blocks of session
-                    msg_length = len(msg.token_ids)
-                    block_size = self.cache_config.block_size
-                    session.append_tokens(msg_length, block_size)
-
-                    # allocate session memory
-                    self.block_manager.allocate(session)
-                    enable_running = True
-
-            if enable_running:
+            block_table = block_manager.get_block_table(seq)
+            if block_table is not None:
+                if not block_manager.can_append_slot(seq):
+                    can_append = False
+                    while _try_swap_out_seqs(self.hanging):
+                        if block_manager.can_append_slot(seq):
+                            can_append = True
+                            break
+                    if not can_append:
+                        break
+                if _need_swap_in(seq):
+                    if block_manager.can_swap_in(seq):
+                        swap_in_map.update(block_manager.swap_in(seq))
+                    else:
+                        break
+                block_manager.append_slot(seq)
                 self.waiting.pop(0)
-                _to_running(msg)
+                _to_running(seq)
+            else:
+                if not block_manager.can_allocate(seq):
+                    can_alloc = False
+                    while _try_swap_out_seqs(self.hanging):
+                        if block_manager.can_allocate(seq):
+                            can_alloc = True
+                            break
+                    if not can_alloc:
+                        break
+                # allocate session memory
+                block_manager.allocate(seq)
+                self.waiting.pop(0)
+                _to_running(seq)
 
         self.running = running
 
         running = [
             msg for msg in self.running if msg.status == MessageStatus.RUNNING
         ]
-        return running, swap_in_map, swap_out_map
+        return running, swap_in_map, swap_out_map, copy_map
 
     def schedule(self):
         """Schedule inputs for next steps."""
-        running, swap_in_map, swap_out_map = self._schedule()
-
-        sessions = [self.sessions[msg.session_id] for msg in running]
+        running, swap_in_map, swap_out_map, copy_map = self._schedule()
 
         block_tables = [
-            self.block_manager.get_block_table(session) for session in sessions
+            self.block_manager.get_block_table(seq) for seq in running
         ]
 
         return SchedulerOutput(
             running=running,
             swap_in_map=swap_in_map,
             swap_out_map=swap_out_map,
+            copy_map=copy_map,
             block_tables=block_tables,
         )
 
@@ -226,14 +257,15 @@ class Scheduler:
             session_id (int): The session id.
             status (MessageStatus): New status.
         """
+        assert session_id in self.sessions
         session = self.sessions[session_id]
         session.status = status
-        running_msg = _find_message_with_session_id(self.running, session_id)
-        waiting_msg = _find_message_with_session_id(self.waiting, session_id)
-        swaping_msg = _find_message_with_session_id(self.swapped, session_id)
+        running_seq = _find_seq_with_session_id(self.running, session_id)
+        waiting_seq = _find_seq_with_session_id(self.waiting, session_id)
+        hanging_seq = _find_seq_with_session_id(self.hanging, session_id)
 
-        for msg in running_msg + waiting_msg + swaping_msg:
-            msg.status = status
+        for seq in running_seq + waiting_seq + hanging_seq:
+            seq.status = status
 
     def stop_session(self, session_id: int):
         """Stop session.
@@ -253,57 +285,63 @@ class Scheduler:
 
     def has_unfinished(self):
         """Check if there are any unfinished message."""
-        return self.waiting or self.running or self.swapped
+        return self.waiting or self.running
 
-    def _remove_session(self, session_id: int):
-        """Remove session.
+    def _remove_sequence(self, seq: SchedulerSequence):
+        """Remove sequence(unsafe)
 
         Args:
-            session_id (int): The session id.
+            seq (SchedulerSequence): sequence to remove
         """
-        assert session_id in self.sessions
-        session = self.sessions.pop(session_id)
-        self.block_manager.free(session)
+        self.block_manager.free(seq)
+        seq.session.sequences.pop(seq.seq_id)
 
     def update(self):
         """Update scheduler status after one step.
 
         A full step inference should include:
-        1. schedule
-        2. forward
-        3. update
+        0. end unused sequence
+        1. schedule the running sequence
+        2. forward with the running sequence
+        3. update scheduler status
         """
+        seq_to_remove = []
         session_id_to_remove = set()
 
-        for msg in self.running:
-            session = self.sessions[msg.session_id]
-            session.history_length = sum(block.num_tokens
-                                         for block in session.logical_blocks)
-
-        def _update_queue(que: List[SchedulerMessage],
+        def _update_queue(group: List[SchedulerSequence],
                           expect_status: MessageStatus):
-            for msg in que:
-                if msg.status == expect_status:
+            for seq in group:
+                if seq.status == expect_status:
                     continue
 
-                if msg.status == MessageStatus.ENDED:
-                    session_id_to_remove.add(msg.session_id)
+                if seq.status == MessageStatus.WAITING:
+                    self.waiting.append(seq)
 
-            return [msg for msg in que if msg.status == expect_status]
+                if seq.status == MessageStatus.STOPPED:
+                    self.hanging.append(seq)
 
-        self.waiting = _update_queue(self.waiting, MessageStatus.WAITING)
+                # remove stopped session
+                if seq.status == MessageStatus.ENDED:
+                    seq_to_remove.append(seq)
+
+            return [seq for seq in group if seq.status == expect_status]
+
         self.running = _update_queue(self.running, MessageStatus.RUNNING)
-        self.swapped = _update_queue(self.swapped, MessageStatus.SWAP_OUT)
+        self.waiting = _update_queue(self.waiting, MessageStatus.WAITING)
+        self.hanging = _update_queue(self.hanging, MessageStatus.STOPPED)
 
         for session_id, session in self.sessions.items():
             if session.status == MessageStatus.ENDED:
                 session_id_to_remove.add(session_id)
 
-        # remove session
-        for session_id in session_id_to_remove:
-            self._remove_session(session_id)
+        # remove seqs
+        for seq in seq_to_remove:
+            self._remove_sequence(seq)
 
-    def get_block_tables(self, messages: List[SchedulerMessage]):
-        """get block table of the messages."""
-        sessions = [self.sessions[msg.session_id] for msg in messages]
-        return [self.block_manager.get_block_table(sess) for sess in sessions]
+        # remove sessions
+        for session_id in session_id_to_remove:
+            self.sessions.pop(session_id)
+
+    def get_block_tables(self, seqs: List[SchedulerSequence]):
+        """get block table of the sequences."""
+        return [self.block_manager.get_block_table(seq) for seq in seqs]
