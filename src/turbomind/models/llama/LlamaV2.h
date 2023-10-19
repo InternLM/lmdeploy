@@ -135,6 +135,8 @@ private:
                         const int*  cu_block_counts,
                         int         step,
                         int         ite,
+                        int         sum_seq_len,
+                        int         max_seq_len,
                         size_t      session_len,
                         size_t      batch_size);
 

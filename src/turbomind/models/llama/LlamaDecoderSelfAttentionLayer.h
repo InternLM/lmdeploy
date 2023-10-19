@@ -92,6 +92,9 @@ private:
     T* qkv_buf_     = nullptr;
     T* context_buf_ = nullptr;
 
+    static constexpr int kMaxSplitK = 16;  // must be <= WARP_SIZE
+    float*               workspace_ = nullptr;
+
     bool is_allocate_buffer_{};
 };
 

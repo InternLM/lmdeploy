@@ -286,13 +286,14 @@ void LlamaV2<T>::decoderForward(T*          decoder_output,
                                 const int*  cu_block_counts,
                                 int         step,
                                 int         ite,
+                                int         sum_seq_len,
+                                int         max_seq_len,
                                 size_t      session_len,
                                 size_t      batch_size)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    const int  max_seq_len = session_len;
-    const auto dtype       = getTensorType<T>();
+    const auto dtype = getTensorType<T>();
 
     // max_input_length is not used w/o linear_bias_slopes
     // sequence_lengths_ will be incremented in dynamic decode
@@ -300,6 +301,7 @@ void LlamaV2<T>::decoderForward(T*          decoder_output,
         {"decoder_input", {MEMORY_GPU, dtype, {batch_size, hidden_units_}, decoder_input}},
         {"sequence_lengths", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
         {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}},
+        {"sum_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &sum_seq_len}},
         {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
         {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
         {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},

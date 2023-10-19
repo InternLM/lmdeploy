@@ -53,8 +53,6 @@ protected:
 
     struct Session {
         size_t                                          batch_size;
-        int                                             ite;
-        size_t                                          max_memory_len;
         Tensor*                                         k_cache;
         Tensor*                                         v_cache;
         const std::vector<LlamaDecoderLayerWeight<T>*>* weights;

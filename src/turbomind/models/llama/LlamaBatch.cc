@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <math.h>
 #include <mutex>
+#include <numeric>
 #include <sstream>
 #include <unordered_map>
 
@@ -740,6 +741,11 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     invokePlusScalar(sequence_lengths_, -1, batch_size, stream_);
     sync_check_cuda_error();
 
+    // used for dispatching split-k decoding kernels
+    const int sum_seq_len =
+        std::accumulate(state_->h_context_length, state_->h_context_length + batch_size, -batch_size);
+    const int max_seq_len = *std::max_element(state_->h_context_length, state_->h_context_length + batch_size) - 1;
+
     // seq_limit_len_, will be compared to `step` instead of `sequence_length`, so padding len should be accounted
     // for
     for (int i = 0; i < batch_size; ++i) {
@@ -786,7 +792,7 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
                         (int)state_->h_finished[i]);
         }
     }
-    return GenerationState{max_context_len, start_step};
+    return GenerationState{max_context_len, start_step, sum_seq_len, max_seq_len};
 }
 
 template<typename T>
@@ -823,6 +829,8 @@ bool LlamaBatch<T>::Generate(GenerationState& g)
                            cu_block_counts_,
                            g.step,
                            0,
+                           g.sum_seq_len,
+                           g.max_seq_len,
                            session_len_,
                            batch_size);
 
@@ -872,8 +880,10 @@ bool LlamaBatch<T>::Generate(GenerationState& g)
     }
 
     ////////////////////////////////////////////////
-    /// ! increase the step counter
-    ++g.step;
+    /// ! increase the counters
+    g.step += 1;
+    g.max_seq_len += 1;
+    g.sum_seq_len += batch_size;
 
     return !should_stop;
 }

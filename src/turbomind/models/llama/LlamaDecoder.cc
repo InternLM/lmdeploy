@@ -189,11 +189,8 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
 
     allocateBuffer(sess.batch_size);
 
-    sess.ite     = input_tensors->at("ite").getVal<const int>();
     sess.k_cache = &output_tensors->at("key_cache");
     sess.v_cache = &output_tensors->at("value_cache");
-
-    sess.max_memory_len = input_tensors->at("max_seq_len").getVal<int>();
 
     T* decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
     T* decoder_output = output_tensors->at("decoder_output").getPtr<T>();

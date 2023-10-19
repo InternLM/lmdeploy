@@ -56,6 +56,11 @@ struct DecoderMultiHeadAttentionParams {
     int   quant_policy;
     float kv_quant_params[4];
 
+    int    max_split_k;
+    float* partial_O;
+    float* partial_M;
+    float* partial_L;
+
     cudaStream_t stream;
 };
 

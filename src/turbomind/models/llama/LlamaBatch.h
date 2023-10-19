@@ -60,6 +60,8 @@ public:
     struct GenerationState {
         int max_init_ctx_len;
         int step;
+        int sum_seq_len;
+        int max_seq_len;
     };
 
     void            InitializeSampling();

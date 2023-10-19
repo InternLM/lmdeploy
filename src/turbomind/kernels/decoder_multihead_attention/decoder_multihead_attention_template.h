@@ -4,6 +4,8 @@
 #include "iterator.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "thread_map.h"
+#include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cuda_pipeline_primitives.h>
 #include <type_traits>
@@ -14,21 +16,23 @@ namespace turbomind {
 
 template<typename T,
          typename Tkv,
-         int HeadPerCta,
-         int MaxHeadDim,
-         int KeyPerIter,
-         int HeadDim,
-         int SliceLen,
-         int Stages>
+         int  HeadPerCta,
+         int  MaxHeadDim,
+         int  KeyPerIter,
+         int  HeadDim,
+         int  SliceLen,
+         int  Stages,
+         bool SplitK>
 struct DecoderMultiHeadAttentionKernel {
     using ParamType = DecoderMultiHeadAttentionParams<T>;
 
-    static constexpr int kWarpCount  = 4;
-    static constexpr int kHeadPerCta = HeadPerCta;
-    static constexpr int kMaxHeadDim = MaxHeadDim;
-    static constexpr int kKeyPerIter = KeyPerIter;
-    static constexpr int kHeadDim    = HeadDim;
-    static constexpr int kStages     = Stages;
+    static constexpr int  kWarpCount  = 4;
+    static constexpr int  kHeadPerCta = HeadPerCta;
+    static constexpr int  kMaxHeadDim = MaxHeadDim;
+    static constexpr int  kKeyPerIter = KeyPerIter;
+    static constexpr int  kHeadDim    = HeadDim;
+    static constexpr int  kStages     = Stages;
+    static constexpr bool kSplitK     = SplitK;
 
     static constexpr int kSliceLen     = SliceLen;
     static constexpr int kIterPerSlice = kSliceLen / kKeyPerIter;
@@ -47,7 +51,8 @@ struct DecoderMultiHeadAttentionKernel {
     static constexpr size_t GetDynamicSmemSize()
     {
         size_t smem_kv_cache = IterKv::kSmemByteSize;
-        size_t smem_kv_align = 128;
+        // size_t smem_kv_align = 128;
+        size_t smem_kv_align = 0;
         size_t smem_qk       = sizeof(float) * kHeadPerCta * kSliceLen;
         size_t smem_pr       = sizeof(float) * kHeadPerCta * kSliceLen;
         return smem_kv_align + smem_kv_cache + std::max(smem_qk, smem_pr);
@@ -77,6 +82,9 @@ struct DecoderMultiHeadAttentionKernel {
 
     int  kv_head_idx_;
     bool is_gqa_leader_;
+
+    int step_begin_;
+    int step_end_;
 
     int timestep_;
     Tkv* __restrict__ k_cache_;  // [S, D]
@@ -137,6 +145,18 @@ struct DecoderMultiHeadAttentionKernel {
 
         timestep_ = params_.per_sample_length[batch_idx_];
 
+        if (kSplitK && params.max_split_k > 1) {
+            const int slice_count     = (timestep_ + kSliceLen - 1) / kSliceLen;
+            const int slice_per_split = (slice_count + params_.max_split_k - 1) / params_.max_split_k;
+
+            step_begin_ = slice_per_split * get_split_k_idx() * kSliceLen;
+            step_end_   = min(timestep_, step_begin_ + slice_per_split * kSliceLen);
+        }
+        else {
+            step_begin_ = 0;
+            step_end_   = timestep_;
+        }
+
         if constexpr (kUseBlockIter) {
             k_cache_ptrs_ = params_.k_cache_block_ptrs + params_.cu_block_cnts[batch_idx_];
             v_cache_ptrs_ = params_.v_cache_block_ptrs + params_.cu_block_cnts[batch_idx_];
@@ -156,7 +176,8 @@ struct DecoderMultiHeadAttentionKernel {
         static_assert(kMaxHeadDim % WARP_SIZE == 0);
         static constexpr int kVecQSize = kMaxHeadDim / WARP_SIZE;
 
-        using VecQ = Array<T, kVecQSize>;
+        using VecQ      = Array<T, kVecQSize>;
+        using VecQFloat = Array<float, kVecQSize>;
 
         using MapQ = ThreadMapQ<kMaxHeadDim, kHeadPerCta, kVecQSize, kWarpCount>;
 
@@ -220,13 +241,29 @@ struct DecoderMultiHeadAttentionKernel {
         }
         rotary_emb.apply(frag_K);
 
+        if (kSplitK && step_begin_) {  // Split idx > 0
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQHeadPerThread; ++s) {
+                int qi = offset.y + s;
+                if (lane_id_ == 0) {
+                    smem_M_[qi] = -std::numeric_limits<float>::infinity();
+                    smem_L_[qi] = 0.f;
+                }
+                Store(&smem_Q_[qi * kMaxHeadDim + offset.x], frag_Q[s]);
+                Store(&smem_O_[qi * kMaxHeadDim + offset.x], VecQFloat{});
+            }
+            return;
+        }
+
+        ////////////////////////////////////////////////////////
+        // Split 0 computes last step and stores to k/v cache
+
         PRAGMA_UNROLL
         for (int s = 0; s < kQHeadPerThread; ++s) {
             int         qi = offset.y + s;
             QkAccumType qk = qk_dot<QkAccumType, QkComputeType, WARP_SIZE>(frag_Q[s], frag_K);
             if (lane_id_ == 0) {
                 qk *= params_.inv_sqrt_dh;
-                // printf("qk_last[%d]=%f\n", head_idx_, qk);
                 smem_M_[qi] = qk;
                 smem_L_[qi] = 1.f;
             }
@@ -272,8 +309,6 @@ struct DecoderMultiHeadAttentionKernel {
     __device__ void CpAsyncWait()
     {
         __pipeline_wait_prior(kStages - 2);
-        // __syncwarp();
-        // __syncthreads();
     }
 
     __device__ void CpAsyncCommit()
@@ -676,9 +711,9 @@ struct DecoderMultiHeadAttentionKernel {
         State state;
 
         PRAGMA_NO_UNROLL
-        for (int step = 0; step < timestep_; step += kSliceLen) {
-            int iter_length = min(timestep_ - step, kSliceLen);
-            ComputeSlice(frag_Q, state, offset, step, iter_length);
+        for (int step = step_begin_; step < step_end_; step += kSliceLen) {
+            int iter_count = min(step_end_ - step, kSliceLen);
+            ComputeSlice(frag_Q, state, offset, step, iter_count);
         }
     }
 
@@ -689,6 +724,11 @@ struct DecoderMultiHeadAttentionKernel {
                 smem_Kv_[i] = T(0);
             }
             __syncthreads();
+        }
+
+        // early exit if split if out of bound
+        if (kSplitK && step_begin_ >= step_end_) {
+            return;
         }
 
         // early exit if finished flag is set
@@ -714,7 +754,6 @@ struct DecoderMultiHeadAttentionKernel {
     {
         static constexpr int kVecQSize = kMaxHeadDim / WARP_SIZE;
 
-        using VecQ      = Array<T, kVecQSize>;
         using VecQFloat = Array<float, kVecQSize>;
 
         using MapQ = ThreadMapQ<kMaxHeadDim, kHeadPerCta, kVecQSize, kWarpCount>;
@@ -723,23 +762,258 @@ struct DecoderMultiHeadAttentionKernel {
 
         int2 offset = MapQ::get_offset(warp_id_, lane_id_);
 
-        bool is_valid = offset.x < kMaxHeadDim && offset.y < kHeadPerCta;
-        if (!is_valid) {
+        if (offset.x >= kMaxHeadDim || offset.y >= kHeadPerCta) {
             return;
+        }
+
+        using namespace ops;
+
+        if (!kSplitK || (step_begin_ == 0 && step_end_ == timestep_)) {  // non-split-k
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQkvHeadPerThread; ++s) {
+                const int di = offset.x;
+                const int qi = offset.y + s;
+
+                const float     scale  = __fdividef(1.f, smem_L_[qi] + 1e-8f);
+                const VecQFloat frag_O = (VecQFloat&)smem_O_[qi * kMaxHeadDim + di] * scale;
+
+                Store(&params_.out[batch_idx_ * params_.num_heads * kHeadDim + (head_idx_ + qi) * kHeadDim + di],
+                      cast<T>(frag_O));
+            }
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQkvHeadPerThread; ++s) {  // split-k
+                const int di = offset.x;
+                const int qi = offset.y + s;
+
+                const VecQFloat frag_O = (VecQFloat&)smem_O_[qi * kMaxHeadDim + di];
+
+                // [B, H, k, D]
+                const int index = batch_idx_ * params_.num_heads * params_.max_split_k
+                                  + (head_idx_ + qi) * params_.max_split_k + get_split_k_idx();
+                Store(&params_.partial_O[index * kHeadDim + di], cast<float>(frag_O));
+
+                if (di == 0) {
+                    params_.partial_M[index] = smem_M_[qi];
+                    params_.partial_L[index] = smem_L_[qi];
+                }
+            }
+        }
+    }
+
+    static __device__ void Reduce(const ParamType& params)
+    {
+        static constexpr int kVecQSize = kMaxHeadDim / WARP_SIZE;
+
+        // using VecQ      = Array<T, kVecQSize>;
+        using VecQFloat = Array<float, kVecQSize>;
+        using MapQ      = ThreadMapQ<kMaxHeadDim, kHeadPerCta, kVecQSize, kWarpCount>;
+
+        static constexpr int kQkvHeadPerThread = MapQ::kIterS;
+
+        const int batch_idx = get_batch_idx();
+        const int head_idx  = get_head_idx() * kHeadPerCta;
+        const int warp_id_  = threadIdx.x / WARP_SIZE;
+        const int lane_id_  = threadIdx.x % WARP_SIZE;
+        const int split_k   = (params.per_sample_length[batch_idx] + kSliceLen - 1) / kSliceLen;
+
+        int2 offset = MapQ::get_offset(warp_id_, lane_id_);
+
+        if (offset.x >= kMaxHeadDim || offset.y >= kHeadPerCta) {
+            return;
+        }
+
+        auto get_index = [&](int k, int qi) {
+            return batch_idx * params.num_heads * split_k + (head_idx + qi) * split_k + k;
+        };
+
+        Array<float, kQkvHeadPerThread> global_M;
+        PRAGMA_UNROLL
+        for (int s = 0; s < kQkvHeadPerThread; ++s) {
+            const int qi = offset.y + s;
+            global_M[s]  = params.partial_M[get_index(0, qi)];
+        }
+        for (int k = 1; k < split_k; ++k) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQkvHeadPerThread; ++s) {
+                const int qi = offset.y + s;
+                global_M[s]  = max(global_M[qi], params.partial_M[get_index(k, qi)]);
+            }
+        }
+
+        Array<float, kQkvHeadPerThread> global_L{};
+        for (int k = 0; k < split_k; ++k) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQkvHeadPerThread; ++s) {
+                const int qi = offset.y + s;
+                global_L[s] +=
+                    params.partial_L[get_index(k, qi)] * expf(params.partial_M[get_index(k, qi)] - global_M[s]);
+            }
+        }
+
+        VecQFloat frag_O[kQkvHeadPerThread]{};
+        for (int k = 0; k < split_k; ++k) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQkvHeadPerThread; ++s) {
+                const int di = offset.x;
+                const int qi = offset.y + s;
+
+                float scale = expf(params.partial_M[get_index(k, qi)] - global_M[s]) / (global_L[s] + 1e-8f);
+
+                VecQFloat partial_O;
+                Ldg(partial_O, &params.partial_O[get_index(k, qi) * kHeadDim + di]);
+
+                using namespace ops;
+                frag_O[s] = frag_O[s] + partial_O * scale;
+            }
         }
 
         PRAGMA_UNROLL
         for (int s = 0; s < kQkvHeadPerThread; ++s) {
-            int   di    = offset.x;
-            int   qi    = offset.y + s;
-            float scale = __fdividef(1.f, smem_L_[qi] + 1e-6f);
-            // float scale = 1.f;
-            using namespace ops;
-            VecQFloat frag_O = (VecQFloat&)smem_O_[qi * kMaxHeadDim + di] * scale;
-
-            Store(&params_.out[batch_idx_ * params_.num_heads * kHeadDim + (head_idx_ + qi) * kHeadDim + di],
-                  cast<T>(frag_O));
+            const int di = offset.x;
+            const int qi = offset.y + s;
+            Store(&params.out[batch_idx * params.num_heads * kHeadDim + (head_idx + qi) * kHeadDim + di],
+                  cast<T>(frag_O[s]));
         }
+    }
+
+    static __device__ void Reduce2(const ParamType& params)
+    {
+        const int batch_idx = get_batch_idx();
+        const int head_idx  = get_head_idx();
+        const int lane_id   = threadIdx.x % WARP_SIZE;
+        const int warp_id   = threadIdx.x / WARP_SIZE;
+
+        const int timestep        = params.per_sample_length[batch_idx];
+        const int max_split_k     = params.max_split_k;
+        const int slice_count     = get_slice_count(timestep);
+        const int slice_per_split = (slice_count + max_split_k - 1) / max_split_k;
+        const int split_k         = (slice_count + slice_per_split - 1) / slice_per_split;
+
+        if (split_k == 1) {
+            return;
+        }
+
+        // [B, H, k, D]
+        const int index = batch_idx * params.num_heads * max_split_k + head_idx * max_split_k + threadIdx.x;
+
+        __shared__ float smem_global_M;
+        __shared__ float smem_global_L;
+        __shared__ __align__(16) float smem_expdiff_M[WARP_SIZE];
+        __shared__ __align__(16) float smem_scale_O[WARP_SIZE];
+
+        {
+            float global_M = threadIdx.x < split_k ? params.partial_M[index] : -std::numeric_limits<float>::infinity();
+            PRAGMA_UNROLL
+            for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {
+                global_M = fmaxf(global_M, __shfl_xor_sync((uint32_t)-1, global_M, mask));
+            }
+
+            if (threadIdx.x == 0) {
+                smem_global_M = global_M;
+            }
+        }
+
+        __syncthreads();
+
+        {
+            float global_L = threadIdx.x < split_k ? params.partial_L[index] : 0.f;
+
+            if (threadIdx.x < split_k) {
+                auto expdiff_M = expf(params.partial_M[index] - smem_global_M);
+                global_L *= expdiff_M;
+                smem_expdiff_M[threadIdx.x] = expdiff_M;
+            }
+
+            PRAGMA_UNROLL
+            for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {
+                global_L += __shfl_xor_sync((uint32_t)-1, global_L, mask);
+            }
+
+            if (threadIdx.x == 0) {
+                smem_global_L = global_L;
+            }
+        }
+
+        __syncthreads();
+
+        if (threadIdx.x < split_k) {
+            smem_scale_O[threadIdx.x] = smem_expdiff_M[threadIdx.x] / (smem_global_L + 1e-8f);
+        }
+
+        __syncthreads();
+
+        if constexpr (1) {
+            int   idx = (batch_idx * params.num_heads * max_split_k + head_idx * max_split_k) * kHeadDim + threadIdx.x;
+            float accum_O{};
+            const bool is_valid = threadIdx.x < kHeadDim;
+            for (int k = 0; k < split_k; ++k) {
+                if (is_valid) {
+                    accum_O += smem_scale_O[k] * params.partial_O[idx];
+                }
+                idx += kHeadDim;
+            }
+            if (is_valid) {
+                params.out[batch_idx * params.num_heads * kHeadDim + head_idx * kHeadDim + threadIdx.x] = (T)accum_O;
+            }
+        }
+        else {  // vectorized version, not benificial
+            using namespace ops;
+            constexpr int kVecSize = 4;
+
+            using VecO = Array<float, kVecSize>;
+            VecO accum_O{};
+
+            int idx =
+                batch_idx * params.num_heads * max_split_k + head_idx * max_split_k + warp_id;  // offset by warp_id
+            idx = idx * kHeadDim + lane_id * kVecSize;                                          // offset by lane_id
+
+            for (int k = warp_id; k < split_k; k += kWarpCount) {
+                VecO frag_O;
+                Ldg(frag_O, &params.partial_O[idx]);
+                accum_O = accum_O + frag_O * smem_scale_O[k];
+                idx += kWarpCount * kHeadDim;
+            }
+
+            __shared__ __align__(16) VecO reduce_O[kWarpCount][WARP_SIZE];
+
+            reduce_O[warp_id][lane_id] = accum_O;
+
+            PRAGMA_UNROLL
+            for (int mask = kWarpCount / 2; mask >= 1; mask /= 2) {
+                __syncthreads();
+                if (warp_id < mask) {
+                    reduce_O[warp_id][lane_id] = reduce_O[warp_id][lane_id] + reduce_O[warp_id + mask][lane_id];
+                }
+            }
+
+            // no need to sync, last loop ends with warp 0
+            if (warp_id == 0 && lane_id * kVecSize < kHeadDim) {
+                Store(&params.out[batch_idx * params.num_heads * kHeadDim + head_idx * kHeadDim + lane_id * kVecSize],
+                      cast<T>(reduce_O[warp_id][lane_id]));
+            }
+        }
+    }
+
+    static __device__ int get_slice_count(int timestep)
+    {
+        return (timestep + kSliceLen - 1) / kSliceLen;
+    }
+
+    static __device__ int get_head_idx()
+    {
+        return blockIdx.x;
+    }
+
+    static __device__ int get_batch_idx()
+    {
+        return blockIdx.y;
+    }
+
+    static __device__ int get_split_k_idx()
+    {
+        return blockIdx.z;
     }
 };
 
@@ -752,16 +1026,13 @@ __global__ void decoder_multihead_attention(ParamType params)
 
     uint8_t* smem_ptr = dynamic_smem;
 
-    // Align dynamic smem ptr to 128 byte boundary, this eliminates excessive wavefronts from smem to L1
-    // but it does not improve performance
-    if constexpr (0) {
-        int misalign = (uintptr_t)smem_ptr % 128;
-        if (misalign) {
-            smem_ptr += 128 - misalign;
-        }
-    }
-
     MHAType{params, shared_storage, smem_ptr}.Run();
+}
+
+template<typename MHAType, typename ParamType = typename MHAType::ParamType>
+__global__ void decoder_multihead_attention_reduce(ParamType params)
+{
+    MHAType::Reduce2(params);
 }
 
 }  // namespace turbomind

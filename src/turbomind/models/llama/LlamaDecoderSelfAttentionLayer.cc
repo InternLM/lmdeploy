@@ -44,6 +44,9 @@ void LlamaDecoderSelfAttentionLayer<T>::allocateBuffer(size_t batch_size)
     context_buf_ =
         reinterpret_cast<T*>(allocator_->reMalloc(context_buf_, sizeof(T) * batch_size * local_hidden_units_, false));
 
+    workspace_ = (float*)allocator_->reMalloc(
+        workspace_, sizeof(float) * batch_size * local_head_num_ * kMaxSplitK * (size_per_head_ + 2));
+
     is_allocate_buffer_ = true;
 }
 
@@ -84,6 +87,9 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     const int*  sequence_lengths_data = input_tensors->getPtr<int>("sequence_lengths");
     const bool* finished_data         = input_tensors->getPtr<bool>("finished");
 
+    const int sum_seq_len = input_tensors->getVal<int>("sum_seq_len");
+    const int max_seq_len = input_tensors->getVal<int>("max_seq_len");
+
     T*  hidden_features_data = output_tensors->getPtr<T>("attention_output");
     T** key_cache_ptrs       = output_tensors->getPtr<T*>("key_cache");
     T** value_cache_ptrs     = output_tensors->getPtr<T*>("value_cache");
@@ -116,7 +122,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
 
     params.batch_size    = batch_size;
-    params.cu_block_cnts = cu_block_counts;  /// TODO
+    params.cu_block_cnts = cu_block_counts;
 
     params.k_cache_block_ptrs  = (void**)key_cache_ptrs;
     params.v_cache_block_ptrs  = (void**)value_cache_ptrs;
@@ -134,6 +140,26 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     params.rotary_embedding_dim  = size_per_head_;
     params.rotary_embedding_base = 10000.f;
+
+    params.partial_O = workspace_;
+    params.partial_M = params.partial_O + batch_size * local_head_num_ * kMaxSplitK * size_per_head_;
+    params.partial_L = params.partial_M + batch_size * local_head_num_ * kMaxSplitK;
+
+    // avg_batch_size = sum_seq_len / max_seq_len
+    // max_split_k    = kMaxSplitK  / avg_batch_size
+    // max_split_k'   = min(max_split_k, max_seq_lens / kSliceLen)
+
+    const float avg_batch_size = max_seq_len ? (float)sum_seq_len / max_seq_len : 1;
+    FT_CHECK(avg_batch_size >= 1.f);
+    
+    const int max_split_k = std::max(1, (int)std::ceil(kMaxSplitK / avg_batch_size));
+
+    // if (layer_id == 0) {
+    //     TM_LOG_INFO("avg_batch_size = %.1f, max_split_k = %d", avg_batch_size, max_split_k);
+    // }
+
+    params.max_split_k = max_split_k;
+    params.max_seq_len = max_seq_len;
 
     params.stream = stream_;
 
