@@ -47,7 +47,10 @@ void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_r
             if (r) {
                 int ec = 0;
 
-                const int input_length = r->inputs[rank_].getVal<int>("input_lengths", 0);
+                const int  input_length = r->inputs[rank_].getVal<int>("input_lengths", 0);
+                const auto get_offset   = [&](int token_count) {
+                    return std::max(0, std::min(token_count, r->inputs[rank_].getVal<int>("step", token_count)));
+                };
 
                 if (occurrence[r->id] != 1) {
                     ec = Request::kConflict;
@@ -62,7 +65,7 @@ void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_r
                     if (auto seq = sequence_manager_->Get(r->id); seq == nullptr) {
                         ec = Request::kTooLong;
                     }
-                    else if (seq->tokens.size() + input_length > session_len_) {
+                    else if (get_offset(seq->tokens.size()) + input_length > session_len_) {
                         ec = Request::kTooLong;
                     }
                 }
