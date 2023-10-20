@@ -261,6 +261,7 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
                                   const std::vector<uint64_t>&        priorities,
                                   int                                 step_length) -> Outcome
 {
+    dbg(__PRETTY_FUNCTION__);
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule the assignment of blocks to sequences
     auto    seqs = const_cast<Sequence* const*>(sequences.data());
@@ -285,20 +286,21 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
 
     // count required blocks based on block validity
     std::vector<int> required(sequences.size());
-    int              total_required{};
+    // int              total_required{};
     for (int i = 0; i < sequences.size(); ++i) {
         int seq_len = context_lengths[i] + step_length;
         int count   = (seq_len + block_seq_len_ - 1) / block_seq_len_ - static_cast<int>(seqs[i]->blocks.size());
         required[i] = std::max(0, count);
-        total_required += required[i];
+        // total_required += required[i];
     }
 
     // dbg(required);
 
     // no new blocks required, exit early
-    if (total_required == 0) {
-        return outcome;
-    }
+    // if (total_required == 0) {
+    //     dbg("early exit");
+    //     return outcome;
+    // }
 
     /// TODO: more early exit heuristics
 
@@ -396,7 +398,13 @@ auto SequenceManager::Materialize(const std::vector<const Sequence*>& sequences,
     auto first  = blocks.begin();
 
     for (const auto& idx : schedule.active) {
-        auto& sequence  = *seqs[idx];
+        auto& sequence = *seqs[idx];
+
+        // retain blocks for swap-in sequences
+        if (sequence.status == Sequence::kCached) {
+            block_manager_->Retain(sequence.blocks);
+        }
+
         sequence.status = Sequence::kActive;
 
         auto last = first + required[idx];

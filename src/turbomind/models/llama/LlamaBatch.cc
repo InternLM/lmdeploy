@@ -265,8 +265,10 @@ bool LlamaBatch<T>::Initialize()
         }
     }
 
+    dbg(holes, active_holes);
+
     auto process = [&](BatchState* state) {
-        // dbg(state->size);
+        dbg(state->size);
         for (int i = 0; i < state->size; ++i) {
             if (auto& r = state->requests[i]) {
                 sequences.push_back(state->sequences[i]);
@@ -289,9 +291,11 @@ bool LlamaBatch<T>::Initialize()
     // dbg(step_length_);
 
     auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, step_length_);
-    if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
-        dbg(outcome);
-    }
+
+    dbg(outcome);
+    // if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
+    //     dbg(outcome);
+    // }
 
     bool exchange = outcome.swap_in + outcome.swap_out > 0;
 
