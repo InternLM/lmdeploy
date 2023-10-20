@@ -86,7 +86,7 @@ def _fwd_split_kernel(
     num_blocks_per_prog = (num_blocks + SPLIT_K - 1) // SPLIT_K
     kv_len_per_prog = num_blocks_per_prog * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
-    loop_end = tl.min(loop_start + kv_len_per_prog, cur_batch_kv_len)
+    loop_end = tl.minimum(loop_start + kv_len_per_prog, cur_batch_kv_len)
 
     for start_n in range(loop_start, block_mask * loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -163,13 +163,46 @@ def _reduce_split_kernel(
     stride_oh,
     stride_od,
     SPLIT_K: tl.constexpr,
-    BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
 ):
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
-    split_k_id = tl.program_id(2)
+
+    # initialize offsets
+    offs_d = tl.arange(0, BLOCK_DMODEL)
+
+    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah +
+                offs_d * stride_ad)
+    offs_mi = cur_batch * stride_mbs + cur_head * stride_mh
+
+    m = tl.load(Meta + offs_mi)
+    l_sum = tl.load(Meta + offs_mi + stride_md)
+    acc = tl.load(Acc + offs_acc)
+    for k_id in range(1, SPLIT_K):
+        acc_k = tl.load(Acc + offs_acc + k_id * stride_ak)
+        m_k = tl.load(Meta + offs_mi + k_id * stride_mk)
+        l_k = tl.load(Meta + offs_mi + k_id * stride_mk + stride_md)
+
+        m_new = tl.maximum(m, m_k)
+        if m_k < m:
+            # Scale incoming values
+            alpha = tl.exp(m_k - m_new)
+            acc_k = acc_k * alpha
+            l_k = l_k * alpha
+        else:
+            # Scale our values
+            alpha = tl.exp(m - m_new)
+            acc = acc * alpha
+            l_sum = l_sum * alpha
+
+        m = m_new
+        l_sum += l_k
+        acc += acc_k
+
+    acc = acc / l_sum
+    out_offs = (cur_batch * stride_obs + cur_head * stride_oh +
+                offs_d * stride_od)
+    tl.store(Out + out_offs, acc)
 
 
 @triton.jit
@@ -339,7 +372,7 @@ def paged_attention_fwd(
     num_warps = 4 if Lk <= 64 else 8
 
     # is_decoding = q.shape[-3] == b_seq_len.size(0)
-    is_decoding = False
+    is_decoding = False  # split k implementation is slower...
     if not is_decoding:
         grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
         _fwd_kernel[grid](
@@ -369,6 +402,67 @@ def paged_attention_fwd(
             BLOCK_M=BLOCK,
             BLOCK_DMODEL=Lk,
             BLOCK_N=BLOCK,
+            num_warps=num_warps,
+            num_stages=1,
+        )
+    else:
+        SPLIT_K = 4
+        grid = (batch, head, SPLIT_K)
+        acc = q.new_empty(batch, head, SPLIT_K, Lq, dtype=torch.float32)
+        meta = acc.new_empty(batch, head, SPLIT_K, 2)
+        _fwd_split_kernel[grid](
+            q,
+            k,
+            v,
+            sm_scale,
+            b_kv_seq_len,
+            block_offsets,
+            acc,
+            meta,
+            stride_qbs=q.stride(-3),
+            stride_qh=q.stride(-2),
+            stride_qd=q.stride(-1),
+            stride_kbs=k.stride(-3),
+            stride_kh=k.stride(-2),
+            stride_kd=k.stride(-1),
+            stride_vbs=v.stride(-3),
+            stride_vh=v.stride(-2),
+            stride_vd=v.stride(-1),
+            stride_ok=acc.stride(-2),
+            stride_obs=acc.stride(-4),
+            stride_oh=acc.stride(-3),
+            stride_od=acc.stride(-1),
+            stride_mk=meta.stride(-2),
+            stride_mbs=meta.stride(-4),
+            stride_mh=meta.stride(-3),
+            stride_md=meta.stride(-1),
+            stride_boffb=block_offsets.stride(0),
+            kv_group_num=kv_group_num,
+            SPLIT_K=SPLIT_K,
+            BLOCK_M=16,
+            BLOCK_DMODEL=Lk,
+            BLOCK_N=BLOCK,
+            num_warps=num_warps,
+            num_stages=1,
+        )
+        grid = (batch, head)
+        _reduce_split_kernel[grid](
+            acc,
+            meta,
+            o,
+            stride_ak=acc.stride(-2),
+            stride_abs=acc.stride(-4),
+            stride_ah=acc.stride(-3),
+            stride_ad=acc.stride(-1),
+            stride_mk=meta.stride(-2),
+            stride_mbs=meta.stride(-4),
+            stride_mh=meta.stride(-3),
+            stride_md=meta.stride(-1),
+            stride_obs=o.stride(-3),
+            stride_oh=o.stride(-2),
+            stride_od=o.stride(-1),
+            SPLIT_K=SPLIT_K,
+            BLOCK_DMODEL=Lk,
             num_warps=num_warps,
             num_stages=1,
         )
