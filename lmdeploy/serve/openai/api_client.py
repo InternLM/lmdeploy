@@ -139,7 +139,6 @@ class APIClient:
             stream: whether to stream the results or not.
             stop: whether to stop the session response or not.
             request_output_len (int): output token nums
-            step (int): the offset of the k/v cache
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
                 higher are kept for generation.
