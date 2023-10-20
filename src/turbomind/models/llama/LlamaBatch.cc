@@ -964,9 +964,9 @@ void LlamaBatch<T>::ContextDecode()
         else {
             offsets.push_back(i);
             max_context_cnts.push_back(max_context_count);
-            accum_size        = 0;
-            accum_input_count = 0;
-            max_context_count = 0;
+            accum_size        = 1;
+            accum_input_count = h_input_length_buf_[i];
+            max_context_count = state_->h_context_length[i] - 1;
         }
     }
     offsets.push_back(batch_size);
@@ -983,7 +983,9 @@ void LlamaBatch<T>::ContextDecode()
         std::vector<int> decode_lengths{};
         int              max_input_len{};
         auto             input_ids = context_decoder_ids_buf_;
+        TM_LOG_INFO("first = %d, last = %d", first, last);
         for (int i = first; i < last; ++i) {
+            TM_LOG_INFO("session_len = %d, input_length = %d", session_len_, h_input_length_buf_[i]);
             input_ids = Copy(input_ids_buf_ + i * session_len_, h_input_length_buf_[i], input_ids);
             dbg(i, h_input_length_buf_[i]);
             h_tmp_k_ptrs_[i] = k_ptr;
