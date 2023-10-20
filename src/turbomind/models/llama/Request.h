@@ -32,7 +32,8 @@ struct Request {
         kConflict = 2,
         kBusy     = 3,
         kInactive = 4,
-        kFail     = 5
+        kFail     = 5,
+        kTooLong  = 6
     };
     std::promise<int> signal;
 };

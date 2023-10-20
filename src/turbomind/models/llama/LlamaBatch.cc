@@ -47,14 +47,24 @@ void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_r
             if (r) {
                 int ec = 0;
 
+                const int input_length = r->inputs[rank_].getVal<int>("input_lengths", 0);
+
                 if (occurrence[r->id] != 1) {
                     ec = Request::kConflict;
                 }
                 else if (r->start_flag && r->stop_flag) {
                     ec = Request::kInvalid;
                 }
-                else if (!r->start_flag && !sequence_manager_->Contains(r->id)) {
+                else if (input_length > session_len_) {
                     ec = Request::kInvalid;
+                }
+                else if (!r->start_flag) {
+                    if (auto seq = sequence_manager_->Get(r->id); seq == nullptr) {
+                        ec = Request::kTooLong;
+                    }
+                    else if (seq->tokens.size() + input_length > session_len_) {
+                        ec = Request::kTooLong;
+                    }
                 }
 
                 if (ec) {
