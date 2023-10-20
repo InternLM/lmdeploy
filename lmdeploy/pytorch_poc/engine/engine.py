@@ -647,7 +647,7 @@ class Engine:
             token_ids = [token_ids]
 
         seq_length = [len(tokens) for tokens in token_ids]
-        q_start_loc = torch.tensor([0]+seq_length).cumsum(0)[:-1].to(device)
+        q_start_loc = torch.tensor([0] + seq_length).cumsum(0)[:-1].to(device)
         max_seq_len = max(seq_length)
 
         input_ids = list(itertools.chain(*token_ids))

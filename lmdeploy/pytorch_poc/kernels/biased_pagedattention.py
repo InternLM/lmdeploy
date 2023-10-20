@@ -14,7 +14,6 @@ def _fwd_kernel(
     K,
     V,
     Bias,
-    Head_scale,
     sm_scale,
     B_Start_Loc,
     B_Seqlen,
@@ -109,22 +108,14 @@ def _fwd_kernel(
         )
         qk += bias
 
-        # -- compute m_ij, p, l_ij
-        m_ij = tl.max(qk, 1)
-        p = tl.exp(qk - m_ij[:, None])
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        m_i_new = tl.maximum(m_i, m_ij)
+        # -- compute p, m_i and l_i
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        p = tl.exp(qk - m_i_new[:, None])
         alpha = tl.exp(m_i - m_i_new)
-        beta = tl.exp(m_ij - m_i_new)
-        l_i_new = alpha * l_i + beta * l_ij
+        l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
-        # scale p
-        p_scale = beta / l_i_new
-        p = p * p_scale[:, None]
         # scale acc
-        acc_scale = l_i / l_i_new * alpha
-        acc = acc * acc_scale[:, None]
+        acc = acc * alpha[:, None]
         # update acc
         v = tl.load(
             v_ptrs + b_offset * BLOCK_N * stride_vbs,
@@ -137,6 +128,8 @@ def _fwd_kernel(
         # update m_i and l_i
         l_i = l_i_new
         m_i = m_i_new
+
+    acc = acc / l_i[:, None]
     # initialize pointers to output
     off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs +
              cur_head * stride_oh + offs_d[None, :] * stride_od)
@@ -190,6 +183,7 @@ def biased_paged_attention_fwd(
     kv_group_num = q.shape[-2] // k[0].shape[-2]
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
+    bias_head_stride = 0 if bias.size(1) == 1 else bias.stride(-3)
 
     num_warps = 4 if Lk <= 64 else 8
     _fwd_kernel[grid](
@@ -213,7 +207,7 @@ def biased_paged_attention_fwd(
         v.stride(-2),
         v.stride(-1),
         bias.stride(-4),
-        bias.stride(-3),
+        bias_head_stride,
         bias.stride(-2),
         bias.stride(-1),
         o.stride(-3),
@@ -227,4 +221,3 @@ def biased_paged_attention_fwd(
         num_warps=num_warps,
         num_stages=1,
     )
-    return
