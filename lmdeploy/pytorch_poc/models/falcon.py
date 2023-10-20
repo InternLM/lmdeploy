@@ -94,13 +94,26 @@ class PatchedFalconAttention(nn.Module):
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
 
+        world_size = dist.get_world_size()
+
         if mod_name in ['query_key_value']:
-            if self.multi_query:
-
-                world_size = dist.get_world_size()
-
-                weight = mod.weight.reshape(-1, self.head_dim,
-                                            self.hidden_size)
+            if self.new_decoder_architecture:
+                # e.g. 40b-instruct, GQA
+                # split qkv across groups
+                # no finer-grained partitioning
+                weight = mod.weight.reshape(
+                    -1,  # num groups
+                    (self.num_heads + self.num_kv_heads * 2) * self.head_dim,
+                    self.hidden_size,
+                )
+            elif self.multi_query:
+                # e.g. 7b-instruct, MQA
+                # split to q, copy kv
+                weight = mod.weight.reshape(
+                    -1,
+                    self.head_dim,
+                    self.hidden_size,
+                )
                 q_weight = weight[:self.num_heads]
                 k_weight = weight[self.num_heads:self.num_heads + 1]
                 v_weight = weight[self.num_heads + 1:self.num_heads + 2]
@@ -119,34 +132,26 @@ class PatchedFalconAttention(nn.Module):
                 # so that column parallel will split it
                 # into integer-numbered heads
 
-                if mod.bias:
-                    # no bias for 7b-instruct
-                    bias = mod.bias.reshape(-1, self.head_dim)
-                    q_bias = bias[:self.num_heads]
-                    k_bias = bias[self.num_heads:self.num_heads + 1]
-                    v_bias = bias[self.num_heads + 1:self.num_heads + 2]
-                    q_bias_shards = torch.tensor_split(q_bias,
-                                                       world_size,
-                                                       dim=0)
-                    bias_shards = []
-                    for q in q_bias_shards:
-                        bias_shards.append(q)
-                        bias_shards.append(k_bias)
-                        bias_shards.append(v_bias)
-                    mod.bias.data = torch.cat(bias_shards, dim=0)
+            # no bias for 7b-instruct and 40b-instruct
 
             colwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
                                           to_local=True)
 
-            if self.multi_query:
+            if self.new_decoder_architecture or self.multi_query:
                 # return to 2D for later matmul
                 mod.weight.data = mod.weight.data.reshape(-1, self.hidden_size)
-                if mod.bias:
-                    mod.weight.data = mod.weight.data.reshape(self.hidden_size)
 
         elif mod_name in ['dense']:
-            if self.multi_query:
+            if self.new_decoder_architecture:
+                # e.g. 40b-instruct, GQA
+                weight = mod.weight.reshape(
+                    self.hidden_size,
+                    -1,  # num groups
+                    self.num_heads * self.head_dim,
+                )
+            elif self.multi_query:
+                # e.g. 7b-instruct, MQA
                 mod.weight.data = mod.weight.reshape(self.hidden_size, -1,
                                                      self.head_dim)
 
@@ -154,7 +159,7 @@ class PatchedFalconAttention(nn.Module):
                                           device_mesh=device_mesh,
                                           to_local=True)
 
-            if self.multi_query:
+            if self.new_decoder_architecture or self.multi_query:
                 mod.weight.data = mod.weight.reshape(self.hidden_size, -1)
 
     @classmethod
@@ -178,7 +183,24 @@ class PatchedFalconAttention(nn.Module):
             key: [batch_size, seq_length, num_heads, head_dim]
             value: [batch_size, seq_length, num_heads, head_dim]
         """
-        if not self.multi_query:
+        if self.new_decoder_architecture:
+            # e.g. 40b-instruct model
+            batch, seq_len, _ = fused_qkv.shape
+            qkv = fused_qkv.view(batch, seq_len, -1,
+                                 self.num_heads // self.num_kv_heads + 2,
+                                 self.head_dim)
+            query = qkv[:, :, :, :-2]
+            key = qkv[:, :, :, [-2]]
+            value = qkv[:, :, :, [-1]]
+            # because cache_engine & kernel
+            # already handled grouped attention
+            # removing broadcast make it faster and more memory-saving
+            # key = torch.broadcast_to(key, query.shape)
+            # value = torch.broadcast_to(value, query.shape)
+
+            query, key, value = [x.flatten(2, 3) for x in (query, key, value)]
+            return query, key, value
+        elif not self.multi_query:
             # e.g. rw-1b model
             batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
             fused_qkv = fused_qkv.view(batch_size, seq_length,
