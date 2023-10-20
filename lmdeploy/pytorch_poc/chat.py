@@ -90,7 +90,7 @@ def main(
                 repetition_penalty=repetition_penalty,
                 ignore_eos=False,
                 random_seed=seed,
-            )
+                stop_words=model.stop_words)
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     prompt_token_ids=input_ids,

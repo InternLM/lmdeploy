@@ -53,7 +53,7 @@ class CalibrationContext():
         self.num_kv_heads = num_kv_heads
         self.head_dim = model.config.hidden_size // num_attn_heads
         self.model = model
-        del self.model.lm_head
+        self.model.lm_head.to('cpu')  # save gpu memory
 
         self.tokenizer = tokenizer
 

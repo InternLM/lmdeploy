@@ -526,6 +526,7 @@ class Engine:
                     torch_dtype=torch_dtype,
                     trust_remote_code=trust_remote_code)
                 hf_model.eval()
+                hf_model.config.use_cache = True
 
             self.patched_model = patch(
                 hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
@@ -646,7 +647,7 @@ class Engine:
             token_ids = [token_ids]
 
         seq_length = [len(tokens) for tokens in token_ids]
-        q_start_loc = torch.tensor([0]+seq_length).cumsum(0)[:-1].to(device)
+        q_start_loc = torch.tensor([0] + seq_length).cumsum(0)[:-1].to(device)
         max_seq_len = max(seq_length)
 
         input_ids = list(itertools.chain(*token_ids))
