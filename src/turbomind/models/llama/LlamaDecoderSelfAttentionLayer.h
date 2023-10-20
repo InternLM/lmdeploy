@@ -24,6 +24,7 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
@@ -60,6 +61,7 @@ public:
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
         quant_policy_(quant_policy)
     {
+        arch_ = getSMVersion();
     }
 
     ~LlamaDecoderSelfAttentionLayer()
@@ -96,6 +98,7 @@ private:
     float*               workspace_ = nullptr;
 
     bool is_allocate_buffer_{};
+    int  arch_{};
 };
 
 }  // namespace turbomind

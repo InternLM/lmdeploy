@@ -2,6 +2,7 @@
 
 #include "decoder_multihead_attention_template.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 #include <iostream>
 
@@ -34,39 +35,46 @@ bool Print(size_t dynamic_smem_size)
 template<typename T, typename Tkv, int HeadDim, int HeadPerCta>
 void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& params)
 {
-    // cpasync_2048_32x6 ~ 64k smem
-    // using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 6>;
+    auto invoke = [&](auto* type) {
+        using Attn = std::remove_reference_t<decltype(*type)>;
 
-    using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 1024, 5, true>;
+        static const size_t kDynSmemSize = Attn::GetDynamicSmemSize();
 
-    // ld_kv16_2048_32x3 ~ 34k smem
-    // using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 3>;
+        [[maybe_unused]] static const bool _ = Print<Attn>(kDynSmemSize);
 
-    // ld_kv8_2048_64x3 ~ 34k smem
-    // using MHAType = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HedDim, 64, HeadDim, 2048, 3>;
+        const int slice_count = (params.max_seq_len + Attn::kSliceLen - 1) / Attn::kSliceLen;
+        const int max_split_k = std::min(params.max_split_k, std::max(1, slice_count));
 
-    static const size_t kDynSmemSize = MHAType::GetDynamicSmemSize();
+        dim3 block(Attn::kWarpCount * WARP_SIZE);
+        dim3 grid(params.num_heads / HeadPerCta, params.batch_size, max_split_k);
 
-    [[maybe_unused]] static const bool _ = Print<MHAType>(kDynSmemSize);
+        // if (params.layer_offset == 0) {
+        //     std::cout << "max_split_k' = " << max_split_k << ", arch = " << params.arch << "\n";
+        // }
 
-    const int slice_count = (params.max_seq_len + MHAType::kSliceLen - 1) / MHAType::kSliceLen;
-    const int max_split_k = std::min(params.max_split_k, std::max(1, slice_count));
+        cudaFuncSetAttribute(
+            decoder_multihead_attention<Attn>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
 
-    dim3 block(MHAType::kWarpCount * WARP_SIZE);
-    dim3 grid(params.num_heads / HeadPerCta, params.batch_size, max_split_k);
+        decoder_multihead_attention<Attn><<<grid, block, kDynSmemSize, params.stream>>>(params);
 
-    // if (params.layer_offset == 0) {
-    //     std::cout << "max_split_k' = " << max_split_k << "\n";
-    // }
+        if (max_split_k > 1) {
+            dim3 grid(params.num_heads, params.batch_size);
+            decoder_multihead_attention_reduce<Attn><<<grid, block, 0, params.stream>>>(params);
+        }
+    };
 
-    cudaFuncSetAttribute(
-        decoder_multihead_attention<MHAType>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
+    if (params.arch >= 80) {
+        // DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 6>;  // 64k
 
-    decoder_multihead_attention<MHAType><<<grid, block, kDynSmemSize, params.stream>>>(params);
+        using Type = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 1024, 5, true>;
+        invoke((Type*)0);
+    }
+    else {
+        // DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 3>; // 34k
+        // DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 64, HeadDim, 2048, 3>;  // 34k
 
-    if (max_split_k > 1) {
-        dim3 grid(params.num_heads, params.batch_size);
-        decoder_multihead_attention_reduce<MHAType><<<grid, block, 0, params.stream>>>(params);
+        using Type = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 64, HeadDim, 1024, 3, true>;
+        invoke((Type*)0);
     }
 }
 

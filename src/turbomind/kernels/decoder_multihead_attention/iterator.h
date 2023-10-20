@@ -7,6 +7,12 @@
 
 namespace turbomind {
 
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 4)
+#define L2_CACHEHINT(size) ".L2::" #size "B"
+#else
+#define L2_CACHEHINT(size)
+#endif
+
 struct BlockIterator {
     const void** ptrs_;
     const void*  prefetch_;
@@ -256,15 +262,20 @@ struct Iterator {
     {
         const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
         constexpr int cp_size      = sizeof(AccessType);
-        // static_assert(cp_size == 16);
+#if TURBOMIND_ARCH_SM80
+        // clang-format off
         asm volatile("{\n"
                      "  .reg .pred p;\n"
                      "  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.ca.shared.global.L2::128B [%1], [%2], %3;\n"
+                     "  @p cp.async.ca.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                      "}\n" ::"r"((int)mask),
                      "r"(smem_int_ptr),
                      "l"(src),
                      "n"(cp_size));
+        // clang-format on
+#else
+        assert(TURBOMIND_ARCH_SM80);
+#endif
     }
 
     static __device__ void Copy(T* __restrict__ dst, const T* __restrict__ src, bool mask)
@@ -276,8 +287,12 @@ struct Iterator {
 
     __device__ void Prefetch(bool mask)
     {
-        CpAsync(smem_ + dst_offset_, src_ + src_offset_, mask);
-        // Copy(smem_ + dst_offset_, src_ + src_offset_, mask);
+        if constexpr (TURBOMIND_ARCH_SM80) {
+            CpAsync(smem_ + dst_offset_, src_ + src_offset_, mask);
+        }
+        else {
+            Copy(smem_ + dst_offset_, src_ + src_offset_, mask);
+        }
     }
 
     __device__ void Load(AccessType (&frag)[ThreadMap::kIterC])

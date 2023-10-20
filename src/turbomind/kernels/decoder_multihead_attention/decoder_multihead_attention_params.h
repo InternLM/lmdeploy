@@ -63,6 +63,7 @@ struct DecoderMultiHeadAttentionParams {
     float* partial_M;
     float* partial_L;
 
+    int          arch;
     cudaStream_t stream;
 };
 

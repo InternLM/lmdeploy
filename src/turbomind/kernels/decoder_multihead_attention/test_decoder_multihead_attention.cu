@@ -252,6 +252,8 @@ int main(int argc, char* argv[])
     params.max_split_k = kMaxSplitK;
     params.max_seq_len = kContextLen;
 
+    params.arch = 80;
+
     std::vector<thrust::universal_vector<half>> outputs;
 
     for (int i = 0; i < std::max(kTestIter, 10); ++i) {

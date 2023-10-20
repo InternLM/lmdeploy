@@ -151,7 +151,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     const float avg_batch_size = max_seq_len ? (float)sum_seq_len / max_seq_len : 1;
     FT_CHECK(avg_batch_size >= 1.f);
-    
+
     const int max_split_k = std::max(1, (int)std::ceil(kMaxSplitK / avg_batch_size));
 
     // if (layer_id == 0) {
@@ -161,6 +161,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.max_split_k = max_split_k;
     params.max_seq_len = max_seq_len;
 
+    params.arch   = arch_;
     params.stream = stream_;
 
     params.quant_policy = quant_policy_;
