@@ -8,7 +8,7 @@ import fire
 import numpy as np
 import requests
 
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 

@@ -8,7 +8,7 @@ import fire
 import numpy as np
 
 from lmdeploy.serve.turbomind.chatbot import Chatbot
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 
 def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):

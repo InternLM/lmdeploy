@@ -27,14 +27,30 @@ permissions:
 jobs:
   cuda-118:
     runs-on: ubuntu-latest
-    container: openmmlab/lmdeploy-builder:cuda11.8
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Build
-        run: |
-          source /opt/conda/bin/activate
-          conda activate py38
-          mkdir build && cd build
-          bash ../generate.sh
-          make -j$(nproc) && make install
+        uses: addnab/docker-run-action@v3
+        with:
+          image: openmmlab/lmdeploy-builder:cuda11.8
+          options: -v ${{ github.workspace }}:/work --cpus=1.8
+          run: |
+            cd /work
+            source /opt/conda/bin/activate
+            conda activate py38
+            mkdir build && cd build
+            bash ../generate.sh
+            make -j$(nproc) && make install

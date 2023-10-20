@@ -448,6 +448,7 @@ If a question does not make any sense, or is not factually coherent, explain why
         return ret
 
 
+@MODELS.register_module(name='qwen-14b')
 @MODELS.register_module(name='qwen-7b')
 class Qwen7BChat(BaseModel):
     """Chat template for Qwen-7B-Chat."""
@@ -572,6 +573,73 @@ class CodeLlama(Llama2):
             f'codellama message2prompt only supports chat mode ' \
             f'but got {self.cap} mode'
         return super().messages2prompt(messages, sequence_start)
+
+
+@MODELS.register_module(name='solar')
+class SOLAR(BaseModel):
+    """Chat template of SOLAR model.
+
+    `https://huggingface.co/upstage/SOLAR-0-70b-16bit`
+    """
+
+    def __init__(self,
+                 b_sys='### System:\n',
+                 e_sys='\n\n',
+                 boh='### User:\n',
+                 eoh='\n\n',
+                 boa='### Assistant:\n',
+                 eoa='\n\n',
+                 system='',
+                 session_len=2048,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.b_sys = b_sys
+        self.e_sys = e_sys
+        self.boh = boh
+        self.eoh = eoh
+        self.boa = boa
+        self.eoa = eoa
+        self.system = system
+        self.session_len = session_len
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'{self.b_sys}{self.system}{self.e_sys}' \
+                   f'{self.boh}{prompt}{self.eoh}{self.boa}'
+
+        return f'{self.boh}{prompt} {self.eoh}{self.boa}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'{self.b_sys}{system}{self.e_sys}'
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            ret += f'{self.boh}{user}{self.eoh}{self.boa}'
+            if assistant:
+                ret += f'{assistant}{self.eoa}'
+        return ret
 
 
 def main(model_name: str = 'test'):

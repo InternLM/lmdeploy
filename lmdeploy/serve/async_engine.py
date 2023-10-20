@@ -30,7 +30,7 @@ class AsyncEngine:
 
     def __init__(self, model_path, instance_num=32, tp=1) -> None:
         from lmdeploy import turbomind as tm
-        from lmdeploy.turbomind.tokenizer import Tokenizer
+        from lmdeploy.tokenizer import Tokenizer
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
@@ -156,6 +156,11 @@ class AsyncEngine:
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),
                                                      offset=response_size)
+                    # utf-8 char at the end means it's a potential unfinished
+                    # byte sequence, continue to concate it with the next
+                    # sequence and decode them together
+                    if response.endswith('�'):
+                        continue
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.steps[str(session_id)],
@@ -249,6 +254,11 @@ class AsyncEngine:
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),
                                                      offset=response_size)
+                    # utf-8 char at the end means it's a potential unfinished
+                    # byte sequence, continue to concate it with the next
+                    # sequence and decode them together
+                    if response.endswith('�'):
+                        continue
                     # response, history len, input len, generation len
                     yield GenOut(response, self.steps[str(session_id)],
                                  len(input_ids), tokens, finish_reason)

@@ -11,6 +11,7 @@ from pathlib import Path
 import fire
 import safetensors
 import torch
+from safetensors.torch import load_file
 from sentencepiece import SentencePieceProcessor
 
 import lmdeploy
@@ -106,6 +107,35 @@ def tokenizer_info_qwen(model_dir: str):
     bos_id = 0
     eos_id = 151643
     return n_words, bos_id, eos_id
+
+
+def load_checkpoint(model_path):
+    """Load checkpoint files into torch format.
+
+    Args:
+        model_path (str): the checkpoint folder
+    Returns:
+        Dict[str, torch.Tensor]: weight in torch format
+    """
+    suffixes = ['.safetensors', '.bin']
+    for suffix in suffixes:
+        files = [
+            file for file in os.listdir(model_path) if file.endswith(suffix)
+        ]
+        if len(files) > 0:
+            break
+
+    assert len(files) > 0, f'could not find checkpoints in {model_path}'
+    files = sorted(files)
+    print(files)
+    params = {}
+    for file in files:
+        if file.endswith('.bin'):
+            tmp = torch.load(osp.join(model_path, file), map_location='cpu')
+        else:
+            tmp = load_file(osp.join(model_path, file))
+        params.update(tmp)
+    return params
 
 
 def export(model_name: str,
@@ -276,7 +306,7 @@ def deploy_llama(model_name: str, model_path: str, tokenizer_path: str,
         shutil.copy(tokenizer_path,
                     osp.join(triton_models_path, 'tokenizer/tokenizer.model'))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -405,7 +435,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -437,14 +467,7 @@ def deploy_hf(model_name: str, model_path: str, tokenizer_path: str,
     _qweight = 'weight'
     _suffixes = [_qweight, 'bias']
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
-    _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _params = load_checkpoint(model_path)
 
     def get_tensor(name):
         """return tensor according its name."""
@@ -578,7 +601,7 @@ def deploy_awq(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -808,7 +831,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
                 shutil.copy(json_path,
                             osp.join(triton_models_path, 'tokenizer', _file))
         with get_package_root_path() as root_path:
-            shutil.copy(osp.join(root_path, 'turbomind/tokenizer.py'),
+            shutil.copy(osp.join(root_path, 'tokenizer.py'),
                         osp.join(triton_models_path, 'tokenizer'))
     else:
         print(f'tokenizer model {tokenizer_path} does not exist')
@@ -837,14 +860,7 @@ def deploy_qwen(model_name: str, model_path: str, tokenizer_path: str,
     # convert weights from hf to turbomind
     model_params = {}
 
-    _files = [file for file in os.listdir(model_path) if file.endswith('.bin')]
-    _files = sorted(_files)
-    print(_files)
-
-    _params = {}
-    for _file in _files:
-        _tmp = torch.load(osp.join(model_path, _file), map_location='cpu')
-        _params.update(_tmp)
+    _params = load_checkpoint(model_path)
 
     def get_tensor(name, trans=True):
         """return a transposed tensor according its name."""
@@ -956,7 +972,7 @@ def main(model_name: str,
             META's llama format, and 'hf' means huggingface format
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
-        tp (int): the number of GPUs used for tensor parallelism
+        tp (int): the number of GPUs used for tensor parallelism, should be 2^n
         quant_path (str): path of the quantized model, which can be None
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
@@ -965,8 +981,10 @@ def main(model_name: str,
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
 
+    assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
+
     if model_format is None:
-        model_format = 'qwen' if model_name == 'qwen-7b' else 'hf'
+        model_format = 'qwen' if model_name.startswith('qwen') else 'hf'
 
     if model_format not in supported_formats:
         print(f'the model format "{model_format}" is not supported. '
