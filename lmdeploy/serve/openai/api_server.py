@@ -19,8 +19,8 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
     CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
-    EmbeddingsRequest, EmbeddingsResponse, ErrorResponse, GenerateRequest,
-    GenerateResponse, ModelCard, ModelList, ModelPermission, UsageInfo)
+    EmbeddingsRequest, ErrorResponse, GenerateRequest, GenerateResponse,
+    ModelCard, ModelList, ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -387,32 +387,16 @@ async def completions_v1(request: CompletionRequest,
 async def create_embeddings(request: EmbeddingsRequest,
                             raw_request: Request = None):
     """Creates embeddings for the text."""
-    return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by now.')
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    embedding = await VariableInterface.async_engine.get_embeddings(
-        request.input)
-    data = [{'object': 'embedding', 'embedding': embedding, 'index': 0}]
-    token_num = len(embedding)
-    return EmbeddingsResponse(
-        data=data,
-        model=request.model,
-        usage=UsageInfo(
-            prompt_tokens=token_num,
-            total_tokens=token_num,
-            completion_tokens=None,
-        ),
-    ).dict(exclude_none=True)
+    return create_error_response(HTTPStatus.BAD_REQUEST,
+                                 'Unsupported by turbomind.')
 
 
 @app.post('/generate',
           tags=['deprecated'],
           description='please use /v1/chat/interactive')
 @app.post('/v1/chat/interactive')
-async def interactive_completions(request: GenerateRequest,
-                                  raw_request: Request = None):
+async def chat_interactive_v1(request: GenerateRequest,
+                              raw_request: Request = None):
     """Generate completion for the request.
 
     - On interactive mode, the chat history is kept on the server. Please set
@@ -441,7 +425,7 @@ async def interactive_completions(request: GenerateRequest,
     - ignore_eos (bool): indicator for ignoring eos
     """
     if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+        request.session_id = random.randint(10087, 23333)
 
     async_engine = VariableInterface.async_engine
     sequence_start = async_engine.steps.get(str(request.session_id), 0) == 0
