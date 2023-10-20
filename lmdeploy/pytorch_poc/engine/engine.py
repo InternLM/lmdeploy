@@ -466,6 +466,7 @@ class Engine:
     ) -> None:
 
         self.tp = tp
+        self.gpu_count = tp
         hf_config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(hf_config)
@@ -646,7 +647,7 @@ class Engine:
             token_ids = [token_ids]
 
         seq_length = [len(tokens) for tokens in token_ids]
-        q_start_loc = torch.tensor([0]+seq_length).cumsum(0)[:-1].to(device)
+        q_start_loc = torch.tensor([0] + seq_length).cumsum(0)[:-1].to(device)
         max_seq_len = max(seq_length)
 
         input_ids = list(itertools.chain(*token_ids))
@@ -1094,19 +1095,18 @@ class EngineInstance:
                            dict(session_id=session_id))
             self.owned_sessions.append(session_id)
 
-    def stream_infer(
-            self,
-            session_id: int,
-            prompt_token_ids: List[int] = None,
-            request_output_len: int = None,
-            step: int = 0,
-            sampling_param: SamplingParam = SamplingParam(),
-    ):
+    def stream_infer(self,
+                     session_id: int,
+                     input_ids: List[int] = None,
+                     request_output_len: int = None,
+                     step: int = 0,
+                     sampling_param: SamplingParam = SamplingParam(),
+                     **kwargs):
         """Send stream inference request.
 
         Args:
             session_id (int): The session id.
-            prompt_token_ids (List[int]): The input token ids.
+            input_ids (List[int]): The input token ids.
             request_output_len (int): The max output length of this request.
             step (int): No use for now.
             sampling_param (SamplingParam): The sampling param of the output.
@@ -1119,7 +1119,7 @@ class EngineInstance:
         self._try_add_session(session_id)
         req_id = self.req_count
         msg = dict(
-            token_ids=prompt_token_ids,
+            token_ids=input_ids,
             session_id=session_id,
             max_request_output_len=request_output_len,
             req_id=req_id,
