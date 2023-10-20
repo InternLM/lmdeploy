@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-import random
 import threading
 import time
 from functools import partial
@@ -23,6 +22,13 @@ THEME = gr.themes.Soft(
 
 enable_btn = gr.Button.update(interactive=True)
 disable_btn = gr.Button.update(interactive=False)
+
+
+# a IO interface mananing variables
+class InterFace:
+    async_engine: AsyncEngine = None  # for run_local
+    restful_api_url: str = None  # for run_restful
+    global_session_id: int = 0
 
 
 def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
@@ -144,12 +150,6 @@ def run_server(triton_server_addr: str,
         server_port=server_port,
         server_name=server_name,
     )
-
-
-# a IO interface mananing variables
-class InterFace:
-    async_engine: AsyncEngine = None  # for run_local
-    restful_api_url: str = None  # for run_restful
 
 
 def chat_stream_restful(
@@ -377,7 +377,7 @@ async def chat_stream_local(
 
 
 async def reset_local_func(instruction_txtbox: gr.Textbox,
-                           state_chatbot: gr.State, session_id: int):
+                           state_chatbot: Sequence, session_id: int):
     """reset the session.
 
     Args:
@@ -394,8 +394,8 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
                                                      sequence_start=False,
                                                      sequence_end=True):
         pass
-
-    new_session_id = random.randint(0, 100000)
+    InterFace.global_session_id += 1
+    new_session_id = InterFace.global_session_id
     return (
         state_chatbot,
         state_chatbot,
@@ -501,7 +501,8 @@ def run_local(model_path: str,
                         cancels=[send_event])
 
         def init():
-            new_session_id = random.randint(0, 100000)
+            InterFace.global_session_id += 1
+            new_session_id = InterFace.global_session_id
             return [new_session_id, new_session_id]
 
         demo.load(init,
