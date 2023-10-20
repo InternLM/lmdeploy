@@ -480,10 +480,17 @@ class Engine:
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
         if 'falcon' in model_path:
+            if hf_config.new_decoder_architecture:
+                # 40b-instruct, GQA
+                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+                kv_dim *= hf_config.num_kv_heads
+                kv_head = hf_config.num_kv_heads
             if hf_config.multi_query:
+                # 7b-instruct, MQA
                 kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
                 kv_head = 1
             else:
+                # rw-1b, MHA
                 kv_dim = hf_config.hidden_size
                 kv_head = hf_config.num_attention_heads
             model_config = ModelConfig(
