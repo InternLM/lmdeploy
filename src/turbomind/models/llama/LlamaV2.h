@@ -202,10 +202,9 @@ private:
     DynamicDecodeLayer<float>* dynamic_decode_layer_{};
 
     const int                      step_length_;
-    std::unique_ptr<LlamaBatch<T>> batch_;
     std::shared_ptr<SharedState>   shared_state_;
-
-    ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
+    ffi_api_lock_ctrl_t            ffi_lock_;
+    std::unique_ptr<LlamaBatch<T>> batch_;
 };
 
 }  // namespace turbomind
