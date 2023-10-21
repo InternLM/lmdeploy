@@ -30,7 +30,7 @@ BlockManager::BlockManager(size_t block_size, double block_count, int chunk_size
         chunk_size_ = chunk_size;
     }
 
-    TM_LOG_INFO("[BlockManager] block_size = %d", block_size_);
+    TM_LOG_INFO("[BlockManager] block_size = %lu MB", (unsigned long)block_size_ >> 20);
     TM_LOG_INFO("[BlockManager] max_block_count = %d", max_block_count_);
     TM_LOG_INFO("[BlockManager] chunk_size = %d", chunk_size_);
 
