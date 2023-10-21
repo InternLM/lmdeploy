@@ -574,7 +574,7 @@ __global__ void updateOutput(int**      request_output_ids_ptrs,
 
     output_ids += max_session_len * batch_id;
 
-    const int seqlen     = sequence_lengths[batch_id];
+    const int seqlen     = sequence_lengths[batch_id] + (int)token_generated;
     const int output_len = min(seqlen, request_output_ids_lens[batch_id]);
 
     for (int i = threadIdx.x; i < output_len; i += blockDim.x) {
