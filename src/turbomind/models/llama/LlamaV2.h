@@ -104,8 +104,11 @@ public:
 private:
     friend class Batch;
 
-    void
-    initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, bool use_context_fmha, int quant_policy);
+    void initialize(const LlamaAttentionParams& attn_params,
+                    size_t                      kv_head_num,
+                    bool                        use_context_fmha,
+                    int                         cache_block_seq_len,
+                    int                         quant_policy);
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 

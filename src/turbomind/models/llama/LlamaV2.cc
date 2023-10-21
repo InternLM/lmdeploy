@@ -136,7 +136,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     batch_ = std::make_unique<LlamaBatch<T>>(
         max_batch_size, max_context_token_num, session_len, std::move(sequence_manager), this);
 
-    initialize(attn_params, kv_head_num, use_context_fmha, quant_policy);
+    initialize(attn_params, kv_head_num, use_context_fmha, cache_block_seq_len, quant_policy);
 
     /// TODO: decouple Llama model and batch inference
     batch_->Start();
@@ -154,6 +154,7 @@ template<typename T>
 void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                             size_t                      kv_head_num,
                             bool                        use_context_fmha,
+                            int                         cache_block_seq_len,
                             int                         quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -171,6 +172,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                                   allocator_,
                                                   is_free_buffer_after_forward_,
                                                   use_context_fmha,
+                                                  cache_block_seq_len,
                                                   quant_policy);
 
     decoder_ = new LlamaDecoder<T>(head_num_,
@@ -185,6 +187,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                    cublas_wrapper_,
                                    allocator_,
                                    is_free_buffer_after_forward_,
+                                   cache_block_seq_len,
                                    quant_policy);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,

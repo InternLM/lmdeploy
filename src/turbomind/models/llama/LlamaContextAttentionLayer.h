@@ -45,6 +45,7 @@ public:
                                IAllocator*          allocator,
                                bool                 is_free_buffer_after_forward,
                                bool                 use_fmha,
+                               int                  cache_block_seq_len,
                                int                  quant_policy):
         head_num_(head_num),
         size_per_head_(size_per_head),
@@ -58,7 +59,7 @@ public:
         cublas_wrapper_(cublas_wrapper),
         linear_(cublas_wrapper, stream),
         allocator_(allocator),
-        kv_cache_block_len_(128), /// 
+        kv_cache_block_len_(cache_block_seq_len),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
         use_fmha_(use_fmha),
         quant_policy_(quant_policy)

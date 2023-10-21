@@ -40,7 +40,11 @@ protected:
     void allocateBuffer(size_t batch_size, size_t num_token, size_t max_q_len, size_t max_kv_len);
     void freeBuffer() override;
 
-    void initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, bool use_fmha, int quant_policy);
+    void initialize(const LlamaAttentionParams& attn_params,
+                    size_t                      kv_head_num,
+                    bool                        use_fmha,
+                    int                         cache_block_seq_len,
+                    int                         quant_policy);
 
     size_t head_num_;
     size_t size_per_head_;
@@ -94,6 +98,7 @@ public:
                         IAllocator*                 allocator,
                         bool                        is_free_buffer_after_forward,
                         bool                        use_fmha,
+                        int                         cache_block_seq_len,
                         int                         quant_policy);
 
     ~LlamaContextDecoder() override;
