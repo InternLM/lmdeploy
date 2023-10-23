@@ -98,12 +98,28 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     const int layer_id = input_tensors->getVal<int>("layer_id");
 
-    // const int step        = input_tensors->getVal<int>("step");
+    // const int step = input_tensors->getVal<int>("step");
     // const int step_1 = step - 1;
 
     const int batch_size = input_tensors->at("input_query").shape[0];
 
     allocateBuffer(batch_size);
+
+    // std::vector<int> seqlens(batch_size);
+    // check_cuda_error(
+    //     cudaMemcpyAsync(seqlens.data(), sequence_lengths_data, sizeof(int) * batch_size, cudaMemcpyDefault,
+    //     stream_));
+    // check_cuda_error(cudaStreamSynchronize(stream_));
+
+    // for (int i = 0; i < batch_size; ++i) {
+    //     if (gSequenceIds(i) == 1) {
+    //         Compare((T*)input_query_data + hidden_units_ * i,
+    //                 hidden_units_,
+    //                 Concat("query", gSequenceIds(i), seqlens[i], layer_id),
+    //                 compare_mode,
+    //                 stream_);
+    //     }
+    // }
 
     {
         NvtxScope scope("qkv_gemm");
@@ -171,6 +187,16 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         NvtxScope scope("decoder_multihead_attention");
         DispatchDecoderMultiheadAttention<T>(params);
     }
+
+    // for (int i = 0; i < batch_size; ++i) {
+    //     if (gSequenceIds(i) == 1) {
+    //         Compare((T*)context_buf_ + hidden_units_ * i,
+    //                 hidden_units_,
+    //                 Concat("context_buf", gSequenceIds(i), seqlens[i], layer_id),
+    //                 compare_mode,
+    //                 stream_);
+    //     }
+    // }
 
     {
         NvtxScope scope("o_gemm");

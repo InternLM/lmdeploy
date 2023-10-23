@@ -77,4 +77,6 @@ struct NvtxScope {
     }
 };
 
+int64_t& gSequenceIds(int batch_idx);
+
 }  // namespace turbomind

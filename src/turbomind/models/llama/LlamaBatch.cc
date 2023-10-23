@@ -813,6 +813,11 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
                         (int)state_->h_finished[i]);
         }
     }
+
+    // for (int i = 0; i < batch_size; ++i) {
+    //     gSequenceIds(i) = state_->requests[i]->id;
+    // }
+
     return GenerationState{max_context_len, start_step, sum_seq_len, max_seq_len};
 }
 
