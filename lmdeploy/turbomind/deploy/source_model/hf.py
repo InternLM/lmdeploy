@@ -25,29 +25,37 @@ class HfWeightFileMgr(BaseWeightFileMgr):
         self.init_layer_id()
 
     def init_layer_id(self):
+        """Get start/end transformer layer id."""
         super().init_layer_id()
 
     def clean_up(self, last: bool) -> None:
+        """Clean up unused params."""
         super().clean_up(last)
 
     @property
     def start_layer_id(self):
+        """Get start transformer layer id."""
         return self._start_layer_id
 
     @property
     def end_layer_id(self):
+        """Get end transformer layer id."""
         return self._end_layer_id
 
     def tok_embeddings(self):
+        """Get embeddings."""
         return self.params.get('model.embed_tokens.weight', None)
 
     def norm_weight(self):
+        """Get norm."""
         return self.params.get('model.norm.weight', None)
 
     def output_weight(self):
+        """Get output."""
         return self.params.get('lm_head.weight', None)
 
     def attn(self, i: int):
+        """Get q, k, v, o weight for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params[
@@ -56,6 +64,7 @@ class HfWeightFileMgr(BaseWeightFileMgr):
         return (*result, )
 
     def attn_bias(self, i: int):
+        """Get q, k, v, o bias for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
@@ -64,15 +73,19 @@ class HfWeightFileMgr(BaseWeightFileMgr):
         return (*result, )
 
     def attn_zero(self, i: int):
+        """Get q, k, v, o zero point for layer i."""
         return (None, ) * 4
 
     def attn_scale(self, i: int):
+        """Get q, k, v, o scale for layer i."""
         return (None, ) * 4
 
     def attn_norm(self, i: int):
+        """Get attn norm for layer i."""
         return self.params[f'model.layers.{i}.input_layernorm.weight']
 
     def ffn(self, i: int):
+        """Get ffn weight for layer i."""
         result = []
         for key in ['gate', 'down', 'up']:
             tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.weight']
@@ -80,12 +93,15 @@ class HfWeightFileMgr(BaseWeightFileMgr):
         return (*result, )
 
     def ffn_zero(self, i: int):
+        """Get ffn zero point for layer i."""
         return (None, ) * 3
 
     def ffn_scale(self, i: int):
+        """Get ffn scale for layer i."""
         return (None, ) * 3
 
     def ffn_norm(self, i: int):
+        """Get ffn norm for layer i."""
         return self.params[f'model.layers.{i}.post_attention_layernorm.weight']
 
 
@@ -100,6 +116,7 @@ class HfModel(BaseInputModel):
         self.ckpt_files = self.get_ckpt()
 
     def get_ckpt(self):
+        """Get weight files."""
         suffixes = ['.safetensors', '.bin']
         files = []
         for suffix in suffixes:
@@ -114,9 +131,11 @@ class HfModel(BaseInputModel):
 
     @property
     def nmgrs(self):
+        """Get number of checkpoint."""
         return len(self.ckpt_files)
 
     def get_mgrs(self):
+        """Conctruct all WeightFileMgr."""
         assert self.nmgrs > 0, \
             f'could not find checkpoints in {self.model_path}'
         unused_params = {}
@@ -135,6 +154,7 @@ class HfModel(BaseInputModel):
             ret.clean_up(True)
 
     def tokenizer_info(self):
+        """Read tokenizer info."""
         assert osp.isfile(self.tokenizer_path), self.tokenizer_path
         try:
             tk_model = SentencePieceProcessor(model_file=self.tokenizer_path)
@@ -147,6 +167,7 @@ class HfModel(BaseInputModel):
         return n_words, bos_id, eos_id
 
     def model_info(self):
+        """Read model info."""
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             model_arg = json.load(f)

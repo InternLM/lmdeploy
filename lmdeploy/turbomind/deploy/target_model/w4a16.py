@@ -66,6 +66,7 @@ def tp_m_s4(x: torch.Tensor, tp: int):
 
 
 def get_cuda_tensor(tensors):
+    """Get cuda tensor."""
     result = map(lambda x: x.cuda() if x is not None else x, tensors)
     return (*result, )
 
@@ -82,6 +83,7 @@ class TurbomindW4A16Model(BaseOutputModel):
         super().__init__(input_model, cfg, to_file, out_dir)
 
     def get_config(self, cfg: TurbomindModelConfig):
+        """Get turbomind config."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
         model = MODELS.get(cfg.model_name)()
         final_cfg = cfg.__dict__
@@ -117,6 +119,7 @@ class TurbomindW4A16Model(BaseOutputModel):
         return TurbomindModelConfig.from_dict(final_cfg)
 
     def export_transformer_block(self, bin: BaseWeightFileMgr, i: int):
+        """Export transformer layer i."""
         group_size = self.cfg.group_size
         tp = self.cfg.tensor_para_size
         # attn

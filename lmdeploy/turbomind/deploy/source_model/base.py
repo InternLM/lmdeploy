@@ -171,5 +171,6 @@ class BaseInputModel(ABC):
         pass
 
     def bins(self) -> Iterator[BaseWeightFileMgr]:
+        """Get WeightFileMgr."""
         for mgr in self.get_mgrs():
             yield mgr

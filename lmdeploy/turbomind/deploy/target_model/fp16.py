@@ -13,6 +13,7 @@ from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
 
 
 def transpose_tensor(input: List[torch.Tensor]):
+    """Transpose tensor."""
     output = [x.cuda().t() for x in input]
     return output
 
@@ -29,6 +30,7 @@ class TurbomindModel(BaseOutputModel):
         super().__init__(input_model, cfg, to_file, out_dir)
 
     def get_config(self, cfg: TurbomindModelConfig):
+        """Get turbomind config."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
         model = MODELS.get(cfg.model_name)()
         final_cfg = cfg.__dict__
@@ -65,6 +67,7 @@ class TurbomindModel(BaseOutputModel):
         return TurbomindModelConfig.from_dict(final_cfg)
 
     def export_transformer_block(self, bin: BaseWeightFileMgr, i: int):
+        """Export transformer layer i."""
         assert bin.start_layer_id <= i < bin.end_layer_id
         tp = self.cfg.tensor_para_size
         # attn

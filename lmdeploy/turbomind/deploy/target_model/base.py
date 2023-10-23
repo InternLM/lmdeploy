@@ -48,6 +48,7 @@ class TurbomindModelConfig:
 
     @classmethod
     def from_dict(cls, env, allow_none=False):
+        """Construct from dict."""
         params = inspect.signature(cls).parameters
         used = {k: v for k, v in env.items() if k in params and v is not None}
         if not allow_none:
@@ -62,6 +63,7 @@ class TurbomindModelConfig:
 
     @property
     def valid(self):
+        """Check if cfg is valid."""
         for _, v in self.__dict__.items():
             if v is None:
                 return False

@@ -12,6 +12,7 @@ from lmdeploy.turbomind.deploy.source_model.base import (INPUT_MODELS,
 
 
 def reverse_permute(x: torch.Tensor):
+    """reverse permute to hf format."""
     SIZE_PER_HEAD = 128
     if x.shape[-1] > 1:
         dim = x.shape[-1]
@@ -36,9 +37,11 @@ class LlamaWeightFileMgr(BaseWeightFileMgr):
         self.params = self.load_model(model_path)
 
     def init_layer_id(self):
+        """Empty."""
         pass
 
     def load_model(self, model_path):
+        """Load all parameters."""
         checkpoints = []
         for pattern in ['*.pth', '*.pt']:
             checkpoints += sorted(Path(model_path).glob(pattern))
@@ -99,26 +102,33 @@ class LlamaWeightFileMgr(BaseWeightFileMgr):
         return model_params
 
     def clean_up(self, last: bool) -> None:
+        """Clean up unused params."""
         self.params.clear()
 
     @property
     def start_layer_id(self):
+        """Get start transformer layer id."""
         return self._start_layer_id
 
     @property
     def end_layer_id(self):
+        """Get end transformer layer id."""
         return self._end_layer_id
 
     def tok_embeddings(self):
+        """Get embeddings."""
         return self.params.get('tok_embeddings.weight')
 
     def norm_weight(self):
+        """Get norm."""
         return self.params.get('norm.weight')
 
     def output_weight(self):
+        """Get output."""
         return self.params.get('output.weight')
 
     def attn(self, i: int):
+        """Get q, k, v, o weight for layer i."""
         result = []
         for key in ['wq', 'wk', 'wv', 'wo']:
             tensor = self.params.pop(f'layers.{i}.attention.{key}.weight')
@@ -127,6 +137,7 @@ class LlamaWeightFileMgr(BaseWeightFileMgr):
         return (*result, )
 
     def attn_bias(self, i: int):
+        """Get q, k, v, o bias for layer i."""
         result = []
         for key in ['wq', 'wk', 'wv', 'wo']:
             tensor = self.params.pop(f'layers.{i}.attention.{key}.bias', None)
@@ -135,15 +146,19 @@ class LlamaWeightFileMgr(BaseWeightFileMgr):
         return (*result, )
 
     def attn_zero(self, i: int):
+        """Get q, k, v, o zero point for layer i."""
         return (None, ) * 4
 
     def attn_scale(self, i: int):
+        """Get q, k, v, o scale for layer i."""
         return (None, ) * 4
 
     def attn_norm(self, i: int):
+        """Get attn norm for layer i."""
         return self.params.pop(f'layers.{i}.attention_norm.weight')
 
     def ffn(self, i: int):
+        """Get ffn weight for layer i."""
         result = []
         for key in ['w1', 'w2', 'w3']:
             tensor = self.params.pop(f'layers.{i}.feed_forward.{key}.weight')
@@ -151,12 +166,15 @@ class LlamaWeightFileMgr(BaseWeightFileMgr):
         return (*result, )
 
     def ffn_zero(self, i: int):
+        """Get ffn zero point for layer i."""
         return (None, ) * 3
 
     def ffn_scale(self, i: int):
+        """Get ffn scale for layer i."""
         return (None, ) * 3
 
     def ffn_norm(self, i: int):
+        """Get ffn norm for layer i."""
         return self.params.pop(f'layers.{i}.ffn_norm.weight')
 
 
@@ -169,9 +187,11 @@ class LlamaModel(BaseInputModel):
 
     @property
     def nmgrs(self):
+        """Get number of checkpoint."""
         return 1
 
     def get_mgrs(self):
+        """Conctruct all BaseWeightFileMgr."""
         end_layer_id = self.model_info()['num_layer']
         try:
             for _ in range(1):
@@ -182,6 +202,7 @@ class LlamaModel(BaseInputModel):
             ret.clean_up(True)
 
     def tokenizer_info(self):
+        """Read tokenizer info."""
         assert osp.isfile(self.tokenizer_path), self.tokenizer_path
         sp_model = SentencePieceProcessor(model_file=self.tokenizer_path)
         # BOS / EOS token IDs
@@ -191,6 +212,7 @@ class LlamaModel(BaseInputModel):
         return n_words, bos_id, eos_id
 
     def model_info(self):
+        """Read model info."""
         params_path = osp.join(self.model_path, 'params.json')
         with open(params_path) as f:
             model_arg = json.load(f)

@@ -14,11 +14,13 @@ from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
 
 
 def get_package_root_path():
+    """Get lmdeploy root path."""
     import lmdeploy
     return Path(lmdeploy.__file__).parent
 
 
 def guess_tokenizer_path(model_path: str):
+    """Guess tokenizer path if not given."""
     tokenizer_path = None
     candidate = ['tokenizer.model', 'qwen.tiktoken']
     for name in candidate:
@@ -31,6 +33,7 @@ def guess_tokenizer_path(model_path: str):
 
 
 def guess_model_format(model_name: str):
+    """Guess model format if not given."""
     model_format = 'qwen' if model_name.startswith('qwen') else 'hf'
     return model_format
 

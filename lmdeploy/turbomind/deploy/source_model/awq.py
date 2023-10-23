@@ -10,6 +10,7 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         super().__init__(new_params, unused_params)
 
     def attn(self, i: int):
+        """Get q, k, v, o qweight for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params[
@@ -18,6 +19,7 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         return (*result, )
 
     def attn_zero(self, i: int):
+        """Get q, k, v, o qzeros for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
@@ -26,6 +28,7 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         return (*result, )
 
     def attn_scale(self, i: int):
+        """Get q, k, v, o scales for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
@@ -34,6 +37,7 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         return (*result, )
 
     def ffn(self, i: int):
+        """Get ffn qweight for layer i."""
         result = []
         for key in ['gate_proj', 'down_proj', 'up_proj']:
             tensor = self.params[f'model.layers.{i}.mlp.{key}.qweight']
@@ -41,6 +45,7 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         return (*result, )
 
     def ffn_zero(self, i: int):
+        """Get ffn qzeros for layer i."""
         result = []
         for key in ['gate_proj', 'down_proj', 'up_proj']:
             tensor = self.params[f'model.layers.{i}.mlp.{key}.qzeros']
@@ -48,6 +53,7 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         return (*result, )
 
     def ffn_scale(self, i: int):
+        """Get ffn scales for layer i."""
         result = []
         for key in ['gate_proj', 'down_proj', 'up_proj']:
             tensor = self.params[f'model.layers.{i}.mlp.{key}.scales']
