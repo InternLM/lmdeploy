@@ -321,6 +321,7 @@ bool LlamaBatch<T>::Initialize()
             return sequences[idx]->status == Sequence::kActive;  // present status
         });
 
+        // all blocks are not enough to hold a single sequence
         FT_CHECK_WITH_INFO(active_end != idxs.begin(), "No enough blocks.");
 
         // move swap-ins to the back
@@ -364,7 +365,7 @@ bool LlamaBatch<T>::Initialize()
 
     const int batch_size = state_->active_size;
 
-    if (exchange || outcome.allocation) {
+    if (exchange || active_holes || outcome.allocation) {
         // Prepare intermediate buffers
         h_cu_block_counts_[0] = 0;
 
@@ -385,10 +386,10 @@ bool LlamaBatch<T>::Initialize()
             });
         }
 
-        if (1) {
-            std::vector cu_block_cnts(h_cu_block_counts_, h_cu_block_counts_ + batch_size + 1);
-            dbg(cu_block_cnts);
-        }
+        // if (1) {
+        //     std::vector cu_block_cnts(h_cu_block_counts_, h_cu_block_counts_ + batch_size + 1);
+        //     dbg(cu_block_cnts);
+        // }
         // dbg(std::vector(h_k_block_ptrs_, h_k_block_ptrs_ + h_cu_block_counts_[batch_size]));
         // dbg(std::vector(h_v_block_ptrs_, h_v_block_ptrs_ + h_cu_block_counts_[batch_size]));
         // dbg(h_cu_block_counts_[batch_size]);
@@ -418,7 +419,7 @@ void LlamaBatch<T>::CopyState(const std::pair<BatchState*, int> _src, const std:
     dst->h_finished[j]       = src->h_finished[i];
     dst->seq_len_limit[j]    = src->seq_len_limit[i];
     dst->sequences[j]        = src->sequences[i];
-    dst->is_swap_in[i]       = src->is_swap_in[i];
+    dst->is_swap_in[j]       = src->is_swap_in[i];
     dst->requests[j]         = std::move(src->requests[i]);
 
     Copy(src->output_ids + i * session_len_, src->h_context_length[i], dst->output_ids + j * session_len_);
@@ -972,6 +973,8 @@ void LlamaBatch<T>::ContextDecode()
     offsets.push_back(batch_size);
     max_context_cnts.push_back(max_context_count);
 
+    dbg(offsets, max_context_cnts);
+
     // context decode on sub-batches
     for (int k = 0; k < offsets.size() - 1; ++k) {
         int              first          = offsets[k];
@@ -1111,7 +1114,11 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
 
     // secure info needed by `Initialize()`
     Copy(finished_buf_, batch_size, state_->h_finished);
+
+    // invariant: context_length = sequence_length + 1
+    invokePlusScalar(sequence_lengths_, 1, batch_size, stream_);
     Copy(sequence_lengths_, batch_size, state_->h_context_length);
+    invokePlusScalar(sequence_lengths_, -1, batch_size, stream_);
 
     if constexpr (0) {
         std::unique_lock<std::mutex> lock;
