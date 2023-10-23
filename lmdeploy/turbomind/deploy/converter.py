@@ -12,8 +12,6 @@ from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
 from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
                                                          TurbomindModelConfig)
 
-supported_formats = ['llama', 'hf', 'awq', 'qwen']
-
 
 def get_package_root_path():
     import lmdeploy
@@ -80,6 +78,23 @@ def copy_triton_model_templates(_path: str):
         return None
 
 
+def copy_tokenizer(model_path: str, tokenizer_path: str,
+                   triton_models_path: str):
+    """Copy tokenizer."""
+    shutil.copy(
+        tokenizer_path,
+        osp.join(triton_models_path,
+                 osp.join('tokenizer', osp.basename(tokenizer_path))))
+    for _file in os.listdir(model_path):
+        if _file.endswith('.json') or _file.endswith('.py'):
+            json_path = osp.join(model_path, _file)
+            shutil.copy(json_path,
+                        osp.join(triton_models_path, 'tokenizer', _file))
+    with get_package_root_path() as root_path:
+        shutil.copy(osp.join(root_path, 'tokenizer.py'),
+                    osp.join(triton_models_path, 'tokenizer'))
+
+
 def pack_model_repository(workspace_path: str):
     """package the model repository.
 
@@ -135,13 +150,19 @@ def main(model_name: str,
 
     output_format = 'fp16'
 
+    # gusss input model format
+    if model_name.startswith('qwen') and model_format == 'awq':
+        model_format = 'qwen-awq'
     if model_format is None:
         model_format = guess_model_format(model_name)
-    if model_format not in supported_formats:
-        print(f'the model format "{model_format}" is not supported. '
-              f'The supported format are: {supported_formats}')
+    if model_format not in INPUT_MODELS.module_dict.keys():
+        print(
+            f'the model format "{model_format}" is not supported. '
+            f'The supported format are: {list(INPUT_MODELS.module_dict.keys())}'
+        )
         exit(-1)
 
+    # guess tokenizer path
     if tokenizer_path is None:
         tokenizer_path = guess_tokenizer_path(model_path)
 
@@ -155,17 +176,23 @@ def main(model_name: str,
         print('Can\'t copy triton model templates')
         exit(-1)
 
+    copy_tokenizer(model_path, tokenizer_path, triton_models_path)
+
     # turbomind config
     cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
     cfg.model_name = model_name
     cfg.tensor_para_size = tp
     cfg.rotary_embedding = cfg.size_per_head
     cfg.group_size = group_size
-    if model_format == 'awq':
+    if model_format.find('awq') != -1:
         cfg.weight_type = 'int4'
         output_format = 'w4a16'
 
     # convert
+    print('model_path', model_path)
+    print('tokenizer_path', tokenizer_path)
+    print('model_format', model_format)
+    print('output_format', output_format)
     weight_path = osp.join(triton_models_path, 'weights')
     input_model = INPUT_MODELS.get(model_format)(model_path, tokenizer_path)
     output_model = OUTPUT_MODELS.get(output_format)(input_model, cfg, True,
