@@ -14,21 +14,25 @@ LOG2 = math.log(2)
 
 @triton.jit
 def tl_pow(a, b):
+    """triton pow."""
     return tl.exp(b * tl.log(a))
 
 
 @triton.jit
 def tl_2pow(b):
+    """triton pow2."""
     return tl.exp(b * LOG2)
 
 
 @triton.jit
 def tl_log2(a):
+    """triton log2."""
     return tl.log(a) / LOG2
 
 
 @triton.jit
 def _get_interleave_power_of_2(i, n):
+    """get interleave power of 2."""
     start = -tl_2pow(3 - tl_log2(n))
     start = tl_2pow(start)
     ratio = start
@@ -37,6 +41,7 @@ def _get_interleave_power_of_2(i, n):
 
 @triton.jit
 def get_slope(i, n):
+    """get slope."""
     closest_power_of_2 = tl_2pow(tl_log2(n).to(tl.int32))
     if i < closest_power_of_2:
         return _get_interleave_power_of_2(i, closest_power_of_2)
@@ -77,6 +82,7 @@ def _fwd_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
+    """forward kernel."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     start_m = tl.program_id(2)

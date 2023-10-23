@@ -44,6 +44,7 @@ def _fwd_split_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
+    """first step kernel of split k attention."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     split_k_id = tl.program_id(2)
@@ -165,6 +166,7 @@ def _reduce_split_kernel(
     SPLIT_K: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
 ):
+    """second step kernel of split k attention."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
 
@@ -234,6 +236,7 @@ def _fwd_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
+    """paged attention kernel."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     start_m = tl.program_id(2)
