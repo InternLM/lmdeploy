@@ -156,10 +156,9 @@ def main(model_name: str,
     if model_format is None:
         model_format = guess_model_format(model_name)
     if model_format not in INPUT_MODELS.module_dict.keys():
-        print(
-            f'the model format "{model_format}" is not supported. '
-            f'The supported format are: {list(INPUT_MODELS.module_dict.keys())}'
-        )
+        supported_keys = list(INPUT_MODELS.module_dict.keys())
+        print(f'the model format "{model_format}" is not supported. '
+              f'The supported format are: {supported_keys}')
         exit(-1)
 
     # guess tokenizer path

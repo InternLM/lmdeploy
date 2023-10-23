@@ -101,6 +101,7 @@ class HfModel(BaseInputModel):
 
     def get_ckpt(self):
         suffixes = ['.safetensors', '.bin']
+        files = []
         for suffix in suffixes:
             files = [
                 file for file in os.listdir(self.model_path)
@@ -108,8 +109,6 @@ class HfModel(BaseInputModel):
             ]
             if len(files) > 0:
                 break
-        assert len(
-            files) > 0, f'could not find checkpoints in {self.model_path}'
         files = sorted(files)
         return files
 
@@ -118,6 +117,8 @@ class HfModel(BaseInputModel):
         return len(self.ckpt_files)
 
     def get_mgrs(self):
+        assert self.nmgrs > 0, \
+            f'could not find checkpoints in {self.model_path}'
         unused_params = {}
         try:
             for i, ckpt in enumerate(self.ckpt_files):
@@ -137,7 +138,7 @@ class HfModel(BaseInputModel):
         assert osp.isfile(self.tokenizer_path), self.tokenizer_path
         try:
             tk_model = SentencePieceProcessor(model_file=self.tokenizer_path)
-        except Exception as ex:
+        except Exception:
             tk_model = Tokenizer(self.model_path)
         # BOS / EOS token IDs
         n_words = tk_model.vocab_size
