@@ -6,12 +6,8 @@ from torch import Tensor
 
 
 @triton.jit
-def _sum_fn(x0, x1):
-    return x0 + x1
-
-
-@triton.jit
 def rms_norm_kernel(X, WEIGHT, OUT, eps, BLOCK_N: tl.constexpr):
+    """rms norm kernel."""
     prog_id = tl.program_id(0)
 
     w = tl.load(WEIGHT + tl.arange(0, BLOCK_N))
@@ -19,7 +15,7 @@ def rms_norm_kernel(X, WEIGHT, OUT, eps, BLOCK_N: tl.constexpr):
     x = tl.load(X + x_off)
     xf = x.to(tl.float32)
 
-    var = tl.reduce(xf * xf, 0, _sum_fn) * float(1 / BLOCK_N)
+    var = tl.sum(xf * xf, 0) * float(1 / BLOCK_N)
     sqrt = tl.sqrt(var + eps)
     out = xf / sqrt
     out = w * out.to(x.dtype)
