@@ -770,8 +770,9 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     // for
     for (int i = 0; i < batch_size; ++i) {
         h_seq_limit_len_[i] = state_->seq_len_limit[i] + (max_context_len - state_->h_context_length[i]);
-        // mask finished sequences
-        state_->h_finished[i] = max_context_len >= h_seq_limit_len_[i];
+        if (max_context_len >= h_seq_limit_len_[i]) {  // mask finished sequences
+            state_->h_finished[i] = true;
+        }
     }
     Copy(h_seq_limit_len_, batch_size, seq_limit_len_);
     Copy(state_->h_finished, batch_size, finished_buf_);
