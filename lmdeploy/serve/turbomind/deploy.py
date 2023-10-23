@@ -949,7 +949,10 @@ def deploy_qwen_awq(model_name: str, model_path: str, tokenizer_path: str,
 
     def get_tensor(name):
         """return tensor according its name."""
-        return _params[name].cuda().contiguous()
+        tensor = _params[name].cuda().contiguous()
+        if tensor.dtype == torch.float32:
+            tensor = tensor.half()
+        return tensor
 
     # import _turbomind as _tm
     # TODO: find another way import _turbomind
@@ -1049,6 +1052,8 @@ def deploy_qwen_awq(model_name: str, model_path: str, tokenizer_path: str,
 
         model_params[f'layers.{i}.attention.wo.qweight'] = o_qw
         model_params[f'layers.{i}.attention.wo.scales_zeros'] = o_sz
+        model_params[f'layers.{i}.attention.wo.bias'] = torch.zeros(
+            qkv_b.shape[-1] // 3, dtype=torch.float16)
 
         # ffn weights
         # ours: w2(silu(w1(x)) * w3(x))
@@ -1100,6 +1105,8 @@ def deploy_qwen_awq(model_name: str, model_path: str, tokenizer_path: str,
                   model_path,
                   triton_models_path,
                   tp,
+                  group_size=group_size,
+                  weight_type='int4',
                   max_position_embeddings=seq_length,
                   use_dynamic_ntk=use_dynamic_ntk,
                   use_logn_attn=use_logn_attn,
