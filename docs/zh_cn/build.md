@@ -21,14 +21,14 @@ cd lmdeploy # lmdeploy 源码根目录
 bash builder/manywheel/build_all_wheel.sh
 ```
 
-即可在 `builder/manywheel/cuda11.8_dist` 文件夹下，得到 lmdeploy 在 py3.8 - py3.11 下所有的 wheel 文件。
+即可在 `builder/manywheel/cuda11.8_dist` 文件夹下，得到 lmdeploy 在 py3.8 - py3.11 下所有的 wheel 文件。比如，
 
 ```text
 builder/manywheel/cuda11.8_dist/
-├── lmdeploy-0.0.11-cp310-cp310-manylinux2014_x86_64.whl
-├── lmdeploy-0.0.11-cp311-cp311-manylinux2014_x86_64.whl
-├── lmdeploy-0.0.11-cp38-cp38-manylinux2014_x86_64.whl
-└── lmdeploy-0.0.11-cp39-cp39-manylinux2014_x86_64.whl
+├── lmdeploy-0.0.12-cp310-cp310-manylinux2014_x86_64.whl
+├── lmdeploy-0.0.12-cp311-cp311-manylinux2014_x86_64.whl
+├── lmdeploy-0.0.12-cp38-cp38-manylinux2014_x86_64.whl
+└── lmdeploy-0.0.12-cp39-cp39-manylinux2014_x86_64.whl
 ```
 
 如果需要固定 python 版本的 wheel 文件，比如 py3.8，可以执行：
@@ -39,9 +39,9 @@ bash builder/manywheel/build_wheel.sh py38 manylinux2014_x86_64 cuda11.8 cuda11.
 
 wheel 文件存放在目录 `builder/manywheel/cuda11.8_dist` 下。
 
-在宿主机上，通过 `pip install` 安装和宿主机python版本一致的 wheel 文件后，即完成 lmdeploy 整个编译安装过程。
+在宿主机上，通过 `pip install` 安装和宿主机python版本一致的 wheel 文件，即完成 lmdeploy 整个编译安装过程。
 
-## 在 host 上编译安装（可选）
+## 在物理机上编译安装（可选）
 
 首先，请确保物理机环境的 gcc 版本不低于 9，可以通过`gcc --version`确认。
 
