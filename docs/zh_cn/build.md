@@ -12,15 +12,23 @@ git clone --depth=1 https://github.com/InternLM/lmdeploy
 
 ## 在 docker 内编译安装（强烈推荐）
 
-LMDeploy 提供了编译镜像 `openmmlab/lmdeploy-builder:cuda11.8` ~~和运行镜像 `openmmlab/lmdeploy:latest`。~~
+LMDeploy 提供了编译镜像 `openmmlab/lmdeploy-builder:cuda11.8`。使用之前，请确保 docker 已安装。
 
-~~前者用来编译 lmdeploy 并打包为 wheel 文件。后者用来运行 lmdeploy，对模型进行推理。~~
-
-只需运行以下命令，即可在 bui，得到 lmdeploy 在 py3.8 - py3.11 下所有的 wheel 文件。
+在 lmdeploy 源码的根目录下，运行以下命令：
 
 ```shell
 cd lmdeploy # lmdeploy 源码根目录
 bash builder/manywheel/build_all_wheel.sh
+```
+
+即可在 `builder/manywheel/cuda11.8_dist` 文件夹下，得到 lmdeploy 在 py3.8 - py3.11 下所有的 wheel 文件。
+
+```text
+builder/manywheel/cuda11.8_dist/
+├── lmdeploy-0.0.11-cp310-cp310-manylinux2014_x86_64.whl
+├── lmdeploy-0.0.11-cp311-cp311-manylinux2014_x86_64.whl
+├── lmdeploy-0.0.11-cp38-cp38-manylinux2014_x86_64.whl
+└── lmdeploy-0.0.11-cp39-cp39-manylinux2014_x86_64.whl
 ```
 
 如果需要固定 python 版本的 wheel 文件，比如 py3.8，可以执行：
@@ -29,7 +37,11 @@ bash builder/manywheel/build_all_wheel.sh
 bash builder/manywheel/build_wheel.sh py38 manylinux2014_x86_64 cuda11.8 cuda11.8_dist
 ```
 
-## 在 localhost 编译安装（可选）
+wheel 文件存放在目录 `builder/manywheel/cuda11.8_dist` 下。
+
+在宿主机上，通过 `pip install` 安装和宿主机python版本一致的 wheel 文件后，即完成 lmdeploy 整个编译安装过程。
+
+## 在 host 上编译安装（可选）
 
 首先，请确保物理机环境的 gcc 版本不低于 9，可以通过`gcc --version`确认。
 
