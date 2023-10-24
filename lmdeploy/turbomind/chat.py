@@ -73,7 +73,6 @@ def get_gen_param(cap,
 def main(model_path,
          session_id: int = 1,
          cap: str = 'chat',
-         sys_instruct: str = None,
          tp=1,
          stream_output=True,
          **kwargs):
@@ -85,8 +84,6 @@ def main(model_path,
         session_id (int): the identical id of a session
         cap (str): the capability of a model. For example, codellama has
             the ability among ['completion', 'infilling', 'chat', 'python']
-        sys_instruct (str): the content of 'system' role, which is used by
-            conversational model
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
         **kwarg (dict): other arguments for initializing model's chat template
@@ -100,9 +97,7 @@ def main(model_path,
     step = 0
     seed = random.getrandbits(64)
     model_name = tm_model.model_name
-    model = MODELS.get(model_name)(capability=cap, **kwargs) \
-        if sys_instruct is None else MODELS.get(model_name)(
-            capability=cap, system=sys_instruct, **kwargs)
+    model = MODELS.get(model_name)(capability=cap, **kwargs)
 
     print(f'session {session_id}')
     while True:
