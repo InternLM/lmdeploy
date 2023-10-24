@@ -4,12 +4,12 @@ from pathlib import Path
 
 import fire
 import torch
-from accelerate import (infer_auto_device_map, init_empty_weights,
-                        load_checkpoint_in_model)
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from accelerate import infer_auto_device_map, init_empty_weights
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lmdeploy.lite.quantization import CalibrationContext
 from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders
+from lmdeploy.pytorch.model import LoadWoInit
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -35,7 +35,7 @@ def calibrate(model: str,
     given dataset.
 
     Args:
-        model (str): The model to be loaded.
+        model (str): The name or path of the model to be loaded.
         calib_dataset (str, optional): The calibration dataset name.
             Defaults to 'c4'.
         calib_samples (int, optional): The number of samples for calibration.
@@ -47,6 +47,7 @@ def calibrate(model: str,
         device (str, optional): The device to be used for calculation.
             Defaults to 'cuda'.
     """
+    pretrained_model_name_or_path = model
 
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
@@ -55,8 +56,6 @@ def calibrate(model: str,
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-    hf_config = AutoConfig.from_pretrained(model, trust_remote_code=True)
-    checkpoint = hf_config._name_or_path
 
     with init_empty_weights():
         # Load model
@@ -78,7 +77,12 @@ def calibrate(model: str,
             device_map[name] = 'cpu'
         else:
             device_map[name] = 0
-    load_checkpoint_in_model(model, checkpoint, device_map)
+    with LoadWoInit():
+        model = AutoModelForCausalLM.from_pretrained(
+            pretrained_model_name_or_path,
+            torch_dtype=torch.float16,
+            trust_remote_code=True)
+        model.config.use_cache = False
 
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,

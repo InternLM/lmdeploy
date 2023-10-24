@@ -4,14 +4,14 @@ from pathlib import Path
 
 import fire
 import torch
-from accelerate import (infer_auto_device_map, init_empty_weights,
-                        load_checkpoint_in_model)
+from accelerate import infer_auto_device_map, init_empty_weights
 from torch import nn
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             quant_weights, smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
+from lmdeploy.pytorch.model import LoadWoInit
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -33,13 +33,12 @@ def auto_awq(model: str,
              w_sym: bool = False,
              w_group_size: int = 128,
              device: str = 'cuda'):
+    pretrained_model_name_or_path = model
 
     # Load tokenizer and configuration
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-    hf_config = AutoConfig.from_pretrained(model, trust_remote_code=True)
-    checkpoint = hf_config._name_or_path
 
     with init_empty_weights():
         # Load model
@@ -62,7 +61,12 @@ def auto_awq(model: str,
             device_map[name] = 'cpu'
         else:
             device_map[name] = 0
-    load_checkpoint_in_model(model, checkpoint, device_map)
+    with LoadWoInit():
+        model = AutoModelForCausalLM.from_pretrained(
+            pretrained_model_name_or_path,
+            torch_dtype=torch.float16,
+            trust_remote_code=True)
+        model.config.use_cache = False
 
     work_dir = Path(work_dir)
 
