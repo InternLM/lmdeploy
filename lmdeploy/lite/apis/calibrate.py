@@ -54,7 +54,9 @@ def calibrate(model: str,
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-    hf_config = AutoConfig.from_pretrained(model, trust_remote_code=True)
+    hf_config = AutoConfig.from_pretrained(model,
+                                           torch_dtype=torch.float16,
+                                           trust_remote_code=True)
     checkpoint = hf_config._name_or_path
 
     with init_empty_weights():
@@ -77,7 +79,10 @@ def calibrate(model: str,
             device_map[name] = 'cpu'
         else:
             device_map[name] = 0
-    load_checkpoint_in_model(model, checkpoint, device_map)
+    load_checkpoint_in_model(model,
+                             checkpoint,
+                             device_map,
+                             dtype=torch.float16)
 
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,

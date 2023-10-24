@@ -61,11 +61,14 @@ def auto_awq(model: str,
             device_map[name] = 'cpu'
         else:
             device_map[name] = 0
-    load_checkpoint_in_model(model, checkpoint, device_map)
+    load_checkpoint_in_model(model,
+                             checkpoint,
+                             device_map,
+                             dtype=torch.float16)
 
     work_dir = Path(work_dir)
 
-    act_scales = torch.load(work_dir / 'inputs_stats.pth')['absmean']
+    act_scales = torch.load(work_dir / 'inputs_stats.pth')['absmax']
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():
