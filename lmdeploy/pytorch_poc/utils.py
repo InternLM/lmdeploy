@@ -5,12 +5,18 @@ from inspect import Parameter, Signature
 from typing import Dict, Sequence
 
 import psutil
-import torch
+import pycuda.autoinit
+import pycuda.driver as drv
 
 
-def get_gpu_memory(gpu: int = 0) -> int:
-    """Returns the total memory of the GPU in bytes."""
-    return torch.cuda.get_device_properties(gpu).total_memory
+def get_gpu_memory(id: int = 0) -> int:
+    """Returns the free and total physical memory of the GPU in bytes."""
+    drv.init()
+    dev = drv.Device(id)
+    cxt = dev.make_context()
+    free, total = drv.mem_get_info()
+    cxt.pop()
+    return free, total
 
 
 def get_cpu_memory() -> int:

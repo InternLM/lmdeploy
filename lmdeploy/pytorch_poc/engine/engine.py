@@ -14,17 +14,12 @@ import torch.distributed as dist
 from torch import multiprocessing as mp
 from torch.distributed._tensor import DeviceMesh, Replicate, distribute_tensor
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.generation.logits_process import (LogitsProcessorList,
-                                                    TemperatureLogitsWarper,
-                                                    TopKLogitsWarper,
-                                                    TopPLogitsWarper)
+from transformers.generation.logits_process import (LogitsProcessorList, TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
 from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
-from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
-                                         SchedulerConfig)
-from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
-                                           SchedulerSequence, SchedulerSession)
+from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig, SchedulerConfig)
+from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam, SchedulerSequence, SchedulerSession)
 from lmdeploy.pytorch_poc.models import patch
 from lmdeploy.pytorch_poc.paging import Scheduler
 from lmdeploy.pytorch_poc.utils import get_gpu_memory
@@ -120,9 +115,7 @@ class ModelContext:
 
         # padding zero
         pad_sequence = torch.nn.utils.rnn.pad_sequence
-        block_offsets = [
-            torch.tensor(offset, device=device) for offset in block_offsets
-        ]
+        block_offsets = [torch.tensor(offset, device=device) for offset in block_offsets]
         block_offsets = pad_sequence(block_offsets, True)
         self.block_offsets = block_offsets
 
@@ -181,10 +174,8 @@ class ModelContext:
 
             assert 0 <= fill_token_num <= block_size
 
-            k_caches[block_id][token_offset:token_offset +
-                               fill_token_num] = k_state[:fill_token_num]
-            v_caches[block_id][token_offset:token_offset +
-                               fill_token_num] = v_state[:fill_token_num]
+            k_caches[block_id][token_offset:token_offset + fill_token_num] = k_state[:fill_token_num]
+            v_caches[block_id][token_offset:token_offset + fill_token_num] = v_state[:fill_token_num]
 
             # update offset
             seq_len = seq_len - fill_token_num
@@ -203,9 +194,7 @@ class ModelContext:
                 v_state = v_state[token_num:]
 
 
-def _update_cache_config(model_config: ModelConfig,
-                         cache_config: CacheConfig,
-                         gpu_id: int = 0):
+def _update_cache_config(model_config: ModelConfig, cache_config: CacheConfig, gpu_id: int = 0):
     """Update the gpu mem and cpu mem according to model info.
 
     Args:
@@ -215,11 +204,10 @@ def _update_cache_config(model_config: ModelConfig,
     """
     GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
-    reserved_mem = torch.cuda.memory_reserved(gpu_id)
-    gpu_mem = (get_gpu_memory(gpu_id) - reserved_mem) * GPU_MEM_PERCENT
+    gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
+    gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
     cpu_mem = SWAP_SPACE
-    cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config)
+    cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config)
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
@@ -270,14 +258,10 @@ def _tp_model_loop(
     error_type = None
 
     try:
-        config = AutoConfig.from_pretrained(
-            model_path, trust_remote_code=trust_remote_code)
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(config)
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(
-                config,
-                torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code)
+            model = AutoModelForCausalLM.from_config(config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code)
 
         try:
             torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
@@ -287,9 +271,7 @@ def _tp_model_loop(
             weight_map = torch_model_json['weight_map']
 
             checkpoints = list(set(weight_map.values()))
-            checkpoints = [
-                cached_file(model_path, ckpt) for ckpt in checkpoints
-            ]
+            checkpoints = [cached_file(model_path, ckpt) for ckpt in checkpoints]
         except Exception:
             logger.warning(f'load failed, try load from {WEIGHTS_NAME}.')
             checkpoints = [cached_file(model_path, WEIGHTS_NAME)]
@@ -302,10 +284,7 @@ def _tp_model_loop(
         )
 
         _update_cache_config(model_config, cache_config)
-        cache_engine = CacheEngine(cache_config,
-                                   model_config,
-                                   rank=rank,
-                                   world_size=world_size)
+        cache_engine = CacheEngine(cache_config, model_config, rank=rank, world_size=world_size)
     except Exception as e:
         error_code = 1
         error_type = e
@@ -336,10 +315,8 @@ def _tp_model_loop(
 
         if rank == 0:
             inputs, swap_in_map, swap_out_map = in_que.get()
-            input_tensors = dict((name, t) for name, t in inputs.items()
-                                 if name in input_tensor_names)
-            input_metas = dict((name, (t.shape, t.dtype))
-                               for name, t in input_tensors.items())
+            input_tensors = dict((name, t) for name, t in inputs.items() if name in input_tensor_names)
+            input_metas = dict((name, (t.shape, t.dtype)) for name, t in input_tensors.items())
             input_metas['block_offsets'] = inputs['block_offsets']
             input_metas['history_lengths'] = inputs['history_lengths']
 
@@ -352,16 +329,11 @@ def _tp_model_loop(
 
         if rank != 0:
             input_metas = objs[0]
-            input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1]))
-                                 for name, meta in input_metas.items()
-                                 if name in input_tensor_names)
+            input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1])) for name, meta in input_metas.items() if name in input_tensor_names)
 
         updated_inputs = dict()
         for name, t in input_tensors.items():
-            updated_inputs[name] = distribute_tensor(t,
-                                                     device_mesh=device_mesh,
-                                                     placements=[Replicate()
-                                                                 ]).to_local()
+            updated_inputs[name] = distribute_tensor(t, device_mesh=device_mesh, placements=[Replicate()]).to_local()
 
         inputs = updated_inputs
         inputs['block_offsets'] = input_metas['block_offsets']
@@ -413,11 +385,7 @@ def _tp_model_loop(
                 out_que.put((0, output['logits'].cpu()))
 
 
-def _start_tp_process(rank: int,
-                      world_size: int,
-                      func: Callable,
-                      args: List = None,
-                      kwargs: Dict = None):
+def _start_tp_process(rank: int, world_size: int, func: Callable, args: List = None, kwargs: Dict = None):
     """Start the tensor parallel process.
 
     Args:
@@ -467,19 +435,14 @@ class Engine:
 
         self.tp = tp
         self.gpu_count = tp
-        hf_config = AutoConfig.from_pretrained(
-            model_path, trust_remote_code=trust_remote_code)
+        hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
         torch_dtype = _get_torch_dtype(hf_config)
         self.torch_dtype = torch_dtype
 
         if scheduler_config is None:
-            scheduler_config = SchedulerConfig(max_batches=64,
-                                               max_session_len=2048,
-                                               max_request_output_len=512)
+            scheduler_config = SchedulerConfig(max_batches=64, max_session_len=2048, max_request_output_len=512)
         if cache_config is None:
-            cache_config = CacheConfig(block_size=64,
-                                       num_cpu_blocks=0,
-                                       num_gpu_blocks=0)
+            cache_config = CacheConfig(block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
         if 'falcon' in model_path:
             if hf_config.multi_query:
                 kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
@@ -497,8 +460,7 @@ class Engine:
             )
         elif 'chatglm' in model_path:
             model_config = ModelConfig(
-                hf_config.hidden_size // hf_config.num_attention_heads *
-                hf_config.multi_query_group_num,
+                hf_config.hidden_size // hf_config.num_attention_heads * hf_config.multi_query_group_num,
                 hf_config.num_layers,
                 hf_config.multi_query_group_num,
                 bos_token_id=hf_config.bos_token_id,
@@ -522,20 +484,15 @@ class Engine:
 
         if tp == 1:
             with LoadNoInit():
-                hf_model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    torch_dtype=torch_dtype,
-                    trust_remote_code=trust_remote_code)
+                hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code)
                 hf_model.eval()
 
-            self.patched_model = patch(
-                hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
+            self.patched_model = patch(hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
             _update_cache_config(model_config, cache_config)
 
             self.cache_engine = CacheEngine(cache_config, model_config)
-            logger.debug(
-                f'Initialize cache engine with {cache_config.num_gpu_blocks}'
-                f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+            logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+                         f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
         else:
             mp.set_start_method('spawn')
             self.tp_model_in_que = mp.Queue(5)
@@ -630,9 +587,7 @@ class Engine:
         """Add new message."""
         self.scheduler.add_sequence(message)
 
-    def _make_inputs(self,
-                     messages: List[SchedulerSequence],
-                     device: str = 'cuda'):
+    def _make_inputs(self, messages: List[SchedulerSequence], device: str = 'cuda'):
         """create model inputs from messages.
 
         Args:
@@ -653,17 +608,13 @@ class Engine:
         input_ids = list(itertools.chain(*token_ids))
         input_ids = torch.tensor(input_ids).to(device)
 
-        attention_mask = torch.tensor([
-            seq_len * [1] + (max_seq_len - seq_len) * [0]
-            for seq_len in seq_length
-        ]).to(device)
+        attention_mask = torch.tensor([seq_len * [1] + (max_seq_len - seq_len) * [0] for seq_len in seq_length]).to(device)
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids += position_ids.new_tensor(history_lengths).unsqueeze(-1)
         seq_length = torch.tensor(seq_length).to(device)
 
         block_tables = self.scheduler.get_block_tables(messages)
-        block_offsets = [[block.block_id for block in block_table]
-                         for block_table in block_tables]
+        block_offsets = [[block.block_id for block in block_table] for block_table in block_tables]
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -705,8 +656,7 @@ class Engine:
                 return True
 
         # check stop words
-        if (sampling_param.stop_words is not None
-                and next_token_id in sampling_param.stop_words):
+        if (sampling_param.stop_words is not None and next_token_id in sampling_param.stop_words):
             return True
 
         # check request_len
@@ -720,8 +670,7 @@ class Engine:
 
         return False
 
-    def _model_forward(self, inputs: Dict, swap_in_map: Dict[int, int],
-                       swap_out_map: Dict[int, int]):
+    def _model_forward(self, inputs: Dict, swap_in_map: Dict[int, int], swap_out_map: Dict[int, int]):
         """model forward.
 
         Args:
@@ -814,15 +763,11 @@ class Engine:
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         # gather output
-        sampling_params: List[SamplingParam] = [
-            msg.sampling_param for msg in running
-        ]
+        sampling_params: List[SamplingParam] = [msg.sampling_param for msg in running]
         seq_length = inputs['seq_length']
         accum_seq_length = inputs['seq_length'].cumsum(0)
         logits = logits.cuda()
-        split_logits = [
-            logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
-        ]
+        split_logits = [logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)]
 
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
@@ -876,9 +821,7 @@ class Engine:
             for session_id, out in outputs.items():
                 if session_id not in ret_tokens:
                     # TODO: check if req_id is different
-                    ret_tokens[session_id] = InferOutput(session_id=session_id,
-                                                         req_id=out.req_id,
-                                                         token_ids=[])
+                    ret_tokens[session_id] = InferOutput(session_id=session_id, req_id=out.req_id, token_ids=[])
 
                 ret_tokens[session_id].token_ids += out.token_ids
 
@@ -905,8 +848,7 @@ class Engine:
         assert not self.scheduler.has_unfinished()
 
         if len(self.scheduler.sessions) > 0:
-            logger.warning(
-                'Unreleased session might leads to low performance.')
+            logger.warning('Unreleased session might leads to low performance.')
 
         session_id = 1
         sessions: List[SchedulerSession] = []
@@ -951,14 +893,11 @@ class Engine:
         ):
             if session_id in self.scheduler.sessions:
                 if resp_if_exist:
-                    req.resp.put(
-                        Response(ResponseType.REPEAT_ERROR, req_id=req.req_id))
+                    req.resp.put(Response(ResponseType.REPEAT_ERROR, req_id=req.req_id))
                 return True
             else:
                 if resp_if_not_exist:
-                    req.resp.put(
-                        Response(ResponseType.NOT_EXIST_ERROR,
-                                 req_id=req.req_id))
+                    req.resp.put(Response(ResponseType.NOT_EXIST_ERROR, req_id=req.req_id))
                 return False
 
         while True:
@@ -976,8 +915,7 @@ class Engine:
                 reqs.append(self.requests.get())
 
             # gather requests
-            reqs_by_type: Dict[RequestType, Request] = dict(
-                (t, []) for t in RequestType)
+            reqs_by_type: Dict[RequestType, Request] = dict((t, []) for t in RequestType)
             for req in reqs:
                 reqs_by_type[req.type].append(req)
 
@@ -988,16 +926,14 @@ class Engine:
                 return
 
             # stop session
-            stop_session_reqs: List[Request] = reqs_by_type[
-                RequestType.STOP_SESSION]
+            stop_session_reqs: List[Request] = reqs_by_type[RequestType.STOP_SESSION]
             for req in stop_session_reqs:
                 session_id = req.data['session_id']
                 if _session_exist(session_id, req, resp_if_not_exist=True):
                     self.stop_session(session_id)
 
             # end session
-            end_session_reqs: List[Request] = reqs_by_type[
-                RequestType.END_SESSION]
+            end_session_reqs: List[Request] = reqs_by_type[RequestType.END_SESSION]
             for req in end_session_reqs:
                 session_id = req.data['session_id']
                 if _session_exist(session_id, req, resp_if_not_exist=True):
@@ -1005,8 +941,7 @@ class Engine:
                     out_ques.pop(session_id)
 
             # add session
-            add_session_reqs: List[Request] = reqs_by_type[
-                RequestType.ADD_SESSION]
+            add_session_reqs: List[Request] = reqs_by_type[RequestType.ADD_SESSION]
             for req in add_session_reqs:
                 session_id = req.data['session_id']
                 if not _session_exist(session_id, req, resp_if_exist=True):
@@ -1022,10 +957,7 @@ class Engine:
                 sess = self.scheduler.sessions[session_id]
                 # TODO: support 1 session n sequence
                 if len(sess.sequences) == 0:
-                    sess.add_sequence(
-                        req.data['token_ids'],
-                        max_output_len=req.data['max_request_output_len'],
-                        sampling_param=req.data['sampling_param'])
+                    sess.add_sequence(req.data['token_ids'], max_output_len=req.data['max_request_output_len'], sampling_param=req.data['sampling_param'])
                     msg = next(iter(sess.sequences.values()))
                     self.add_message(msg)
                 else:
@@ -1044,12 +976,11 @@ class Engine:
                     resp_type = ResponseType.FINISH
                 else:
                     resp_type = ResponseType.SUCCESS
-                out_ques[session_id].put(
-                    Response(
-                        type=resp_type,
-                        req_id=out.req_id,
-                        data=dict(token_ids=out.token_ids),
-                    ))
+                out_ques[session_id].put(Response(
+                    type=resp_type,
+                    req_id=out.req_id,
+                    data=dict(token_ids=out.token_ids),
+                ))
 
 
 class EngineInstance:
@@ -1077,11 +1008,7 @@ class EngineInstance:
             req_type (RequestType): The request type to send.
             data (Any): The data of the request.
         """
-        self.engine.requests.put(
-            Request(type=req_type,
-                    resp=self.response,
-                    req_id=self.req_count,
-                    data=data))
+        self.engine.requests.put(Request(type=req_type, resp=self.response, req_id=self.req_count, data=data))
         self.req_count += 1
 
     def _try_add_session(self, session_id: int):
@@ -1091,17 +1018,10 @@ class EngineInstance:
             session_id (int): The session id to add.
         """
         if session_id not in self.owned_sessions:
-            self._send_req(RequestType.ADD_SESSION,
-                           dict(session_id=session_id))
+            self._send_req(RequestType.ADD_SESSION, dict(session_id=session_id))
             self.owned_sessions.append(session_id)
 
-    def stream_infer(self,
-                     session_id: int,
-                     input_ids: List[int] = None,
-                     request_output_len: int = None,
-                     step: int = 0,
-                     sampling_param: SamplingParam = SamplingParam(),
-                     **kwargs):
+    def stream_infer(self, session_id: int, input_ids: List[int] = None, request_output_len: int = None, step: int = 0, sampling_param: SamplingParam = SamplingParam(), **kwargs):
         """Send stream inference request.
 
         Args:
