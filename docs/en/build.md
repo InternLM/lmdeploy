@@ -22,6 +22,10 @@ cd /workspace/lmdeploy
 mkdir -p build && cd build
 ../generate.sh
 make -j$(nproc) && make install
+
+# install lmdeploy python package
+cd ..
+pip install .
 ```
 
 **Note**:
@@ -54,10 +58,15 @@ Then, follow the steps below to set up the compilation environment:
   ./configure
   make -j$(nproc) && make install
   ```
-- build and install lmdeploy:
+- build and install lmdeploy libraries:
   ```shell
   cd lmdeploy # the home folder of lmdeploy
   mkdir build && cd build
   sh ../generate.sh
   make -j$(nproc) && make install
+  ```
+- install lmdeploy python package:
+  ```shell
+  cd ..
+  pip install -e .
   ```

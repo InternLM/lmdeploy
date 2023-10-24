@@ -22,6 +22,10 @@ cd /workspace/lmdeploy
 mkdir -p build && cd build
 ../generate.sh
 make -j$(nproc) && make install
+
+# 安装 lmdeploy python package
+cd ..
+pip install .
 ```
 
 **说明**
@@ -59,4 +63,9 @@ make -j$(nproc) && make install
   mkdir build && cd build
   sh ../generate.sh
   make -j$(nproc) && make install
+  ```
+- 安装 lmdeploy python package:
+  ```shell
+  cd ..
+  pip install -e .
   ```
