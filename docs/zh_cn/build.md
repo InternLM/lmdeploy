@@ -13,8 +13,8 @@ LMDeploy 提供了预编译包，可以很方便的通过 `pip install lmdeploy`
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 docker pull openmmlab/lmdeploy:latest
 
-# 启动 docker container
-cd {home/folder/of/lmdeploy}
+# 在lmdeploy源码的根目录下，启动 docker container
+cd lmdeploy
 docker run --gpus all --rm -v $(pwd):/workspace/lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
 
 # 编译和安装
@@ -48,14 +48,14 @@ make -j$(nproc) && make install
 - 源码编译安装 openmpi:
   ```shell
   wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz
-  tar -xzf openmpi-*.tar.gz && cd openmpi-*
-  ./configure --with-cuda
-  make -j$(nproc)
-  make install
+  tar xf openmpi-4.1.5.tar.gz
+  cd openmpi-4.1.5
+  ./configure
+  make -j$(nproc) && make install
   ```
 - lmdeploy 编译安装:
   ```shell
-  cd {home/folder/of/lmdeploy}
+  cd lmdeploy # lmdeploy 源码的根目录
   mkdir build && cd build
   sh ../generate.sh
   make -j$(nproc) && make install

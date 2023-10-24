@@ -13,8 +13,8 @@ We highly advise using the provided docker image for lmdeploy build to circumven
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 docker pull openmmlab/lmdeploy:latest
 
-# launch docker container
-cd {home/folder/of/lmdeploy}
+# launch docker container in the home folder of lmdeploy
+cd lmdeploy
 docker run --gpus all --rm -v $(pwd):/workspace/lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
 
 # build and install
@@ -49,14 +49,14 @@ Then, follow the steps below to set up the compilation environment:
 - install openmpi from source:
   ```shell
   wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz
-  tar -xzf openmpi-*.tar.gz && cd openmpi-*
-  ./configure --with-cuda
-  make -j$(nproc)
-  make install
+  tar xf openmpi-4.1.5.tar.gz
+  cd openmpi-4.1.5
+  ./configure
+  make -j$(nproc) && make install
   ```
 - build and install lmdeploy:
   ```shell
-  cd {home/folder/of/lmdeploy}
+  cd lmdeploy # the home folder of lmdeploy
   mkdir build && cd build
   sh ../generate.sh
   make -j$(nproc) && make install
