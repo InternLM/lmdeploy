@@ -29,7 +29,7 @@ Based on the above table, download the model that meets your requirements. Execu
 python3 -m pip install lmdeploy
 
 # convert weight layout
-python3 -m lmdeploy.serve.turbomind.deploy codellama /the/path/of/codellama/model
+lmdeploy convert codellama /the/path/of/codellama/model
 ```
 
 Then, you can communicate with codellama in consolo by following instructions in next sections
@@ -42,13 +42,13 @@ Then, you can communicate with codellama in consolo by following instructions in
 ### Completion
 
 ```shell
-python3 -m lmdeploy.turbomind.chat ./workspace --cap completion
+lmdeploy chat turbomind ./workspace --cap completion
 ```
 
 ### Infilling
 
 ```shell
-python3 -m lmdeploy.turbomind.chat ./workspace --cap infilling
+lmdeploy chat turbomind ./workspace --cap infilling
 ```
 
 The input code is supposed to have a special placeholder `<FILL>`. For example,
@@ -64,7 +64,7 @@ And the generated code piece by `turbomind.chat` is the one to be filled in `<FI
 ### Chat
 
 ```
-python3 -m lmdeploy.turbomind.chat ./workspace --cap chat --sys-instruct "Provide answers in Python"
+lmdeploy chat turbomind ./workspace --cap chat --sys-instruct "Provide answers in Python"
 ```
 
 `--sys-instruct` instruction can be changed to other coding languages as long as codellama supports it
@@ -72,7 +72,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace --cap chat --sys-instruct "Provid
 ### Python specialist
 
 ```
-python3 -m lmdeploy.turbomind.chat ./workspace --cap python
+lmdeploy chat turbomind ./workspace --cap python
 ```
 
 Python fine-tuned model is highly recommended when 'python specialist' capability is required.
@@ -90,14 +90,14 @@ Launch inference server by:
 ```shell
 # --instance_num: number of instances to performance inference, which can be viewed as max requests concurrency
 # --tp: the number of GPUs used in tensor parallelism
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name ${server_ip} --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+lmdeploy serve api_client restful_api_url
 ```
 
 or through webui after launching gradio,
@@ -105,8 +105,8 @@ or through webui after launching gradio,
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
 ```
 
 Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../restful_api.md).

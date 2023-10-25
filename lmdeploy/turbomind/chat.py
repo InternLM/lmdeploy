@@ -4,11 +4,7 @@ import os
 import os.path as osp
 import random
 
-import fire
-
-from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
-from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -88,6 +84,9 @@ def main(model_path,
         stream_output (bool): indicator for streaming output or not
         **kwarg (dict): other arguments for initializing model's chat template
     """
+    from lmdeploy import turbomind as tm
+    from lmdeploy.tokenizer import Tokenizer
+
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id, tp=tp)
@@ -157,4 +156,6 @@ def main(model_path,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

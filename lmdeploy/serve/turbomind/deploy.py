@@ -8,7 +8,6 @@ import shutil
 import sys
 from pathlib import Path
 
-import fire
 import safetensors
 import torch
 from safetensors.torch import load_file
@@ -1043,4 +1042,6 @@ def main(model_name: str,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

@@ -2,7 +2,6 @@
 import json
 from typing import Iterable, List
 
-import fire
 import requests
 
 
@@ -89,4 +88,6 @@ def main(restful_api_url: str, session_id: int = 0):
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)
