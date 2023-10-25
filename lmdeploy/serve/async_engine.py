@@ -97,16 +97,17 @@ class AsyncEngine:
         Args:
             prompts (List[str]): a batch of prompts
             request_output_len (int): output token nums
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
             top_p (float): If set to float < 1, only the smallest set of most
               probable tokens with probabilities that add up to top_p or higher
             are kept for generation.
-            top_k (int): The number of the highest probability vocabulary
-              tokens to keep for top-k-filtering
             temperature (float): to modulate the next token probability
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
         """
+        assert isinstance(prompts, List), 'prompts should be a list'
         batch_size = len(prompts)
         outputs = [''] * batch_size
         generators = []
@@ -162,11 +163,11 @@ class AsyncEngine:
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): whether stop inference
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
             top_k (int): The number of the highest probability vocabulary
               tokens to keep for top-k-filtering
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+              are kept for generation.
             temperature (float): to modulate the next token probability
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
@@ -243,11 +244,11 @@ class AsyncEngine:
             renew_session (bool): renew the session
             request_output_len (int): output token nums
             stop (bool): whether stop inference
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
             top_k (int): The number of the highest probability vocabulary
               tokens to keep for top-k-filtering
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+              are kept for generation.
             temperature (float): to modulate the next token probability
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
