@@ -139,7 +139,8 @@ if __name__ == '__main__':
         install_requires=parse_requirements('requirements/runtime.txt'),
         extras_require={
             'all': parse_requirements('requirements.txt'),
-            'optional': parse_requirements('requirements/optional.txt'),
+            'lite': parse_requirements('requirements/lite.txt'),
+            'serve': parse_requirements('requirements/serve.txt')
         },
         has_ext_modules=check_ext_modules,
         classifiers=[
