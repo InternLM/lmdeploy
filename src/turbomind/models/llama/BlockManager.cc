@@ -42,6 +42,7 @@ BlockManager::BlockManager(size_t block_size, double block_count, int chunk_size
 
     // pre-allocate first chunk
     Malloc();
+    dbg(free_ids_);
 }
 
 BlockManager::~BlockManager()
@@ -68,6 +69,7 @@ bool BlockManager::Malloc()
 
     for (int i = 0; i < chunk_size; ++i, ptr += block_size_) {
         auto& block     = blocks_.emplace_back();
+        block.use_count = 0;
         block.ref_count = 0;
         block.id        = (int)blocks_.size() - 1;
         block.timestamp = 0;
@@ -116,15 +118,14 @@ std::vector<const Block*> BlockManager::Allocate(int count)
         auto& block = blocks_[idx];
         FT_CHECK(is_free(block));
         block.ref_count = 1;
+        block.use_count = 1;
         block.unique_id = unique_id_++;
         ret.push_back(&block);
     }
 
     Move(free_ids_, idxs, active_ids_);
 
-    Touch(ret);
-
-    dbg("[Allocate]", free_ids_, active_ids_);
+    dbg(free_ids_, active_ids_);
 
     return ret;
 }
@@ -143,23 +144,49 @@ void BlockManager::Evict(int count)
 
     // set as free
     for (const auto& idx : idxs) {
-        FT_CHECK(is_cached(blocks_[idx]));
-        blocks_[idx].timestamp = 0;
+        auto& b = blocks_[idx];
+        FT_CHECK(is_cached(b));
+        b.ref_count = 0;
+        b.unique_id = 0;
+        b.timestamp = 0;
     }
 
     Move(cached_ids_, idxs, free_ids_);
 
-    dbg("[Evict]", free_ids_);
+    dbg(cached_ids_, free_ids_);
 }
 
-int BlockManager::Release(const std::vector<const Block*>& bs)
+int BlockManager::Free(const std::vector<const Block*>& bs)
+{
+    std::vector<int> idxs;
+
+    for (const auto& p : bs) {
+        auto& b = blocks_[p->id];
+        FT_CHECK(is_cached(b));
+        if (--b.ref_count == 0) {
+            b.unique_id = 0;
+            b.timestamp = 0;
+            idxs.push_back(b.id);
+        }
+    }
+
+    std::sort(idxs.begin(), idxs.end());
+
+    Move(cached_ids_, idxs, free_ids_);
+
+    dbg(cached_ids_, free_ids_);
+
+    return idxs.size();
+}
+
+int BlockManager::Unlock(const std::vector<const Block*>& bs)
 {
     std::vector<int> idxs;
 
     for (const auto& p : bs) {
         auto& block = blocks_[p->id];
         FT_CHECK(is_active(block));
-        if (--block.ref_count == 0) {
+        if (--block.use_count == 0) {
             idxs.push_back(block.id);
         }
     }
@@ -168,19 +195,19 @@ int BlockManager::Release(const std::vector<const Block*>& bs)
 
     Move(active_ids_, idxs, cached_ids_);
 
-    dbg("[Release]", cached_ids_);
+    dbg(active_ids_, cached_ids_);
 
     return idxs.size();
 }
 
-void BlockManager::Retain(const std::vector<const Block*>& bs)
+int BlockManager::Lock(const std::vector<const Block*>& bs)
 {
     std::vector<int> idxs;
 
     for (const auto& p : bs) {
         auto& block = blocks_[p->id];
         FT_CHECK(is_cached(block));
-        if (++block.ref_count == 1) {
+        if (++block.use_count == 1) {
             idxs.push_back(p->id);
         }
     }
@@ -189,7 +216,9 @@ void BlockManager::Retain(const std::vector<const Block*>& bs)
 
     Move(cached_ids_, idxs, active_ids_);
 
-    dbg("[Retain]", active_ids_);
+    dbg(cached_ids_, active_ids_);
+
+    return idxs.size();
 }
 
 void BlockManager::Touch(const std::vector<const Block*>& bs)
@@ -202,32 +231,32 @@ void BlockManager::Touch(const std::vector<const Block*>& bs)
 
 Snapshot BlockManager::TakeSnapshot()
 {
-    std::vector<int> ref_count(blocks_.size());
+    std::vector<int> use_count(blocks_.size());
     for (const auto& idx : active_ids_) {
-        ref_count[idx] = blocks_[idx].ref_count;
+        use_count[idx] = blocks_[idx].use_count;
     }
-    return {active_count(), cached_count(), free_count(), std::move(ref_count)};
+    return {active_count(), cached_count(), free_count(), std::move(use_count)};
 }
 
 std::ostream& operator<<(std::ostream& os, const BlockManager& manager)
 {
-    os << "block_size: " << manager.block_size_ << "\n";
-    os << "max_block_count: " << manager.max_block_count_ << "\n";
-    os << "chunk_size: " << manager.chunk_size_ << "\n";
-    os << "allocator: " << manager.allocator_ << "\n";
-    os << "chunks: " << manager.chunks_.size() << "\n";
-    os << "active_ids: " << manager.active_ids_.size() << "\n";
-    os << "cached_ids: " << manager.cached_ids_.size() << "\n";
-    os << "free_ids: " << manager.free_ids_.size() << "\n";
-    os << "blocks: " << manager.blocks_.size() << "\n";
-    os << "unique_id: " << manager.unique_id_ << "\n";
-    os << "timestamp: " << manager.timestamp_ << "\n";
+    os << "block_size: " << manager.block_size_ << ", ";
+    os << "max_block_count: " << manager.max_block_count_ << ", ";
+    os << "chunk_size: " << manager.chunk_size_ << ", ";
+    os << "chunks: " << manager.chunks_.size() << ", ";
+    os << "active_ids: " << manager.active_ids_.size() << ", ";
+    os << "cached_ids: " << manager.cached_ids_.size() << ", ";
+    os << "free_ids: " << manager.free_ids_.size() << ", ";
+    os << "blocks: " << manager.blocks_.size() << ", ";
+    os << "unique_id: " << manager.unique_id_ << ", ";
+    os << "timestamp: " << manager.timestamp_ << ", ";
+    os << "allocator: " << manager.allocator_;
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const Block& block)
 {
-    os << "id=" << block.id << ", ref_count=" << block.ref_count << ", unique_id=" << block.unique_id
+    os << "id=" << block.id << ", use_count=" << block.use_count << ", unique_id=" << block.unique_id
        << ", timestamp=" << block.timestamp << ", data=" << block.data;
     return os;
 }

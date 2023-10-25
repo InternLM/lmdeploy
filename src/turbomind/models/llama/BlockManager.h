@@ -21,8 +21,9 @@ namespace turbomind {
 // [L, S/x, H, x, D]
 
 struct Block {
-    int      id;  // fixed linear id in the pool
-    int      ref_count;
+    int      id;         // fixed linear id in the pool
+    int      ref_count;  // all sequences referencing the block
+    int      use_count;  // active sequences using the block
     uint64_t unique_id;  // unique for every block allocation
     uint64_t timestamp;
     void*    data;
@@ -32,24 +33,24 @@ struct Block {
 
 inline bool is_active(const Block& block)
 {
-    return block.ref_count > 0;
+    return block.ref_count > 0 && block.use_count > 0;
 }
 
 inline bool is_cached(const Block& block)
 {
-    return block.ref_count == 0 && block.timestamp > 0;
+    return block.ref_count > 0 && block.use_count == 0;
 }
 
 inline bool is_free(const Block& block)
 {
-    return block.ref_count == 0 && block.timestamp == 0;
+    return block.ref_count == 0 && block.use_count == 0 && block.timestamp == 0;
 }
 
 struct Snapshot {
     int              active;
     int              cached;
     int              free;
-    std::vector<int> ref_count;
+    std::vector<int> use_count;
 };
 
 class BlockManager {
@@ -58,19 +59,20 @@ public:
 
     ~BlockManager();
 
-    // free -> active
+    // free -> active (use_count = 1, ref_count = 1)
     [[nodiscard]] std::vector<const Block*> Allocate(int count);
 
-    // decrease ref count
-    // active -> cached
-    [[maybe_unused]] int Release(const std::vector<const Block*>& bs);
+    // cached -> active (use_count += 1)
+    [[maybe_unused]] int Lock(const std::vector<const Block*>& bs);
 
-    // increase ref count
-    // cached -> active
-    void Retain(const std::vector<const Block*>& bs);
+    // active -> cached (use_count -= 1)
+    [[maybe_unused]] int Unlock(const std::vector<const Block*>& bs);
 
-    // cached -> free
+    // cached -> free (ref_count = 0)
     void Evict(int count);
+
+    // cached -> free (ref_count -= 1)
+    [[maybe_unused]] int Free(const std::vector<const Block*>& bs);
 
     // increase timestamp in reversed order
     void Touch(const std::vector<const Block*>& bs);
@@ -123,7 +125,7 @@ private:
     std::vector<Block> blocks_;  // < 100k
 
     // uint64_t unique_id_{1UL << 63};
-    uint64_t unique_id_{0};
+    uint64_t unique_id_{1};
     uint64_t timestamp_{1};
 };
 

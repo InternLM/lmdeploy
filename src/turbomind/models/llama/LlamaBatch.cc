@@ -278,10 +278,9 @@ bool LlamaBatch<T>::Initialize()
         }
     }
 
-    dbg(holes, active_holes);
+    // dbg(holes, active_holes);
 
     auto process = [&](BatchState* state) {
-        dbg(state->size);
         for (int i = 0; i < state->size; ++i) {
             if (auto& r = state->requests[i]) {
                 sequences.push_back(state->sequences[i]);
@@ -305,10 +304,9 @@ bool LlamaBatch<T>::Initialize()
 
     auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, step_length_);
 
-    dbg(outcome);
-    // if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
-    //     dbg(outcome);
-    // }
+    if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
+        dbg(outcome);
+    }
 
     bool exchange = outcome.swap_in + outcome.swap_out > 0;
 
@@ -1058,6 +1056,14 @@ void LlamaBatch<T>::ContextDecode()
 
     std::fill(h_input_length_buf_ + base, h_input_length_buf_ + batch_size, 0);
 
+    // `SequenceManager` needs real-time value of cache length
+    for (int i = base; i < batch_size; ++i) {
+        if (state_->requests[i]) {
+            FT_CHECK(state_->sequences[i]);
+            state_->sequences[i]->cache_len = state_->h_context_length[i] - 1;  // -1 since we skip last token
+        }
+    }
+
     check_cuda_error(cudaStreamSynchronize(stream_));
     const auto tock = std::chrono::high_resolution_clock::now();
     if (rank_ == 0) {
@@ -1183,6 +1189,14 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         TM_LOG_INFO("[finish] [%s]", ss.str().c_str());
     }
 
+    // `SequenceManager` needs real-time value of cache length
+    for (int i = 0; i < batch_size; ++i) {
+        if (state_->requests[i]) {
+            FT_CHECK(state_->sequences[i]);
+            state_->sequences[i]->cache_len = state_->h_context_length[i];
+        }
+    }
+
     std::vector<Signal> signals;
     {
         NvtxScope _("prepare_completion_signal");
@@ -1248,7 +1262,7 @@ void LlamaBatch<T>::CompleteRequest(int index, bool is_stop_request, bool is_for
     }
 
     if (debug_ && rank_ == 0) {
-        std::vector<int> tokens(state_->h_context_length[index] + 1);
+        std::vector<int> tokens(state_->h_context_length[index]);
         Copy(state_->output_ids + index * session_len_, tokens.size(), tokens.data());
         cudaStreamSynchronize(stream_);
         std::stringstream ss;
@@ -1262,12 +1276,10 @@ void LlamaBatch<T>::CompleteRequest(int index, bool is_stop_request, bool is_for
         sequence_manager_->Erase(state_->requests[index]->id);
     }
     else {
-        const int cache_len  = state_->h_context_length[index];
-        const int output_len = !is_stop_request ? cache_len + 1 : cache_len;
+        // account for the last generated token if not a stop request (which doesn't generate)
+        const int output_len = state_->h_context_length[index] + 1 - static_cast<int>(is_stop_request);
 
         auto& seq = *state_->sequences[index];
-
-        seq.cache_len = cache_len;
 
         // update token IDs
         seq.tokens.resize(output_len);
@@ -1286,7 +1298,7 @@ void LlamaBatch<T>::CompleteRequest(int index, bool is_stop_request, bool is_for
 
         check_cuda_error(cudaStreamSynchronize(stream_));
 
-        sequence_manager_->Release(seq);
+        sequence_manager_->UpdateAndSetUnlock(seq);
     }
 
     state_->sequences[index] = nullptr;

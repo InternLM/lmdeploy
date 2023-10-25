@@ -46,7 +46,9 @@ TEST_CASE("BlockManager")
     std::copy(blocks3.begin(), blocks3.end(), std::back_inserter(blocks1));
     std::copy(blocks2.begin(), blocks2.end(), std::back_inserter(blocks1));
 
-    REQUIRE(m.Release(blocks1) == 32);
+    m.Touch(blocks1);
+
+    REQUIRE(m.Unlock(blocks1) == 32);
     REQUIRE(m.active_count() == 0);
     REQUIRE(m.free_count() == 0);
     REQUIRE(m.cached_count() == 32);

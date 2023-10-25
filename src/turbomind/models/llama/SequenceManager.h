@@ -30,6 +30,16 @@ struct Sequence {
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
 };
 
+using Sequences = std::vector<const Sequence*>;
+
+inline std::ostream& operator<<(std::ostream& os, const Sequence& seq)
+{
+    os << "id=" << seq.id << ", status=" << seq.status << ", token_count=" << seq.tokens.size()
+       << ", block_count=" << seq.blocks.size() << ", cache_len=" << seq.cache_len
+       << ", random_state_size=" << seq.random_state.size();
+    return os;
+}
+
 class SequenceManager {
 public:
     explicit SequenceManager(size_t      layer_num,
@@ -53,7 +63,7 @@ public:
 
     bool Erase(uint64_t id);
 
-    void Release(const Sequence& seq);
+    void UpdateAndSetUnlock(const Sequence& seq);
 
     struct Outcome {
         int allocation;
@@ -61,10 +71,10 @@ public:
         int swap_out;
     };
 
-    Outcome Materialize(const std::vector<const Sequence*>& sequences,
-                        const std::vector<int>&             context_lengths,
-                        const std::vector<uint64_t>&        priorities,
-                        int                                 step_length);
+    Outcome Materialize(Sequences                    sequences,
+                        std::vector<int>             context_lengths,
+                        const std::vector<uint64_t>& priorities,
+                        int                          step_length);
 
     void* OffsetKey(void* block_ptr)
     {
@@ -82,21 +92,36 @@ public:
     }
 
 private:
-    void Verify(Sequence& seq, std::vector<const Block*>& retain);
+    void CommitUnlockAndFree();
+
+    void VerifyAndLockCached(const Sequences& sequences);
+
+    std::vector<int> CountRequiredBlocks(const Sequences&        sequences,  //
+                                         const std::vector<int>& context_lengths,
+                                         int                     step_length);
+
+    static void SortByPriority(Sequences&                   sequences,  //
+                               std::vector<int>&            context_lengths,
+                               const std::vector<uint64_t>& priorities);
+
+    static void AssignAndActivate(const Sequences&                 sequences,  //
+                                  const std::vector<int>&          block_counts,
+                                  const std::vector<const Block*>& blocks);
 
 private:
     int    block_seq_len_;
     int    rank_;
     size_t val_offset_{};
 
-    bool need_verification_{};
+    bool need_verify_{};
 
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;
 
     std::unique_ptr<BlockManager> block_manager_;
 
-    std::vector<const Block*> released_;
+    std::vector<const Block*> unlocked_;
+    std::vector<const Block*> freed_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const SequenceManager::Outcome& oc)
