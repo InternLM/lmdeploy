@@ -90,7 +90,7 @@ Launch inference server by:
 ```shell
 # --instance_num: number of instances to performance inference, which can be viewed as max requests concurrency
 # --tp: the number of GPUs used in tensor parallelism
-lmdeploy serve api_server ./workspace --server_name ${server_ip} --server_port 6006 --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name ${server_ip} --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
@@ -106,7 +106,7 @@ or through webui after launching gradio,
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
 # example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
 ```
 
 Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../restful_api.md).
