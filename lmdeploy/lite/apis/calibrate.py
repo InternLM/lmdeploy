@@ -13,13 +13,15 @@ from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
-    'BaiChuanForCausalLM': 'DecoderLayer',
+    'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
+    'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',
+    'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
+    'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
 }
 
@@ -91,8 +93,10 @@ def calibrate(model: str,
     hf_config = AutoConfig.from_pretrained(model,
                                            torch_dtype=torch.float16,
                                            trust_remote_code=True)
-    hf_config.fp16 = True
     checkpoint = hf_config._name_or_path
+
+    # hard code for qwen, other configs do not have the `fp16` attribute.
+    hf_config.fp16 = True
 
     with init_empty_weights():
         # Load model
