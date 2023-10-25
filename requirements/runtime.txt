@@ -1,5 +1,4 @@
 fire
-gradio
 mmengine
 numpy
 safetensors
