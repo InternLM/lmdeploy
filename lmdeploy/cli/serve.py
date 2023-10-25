@@ -7,7 +7,7 @@ class SubCliServe(object):
 
     def gradio(self,
                model_path_or_server: str,
-               server_name: str = '0.0.0.0',
+               server_name: str = 'localhost',
                server_port: int = 6006,
                batch_size: int = 32,
                tp: int = 1,
@@ -48,7 +48,7 @@ class SubCliServe(object):
 
     def api_server(self,
                    model_path: str,
-                   server_name: str = '0.0.0.0',
+                   server_name: str = 'localhost',
                    server_port: int = 23333,
                    instance_num: int = 32,
                    tp: int = 1,
@@ -95,7 +95,6 @@ class SubCliServe(object):
                       tritonserver_addr: str,
                       session_id: int = 1,
                       cap: str = 'chat',
-                      sys_instruct: str = None,
                       stream_output: bool = True,
                       **kwargs):
         """Interact with Triton Server using gRPC protocol.
@@ -107,8 +106,6 @@ class SubCliServe(object):
             cap (str): the capability of a model. For example, codellama
                 has the ability among ['completion', 'infill', 'instruct',
                 'python']
-            sys_instruct (str): the content of 'system' role, which is
-                used by conversational model
             stream_output (bool): indicator for streaming output or not
             **kwargs (dict): other arguments for initializing model's
                 chat template
@@ -120,7 +117,6 @@ class SubCliServe(object):
             tritonserver_addr,
             session_id=session_id,
             cap=cap,
-            sys_instruct=sys_instruct,
             stream_output=stream_output,
             **kwargs,
         )

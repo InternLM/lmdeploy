@@ -166,7 +166,7 @@ lmdeploy serve api_client restful_api_url
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
 # example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${port} --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port${server_port} --restful_api True
 ```
 
 更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。

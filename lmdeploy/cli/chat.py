@@ -65,7 +65,6 @@ class SubCliChat(object):
                   model_path,
                   session_id: int = 1,
                   cap: str = 'chat',
-                  sys_instruct: str = None,
                   tp=1,
                   stream_output=True,
                   **kwargs):
@@ -76,8 +75,6 @@ class SubCliChat(object):
             session_id (int): the identical id of a session
             cap (str): the capability of a model. For example, codellama has
                 the ability among ['completion', 'infilling', 'chat', 'python']
-            sys_instruct (str): the content of 'system' role, which is used by
-                conversational model
             tp (int): GPU number used in tensor parallelism
             stream_output (bool): indicator for streaming output or not
             **kwarg (dict): other arguments for initializing model's chat
@@ -88,7 +85,6 @@ class SubCliChat(object):
         run_turbomind_model(model_path,
                             session_id=session_id,
                             cap=cap,
-                            sys_instruct=sys_instruct,
                             tp=tp,
                             stream_output=stream_output,
                             **kwargs)
