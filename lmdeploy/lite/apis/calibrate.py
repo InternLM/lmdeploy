@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
+from typing import Union
 
 import torch
 from accelerate import (infer_auto_device_map, init_empty_weights,
                         load_checkpoint_in_model)
+from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from lmdeploy.lite.quantization import CalibrationContext
@@ -26,33 +28,70 @@ NORM_TYPE_MAP = {
 }
 
 
-def _prepare_for_calibrate(model,
-                           layer_type,
-                           head_name='lm_head',
-                           device='cuda',
-                           prefix=''):
+def _prepare_for_calibrate(model: nn.Module,
+                           layer_type: Union[str, type],
+                           head_name: str = 'lm_head',
+                           device: str = 'cuda',
+                           prefix: str = '') -> None:
+    """Prepare the model for calibration by moving specific modules to CPU.
+
+    This function goes through each child of a given model and checks whether
+    it is an instance of a certain layer type or has the name equal to
+    `head_name`.
+    If yes, it moves the module to CPU, otherwise to the specified device
+    (default is CUDA).
+
+    If the child contains the target layer type in its sub-modules, the
+    function performs the same operation recursively.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The PyTorch model to prepare for calibration.
+    layer_type : Union[str, Type]
+        The type of the layer to be moved to CPU. Can be either a string of
+        class name or the class type itself.
+    head_name : str, optional
+        The name of the module to be moved to CPU. Default is 'lm_head'.
+    device : str, optional
+        The device to which modules not matching the `layer_type` or
+        `head_name` will be moved. Default is 'cuda'.
+    prefix : str, optional
+        The prefix used when printing the names of the moved modules.
+        Default is ''.
+
+    Raises
+    ------
+    TypeError
+        If `layer_type` is neither a string nor a type.
+    """
 
     for name, child in model.named_children():
 
+        # Check if the child is an instance of the given layer type
         if isinstance(layer_type, str):
             is_layer = type(child).__name__ == layer_type
         elif isinstance(layer_type, type):
             is_layer = isinstance(child, layer_type)
         else:
-            raise TypeError
+            raise TypeError(
+                'layer_type should be a string (class name) or a type')
 
+        # Check if the child contains the target module type
         contain_layer = len(
             collect_target_modules(child, layer_type, [head_name]).keys()) > 0
+
+        # Check if the child matches the head name
         is_head = name == head_name
 
         mod_name = f'{prefix}.{name}' if prefix else name
 
+        # If the child is either an instance of the layer type or has the
+        # head name, move it to CPU, otherwise move it to the specified device
         if is_layer or is_head:
             child.to('cpu')
             print(f'Move {mod_name} to CPU.')
-            continue
-
-        if contain_layer:
+        elif contain_layer:
             _prepare_for_calibrate(child, layer_type, head_name, device,
                                    mod_name)
         else:
