@@ -24,6 +24,40 @@ NORM_TYPE_MAP = {
 }
 
 
+def _prepare_for_calibrate(model,
+                           layer_type,
+                           head_name='lm_head',
+                           device='cuda',
+                           prefix=''):
+
+    for name, child in model.named_children():
+
+        if isinstance(layer_type, str):
+            is_layer = type(child).__name__ == layer_type
+        elif isinstance(layer_type, type):
+            is_layer = isinstance(child, layer_type)
+        else:
+            raise TypeError
+
+        contain_layer = len(
+            collect_target_modules(child, layer_type, [head_name]).keys()) > 0
+        is_head = name == head_name
+
+        mod_name = f'{prefix}.{name}' if prefix else name
+
+        if is_layer or is_head:
+            child.to('cpu')
+            print(f'Move {mod_name} to CPU.')
+            continue
+
+        if contain_layer:
+            _prepare_for_calibrate(child, layer_type, head_name, device,
+                                   mod_name)
+        else:
+            child.to(device)
+            print(f'Move {mod_name} to GPU.')
+
+
 def calibrate(model: str,
               calib_dataset: str = 'c4',
               calib_samples: int = 128,
@@ -57,11 +91,13 @@ def calibrate(model: str,
     hf_config = AutoConfig.from_pretrained(model,
                                            torch_dtype=torch.float16,
                                            trust_remote_code=True)
+    hf_config.fp16 = True
     checkpoint = hf_config._name_or_path
 
     with init_empty_weights():
         # Load model
         model = AutoModelForCausalLM.from_pretrained(model,
+                                                     config=hf_config,
                                                      torch_dtype=torch.float16,
                                                      trust_remote_code=True)
         model.config.use_cache = False
@@ -83,6 +119,8 @@ def calibrate(model: str,
                              checkpoint,
                              device_map,
                              dtype=torch.float16)
+
+    _prepare_for_calibrate(model, layer_type, 'lm_head', device)
 
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,
