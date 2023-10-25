@@ -80,7 +80,8 @@ def draw1(linear_name,
         for k, v in stats.items() if linear_name in k
     }
     if layers is None:
-        for i, tensor in enumerate(tensor_list):
+        for i, tensor in tensor_list.items():
+            # for i, tensor in enumerate(tensor_list):
             draw_one(tensor, i)
     else:
         for layer_idx in layers:
@@ -163,11 +164,10 @@ def draw2(linear_name,
             elif key == 'absmean':
                 v = v.abs().mean(dim=0)[0]
             weight_list[get_layer_idx(k)] = v
-    # import pdb;pdb.set_trace()
 
     if layers is None:
-        for i, (act, weight) in enumerate(zip(act_list, weight_list)):
-            draw_one(act, weight, i)
+        for i in range(len(act_list)):
+            draw_one(act_list[i], weight_list[i], i)
     else:
         for layer_idx in layers:
             draw_one(act_list[layer_idx], weight_list[layer_idx], layer_idx)
@@ -253,8 +253,8 @@ def draw4(linear_name, use_input=True, work_dir='work_dir', layers=None):
         for k, v in stats_min.items() if linear_name in k
     }
     if layers is None:
-        for i, (mmax, mmin) in enumerate(zip(max_list, min_list)):
-            draw_one(mmax, mmin, i)
+        for i in range(len(max_list)):
+            draw_one(max_list[i], min_list[i], i)
     else:
         for layer_idx in layers:
             draw_one(max_list[layer_idx], min_list[layer_idx], layer_idx)
