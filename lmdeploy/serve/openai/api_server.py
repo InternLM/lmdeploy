@@ -229,11 +229,19 @@ async def create_embeddings(request: EmbeddingsRequest,
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
+    if isinstance(request.input, str):
+        request.input = [request.input]
 
-    embedding = await VariableInterface.async_engine.get_embeddings(
-        request.input)
-    data = [{'object': 'embedding', 'embedding': embedding, 'index': 0}]
-    token_num = len(embedding)
+    data = []
+    token_num = 0
+    for i, prompt in enumerate(request.input):
+        embedding = await VariableInterface.async_engine.get_embeddings(prompt)
+        data.append({
+            'object': 'embedding',
+            'embedding': embedding,
+            'index': i
+        })
+        token_num += len(embedding)
     return EmbeddingsResponse(
         data=data,
         model=request.model,
