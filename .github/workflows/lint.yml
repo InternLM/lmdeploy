@@ -16,7 +16,7 @@ jobs:
           python -m pip install pre-commit
           pre-commit install
       - name: Linting
-        run: pre-commit run --all-files || git diff
+        run: pre-commit run --all-files
       - name: Format c/cuda codes with clang-format
         uses: DoozyX/clang-format-lint-action@v0.13
         with:
