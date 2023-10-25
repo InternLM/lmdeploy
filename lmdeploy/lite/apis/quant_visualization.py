@@ -62,11 +62,11 @@ def draw1(linear_name,
         plt.xlabel('dim')
         plt.ylabel(key)
         plt.title(f'layer{idx}  variance = {round(var, 4)}')
-        plt.savefig(f'{work_dir}/case_1/layer_{idx}.png')
+        plt.savefig(f'{work_dir}/case_1/{linear_name}/layer_{idx}.png')
         plt.clf()
 
     work_dir = Path(work_dir)
-    tmp_dir = work_dir / 'case_1'
+    tmp_dir = work_dir / 'case_1' / linear_name
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     if use_input:
@@ -137,11 +137,11 @@ def draw2(linear_name,
         ax.set_ylabel(f'Activation_{key}')
         ax2.set_ylabel(f'Weight_{key}')
         plt.title(f'layer{idx}  topk = {topk}')
-        plt.savefig(f'{work_dir}/case_2/layer_{idx}.png')
+        plt.savefig(f'{work_dir}/case_2/{linear_name}/layer_{idx}.png')
         plt.clf()
 
     work_dir = Path(work_dir)
-    tmp_dir = work_dir / 'case_2'
+    tmp_dir = work_dir / 'case_2' / linear_name
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     stats = torch.load(f'{work_dir}/inputs_stats.pth')
@@ -196,7 +196,11 @@ def draw3(linear_name, use_input=True, key='absmax', work_dir='work_dir'):
         plt.xlabel('layer')
         plt.ylabel(key)
         plt.title(f'linear_name {linear_name}')
-        plt.savefig(f'{work_dir}/case_3.png')
+        plt.savefig(f'{work_dir}/case_3/{linear_name}.png')
+
+    work_dir = Path(work_dir)
+    tmp_dir = work_dir / 'case_3'
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     if use_input:
         stats = torch.load(f'{work_dir}/inputs_stats.pth')
@@ -232,11 +236,11 @@ def draw4(linear_name, use_input=True, work_dir='work_dir', layers=None):
         plt.xlabel('max')
         plt.ylabel('min')
         plt.title(f'layer{idx}')
-        plt.savefig(f'{work_dir}/case_4/layer_{idx}.png')
+        plt.savefig(f'{work_dir}/case_4/{linear_name}/layer_{idx}.png')
         plt.clf()
 
     work_dir = Path(work_dir)
-    tmp_dir = work_dir / 'case_4'
+    tmp_dir = work_dir / 'case_4' / linear_name
     tmp_dir.mkdir(parents=True, exist_ok=True)
     if use_input:
         stats = torch.load(f'{work_dir}/inputs_stats.pth')
@@ -261,17 +265,18 @@ def draw4(linear_name, use_input=True, work_dir='work_dir', layers=None):
 
 
 def draw(mode,
+         linear_name,
          pretrained_model_name_or_path=None,
          work_dir='work_dir',
          use_input=True,
          key='absmax',
-         linear_name=None,
          layers=None,
          force_calibrate=False):
     """Draw specific type of plots based on the given mode.
 
     Args:
         mode (int): Plot mode. Can be 1, 2, 3 or 4.
+        linear_name (str, optional): Name of the linear layer.
         pretrained_model_name_or_path (str, optional): Path or name of the
             pretrained model. Required if `force_calibrate` is True or
             no calibration data exists in `work_dir`. Defaults to None.
@@ -281,7 +286,6 @@ def draw(mode,
             Defaults to use the input of a linear layer.
         key (str, optional): The specific feature to plot. Can be 'absmax',
             'absmean', 'max', 'mean' or 'min'. Defaults to 'absmax'.
-        linear_name (str, optional): Name of the linear layer. Defaults to None
         layers (list, optional): List of layers to draw. If None, all layers
             will be drawn. Defaults to None.
         force_calibrate (bool, optional): Whether to force recalibration
