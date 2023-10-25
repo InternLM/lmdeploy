@@ -12,8 +12,6 @@ def fp32tofp16_tensors(tensors: torch.Tensor):
     for tensor in tensors:
         if tensor is not None and tensor.dtype == torch.float32:
             result.append(tensor.half())
-        elif tensor is not None:
-            assert tensor.dtype == torch.int32
         else:
             result.append(tensor)
     return (*result, )
