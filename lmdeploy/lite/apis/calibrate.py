@@ -4,12 +4,10 @@ from pathlib import Path
 
 import fire
 import torch
-from accelerate import infer_auto_device_map, init_empty_weights
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
 
 from lmdeploy.lite.quantization import CalibrationContext
-from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders
-from lmdeploy.pytorch.model import LoadWoInit
+from lmdeploy.lite.utils import get_calib_loaders, load_hf_from_pretrained
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -47,8 +45,6 @@ def calibrate(model: str,
         device (str, optional): The device to be used for calculation.
             Defaults to 'cuda'.
     """
-    pretrained_model_name_or_path = model
-
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
         'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
 
@@ -56,33 +52,12 @@ def calibrate(model: str,
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-
-    with init_empty_weights():
-        # Load model
-        model = AutoModelForCausalLM.from_pretrained(model,
-                                                     torch_dtype=torch.float16,
-                                                     trust_remote_code=True)
-        model.config.use_cache = False
+    model = load_hf_from_pretrained(model,
+                                    torch_dtype=torch.float16,
+                                    trust_remote_code=True)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
-
-    decoder_layers = collect_target_modules(model, layer_type)
-
-    # Infer device map
-    device_map = infer_auto_device_map(model,
-                                       no_split_module_classes=[layer_type])
-    for name in device_map.keys():
-        if name in decoder_layers or 'lm_head' in name:
-            device_map[name] = 'cpu'
-        else:
-            device_map[name] = 0
-    with LoadWoInit():
-        model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path,
-            torch_dtype=torch.float16,
-            trust_remote_code=True)
-        model.config.use_cache = False
 
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,

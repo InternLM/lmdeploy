@@ -6,13 +6,10 @@ from pathlib import Path
 import fire
 import matplotlib.pyplot as plt
 import torch
-from accelerate import infer_auto_device_map, init_empty_weights
 from calibrate import calibrate
 from matplotlib import rc
-from transformers import AutoModelForCausalLM
 
-from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.model import LoadWoInit
+from lmdeploy.lite.utils import load_hf_from_pretrained
 
 rc('mathtext', default='regular')
 
@@ -154,35 +151,19 @@ def draw2(linear_name,
         for k, v in stats.items() if linear_name in k
     }
 
-    with init_empty_weights():
-        # Load model
-        model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                     torch_dtype=torch.float16,
-                                                     trust_remote_code=True)
-        model.config.use_cache = False
-    layer_type = LAYER_TYPE_MAP[type(model).__name__]
-    decoder_layers = collect_target_modules(model, layer_type)
-    device_map = infer_auto_device_map(model,
-                                       no_split_module_classes=[layer_type])
-    for name in device_map.keys():
-        if name in decoder_layers or 'lm_head' in name:
-            device_map[name] = 'cpu'
-        else:
-            device_map[name] = 0
-    with LoadWoInit():
-        model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                     torch_dtype=torch.float16,
-                                                     trust_remote_code=True)
-        model.config.use_cache = False
+    model = load_hf_from_pretrained(model_path,
+                                    torch_dtype=torch.float16,
+                                    trust_remote_code=True)
 
     weight_list = {}
     for k, v in model.state_dict().items():
-        if linear_name in k:
+        if linear_name in k and 'weight' in k:
             if key == 'absmax':
                 v = v.abs().max(dim=0)[0]
             elif key == 'absmean':
                 v = v.abs().mean(dim=0)[0]
             weight_list[get_layer_idx(k)] = v
+    # import pdb;pdb.set_trace()
 
     if layers is None:
         for i, (act, weight) in enumerate(zip(act_list, weight_list)):
