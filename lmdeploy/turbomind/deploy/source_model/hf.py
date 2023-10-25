@@ -158,12 +158,15 @@ class HfModel(BaseInputModel):
         assert osp.isfile(self.tokenizer_path), self.tokenizer_path
         try:
             tk_model = SentencePieceProcessor(model_file=self.tokenizer_path)
+            # BOS / EOS token IDs
+            n_words = tk_model.vocab_size
+            bos_id = tk_model.bos_token_id
+            eos_id = tk_model.eos_token_id
         except Exception:
             tk_model = Tokenizer(self.model_path)
-        # BOS / EOS token IDs
-        n_words = tk_model.vocab_size
-        bos_id = tk_model.bos_token_id
-        eos_id = tk_model.eos_token_id
+            n_words = tk_model.vocab_size
+            bos_id = tk_model.bos_token_id
+            eos_id = tk_model.eos_token_id
         return n_words, bos_id, eos_id
 
     def model_info(self):

@@ -32,9 +32,24 @@ def guess_tokenizer_path(model_path: str):
     return tokenizer_path
 
 
-def guess_model_format(model_name: str):
-    """Guess model format if not given."""
-    model_format = 'qwen' if model_name.startswith('qwen') else 'hf'
+def guess_model_format(model_name: str, model_format: str):
+    """Guess model format if not given or equal awq."""
+    if model_format == 'awq':
+        if model_name.startswith('qwen'):
+            model_format = 'qwen-awq'
+        elif model_name.startswith('baichuan2'):
+            model_format = 'baichuan2-awq'
+        elif model_name.startswith('baichuan'):
+            model_format = 'baichuan-awq'
+    elif model_format is None:
+        if model_name.startswith('qwen'):
+            model_format = 'qwen'
+        elif model_name.startswith('baichuan2'):
+            model_format = 'baichuan2'
+        elif model_name.startswith('baichuan'):
+            model_format = 'baichuan'
+    if model_format is None:
+        model_format = 'hf'
     return model_format
 
 
@@ -154,10 +169,7 @@ def main(model_name: str,
     output_format = 'fp16'
 
     # gusss input model format
-    if model_name.startswith('qwen') and model_format == 'awq':
-        model_format = 'qwen-awq'
-    if model_format is None:
-        model_format = guess_model_format(model_name)
+    model_format = guess_model_format(model_name, model_format)
     if model_format not in INPUT_MODELS.module_dict.keys():
         supported_keys = list(INPUT_MODELS.module_dict.keys())
         print(f'the model format "{model_format}" is not supported. '
