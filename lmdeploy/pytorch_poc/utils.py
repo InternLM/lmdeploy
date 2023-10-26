@@ -5,7 +5,6 @@ from inspect import Parameter, Signature
 from typing import Dict, Sequence
 
 import psutil
-import pycuda.autoinit  # noqa: F401
 import pycuda.driver as drv
 
 
