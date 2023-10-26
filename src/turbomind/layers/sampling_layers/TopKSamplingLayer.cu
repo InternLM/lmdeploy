@@ -22,6 +22,7 @@
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -202,6 +203,7 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     cudaAutoCpy(skip_decode_, skip_decode_buf_, batch_size, stream_);
     uint* runtime_top_ks = new uint[batch_size];
     cudaAutoCpy(runtime_top_ks, runtime_top_k_buf_, batch_size, stream_);
+    check_cuda_error(cudaStreamSynchronize(stream_));
     runtime_max_top_k_ = static_cast<int>(*std::max_element(runtime_top_ks, runtime_top_ks + batch_size));
     delete[] runtime_top_ks;
 }
