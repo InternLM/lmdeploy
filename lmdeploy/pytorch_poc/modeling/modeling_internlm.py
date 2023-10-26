@@ -36,7 +36,8 @@ from transformers.utils import (add_start_docstrings,
                                 add_start_docstrings_to_model_forward, logging,
                                 replace_return_docstrings)
 
-from lmdeploy.pytorch_poc.models import QLinear, QRMSNorm
+from lmdeploy.pytorch_poc.modeling.convert_to_qmodules import \
+    convert_to_qmodules
 
 from .configuration_internlm import InternLMConfig
 
@@ -186,9 +187,9 @@ class InternLMMLP(nn.Module):
         hidden_act: str,
     ):
         super().__init__()
-        self.gate_proj = QLinear(hidden_size, intermediate_size, bias=False)
-        self.down_proj = QLinear(intermediate_size, hidden_size, bias=False)
-        self.up_proj = QLinear(hidden_size, intermediate_size, bias=False)
+        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
@@ -210,18 +211,18 @@ class InternLMAttention(nn.Module):
             raise ValueError(
                 f'hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}'
                 f' and `num_heads`: {self.num_heads}).')
-        self.q_proj = QLinear(self.hidden_size,
-                              self.num_heads * self.head_dim,
-                              bias=config.bias)
-        self.k_proj = QLinear(self.hidden_size,
-                              self.num_heads * self.head_dim,
-                              bias=config.bias)
-        self.v_proj = QLinear(self.hidden_size,
-                              self.num_heads * self.head_dim,
-                              bias=config.bias)
-        self.o_proj = QLinear(self.num_heads * self.head_dim,
-                              self.hidden_size,
-                              bias=config.bias)
+        self.q_proj = nn.Linear(self.hidden_size,
+                                self.num_heads * self.head_dim,
+                                bias=config.bias)
+        self.k_proj = nn.Linear(self.hidden_size,
+                                self.num_heads * self.head_dim,
+                                bias=config.bias)
+        self.v_proj = nn.Linear(self.hidden_size,
+                                self.num_heads * self.head_dim,
+                                bias=config.bias)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim,
+                                self.hidden_size,
+                                bias=config.bias)
         self.rotary_emb = InternLMRotaryEmbedding(
             self.head_dim,
             max_position_embeddings=self.max_position_embeddings)
@@ -316,10 +317,10 @@ class InternLMDecoderLayer(nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
         )
-        self.input_layernorm = QRMSNorm(config.hidden_size,
-                                        eps=config.rms_norm_eps)
-        self.post_attention_layernorm = QRMSNorm(config.hidden_size,
-                                                 eps=config.rms_norm_eps)
+        self.input_layernorm = InternLMRMSNorm(config.hidden_size,
+                                               eps=config.rms_norm_eps)
+        self.post_attention_layernorm = InternLMRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -381,9 +382,11 @@ INTERNLM_START_DOCSTRING = r"""
     This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
     etc.)
+
     This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
     Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
     and behavior.
+
     Parameters:
         config ([`InternLMConfig`]):
             Model configuration class with all the parameters of the model. Initializing with a config file does not
@@ -424,33 +427,44 @@ INTERNLM_INPUTS_DOCSTRING = r"""
         input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
             Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
             it.
+
             Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
             [`PreTrainedTokenizer.__call__`] for details.
+
             [What are input IDs?](../glossary#input-ids)
         attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
             Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
+
             - 1 for tokens that are **not masked**,
             - 0 for tokens that are **masked**.
+
             [What are attention masks?](../glossary#attention-mask)
+
             Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
             [`PreTrainedTokenizer.__call__`] for details.
+
             If `past_key_values` is used, optionally only the last `decoder_input_ids` have to be input (see
             `past_key_values`).
+
             If you want to change padding behavior, you should read [`modeling_opt._prepare_decoder_attention_mask`]
             and modify to your needs. See diagram 1 in [the paper](https://arxiv.org/abs/1910.13461) for more
             information on the default strategy.
+
             - 1 indicates the head is **not masked**,
             - 0 indicates the head is **masked**.
         position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
             config.n_positions - 1]`.
+
             [What are position IDs?](../glossary#position-ids)
         past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
             Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
             `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
             `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+
             Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
+
             If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
             don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of all
             `decoder_input_ids` of shape `(batch_size, sequence_length)`.
@@ -478,8 +492,8 @@ INTERNLM_INPUTS_DOCSTRING = r"""
 )
 class InternLMModel(InternLMPreTrainedModel):
     """Transformer decoder consisting of *config.num_hidden_layers* layers.
-
     Each layer is a [`InternLMDecoderLayer`]
+
     Args:
         config: InternLMConfig
     """
@@ -689,6 +703,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+        convert_to_qmodules(self)
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -730,14 +745,20 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                 Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
                 config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
                 (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+
         Returns:
+
         Example:
+
         ```python
         >>> from transformers import AutoTokenizer, InternLMForCausalLM
+
         >>> model = InternLMForCausalLM.from_pretrained(PATH_TO_CONVERTED_WEIGHTS)
         >>> tokenizer = AutoTokenizer.from_pretrained(PATH_TO_CONVERTED_TOKENIZER)
+
         >>> prompt = "Hey, are you consciours? Can you talk to me?"
         >>> inputs = tokenizer(prompt, return_tensors="pt")
+
         >>> # Generate
         >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
@@ -948,8 +969,10 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
 @add_start_docstrings(
     """
     The InternLM Model transformer with a sequence classification head on top (linear layer).
+
     [`InternLMForSequenceClassification`] uses the last token in order to do the classification, as other causal models
     (e.g. GPT-2) do.
+
     Since it does classification on the last token, it requires to know the position of the last token. If a
     `pad_token_id` is defined in the configuration, it finds the last token that is not a padding token in each row. If
     no `pad_token_id` is defined, it simply takes the last value in each row of the batch. Since it cannot guess the
