@@ -21,6 +21,7 @@
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/turbomind/macro.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -132,6 +133,20 @@ void TopKSamplingLayer<T>::freeBuffer()
 }
 
 template<typename T>
+inline static std::string format(const Tensor& t)
+{
+    std::stringstream ss;
+    const int         size = t.size();
+    const T*          ptr  = t.getPtr<T>();
+    ss << "[";
+    for (int i = 0; i < size; ++i) {
+        ss << (i ? ", " : "") << ptr[i];
+    }
+    ss << "]";
+    return ss.str();
+}
+
+template<typename T>
 void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
 {
     // Setup runtime topk and topp arguments.
@@ -166,6 +181,11 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
             runtime_top_p.size() == batch_size,
             fmtstr("runtime_top_p.size() (%d) == batch_size (%d) is not satisfied!", runtime_top_p.size(), batch_size));
         cudaAutoCpy(runtime_top_p_buf_, runtime_top_p.getPtr<float>(), batch_size, stream_);
+    }
+
+    if (isDebug()) {
+        TM_LOG_INFO("[TopKSamplingLayer] runtime_top_k: %s", format<int>(runtime_top_k).c_str());
+        TM_LOG_INFO("[TopKSamplingLayer] runtime_top_p: %s", format<float>(runtime_top_p).c_str());
     }
 
     dim3 block(std::min((int)batch_size, 256));
