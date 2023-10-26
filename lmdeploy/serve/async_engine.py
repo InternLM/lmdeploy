@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import Literal, Optional
 
 from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.xmodel import XMODELS
 
 
 @dataclasses.dataclass
@@ -42,7 +43,10 @@ class AsyncEngine:
             self.tm_model.create_instance() for i in range(instance_num)
         ]
         self.instance_num = instance_num
-        self.model: BaseModel = MODELS.get(self.tm_model.model_name)()
+        if self.tm_model.has_image_embs:
+            self.model = XMODELS.get(self.tm_model.model_name)()
+        else:
+            self.model: BaseModel = MODELS.get(self.tm_model.model_name)()
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}
@@ -86,6 +90,7 @@ class AsyncEngine:
         self,
         messages,
         session_id,
+        image_embs=None,
         stream_response=True,
         sequence_start=True,
         sequence_end=False,
@@ -125,7 +130,11 @@ class AsyncEngine:
         if step != 0:
             self.steps[str(session_id)] = step
         seed = random.getrandbits(64)
-        prompt = self.model.messages2prompt(messages, sequence_start)
+        if image_embs is not None:
+            prompt = self.model.messages2prompt(messages, image_embs,
+                                                sequence_start)
+        else:
+            prompt = self.model.messages2prompt(messages, sequence_start)
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
         if self.steps[str(session_id)] + len(
@@ -140,6 +149,7 @@ class AsyncEngine:
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         input_ids=[input_ids],
+                        image_embs=[image_embs],
                         stream_output=stream_response,
                         request_output_len=request_output_len,
                         sequence_start=(sequence_start),

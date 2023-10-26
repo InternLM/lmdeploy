@@ -111,8 +111,10 @@ class TurboMind:
             self.model_name = parser.get(section_name, 'model_name')
             data_type = parser.get(section_name, 'weight_type')
             self.data_type = data_type
+            self.has_image_embs = 0
             if parser.getint(section_name, 'has_image_embs', fallback=0):
                 model = XMODELS.get(self.model_name)()
+                self.has_image_embs = 1
                 self.image_start_id = model.image_start_id
                 self.image_end_id = model.image_end_id
 
@@ -321,8 +323,12 @@ class TurboMindInstance:
             STOP=_broadcast_np((1 if stop else 0), np.int32))
 
         # image embs input
-        # torch.Tensor, [torch.Tensor], [None, None]
-        if image_embs is not None:
+        image_embs_valid = False
+        if isinstance(image_embs, torch.Tensor) or (
+                isinstance(image_embs, list)
+                and image_embs.count(None) != len(image_embs)):
+            image_embs_valid = True
+        if image_embs_valid:
             image_offsets = []
             for ids in input_ids:
                 # closed interval
@@ -349,9 +355,7 @@ class TurboMindInstance:
             image_embs = _image_embs
 
             image_lengths = torch.IntTensor([len(emb) for emb in image_embs])
-            image_embs = pad_sequence(image_embs,
-                                      batch_first=True,
-                                      padding_value=self.eos_id)
+            image_embs = pad_sequence(image_embs, batch_first=True)
             inputs['image_embs'] = image_embs
             inputs['image_lengths'] = image_lengths
             inputs['image_offsets'] = image_offsets
