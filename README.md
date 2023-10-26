@@ -104,11 +104,12 @@ pip install lmdeploy[all]
 ```
 
 > **Note**<br />
-> Users can install lmdeploy with extra required packages, eg: `pip install lmdeploy[all]`
+> `pip install lmdeploy` can only install the runtime required packages. If users want to run codes from modules like `lmdeploy.lite` and `lmdeploy.serve`, they need to install the extra required packages.
+> For instance, running `pip install lmdeploy[lite]` would install extra dependencies for `lmdeploy.lite` module.
 >
-> - `all`: Install lmdeploy with dependencies in `requirements.txt`
-> - `lite`: Install lmdeploy with dependencies in `requirements/runtime.txt` and `requirements/lite.txt`
-> - `serve`: Install lmdeploy with dependencies in `requirements/runtime.txt` and `requirements/serve.txt`
+> - `all`: Install lmdeploy with all dependencies in `requirements.txt`
+> - `lite`: Install lmdeploy with extra dependencies in `requirements/lite.txt`
+> - `serve`: Install lmdeploy with dependencies in `requirements/serve.txt`
 
 ### Deploy InternLM
 

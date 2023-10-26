@@ -105,11 +105,11 @@ pip install lmdeploy[all]
 ```
 
 > **Note**<br />
-> 用户在安装lmdeplou时可指定需要安装的额外依赖包，例如: `pip install lmdeploy[all]` 会安装所有依赖包
+> `pip install lmdeploy`默认安装runtime依赖包，使用lmdeploy的lite和serve功能时，用户需要安装额外依赖包。例如: `pip install lmdeploy[lite]` 会额外安装`lmdeploy.lite`模块的依赖包
 >
-> - `all`: 安装lmdeploy时，安装在 `requirements.txt` 中的所有依赖包
-> - `lite`: 安装lmdeploy时，安装在 `requirements/runtime.txt` 和 `requirements/lite.txt` 中的依赖包
-> - `serve`: 安装lmdeploy时，安装在 `requirements/runtime.txt` 和 `requirements/lite.txt` 中的依赖包
+> - `all`: 安装`lmdeploy`所有依赖包，具体可查看`requirements.txt`
+> - `lite`: 额外安装`lmdeploy.lite`模块的依赖包，具体可查看`requirements/lite.txt`
+> - `serve`: 额外安装`lmdeploy.serve`模块的依赖包，具体可查看`requirements/serve.txt`
 
 ### 部署 InternLM
 
