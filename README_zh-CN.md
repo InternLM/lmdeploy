@@ -104,13 +104,12 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 pip install lmdeploy[all]
 ```
 
-```{note}
-用户在安装lmdeplou时可指定需要安装的额外依赖包，例如: pip install lmdeploy[all]会安装所有依赖包。
-
-- all: 安装lmdeploy时，安装在 requirements.txt 中的所有依赖包。
-- lite: 安装lmdeploy时，安装在 requirements/runtime.txt 和 requirements/lite.txt 中的依赖包。
-- serve: 安装lmdeploy时，安装在 requirements/runtime.txt 和 requirements/lite.txt 中的依赖包。
-```
+> **Note**<br />
+> 用户在安装lmdeplou时可指定需要安装的额外依赖包，例如: `pip install lmdeploy[all]` 会安装所有依赖包。
+>
+> - `all`: 安装lmdeploy时，安装在 `requirements.txt` 中的所有依赖包。
+> - `lite`: 安装lmdeploy时，安装在 `requirements/runtime.txt` 和 `requirements/lite.txt` 中的依赖包。
+> - `serve`: 安装lmdeploy时，安装在 `requirements/runtime.txt` 和 `requirements/lite.txt` 中的依赖包。
 
 ### 部署 InternLM
 
