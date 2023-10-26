@@ -502,6 +502,12 @@ bool LlamaBatch<T>::generate()
                             batch_size_,
                             step_ - 1);
 
+    // insert +inf for half
+    // T x = 999999.f;
+    // cudaMemcpyAsync(decoder_input_buf_, &x, sizeof(x), cudaMemcpyDefault, stream_);
+
+    CheckValues(decoder_input_buf_, batch_size_ * llama_->hidden_units_, "embedding_lookup", stream_);
+
     llama_->decoderForward(decoder_output_buf_,
                            k_cache_ptr_buf_,
                            v_cache_ptr_buf_,
@@ -518,6 +524,8 @@ bool LlamaBatch<T>::generate()
                                 local_logits_buf_,
                                 decoder_output_buf_,
                                 batch_size_);
+
+    CheckValues(logits_buf_, batch_size_ * llama_->vocab_size_, "post_decode_embedding", stream_);
 
     // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
     // not supported yet.

@@ -25,6 +25,7 @@
 #include "src/turbomind/models/llama/LlamaContextDecoder.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
@@ -244,10 +245,14 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                              stream_);
     sync_check_cuda_error();
 
+    CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm", 0), stream_);
+
     for (size_t layer = 0; layer < num_layer_; ++layer) {
         /////////////////////////////////////////////
         /// self-attention
         forwardSelfAttn(sess, decoder_output, input_tensors, layer, false);
+
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_self_attn", layer), stream_);
 
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,
                                           decoder_output,
@@ -259,12 +264,16 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                           stream_);
         sync_check_cuda_error();
 
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm1", layer), stream_);
+
         ////////////////////////////////////////////
         /// feed-forward network
         TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, decoder_output}}};
         TensorMap ffn_outputs{
             {"ffn_output", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, decoder_output}}};
         silu_ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &decoder_layer_weights->at(layer)->ffn_weights);
+
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_ffn", layer), stream_);
 
         auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
                                                      input_tensors->at("output_norm_weight").getPtr<T>();
@@ -277,6 +286,8 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                           hidden_units_,
                                           stream_);
         sync_check_cuda_error();
+
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm2", layer), stream_);
     }
 
     if (is_free_buffer_after_forward_) {
