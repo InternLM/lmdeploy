@@ -103,6 +103,14 @@ Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 pip install lmdeploy[all]
 ```
 
+```{note}
+Users can install lmdeploy with extra required packages, eg: pip install lmdeploy[all]
+
+- all: Install lmdeploy with dependencies in requirements.txt
+- lite: Install lmdeploy with dependencies in requirements/runtime.txt and requirements/lite.txt
+- serve: Install lmdeploy with dependencies in requirements/runtime.txt and requirements/serve.txt
+```
+
 ### Deploy InternLM
 
 #### Get InternLM model
