@@ -1039,6 +1039,7 @@ class Engine:
                     msg = next(iter(sess.sequences.values()))
                     msg.update_token_ids(req.data['token_ids'])
                     msg.status = MessageStatus.WAITING
+                    msg.remain_output_len = req.data['max_request_output_len']
                     self.scheduler.update()
 
                 msg.meta = dict(req_id=req.data['req_id'])
