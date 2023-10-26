@@ -5,7 +5,7 @@ from inspect import Parameter, Signature
 from typing import Dict, Sequence
 
 import psutil
-import pycuda.autoinit
+import pycuda.autoinit  # noqa: F401
 import pycuda.driver as drv
 
 
@@ -27,6 +27,7 @@ def get_cpu_memory() -> int:
 def bind_sigature(input_names: str, args: Sequence, kwargs: Dict):
     """Bind args and kwargs to given input names."""
     kind = inspect._ParameterKind.POSITIONAL_OR_KEYWORD
+
     sig = Signature([Parameter(name, kind) for name in input_names])
     bind = sig.bind(*args, **kwargs)
     return bind.arguments

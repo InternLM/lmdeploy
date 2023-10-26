@@ -75,7 +75,8 @@ class CacheEngine:
             self.head_size,
         )
 
-    def get_value_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
+    def get_value_block_shape(self,
+                              local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
         num_heads = self.num_heads
         if local:
@@ -131,7 +132,8 @@ class CacheEngine:
             cpu_cache.append((key_blocks, value_blocks))
         return cpu_cache
 
-    def _swap(self, src: List[KVCache], dst: List[KVCache], src_to_dst: Dict[int, int]):
+    def _swap(self, src: List[KVCache], dst: List[KVCache],
+              src_to_dst: Dict[int, int]):
         """Move caches from src memory to dst memory.
 
         Args:
@@ -168,7 +170,8 @@ class CacheEngine:
         self._swap(self.local_gpu_cache, self.local_cpu_cache, src_to_dst)
 
     @staticmethod
-    def get_cache_block_size(block_size: int, model_config: ModelConfig) -> int:
+    def get_cache_block_size(block_size: int,
+                             model_config: ModelConfig) -> int:
         """Get the required cache size of the model.
 
         Args:
@@ -185,6 +188,7 @@ class CacheEngine:
         key_cache_block = block_size * num_heads * head_size
         value_cache_block = key_cache_block
         total = num_layers * (key_cache_block + value_cache_block)
+
         dtype_size = _get_dtype_size(model_config.dtype)
         return dtype_size * total
 
