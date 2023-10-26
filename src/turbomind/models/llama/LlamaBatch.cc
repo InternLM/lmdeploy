@@ -385,8 +385,7 @@ void LlamaBatch<T>::initializeSampling(int infer_request_count)
         }
     }
 
-    handleOptArg(&inputs_, "end_id", end_ids_buf_, llama_->end_id_, batch_size_);
-    cudaStreamSynchronize(0);
+    handleOptArg(&inputs_, "end_id", end_ids_buf_, llama_->end_id_, batch_size_, stream_);
 }
 
 template<typename T>
