@@ -644,50 +644,27 @@ class SOLAR(BaseModel):
 
 
 @MODELS.register_module(name='ultracm')
-class UltraCM(BaseModel):
-    """Template of UltraCM model.
+@MODELS.register_module(name='ultralm')
+class UltraChat(BaseModel):
+    """Template of UltraCM and UltraLM models.
 
     `https://huggingface.co/openbmb/UltraCM-13b`
+    `https://huggingface.co/openbmb/UltraLM-13b`
     """
 
     def __init__(
             self,
-            ultracm_instruction_template="""Given my answer to an instruction, your role is to provide specific and constructive feedback for me. You should find the best way for me to learn from your feedback and improve my performance.
-
-You should consider multiple aspects of my answer, including helpfulness, truthfulness, honesty, and to what extent the answer follows instructions.
----
-
-### Instruction
-{instruction}
-
-### Answer
-{completion}
----
-
-Please act as a teacher and provide specific and constructive feedback. Besides describing the weaknesses of the answer, you should also provide specific suggestions to guide me toward understanding how to improve. Please note, however, that your suggestions should help me better complete the instructions, but you should not introduce new requirements that are not mentioned in the instructions. Your feedback should focus on enhancing my ability to think critically and respond accurately. However, never explicitly provide the reference answer, nor do polite phrases be required. Only respond with concise feedback in chat style. Finally, score the overall quality of the answer from 1 to 10, where 1 is the worst and 10 is the best.
-
-*Format*
-### Feedback
-Overall Score: [1-10]
-[Your feedback]
-
----
-
-### Feedback
-Overall Score:
-""",  # noqa: E501
             system="""User: A one-turn chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, very detailed, and polite answers to the user's questions.</s>""",  # noqa: E501
-            eosys='</s>',
+            eos='</s>',
             user='User: ',
             assistant='Assistant: ',
             session_len=2048,
             **kwargs):
         super().__init__(**kwargs)
         self.system = system
-        self.eosys = eosys
+        self.eos = eos
         self.session_len = session_len
         self.user = user
-        self.ultracm_instruction_template = ultracm_instruction_template
         self.assistant = assistant
 
     def decorate_prompt(self, prompt, sequence_start=True):
@@ -701,9 +678,14 @@ Overall Score:
         Returns:
             str: the concatenated prompt
         """
-        raise NotImplementedError(
-            'does not support chat.py. Please use restful api '
-            '/v1/chat/completions with chat history input')
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'{self.system}\n{self.user}{prompt}{self.eos}' \
+                   f'\n{self.assistant}'
+
+        return f'\n{self.user}{prompt}{self.eos}' \
+               f'\n{self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -718,12 +700,14 @@ Overall Score:
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.system if not system else system
-        ret = f'{self.system}{self.eosys}\n'
-        if len(users):
-            # only eval the last turn
-            meta_instruction = self.ultracm_instruction_template.format(
-                instruction=users[-1], completion=assistants[-1])
-            ret += f'{meta_instruction}{self.eosys}\n{self.assistant}'
+        ret = f'{system}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.user}{user}{self.eos}' \
+                       f'\n{self.assistant}{assistant}{self.eos}'
+            else:
+                ret += f'\n{self.user}{user}{self.eos}' \
+                       f'\n{self.assistant}'
         return ret
 
 
