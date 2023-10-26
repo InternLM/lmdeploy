@@ -243,6 +243,22 @@ void LlamaBatch<T>::allocatePersistantBuffer(size_t max_batch_size)
         h_finished_buf_ = (bool*)allocator_->reMalloc(h_finished_buf_, sizeof(bool) * max_batch_size, false, true);
         h_seq_limit_len_ =
             (uint32_t*)allocator_->reMalloc(h_seq_limit_len_, sizeof(uint32_t) * max_batch_size, false, true);
+
+        if (llama_->has_image_embs_) {
+            const size_t hidden_units          = llama_->hidden_units_;
+            int          max_image_per_request = llama_->max_image_per_request_;
+            int          single_image_emb_size = llama_->image_seq_length_ * llama_->hidden_units_;
+
+            h_input_image_embs_ =
+                (T*)allocator_->reMalloc(h_input_image_embs_,
+                                         sizeof(T) * max_batch_size * max_image_per_request * single_image_emb_size,
+                                         false,
+                                         true);
+            h_input_image_lengths_ =
+                (int*)allocator_->reMalloc(h_input_image_lengths_, sizeof(int) * max_batch_size, true, true);
+            h_input_image_offsets_ = (int*)allocator_->reMalloc(
+                h_input_image_offsets_, sizeof(int) * max_batch_size * max_image_per_request, false, true);
+        }
     }
 
     is_allocate_persistant_buffer_ = true;
@@ -300,6 +316,10 @@ void LlamaBatch<T>::freeBuffer()
         allocator_->free((void**)&h_v_cache_ptr_buf_, true);
         allocator_->free((void**)&h_seq_limit_len_, true);
         allocator_->free((void**)&h_finished_buf_, true);
+
+        allocator_->free((void**)&h_input_image_embs_, true);
+        allocator_->free((void**)&h_input_image_lengths_, true);
+        allocator_->free((void**)&h_input_image_offsets_, true);
 
         allocator_->free((void**)&output_ids_buf_);
 
@@ -729,6 +749,29 @@ void LlamaBatch<T>::initialize(const std::vector<std::shared_ptr<Request>>& infe
 
         h_k_cache_ptr_buf_[i] = (uint64_t)seq.k_cache;
         h_v_cache_ptr_buf_[i] = (uint64_t)seq.v_cache;
+
+        if (llama_->has_image_embs_) {
+            int max_image_per_request = llama_->max_image_per_request_;
+            int single_image_emb_size = llama_->image_seq_length_ * llama_->hidden_units_;
+            TM_LOG_INFO("[init] slot  image_len");
+
+            h_input_image_lengths_[i] = 0;
+            if (requests_[i]->inputs[rank_].isExist("image_lengths")) {
+                h_input_image_lengths_[i] = requests_[i]->inputs[rank_].getVal<int>("image_lengths");
+                auto img_ptr              = requests_[i]->inputs[rank_].getPtr<T>("image_embs");
+                auto off_ptr              = requests_[i]->inputs[rank_].getPtr<int>("image_offsets");
+                std::memcpy(h_input_image_offsets_ + i * max_image_per_request,
+                            off_ptr,
+                            sizeof(int) * h_input_image_lengths_[i]);
+                std::memcpy(h_input_image_embs_ + i * max_image_per_request * single_image_emb_size,
+                            img_ptr,
+                            sizeof(T) * single_image_emb_size * h_input_image_lengths_[i]);
+                for (int j = 0; j < h_input_image_lengths_[i]; j++) {
+                    h_input_image_offsets_[i * max_image_per_request + j] += missed;
+                }
+            }
+            TM_LOG_INFO("[init] %4d %9d", i, h_input_image_lengths_[i]);
+        }
     }
 
     const int max_context_len = *std::max_element(h_context_length_buf_ + batch_size_, h_context_length_buf_ + count);
@@ -796,6 +839,11 @@ void LlamaBatch<T>::contextDecode()
 
         std::vector<int> decode_indices{base};
         std::vector<int> decode_lengths{get_input_len(base)};
+        std::vector<int> decode_image_indices{base};
+
+        int              max_image_per_request = llama_->max_image_per_request_;
+        int              single_image_emb_size = llama_->image_seq_length_ * llama_->hidden_units_;
+        std::vector<int> decode_image_offsets{0};
 
         auto token_num       = get_input_len(base);
         auto max_input_len   = get_input_len(base);
@@ -839,7 +887,11 @@ void LlamaBatch<T>::contextDecode()
                                       max_input_len,
                                       max_context_len,
                                       session_len_,
-                                      context_decode_batch_size);
+                                      context_decode_batch_size,
+                                      decode_image_offsets.data(),
+                                      h_input_image_embs_ + offset * max_image_per_request * single_image_emb_size,
+                                      h_input_image_lengths_ + offset,
+                                      h_input_image_offsets_ + offset * max_image_per_request);
 
                 // compute logits of inputs if requested
                 outputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
@@ -853,6 +905,8 @@ void LlamaBatch<T>::contextDecode()
 
                     decode_indices = {i};
                     decode_lengths = {get_input_len(i)};
+
+                    decode_image_offsets = {0};
                 }
             }
             else {
@@ -863,6 +917,7 @@ void LlamaBatch<T>::contextDecode()
 
                 decode_indices.push_back(i);
                 decode_lengths.push_back(get_input_len(i));
+                decode_image_offsets.push_back(get_input_len(i - 1));
             }
         }
 

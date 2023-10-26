@@ -117,6 +117,11 @@ private:
     uintptr_t* h_v_cache_ptr_buf_{};
     uint32_t*  h_seq_limit_len_{};
 
+    // image
+    T*   h_input_image_embs_{};     // [B, N, S, D]
+    int* h_input_image_lengths_{};  // [B]
+    int* h_input_image_offsets_{};  // [B, N]
+
     int*      stop_words_buf_{};  // [batch_size, 2, kMaxStopWordsLen]
     int*      bad_words_buf_{};
     int*      h_runtime_top_k_{};

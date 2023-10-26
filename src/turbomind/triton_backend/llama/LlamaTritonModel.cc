@@ -136,6 +136,10 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
     group_size_            = reader.GetInteger("llama", "group_size", 0);
 
+    has_image_embs_        = reader.GetInteger("llama", "has_image_embs", 0);
+    image_seq_length_      = reader.GetInteger("llama", "image_seq_length", 0);
+    max_image_per_request_ = reader.GetInteger("llama", "image_seq_length", 16);
+
     attn_params_.rotray_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
     attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
     attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
@@ -246,7 +250,10 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   cublas_wrapper.get(),
                                                   allocator.get(),
                                                   false,  // is_free_buffer_after_forward,
-                                                  cuda_device_prop_ptr.get());
+                                                  cuda_device_prop_ptr.get(),
+                                                  has_image_embs_,
+                                                  image_seq_length_,
+                                                  max_image_per_request_);
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
         LlamaTritonSharedModelInstance<T>{std::move(allocator),

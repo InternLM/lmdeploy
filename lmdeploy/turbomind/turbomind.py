@@ -16,6 +16,7 @@ import lmdeploy
 from lmdeploy.model import MODELS
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
+from lmdeploy.xmodel import XMODELS
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -28,8 +29,8 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
-           all(isinstance(elem, str) for elem in stop_words), \
-           f'stop_words must be a list but got {type(stop_words)}'
+        all(isinstance(elem, str) for elem in stop_words), \
+        f'stop_words must be a list but got {type(stop_words)}'
     stop_words = [tokenizer.encode(stop_word)[-1] for stop_word in stop_words]
     assert isinstance(stop_words, List) and all(
         isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
@@ -109,6 +110,12 @@ class TurboMind:
                     self.gpu_count = tp_cfg
             self.model_name = parser.get(section_name, 'model_name')
             data_type = parser.get(section_name, 'weight_type')
+            self.data_type = data_type
+            if parser.getint(section_name, 'has_image_embs', fallback=0):
+                model = XMODELS.get(self.model_name)()
+                self.image_start_id = model.image_start_id
+                self.image_end_id = model.image_end_id
+
         model = MODELS.get(self.model_name)()
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
@@ -227,6 +234,7 @@ class TurboMindInstance:
     def stream_infer(self,
                      session_id,
                      input_ids,
+                     image_embs: torch.Tensor = None,
                      request_output_len: int = 512,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
@@ -311,6 +319,42 @@ class TurboMindInstance:
             END=_broadcast_np((1 if sequence_end else 0), np.int32),
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
+
+        # image embs input
+        # torch.Tensor, [torch.Tensor], [None, None]
+        if image_embs is not None:
+            image_offsets = []
+            for ids in input_ids:
+                # closed interval
+                ie_st = torch.where(ids == self.tm_model.image_start_id)[0] + 1
+                ie_ed = torch.where(ids == self.tm_model.image_end_id)[0] - 1
+                assert ie_st.shape == ie_ed.shape
+                image_offsets.append(ie_st)
+            image_offsets = pad_sequence(image_offsets, batch_first=True)
+            image_offsets = image_offsets.to(torch.int32)
+
+            if isinstance(image_embs, torch.Tensor):
+                image_embs = [image_embs]
+            empty_emb = None
+            for emb in image_embs:
+                if emb is not None:
+                    empty_emb = emb[0:0]
+                    break
+            _image_embs = []
+            for emb in image_embs:
+                if emb is not None:
+                    _image_embs.append(emb)
+                else:
+                    _image_embs.append(torch.empty_like(empty_emb))
+            image_embs = _image_embs
+
+            image_lengths = torch.IntTensor([len(emb) for emb in image_embs])
+            image_embs = pad_sequence(image_embs,
+                                      batch_first=True,
+                                      padding_value=self.eos_id)
+            inputs['image_embs'] = image_embs
+            inputs['image_lengths'] = image_lengths
+            inputs['image_offsets'] = image_offsets
 
         if ignore_eos:
             stop_words = None

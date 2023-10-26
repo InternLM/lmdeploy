@@ -65,7 +65,10 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     cublasMMWrapper*             cublas_wrapper,
                     IAllocator*                  allocator,
                     bool                         is_free_buffer_after_forward,
-                    cudaDeviceProp*              cuda_device_prop):
+                    cudaDeviceProp*              cuda_device_prop,
+                    int                          has_image_embs,
+                    size_t                       image_seq_length,
+                    size_t                       max_image_per_request):
     head_num_(head_num),
     size_per_head_(size_per_head),
     inter_size_(inter_size),
@@ -87,7 +90,10 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     debug_(isDebug()),
     step_length_(step_length),
     batch_(max_batch_size, max_context_token_num, session_len, this),
-    shared_state_(shared_state)
+    shared_state_(shared_state),
+    has_image_embs_(has_image_embs),
+    image_seq_length_(image_seq_length),
+    max_image_per_request_(max_image_per_request)
 
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -215,7 +221,11 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
                                size_t     max_input_len,
                                size_t     max_context_len,
                                size_t     session_len,
-                               size_t     batch_size)
+                               size_t     batch_size,
+                               const int* decode_image_offsets,
+                               const T*   input_image_embs,
+                               const int* input_image_lengths,
+                               const int* input_image_offsets)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -236,6 +246,21 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
                                              hidden_units_,
                                              stream_);
     sync_check_cuda_error();
+
+    // copy image_embs to context_decoder_input_buf
+    if (has_image_embs_) {
+        for (int i = 0; i < batch_size; i++) {
+            auto image_base_ptr = input_image_embs + i * max_image_per_request_ * image_seq_length_ * hidden_units_;
+            for (int j = 0; j < input_image_lengths[i]; j++) {
+                cudaMemcpyAsync(context_decoder_input_buf
+                                    + (decode_image_offsets[i] + input_image_offsets[j]) * hidden_units_,
+                                image_base_ptr + j * image_seq_length_ * hidden_units_,
+                                sizeof(T) * image_seq_length_ * hidden_units_,
+                                cudaMemcpyDefault,
+                                stream_);
+            }
+        }
+    }
 
     const auto dtype = getTensorType<T>();
     const auto bsz   = batch_size;
