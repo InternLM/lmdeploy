@@ -525,7 +525,7 @@ bool LlamaBatch<T>::generate()
                                 decoder_output_buf_,
                                 batch_size_);
 
-    CheckValues(logits_buf_, batch_size_ * llama_->vocab_size_, "post_decode_embedding", stream_);
+    CheckValues(logits_buf_, batch_size_ * llama_->vocab_size_padded_, "post_decode_embedding", stream_);
 
     // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
     // not supported yet.
