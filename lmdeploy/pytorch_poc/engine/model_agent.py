@@ -32,7 +32,7 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config (CacheConfig): The config of the cache info.
         gpu_id (int): The GPU id to use.
     """
-    GPU_MEM_PERCENT = 0.5
+    GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
     reserved_mem = torch.cuda.memory_reserved(gpu_id)
     gpu_mem = (get_gpu_memory(gpu_id) - reserved_mem) * GPU_MEM_PERCENT
@@ -205,6 +205,7 @@ class BaseModelAgent:
         _update_cache_config(model_config, cache_config)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
+        self.stream = torch.cuda.Stream()
         logger.debug(
             f'Initialize cache engine with {cache_config.num_gpu_blocks}'
             f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
@@ -237,7 +238,7 @@ class BaseModelAgent:
             for event in cache_events:
                 event.wait()
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.cuda.stream(self.stream):
             # forward
             output = self.patched_model(
                 input_ids=inputs['input_ids'],
@@ -257,7 +258,8 @@ class BaseModelAgent:
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
             )
-            return output['logits']
+        self.stream.synchronize()
+        return output['logits']
 
 
 def _tp_model_loop(
@@ -329,6 +331,7 @@ def _tp_model_loop(
                                    model_config,
                                    rank=rank,
                                    world_size=world_size)
+        stream = torch.cuda.Stream()
     except Exception as e:
         error_code = 1
         error_type = e
@@ -411,7 +414,7 @@ def _tp_model_loop(
             for event in cache_events:
                 event.wait()
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.cuda.stream(stream):
             output = patched_model(
                 input_ids=inputs['input_ids'],
                 position_ids=inputs['position_ids'],

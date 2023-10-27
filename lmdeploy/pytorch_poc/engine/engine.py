@@ -4,7 +4,7 @@ import itertools
 import time
 from dataclasses import dataclass
 from queue import Queue
-from threading import Lock, Thread
+from threading import Thread
 from typing import Any, Dict, List
 
 import torch
@@ -299,14 +299,17 @@ class Engine:
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.requests = Queue(scheduler_config.max_batches)
+        self.response = Queue(scheduler_config.max_batches)
+        self.req_count = 0
+        self.owned_sessions = []
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.model_config = model_config
         self.session_len = scheduler_config.max_session_len
+        self.stream = torch.cuda.Stream()
 
         # create main thread
-        self.mutex = Lock()
         loop_threads = Thread(target=self.loop, daemon=True)
         loop_threads.start()
         self.loop_threads = loop_threads
@@ -468,24 +471,49 @@ class Engine:
         sampling_params: List[SamplingParam] = [
             msg.sampling_param for msg in running
         ]
-        seq_length = inputs['seq_length']
-        accum_seq_length = inputs['seq_length'].cumsum(0)
-        logits = logits.cuda()
-        split_logits = [
-            logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
-        ]
+        is_decoding = inputs['input_ids'].numel(
+        ) == inputs['seq_length'].numel()
+        if not is_decoding:
+            seq_length = inputs['seq_length']
+            accum_seq_length = inputs['seq_length'].cumsum(0)
+            logits = logits.cuda()
+            split_logits = [
+                logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
+            ]
+            next_token_ids = []
+            for msg, logit, param in zip(running, split_logits,
+                                         sampling_params):
+                input_ids = msg.token_ids
+                logits_processor = LogitsProcessorList([
+                    TopKLogitsWarper(param.top_k),
+                    TopPLogitsWarper(param.top_p),
+                    TemperatureLogitsWarper(param.temperature),
+                ])
+                logit = logits_processor(input_ids, logit)
+                logit = logit.reshape([-1, logit.shape[-1]])
+                next_token_ids.append(logit[-1].argmax())
+        else:
+            split_logits = logits.split(1)
+            grouped_params = dict()
+            next_token_ids = [None] * len(sampling_params)
+            for i, p in enumerate(sampling_params):
+                key = (p.top_k, p.top_p, p.temperature)
+                grouped_params.setdefault(key, list())
+                grouped_params[key].append(i)
 
-        next_token_ids = []
-        for msg, logit, param in zip(running, split_logits, sampling_params):
-            input_ids = torch.tensor(msg.token_ids)
-            logits_processor = LogitsProcessorList([
-                TopKLogitsWarper(param.top_k),
-                TopPLogitsWarper(param.top_p),
-                TemperatureLogitsWarper(param.temperature),
-            ])
-            logit = logits_processor(input_ids, logit)
-            logit = logit.reshape([-1, logit.shape[-1]])
-            next_token_ids.append(logit[-1].argmax())
+            for param, idx in grouped_params.items():
+                top_k, top_p, temperature = param
+                logits_processor = LogitsProcessorList([
+                    TopKLogitsWarper(top_k),
+                    TopPLogitsWarper(top_p),
+                    TemperatureLogitsWarper(temperature),
+                ])
+                input_ids = [running[i].token_ids for i in idx]
+                input_ids = torch.stack(input_ids)
+                new_logits = logits[idx]
+                new_logits = logits_processor(input_ids, new_logits)
+                for i, logit in zip(idx, new_logits):
+                    next_token_ids[i] = logit.argmax()
 
         # update scheduler
         for token, msg in zip(next_token_ids, running):
@@ -512,37 +540,110 @@ class Engine:
                 outputs[session_ids[idx]].logits = split_logits[idx]
         return outputs
 
-    def infer(self, return_logits: bool = False):
-        """Perform inference until all message stopped.
+    def _send_reqs(self, req_types: List[RequestType], data: List[Any]):
+        """Send multiple request to engine.
 
         Args:
-            return_logits (bool): Weither to return the output logits.
+            req_types (List[RequestType]): The request type to send.
+            data (List[Any]): The data of the request.
+        """
+        num_reqs = len(req_types)
+        assert num_reqs == len(data)
+        reqs = [
+            Request(type=req_type,
+                    resp=self.response,
+                    req_id=self.req_count + idx,
+                    data=d)
+            for idx, req_type, d in zip(range(num_reqs), req_types, data)
+        ]
+        self.requests.put(reqs)
+        self.req_count += num_reqs
+
+    def _send_req(self, req_type: RequestType, data: Any):
+        """Send request to engine.
+
+        Args:
+            req_type (RequestType): The request type to send.
+            data (Any): The data of the request.
+        """
+        self._send_reqs([req_type], [data])
+
+    def _try_add_session(self, session_id: int):
+        """Add new session.
+
+        Args:
+            session_id (int): The session id to add.
+        """
+        if session_id not in self.owned_sessions:
+            self._send_req(RequestType.ADD_SESSION,
+                           dict(session_id=session_id))
+            self.owned_sessions.append(session_id)
+
+    def batched_infer(
+            self,
+            session_ids: List[int],
+            token_ids: List[List[int]] = None,
+            request_output_len: int = 512,
+            sampling_param: SamplingParam = SamplingParam(),
+    ):
+        """Send inference request.
+
+        Args:
+            session_id (int): The session id.
+            prompt_token_ids (List[int]): The input token ids.
+            request_output_len (int): The max output length of this request.
+            step (int): No use for now.
+            sampling_param (SamplingParam): The sampling param of the output.
 
         Returns:
-            Dict[int, InferOutput]: The output of each session.
+            int: Error flags. 0 if success.
+            List[int]: The streaming output tokens.
+            int: The number of the output tokens.
         """
-        ret_tokens: Dict[int, InferOutput] = dict()
-        while self.scheduler.has_unfinished():
-            outputs = self.step(return_logits)
-            for session_id, out in outputs.items():
-                if session_id not in ret_tokens:
-                    # TODO: check if req_id is different
-                    ret_tokens[session_id] = InferOutput(session_id=session_id,
-                                                         req_id=out.req_id,
-                                                         token_ids=[])
 
-                ret_tokens[session_id].token_ids += out.token_ids
+        batch_size = len(token_ids)
+        assert len(session_ids) == batch_size
 
-                if return_logits:
-                    if ret_tokens[session_id].logits is None:
-                        ret_tokens[session_id].logits = []
-                    ret_tokens[session_id].logits.append(out.logits)
+        req_ids = []
+        add_msgs = []
+        for session_id, token_id in zip(session_ids, token_ids):
+            self._try_add_session(session_id)
+            req_id = self.req_count
+            req_ids.append(req_id)
+            msg = dict(
+                token_ids=token_id,
+                session_id=session_id,
+                max_request_output_len=request_output_len,
+                req_id=req_id,
+                sampling_param=sampling_param,
+            )
+            add_msgs.append(msg)
+        self._send_reqs([RequestType.ADD_MESSAGE] * batch_size, add_msgs)
 
-        if return_logits:
-            for out in ret_tokens.values():
-                out.logits = torch.cat(out.logits, dim=0)
+        req_idx_map = dict(zip(req_ids, range(len(req_ids))))
+        output_token_ids = [list() for _ in req_ids]
+        status = 0
+        while True:
+            if not self.loop_threads.is_alive():
+                status = 1
+                break
 
-        return ret_tokens
+            resp: Response = self.response.get()
+            if resp.req_id not in req_ids:
+                continue
+            idx = req_idx_map[resp.req_id]
+            token_ids = output_token_ids[idx]
+            if resp.type == ResponseType.SUCCESS:
+                token_ids += resp.data['token_ids']
+            elif resp.type == ResponseType.FINISH:
+                token_ids += resp.data['token_ids']
+                break
+            else:
+                status = 1
+                break
+
+        output_token_len = [len(token_ids) for token_ids in output_token_ids]
+        return (status, output_token_ids, output_token_len)
 
     def decode(self, prompt_token_ids: List[List[int]]):
         """Perform one step inference and get logits.
@@ -614,19 +715,20 @@ class Engine:
 
         while True:
             # get all requests
+            num_requests = self.requests.qsize()
 
-            with self.mutex:
-                num_requests = self.requests.qsize()
+            if num_requests == 0 and not self.scheduler.has_unfinished():
+                time.sleep(1)
+                continue
 
-                if num_requests == 0 and not self.scheduler.has_unfinished():
-                    time.sleep(1)
-                    continue
-
-                reqs: List[Request] = []
-                tmp = num_requests
-                while tmp:
-                    tmp -= 1
-                    reqs.append(self.requests.get())
+            reqs: List[Request] = []
+            tmp = num_requests
+            while tmp:
+                tmp -= 1
+                elem = self.requests.get()
+                if isinstance(elem, Request):
+                    elem = [elem]
+                reqs += elem
 
             # gather requests
             reqs_by_type: Dict[RequestType, Request] = dict(
@@ -692,7 +794,8 @@ class Engine:
                 msg.meta = dict(req_id=req.data['req_id'])
 
             # forward
-            step_tokens: Dict[int, InferOutput] = self.step()
+            with torch.no_grad():
+                step_tokens: Dict[int, InferOutput] = self.step()
 
             for session_id, out in step_tokens.items():
                 if out.finish:
