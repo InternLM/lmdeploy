@@ -145,7 +145,23 @@ def fill_kv_cache(k_states: Tensor,
                   block_offsets: Tensor,
                   history_lengths: Sequence,
                   context: Any = None):
-    """fill kv cache for paged attention."""
+    """fill key/value state to cache for paged attention.
+
+    Paged attention required blocked layout key/value caches. This kernel
+    fill states to cache blocks according to the block offsets.
+    read https://vllm.ai/ for more detail.
+
+    Args:
+        k_states (Tensor): The key state in continuous batching layout.
+        v_states (Tensor): The value state in continuous batching layout.
+        k_caches (Tensor): The key cache in blocked layout.
+        v_caches (Tensor): The value cache in blocked layout.
+        start_loc (Tensor): The batch start sequence offset.
+        seq_length (Tensor): The sequence of each data in batch.
+        block_offsets (Tensor): The block offsets of kv caches.
+        history_lengths (Sequence): The history lengths of each data in batch.
+        context (Any): Context object of current step.
+    """
     fill_cache_info = getattr(context, 'fill_cache_info', None)
 
     if fill_cache_info is None:
