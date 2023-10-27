@@ -3,6 +3,7 @@ import fire
 
 from .chat import SubCliChat
 from .lite import SubCliLite
+from .quant_visualization import SubCliDraw
 from .serve import SubCliServe
 
 
@@ -57,5 +58,6 @@ def run():
     cli.lite = SubCliLite()
     cli.chat = SubCliChat()
     cli.serve = SubCliServe()
+    cli.quant_visualization = SubCliDraw()
 
     fire.Fire(cli, name='lmdeploy')

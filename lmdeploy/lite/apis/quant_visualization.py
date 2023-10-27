@@ -3,13 +3,12 @@
 import os
 from pathlib import Path
 
-import fire
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-from calibrate import calibrate
 from matplotlib import rc
 
+from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.utils import collect_target_modules, load_hf_from_pretrained
 
 rc('mathtext', default='regular')
@@ -406,4 +405,5 @@ def draw(modes=None,
 
 
 if __name__ == '__main__':
+    import fire
     fire.Fire(draw)
