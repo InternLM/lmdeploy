@@ -57,32 +57,26 @@ def _fill_kv_cache_kernel(
         tl.store(vc_ptrs + idx, vs, mask=mask)
 
 
-def fill_kv_cache(k_states: Tensor,
-                  v_states: Tensor,
-                  k_caches: Tensor,
-                  v_caches: Tensor,
-                  start_loc: Tensor,
-                  seq_length: Tensor,
-                  block_offsets: Tensor,
-                  history_lengths: Sequence,
-                  context: Any = None):
-    """fill kv cache for paged attention."""
-    fill_cache_info = getattr(context, 'fill_cache_info', None)
+def _create_fill_cache_info(is_decoding: bool, block_size: int,
+                            start_loc: Tensor, seq_length: Tensor,
+                            block_offsets: Tensor, history_lengths: Sequence,
+                            device: torch.device):
+    """create information for cache filling."""
+    batch_size = block_offsets.size(0)
 
-    if fill_cache_info is None:
-        batch_size = block_offsets.size(0)
-        block_size = k_caches.size(1)
+    # make sure history lengths is a tensor
+    if not isinstance(history_lengths, Tensor):
+        history_lengths = torch.tensor(history_lengths, device=device)
 
-        if not isinstance(history_lengths, Tensor):
-            history_lengths = torch.tensor(history_lengths,
-                                           device=k_states.device)
+    first_block_ids = history_lengths // block_size
+    token_ids_start = history_lengths % block_size
+    if not is_decoding:
+        # prefilling
 
-        batch_ids = torch.arange(batch_size, device=k_states.device)
+        batch_ids = torch.arange(batch_size, device=device)
 
-        first_block_ids = history_lengths // block_size
         block_offsets1d = block_offsets[batch_ids, first_block_ids]
 
-        token_ids_start = history_lengths % block_size
         first_seq_len = torch.minimum(seq_length, block_size - token_ids_start)
 
         state_start = start_loc[:batch_size]
@@ -98,13 +92,11 @@ def fill_kv_cache(k_states: Tensor,
         remain_block_nums = (remain_seq_len / block_size).ceil().long()
 
         remain_state_start = [
-            ss + slen +
-            torch.arange(0, rlen, block_size, device=k_states.device)
-            for ss, slen, rlen in zip(state_start, first_seq_len,
-                                      remain_seq_len)
+            ss + slen + torch.arange(0, rlen, block_size, device=device) for
+            ss, slen, rlen in zip(state_start, first_seq_len, remain_seq_len)
         ]
         remain_seq_lens = [
-            torch.full((mid, ), block_size, device=k_states.device)
+            torch.full((mid, ), block_size, device=device)
             for mid in middle_block_nums
         ]
         remain_seq_lens = [
@@ -127,19 +119,53 @@ def fill_kv_cache(k_states: Tensor,
             [cache_start] +
             [state_start.new_zeros(state_start.size(0) - batch_size)])
         block_offsets1d = torch.cat([block_offsets1d] + remain_block_offsets1d)
-
-        if context is not None:
-            fill_cache_info = dict()
-            fill_cache_info['state_start'] = state_start
-            fill_cache_info['state_len'] = state_len
-            fill_cache_info['cache_start'] = cache_start
-            fill_cache_info['block_offsets1d'] = block_offsets1d
-            context.fill_cache_info = fill_cache_info
     else:
-        state_start = fill_cache_info['state_start']
-        state_len = fill_cache_info['state_len']
-        cache_start = fill_cache_info['cache_start']
-        block_offsets1d = fill_cache_info['block_offsets1d']
+        # decoding
+        state_start = start_loc
+        state_len = seq_length
+        cache_start = token_ids_start
+        batch_ids = torch.arange(batch_size, device=device)
+        block_offsets1d = block_offsets[batch_ids, first_block_ids]
+
+    fill_cache_info = dict()
+    fill_cache_info['state_start'] = state_start
+    fill_cache_info['state_len'] = state_len
+    fill_cache_info['cache_start'] = cache_start
+    fill_cache_info['block_offsets1d'] = block_offsets1d
+
+    return fill_cache_info
+
+
+def fill_kv_cache(k_states: Tensor,
+                  v_states: Tensor,
+                  k_caches: Tensor,
+                  v_caches: Tensor,
+                  start_loc: Tensor,
+                  seq_length: Tensor,
+                  block_offsets: Tensor,
+                  history_lengths: Sequence,
+                  context: Any = None):
+    """fill kv cache for paged attention."""
+    fill_cache_info = getattr(context, 'fill_cache_info', None)
+
+    if fill_cache_info is None:
+        is_decoding = k_states.size(-3) == seq_length.size(0)
+        block_size = k_caches.size(1)
+        fill_cache_info = _create_fill_cache_info(
+            is_decoding,
+            block_size,
+            start_loc=start_loc,
+            seq_length=seq_length,
+            block_offsets=block_offsets,
+            history_lengths=history_lengths,
+            device=k_states.device)
+        if context is not None:
+            context.fill_cache_info = fill_cache_info
+
+    state_start = fill_cache_info['state_start']
+    state_len = fill_cache_info['state_len']
+    cache_start = fill_cache_info['cache_start']
+    block_offsets1d = fill_cache_info['block_offsets1d']
 
     grid = (state_start.size(0), )
     BLOCK_M = k_caches.size(-3)
