@@ -11,6 +11,9 @@ from lmdeploy.pytorch_poc.messages import SamplingParam
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
+import pdb
+
+import torch
 
 
 def input_prompt():
@@ -80,6 +83,9 @@ def main(
                 continue
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
+            import numpy as np
+            input_ids = np.load(
+                '/workspace/GitProjects/rerope/inp.npy').flatten().tolist()
             input_ids = model.update_input_ids(input_ids)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
@@ -91,21 +97,33 @@ def main(
                 ignore_eos=False,
                 random_seed=seed,
             )
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=input_ids,
-                    request_output_len=512,
-                    step=step,
-                    sampling_param=sampling_param):
-                status, res, tokens = outputs
-                # decode res
-                response = tokenizer.decode(res)[response_size:]
-                response = valid_str(response)
-                print(f'{response}', end='', flush=True)
-                response_size += len(response)
 
-            # update step
-            step += len(input_ids) + tokens
+            status, token_ids, token_len = generator.infer(
+                session_id=session_id,
+                prompt_token_ids=input_ids,
+                request_output_len=1024,
+                step=step,
+                sampling_param=sampling_param)
+            pdb.set_trace()
+            response = tokenizer.decode(token_ids)
+            print(f'{response}', end='', flush=True)
+            step += len(input_ids) + token_len
+
+            # for outputs in generator.stream_infer(
+            #         session_id=session_id,
+            #         input_ids=input_ids,
+            #         request_output_len=512,
+            #         step=step,
+            #         sampling_param=sampling_param):
+            #     status, res, tokens = outputs
+            #     # decode res
+            #     response = tokenizer.decode(res)[response_size:]
+            #     response = valid_str(response)
+            #     print(f'{response}', end='', flush=True)
+            #     response_size += len(response)
+
+            # # update step
+            # step += len(input_ids) + tokens
             print()
 
             nth_round += 1

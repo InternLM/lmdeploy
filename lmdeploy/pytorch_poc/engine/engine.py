@@ -110,6 +110,7 @@ class ModelContext:
         seq_length: torch.Tensor,
         world_size: int = 1,
         device='cuda',
+        json_config: dict = None,
     ):
         self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
@@ -117,6 +118,7 @@ class ModelContext:
         self.q_start_loc = q_start_loc
         self.seq_length = seq_length
         self.world_size = world_size
+        self.json_config = json_config
 
         # padding zero
         pad_sequence = torch.nn.utils.rnn.pad_sequence
@@ -243,6 +245,7 @@ def _tp_model_loop(
     extra_args: List[str],
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    json_config: dict,
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
@@ -406,6 +409,7 @@ def _tp_model_loop(
                     seq_length=inputs['seq_length'],
                     world_size=world_size,
                 ),
+                json_config=json_config,
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
             )
 
@@ -456,14 +460,13 @@ class Engine:
         tp (int): Number of tensor parallel.
     """
 
-    def __init__(
-        self,
-        model_path: str,
-        scheduler_config: SchedulerConfig = None,
-        cache_config: CacheConfig = None,
-        tp: int = 1,
-        trust_remote_code=True,
-    ) -> None:
+    def __init__(self,
+                 model_path: str,
+                 scheduler_config: SchedulerConfig = None,
+                 cache_config: CacheConfig = None,
+                 tp: int = 1,
+                 trust_remote_code=True,
+                 json_config_file: str = 'config.json') -> None:
 
         self.tp = tp
         self.gpu_count = tp
@@ -480,6 +483,11 @@ class Engine:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
+
+        self.json_config = None
+        with open(os.path.join(model_path, json_config_file)) as f:
+            self.json_config = json.load(f)
+
         if 'falcon' in model_path:
             if hf_config.multi_query:
                 kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
@@ -546,6 +554,7 @@ class Engine:
                 ['context', 'use_origin', 'q_seq_info'],
                 model_config=model_config,
                 cache_config=cache_config,
+                json_config=self.json_config,
                 in_que=self.tp_model_in_que,
                 out_que=self.tp_model_out_que,
                 world_size=tp,
@@ -576,6 +585,7 @@ class Engine:
         extra_args: List[str],
         model_config: ModelConfig,
         cache_config: CacheConfig,
+        json_config: dict,
         in_que: mp.Queue,
         out_que: mp.Queue,
         world_size: int,
@@ -602,6 +612,7 @@ class Engine:
                 dict(
                     model_config=model_config,
                     cache_config=cache_config,
+                    json_config=json_config,
                     in_que=in_que,
                     out_que=out_que,
                     world_size=world_size,
@@ -651,6 +662,9 @@ class Engine:
         max_seq_len = max(seq_length)
 
         input_ids = list(itertools.chain(*token_ids))
+
+        # import numpy as np
+        # x = np.load('/workspace/GitProjects/rerope/inp.npy')
         input_ids = torch.tensor(input_ids).to(device)
 
         attention_mask = torch.tensor([
@@ -765,6 +779,7 @@ class Engine:
                         position_ids=inputs['position_ids'],
                         q_start_loc=inputs['q_start_loc'],
                         seq_length=inputs['seq_length'],
+                        json_config=self.json_config,
                     ),
                     q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
                 )
@@ -826,7 +841,8 @@ class Engine:
 
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
-            input_ids = torch.tensor(msg.token_ids)
+            # input_ids = torch.tensor(msg.token_ids)
+            input_ids = msg.token_ids.clone().detach()
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),
