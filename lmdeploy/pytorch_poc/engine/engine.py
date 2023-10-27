@@ -789,6 +789,7 @@ class Engine:
                     msg.remain_output_len = req.data['max_request_output_len']
                     msg.sampling_param = req.data['sampling_param']
                     msg.status = MessageStatus.WAITING
+                    msg.remain_output_len = req.data['max_request_output_len']
                     self.scheduler.update()
 
                 msg.meta = dict(req_id=req.data['req_id'])
