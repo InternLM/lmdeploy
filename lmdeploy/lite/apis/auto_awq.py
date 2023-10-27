@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import fire
 import torch
 from torch import nn
 from transformers import AutoTokenizer
@@ -60,5 +59,6 @@ def auto_awq(model: str,
 
 
 if __name__ == '__main__':
+    import fire
 
     fire.Fire(auto_awq)

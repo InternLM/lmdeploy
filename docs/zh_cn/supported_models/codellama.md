@@ -29,7 +29,7 @@
 python3 -m pip install lmdeploy
 
 # 转模型格式
-python3 -m lmdeploy.serve.turbomind.deploy codellama /path/of/codellama/model
+lmdeploy convert codellama /path/of/codellama/model
 ```
 
 接下来，可参考如下章节，在控制台与 codellama 进行交互式对话。
@@ -42,13 +42,13 @@ python3 -m lmdeploy.serve.turbomind.deploy codellama /path/of/codellama/model
 ### 代码续写
 
 ```shell
-python3 -m lmdeploy.turbomind.chat ./workspace --cap completion
+lmdeploy chat turbomind ./workspace --cap completion
 ```
 
 ### 代码填空
 
 ```shell
-python3 -m lmdeploy.turbomind.chat ./workspace --cap infilling
+lmdeploy chat turbomind ./workspace --cap infilling
 ```
 
 输入的代码块中要包含 `<FILL>`，比如：
@@ -64,7 +64,7 @@ def remove_non_ascii(s: str) -> str:
 ### 对话
 
 ```
-python3 -m lmdeploy.turbomind.chat ./workspace --cap chat --sys-instruct "Provide answers in Python"
+lmdeploy chat turbomind ./workspace --cap chat --sys-instruct "Provide answers in Python"
 ```
 
 可以把 `--sys-instruct` 的指令换成 codellama 支持的其他变成语言。
@@ -72,7 +72,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace --cap chat --sys-instruct "Provid
 ### Python 专项
 
 ```
-python3 -m lmdeploy.turbomind.chat ./workspace --cap python
+lmdeploy chat turbomind ./workspace --cap python
 ```
 
 建议这里部署 Python 微调模型
@@ -90,7 +90,7 @@ TBD
 ```shell
 # --instance_num: turbomind推理实例的个数。可理解为支持的最大并发数
 # --tp: 在 tensor parallel时，使用的GPU数量
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 打开 `http://{server_ip}:{server_port}`，即可访问 swagger，查阅 RESTful API 的详细信息。
@@ -99,7 +99,7 @@ python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --
 
 ```shell
 # restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+lmdeploy serve api_client restful_api_url
 ```
 
 或者，启动 gradio，在 webui 的聊天对话框中，与 codellama 交流：
@@ -107,8 +107,8 @@ python -m lmdeploy.serve.openai.api_client restful_api_url
 ```shell
 # restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
 ```
 
 关于 RESTful API的详细介绍，请参考[这份](../restful_api.md)文档。

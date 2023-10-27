@@ -5,7 +5,7 @@
 运行脚本
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
@@ -127,7 +127,7 @@ restful api 服务可以通过客户端测试，例如
 
 ```shell
 # restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+lmdeploy serve api_client restful_api_url
 ```
 
 ### webui
@@ -137,8 +137,8 @@ python -m lmdeploy.serve.openai.api_client restful_api_url
 ```shell
 # restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
+lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
 ```
 
 ### FAQ

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import fire
 import torch
 from transformers import AutoTokenizer
 
@@ -86,4 +85,6 @@ def calibrate(model: str,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(calibrate)
