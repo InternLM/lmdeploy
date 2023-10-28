@@ -40,6 +40,7 @@ def _fwd_split_kernel(
     stride_boffb,
     kv_group_num,
     SPLIT_K: tl.constexpr,
+    BLOCK_PER_CTA: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -72,38 +73,48 @@ def _fwd_split_kernel(
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
     # initialize pointer to m and l
-    # m_i = tl.full([1], -float('inf'), dtype=tl.float32)
     m_i = -float('inf')
     l_i = float(0)
     acc = tl.zeros([BLOCK_DMODEL], dtype=tl.float32)
 
-    num_blocks = (cur_batch_kv_len + BLOCK_N - 1) // BLOCK_N
-    num_blocks_per_prog = (num_blocks + SPLIT_K - 1) // SPLIT_K
-    kv_len_per_prog = num_blocks_per_prog * BLOCK_N
+    kv_len_per_prog = BLOCK_PER_CTA * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, cur_batch_kv_len)
+
+    # load block offset
+    start_block_id = loop_start // BLOCK_N
+    b_offset = tl.load(block_offset_ptrs + start_block_id)
 
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        start_block_id = start_n // BLOCK_N
-        b_offset = tl.load(block_offset_ptrs + start_block_id)
+        mask = (start_n + offs_n[:, None]) < cur_batch_kv_len
 
         # -- compute qk ----
         k = tl.load(
             k_ptrs + b_offset * BLOCK_N * stride_kbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
+            mask=mask,
             other=0.0,
-        ).to(tl.float32)
+        )
 
-        qk = tl.zeros([BLOCK_N], dtype=tl.float32)
-        qk += tl.sum(q[None, :] * k, 1)
+        v = tl.load(
+            v_ptrs + b_offset * BLOCK_N * stride_vbs,
+            mask=mask,
+            other=0.0,
+        )
+
+        # prefetch b_offset
+        if start_n + BLOCK_N < loop_end:
+            start_block_id += 1
+            b_offset = tl.load(block_offset_ptrs + start_block_id)
+
+        qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
         # NOTE: inf - inf = nan, and nan will leads to error
         qk = tl.where(
             history_len >= (start_n + offs_n),
             qk,
-            float(-1e30),
+            -float('inf'),
         )
 
         # -- compute p, m_i and l_i
@@ -111,18 +122,14 @@ def _fwd_split_kernel(
         p = tl.exp(qk - m_i_new)
         alpha = tl.exp(m_i - m_i_new)
         l_i_new = alpha * l_i + tl.sum(p, 0)
+
         # -- update output accumulator --
         # scale acc
         acc = acc * alpha
-        # update acc
-        v = tl.load(
-            v_ptrs + b_offset * BLOCK_N * stride_vbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
-            other=0.0,
-        )
 
-        p = p.to(v.dtype)
-        acc += tl.sum(p[:, None] * v, 0)
+        # update acc
+        p_new = p.to(v.dtype)
+        acc += tl.sum(p_new[:, None] * v, 0)
         # update m_i and l_i
         l_i = l_i_new
         m_i = m_i_new
@@ -401,6 +408,7 @@ def paged_attention_fwd(
     else:
         SPLIT_K = 4
         grid = (batch, head, SPLIT_K)
+        block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lq, dtype=torch.float32)
         meta = acc.new_empty(batch, head, SPLIT_K, 2)
         _fwd_split_kernel[grid](
@@ -432,11 +440,13 @@ def paged_attention_fwd(
             stride_boffb=block_offsets.stride(0),
             kv_group_num=kv_group_num,
             SPLIT_K=SPLIT_K,
+            BLOCK_PER_CTA=block_per_cta,
             BLOCK_DMODEL=Lk,
             BLOCK_N=BLOCK,
             num_warps=num_warps,
             num_stages=1,
         )
+
         grid = (batch, head)
         _reduce_split_kernel[grid](
             acc,
