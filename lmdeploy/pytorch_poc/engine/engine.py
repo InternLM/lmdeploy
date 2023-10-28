@@ -236,7 +236,7 @@ class Engine:
                                                max_session_len=2048,
                                                max_request_output_len=512)
         if cache_config is None:
-            cache_config = CacheConfig(block_size=64,
+            cache_config = CacheConfig(block_size=128,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
         if 'falcon' in model_path:
