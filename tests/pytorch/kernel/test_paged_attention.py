@@ -213,7 +213,7 @@ class TestPagedAttention:
                             max_input_len=max_seq_len,
                             BLOCK=block_size)
 
-        torch.testing.assert_close(out, conti_gt)
+        torch.testing.assert_close(out, conti_gt, atol=5e-4, rtol=1e-5)
 
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
                              indirect=True)
