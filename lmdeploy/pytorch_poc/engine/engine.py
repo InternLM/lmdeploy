@@ -466,6 +466,7 @@ class Engine:
         logits = self._model_forward(inputs, swap_in_map, swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+        logits = logits.cuda()
 
         # gather output
         sampling_params: List[SamplingParam] = [
@@ -476,7 +477,6 @@ class Engine:
         if not is_decoding:
             seq_length = inputs['seq_length']
             accum_seq_length = inputs['seq_length'].cumsum(0)
-            logits = logits.cuda()
             split_logits = [
                 logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
             ]
