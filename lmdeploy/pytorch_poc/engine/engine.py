@@ -348,7 +348,7 @@ class Engine:
             token_ids = [token_ids]
 
         batch_size = len(messages)
-        input_ids = [ids.to(device) for ids in token_ids]
+        input_ids = [ids for ids in token_ids]
         input_ids = torch.cat(input_ids).to(device)
 
         is_decoding = input_ids.size(0) == batch_size
@@ -512,12 +512,12 @@ class Engine:
                 input_ids = None
                 new_logits = split_logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = new_logits.argmax(-1)
+                argmax_ids = new_logits.argmax(-1).cpu()
                 for i, next_ids in zip(idx, argmax_ids):
                     next_token_ids[i] = next_ids
         else:
             # most step share the same sampling parameters
-            split_logits = logits.split(1)
+            split_logits = logits
 
             for param, idx in grouped_params.items():
                 top_k, top_p, temperature, _ = param
@@ -529,7 +529,7 @@ class Engine:
                 input_ids = inputs['input_ids'].reshape(-1, 1)
                 new_logits = logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = new_logits.argmax(-1)
+                argmax_ids = new_logits.argmax(-1).cpu()
                 for i, next_ids in zip(idx, argmax_ids):
                     next_token_ids[i] = next_ids
 

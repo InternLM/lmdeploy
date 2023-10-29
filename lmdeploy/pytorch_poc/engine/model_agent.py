@@ -89,15 +89,18 @@ class ModelContext:
 
         # padding zero
         pad_sequence = torch.nn.utils.rnn.pad_sequence
-        block_offsets = [
-            torch.tensor(offset, device=device) for offset in block_offsets
-        ]
+        block_offsets = [torch.tensor(offset) for offset in block_offsets]
         block_offsets = pad_sequence(block_offsets, True)
-        self.block_offsets = block_offsets
+        self.block_offsets = block_offsets.to(device)
 
         # update position_ids_1d
-        position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
-        position_ids_1d = torch.cat(position_ids_1d)
+        if position_ids.size(1) == 1:
+            position_ids_1d = position_ids.flatten()
+        else:
+            position_ids_1d = [
+                ids[:l] for ids, l in zip(position_ids.cpu(), seq_length.cpu())
+            ]
+            position_ids_1d = torch.cat(position_ids_1d).to(device)
         self.position_ids_1d = position_ids_1d
 
     def get_block_offsets(self):
