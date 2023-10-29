@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-import itertools
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -348,20 +347,36 @@ class Engine:
         if isinstance(token_ids[0], int):
             token_ids = [token_ids]
 
-        seq_length = [len(tokens) for tokens in token_ids]
-        q_start_loc = torch.tensor([0] + seq_length).cumsum(0)[:-1].to(device)
-        max_seq_len = max(seq_length)
+        batch_size = len(messages)
+        input_ids = [ids.to(device) for ids in token_ids]
+        input_ids = torch.cat(input_ids).to(device)
 
-        input_ids = list(itertools.chain(*token_ids))
-        input_ids = torch.tensor(input_ids).to(device)
+        is_decoding = input_ids.size(0) == batch_size
+        if not is_decoding:
+            seq_length = [tokens.size(0) for tokens in token_ids]
+            max_seq_len = max(seq_length)
+            q_start_loc = torch.tensor([0] +
+                                       seq_length).cumsum(0)[:-1].to(device)
 
-        attention_mask = torch.tensor([
-            seq_len * [1] + (max_seq_len - seq_len) * [0]
-            for seq_len in seq_length
-        ]).to(device)
-        position_ids = attention_mask.long().cumsum(-1) - 1
-        position_ids += position_ids.new_tensor(history_lengths).unsqueeze(-1)
-        seq_length = torch.tensor(seq_length).to(device)
+            attention_mask = torch.tensor([
+                seq_len * [1] + (max_seq_len - seq_len) * [0]
+                for seq_len in seq_length
+            ]).to(device)
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids += position_ids.new_tensor(history_lengths).unsqueeze(
+                -1)
+            seq_length = torch.tensor(seq_length).to(device)
+        else:
+            q_start_loc = torch.arange(batch_size, device=device)
+            attention_mask = torch.ones(batch_size,
+                                        1,
+                                        dtype=torch.long,
+                                        device=device)
+            position_ids = q_start_loc.new_tensor(history_lengths).unsqueeze(
+                -1)
+            seq_length = torch.ones(batch_size,
+                                    dtype=torch.long,
+                                    device=device)
 
         block_tables = self.scheduler.get_block_tables(messages)
         block_offsets = [[block.block_id for block in block_table]
@@ -476,10 +491,8 @@ class Engine:
         ) == inputs['seq_length'].numel()
         if not is_decoding:
             seq_length = inputs['seq_length']
-            accum_seq_length = inputs['seq_length'].cumsum(0)
-            split_logits = [
-                logits[x - y:x] for x, y in zip(accum_seq_length, seq_length)
-            ]
+            last_idx = seq_length.cumsum(-1) - 1
+            split_logits = logits[last_idx, :]
             next_token_ids = []
             for msg, logit, param in zip(running, split_logits,
                                          sampling_params):
@@ -489,31 +502,31 @@ class Engine:
                     TopPLogitsWarper(param.top_p),
                     TemperatureLogitsWarper(param.temperature),
                 ])
-                logit = logits_processor(input_ids, logit)
-                logit = logit.reshape([-1, logit.shape[-1]])
-                next_token_ids.append(logit[-1].argmax())
+                logit = logits_processor(None, logit[None])
+                next_token_ids.append(logit.argmax())
         else:
+            # most step share the same sampling parameters
             split_logits = logits.split(1)
             grouped_params = dict()
             next_token_ids = [None] * len(sampling_params)
             for i, p in enumerate(sampling_params):
-                key = (p.top_k, p.top_p, p.temperature)
+                key = (p.top_k, p.top_p, p.temperature, p.repetition_penalty)
                 grouped_params.setdefault(key, list())
                 grouped_params[key].append(i)
 
             for param, idx in grouped_params.items():
-                top_k, top_p, temperature = param
+                top_k, top_p, temperature, _ = param
                 logits_processor = LogitsProcessorList([
                     TopKLogitsWarper(top_k),
                     TopPLogitsWarper(top_p),
                     TemperatureLogitsWarper(temperature),
                 ])
-                input_ids = [running[i].token_ids for i in idx]
-                input_ids = torch.stack(input_ids)
+                input_ids = inputs['input_ids'].reshape(-1, 1)
                 new_logits = logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
-                for i, logit in zip(idx, new_logits):
-                    next_token_ids[i] = logit.argmax()
+                argmax_ids = logits.argmax(-1)
+                for i, next_ids in zip(idx, argmax_ids):
+                    next_token_ids[i] = next_ids
 
         # update scheduler
         for token, msg in zip(next_token_ids, running):
@@ -623,6 +636,7 @@ class Engine:
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
         output_token_ids = [list() for _ in req_ids]
         status = 0
+        finish_count = batch_size
         while True:
             if not self.loop_threads.is_alive():
                 status = 1
@@ -637,9 +651,12 @@ class Engine:
                 token_ids += resp.data['token_ids']
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
-                break
+                finish_count -= 1
             else:
                 status = 1
+                break
+
+            if finish_count == 0:
                 break
 
         output_token_len = [len(token_ids) for token_ids in output_token_ids]
