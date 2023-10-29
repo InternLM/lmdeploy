@@ -484,35 +484,40 @@ class Engine:
         logits = logits.cuda()
 
         # gather output
+        # most step share the same sampling parameters
         sampling_params: List[SamplingParam] = [
             msg.sampling_param for msg in running
         ]
+        grouped_params = dict()
+        next_token_ids = [None] * len(sampling_params)
+        for i, p in enumerate(sampling_params):
+            key = (p.top_k, p.top_p, p.temperature, p.repetition_penalty)
+            grouped_params.setdefault(key, list())
+            grouped_params[key].append(i)
+
         is_decoding = inputs['input_ids'].numel(
         ) == inputs['seq_length'].numel()
+        # TODO: support repetition_penalty
         if not is_decoding:
             seq_length = inputs['seq_length']
             last_idx = seq_length.cumsum(-1) - 1
             split_logits = logits[last_idx, :]
-            next_token_ids = []
-            for msg, logit, param in zip(running, split_logits,
-                                         sampling_params):
-                input_ids = msg.token_ids
+            for param, idx in grouped_params.items():
+                top_k, top_p, temperature, _ = param
                 logits_processor = LogitsProcessorList([
-                    TopKLogitsWarper(param.top_k),
-                    TopPLogitsWarper(param.top_p),
-                    TemperatureLogitsWarper(param.temperature),
+                    TopKLogitsWarper(top_k),
+                    TopPLogitsWarper(top_p),
+                    TemperatureLogitsWarper(temperature),
                 ])
-                logit = logits_processor(None, logit[None])
-                next_token_ids.append(logit.argmax())
+                input_ids = None
+                new_logits = split_logits[idx]
+                new_logits = logits_processor(input_ids, new_logits)
+                argmax_ids = new_logits.argmax(-1)
+                for i, next_ids in zip(idx, argmax_ids):
+                    next_token_ids[i] = next_ids
         else:
             # most step share the same sampling parameters
             split_logits = logits.split(1)
-            grouped_params = dict()
-            next_token_ids = [None] * len(sampling_params)
-            for i, p in enumerate(sampling_params):
-                key = (p.top_k, p.top_p, p.temperature, p.repetition_penalty)
-                grouped_params.setdefault(key, list())
-                grouped_params[key].append(i)
 
             for param, idx in grouped_params.items():
                 top_k, top_p, temperature, _ = param
@@ -524,7 +529,7 @@ class Engine:
                 input_ids = inputs['input_ids'].reshape(-1, 1)
                 new_logits = logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = logits.argmax(-1)
+                argmax_ids = new_logits.argmax(-1)
                 for i, next_ids in zip(idx, argmax_ids):
                     next_token_ids[i] = next_ids
 
