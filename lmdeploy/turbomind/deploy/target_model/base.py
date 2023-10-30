@@ -181,16 +181,15 @@ class BaseOutputModel(ABC):
         pass
 
 
-def permute(x: torch.Tensor):
-    SIZE_PER_HEAD = 128
+def permute(x: torch.Tensor, size_per_head: int = 128):
     if x.shape[-1] > 1:
         dim = x.shape[-1]
-        n_heads = dim // SIZE_PER_HEAD
+        n_heads = dim // size_per_head
         return x.view(-1, n_heads, 2,
                       dim // n_heads // 2).transpose(2, 3).reshape(-1, dim)
     else:  # scales, zeros
         dim = x.shape[0]
-        n_heads = dim // SIZE_PER_HEAD
+        n_heads = dim // size_per_head
         return x.view(n_heads, 2, dim // n_heads // 2,
                       1).transpose(1, 2).reshape(dim, 1)
 

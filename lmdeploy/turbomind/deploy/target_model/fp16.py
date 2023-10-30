@@ -70,19 +70,20 @@ class TurbomindModel(BaseOutputModel):
         """Export transformer layer i."""
         assert bin.start_layer_id <= i < bin.end_layer_id
         tp = self.cfg.tensor_para_size
+        size_per_head = self.cfg.size_per_head
         # attn
         qw, kw, vw, ow = bin.attn(i)
         qw, kw, vw, ow = transpose_tensor([qw, kw, vw, ow])
-        qw = permute(qw)
-        kw = permute(kw)
+        qw = permute(qw, size_per_head)
+        kw = permute(kw, size_per_head)
         qkv_w = merge_qkv(qw, kw, vw, tp, dim=2)
         self.save_split(qkv_w, f'layers.{i}.attention.w_qkv.weight', -1)
         self.save_split(ow, f'layers.{i}.attention.wo.weight', 0)
         qb, kb, vb, ob = bin.attn_bias(i)
         if qb is not None:
             qb, kb, vb, ob = transpose_tensor([qb, kb, vb, ob])
-            qb = permute(qb)
-            kb = permute(kb)
+            qb = permute(qb, size_per_head)
+            kb = permute(kb, size_per_head)
             qkv_b = merge_qkv(qb, kb, vb, tp, dim=1)
             self.save_split(qkv_b, f'layers.{i}.attention.w_qkv.bias', -1)
             self.save_split(ob, f'layers.{i}.attention.wo.bias', copy=True)

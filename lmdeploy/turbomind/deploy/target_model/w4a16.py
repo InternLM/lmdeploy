@@ -122,6 +122,7 @@ class TurbomindW4A16Model(BaseOutputModel):
         """Export transformer layer i."""
         group_size = self.cfg.group_size
         tp = self.cfg.tensor_para_size
+        size_per_head = self.cfg.size_per_head
         # attn
         q_qw, k_qw, v_qw, o_qw = get_cuda_tensor(bin.attn(i))
         q_qz, k_qz, v_qz, o_qz = get_cuda_tensor(bin.attn_zero(i))
@@ -131,8 +132,8 @@ class TurbomindW4A16Model(BaseOutputModel):
         k_qw = transpose_qk_s4(k_qw, group_size)
         q_qz = transpose_qk_s4(q_qz, group_size)
         k_qz = transpose_qk_s4(k_qz, group_size)
-        q_s = permute(q_s)
-        k_s = permute(k_s)
+        q_s = permute(q_s, size_per_head)
+        k_s = permute(k_s, size_per_head)
 
         qkv_qw = merge_qkv(q_qw, k_qw, v_qw, tp, dim=2)
         qkv_qz = merge_qkv(q_qz, k_qz, v_qz, tp, dim=2)
@@ -149,8 +150,8 @@ class TurbomindW4A16Model(BaseOutputModel):
 
         q_b, k_b, v_b, o_b = get_cuda_tensor(bin.attn_bias(i))
         if q_b is not None:
-            q_b = permute(q_b)
-            k_b = permute(k_b)
+            q_b = permute(q_b, size_per_head)
+            k_b = permute(k_b, size_per_head)
             qkv_b = merge_qkv(q_b, k_b, v_b, tp, dim=1)
             self.save_split(qkv_b, f'layers.{i}.attention.w_qkv.bias', -1)
             self.save_split(o_b, f'layers.{i}.attention.wo.bias', copy=True)
