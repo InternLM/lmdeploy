@@ -58,18 +58,12 @@ def create_workspace(_path: str):
 
     Args:
         _path (str): the path of the workspace
-    Returns:
-        bool: success or not
     """
-    try:
-        if osp.exists(_path):
-            shutil.rmtree(_path)
-        os.makedirs(_path)
-        print(f'create workspace in directory {_path}')
-        return True
-    except Exception as e:
-        print(f'create workspace in {_path} failed: {e}')
-        return False
+    if osp.exists(_path):
+        print(f'remove workspace in directory {_path}')
+        shutil.rmtree(_path)
+    print(f'create workspace in directory {_path}')
+    os.makedirs(_path)
 
 
 def copy_triton_model_templates(_path: str):
@@ -80,20 +74,19 @@ def copy_triton_model_templates(_path: str):
     Returns:
         str: the path of the triton models
     """
-    try:
-        root = get_package_root_path()
-        dir_path = osp.join(root, 'serve/turbomind')
-        triton_models_path = osp.join(dir_path, 'triton_models')
-        dst_path = osp.join(_path, 'triton_models')
-        shutil.copytree(triton_models_path, dst_path, symlinks=True)
-        print(f'copy triton model templates from "{triton_models_path}" to '
-              f'"{dst_path}" successfully')
-        shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
-        return dst_path
-    except Exception as e:
-        print(f'copy triton model templates from "{triton_models_path}"'
-              f' to "{dst_path}" failed: {e}')
-        return None
+
+    root = get_package_root_path()
+    dir_path = osp.join(root, 'serve/turbomind')
+    triton_models_path = osp.join(dir_path, 'triton_models')
+    dst_path = osp.join(_path, 'triton_models')
+    print(f'copy triton model templates from "{triton_models_path}" to '
+          f'"{dst_path}"')
+    shutil.copytree(triton_models_path, dst_path, symlinks=True)
+    service_docker_up_file = osp.join(dir_path, 'service_docker_up.sh')
+    print(f'copy service_docker_up.sh from "{service_docker_up_file}" to '
+          f'"{_path}"')
+    shutil.copy(osp.join(dir_path, 'service_docker_up.sh'), _path)
+    return dst_path
 
 
 def copy_tokenizer(model_path: str, tokenizer_path: str,
@@ -181,14 +174,9 @@ def main(model_name: str,
         tokenizer_path = guess_tokenizer_path(model_path)
 
     # create workspace
-    if not create_workspace(dst_path):
-        print(f'Can\'t create dst path {dst_path}')
-        exit(-1)
+    create_workspace(dst_path)
 
     triton_models_path = copy_triton_model_templates(dst_path)
-    if not triton_models_path:
-        print('Can\'t copy triton model templates')
-        exit(-1)
 
     copy_tokenizer(model_path, tokenizer_path, triton_models_path)
 
