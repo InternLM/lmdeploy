@@ -34,8 +34,8 @@ def _update_cache_config(model_config: ModelConfig,
     """
     GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
-    reserved_mem = torch.cuda.memory_reserved(gpu_id)
-    gpu_mem = (get_gpu_memory(gpu_id) - reserved_mem) * GPU_MEM_PERCENT
+    gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
+    gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
     cpu_mem = SWAP_SPACE
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config)
