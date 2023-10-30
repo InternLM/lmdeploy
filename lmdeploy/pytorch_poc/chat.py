@@ -58,7 +58,8 @@ def main(
     tokenizer = Tokenizer(model_path, trust_remote_code)
     tm_model = tm.Engine(model_path,
                          tp=tp,
-                         trust_remote_code=trust_remote_code)
+                         trust_remote_code=trust_remote_code,
+                         max_session_len=8192)
     generator = tm_model.create_instance()
 
     nth_round = 1
@@ -84,8 +85,12 @@ def main(
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
             import numpy as np
+
+            # input_ids = np.load(
+            #     '/workspace/GitProjects/rerope/inp.npy').flatten().tolist()
+
             input_ids = np.load(
-                '/workspace/GitProjects/rerope/inp.npy').flatten().tolist()
+                '/workspace/GitProjects/rerope/long.npy').flatten().tolist()
             input_ids = model.update_input_ids(input_ids)
             print(f'{prompt} ', end='', flush=True)
             response_size = 0

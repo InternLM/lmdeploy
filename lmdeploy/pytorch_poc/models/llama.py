@@ -80,7 +80,7 @@ class LlamaAttention(nn.Module):
                                               window):
                 kv_seq_len = key_states.shape[0]
                 cos, sin = self.rotary_emb(value_states,
-                                           seq_len=max(kv_seq_len, window))
+                                           seq_len=max(kv_seq_len, window + 1))
                 query_states1, key_states1 = apply_rotary_pos_emb_rerope(
                     query_states, key_states, cos, sin, position_ids)
                 query_states2, _ = apply_rotary_pos_emb_rerope(

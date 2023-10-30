@@ -371,8 +371,26 @@ def attention_forward_with_rerope(
                 attn_weights = attn_weights + attention_mask
         else:
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
-                query_states, key_states, value_states, position_ids,
-                window + 1)
+                query_states, key_states, value_states, position_ids, window)
+
+            # def _rotary_emb_context_rerope_fn(query_states, key_states,
+            #                                   value_states, position_ids,
+            #                                   window):
+            #     kv_seq_len = key_states.shape[0]
+            #     cos, sin = self.rotary_emb(value_states,
+            #                                seq_len=max(kv_seq_len, window))
+            #     query_states1, key_states1 = apply_rotary_pos_emb_rerope(
+            #         query_states, key_states, cos, sin, position_ids)
+            #     query_states2, _ = apply_rotary_pos_emb_rerope(
+            #         query_states, None, cos, sin, position_ids * 0 + window)
+
+            #     # repeat k/v heads if n_kv_heads < n_heads
+            #     key_states1 = repeat_kv(key_states1, self.num_key_value_groups)
+            #     key_states2 = repeat_kv(key_states, self.num_key_value_groups)
+            #     value_states = repeat_kv(value_states,
+            #                              self.num_key_value_groups)
+            #     return query_states1, query_states2, key_states1, key_states2, value_states
+
             attn_weights1 = torch.matmul(query_states1.transpose(
                 0, 1), key_states1.permute(1, 2, 0)) / math.sqrt(head_dim)
             attn_weights2 = torch.matmul(query_states2.transpose(
