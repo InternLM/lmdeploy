@@ -872,6 +872,7 @@ class EngineInstance:
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
+
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
 
     def decode(self, prompt_token_ids: List[List[int]]):

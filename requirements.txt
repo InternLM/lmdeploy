@@ -6,6 +6,8 @@ gradio
 mmengine
 numpy
 pybind11
+
+pycuda
 safetensors
 sentencepiece
 setuptools
