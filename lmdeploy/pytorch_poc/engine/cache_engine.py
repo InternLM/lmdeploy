@@ -108,6 +108,7 @@ class CacheEngine:
                 device='cuda',
             )
             gpu_cache.append((key_blocks, value_blocks))
+
         return gpu_cache
 
     def allocate_cpu_cache(self):
@@ -189,6 +190,7 @@ class CacheEngine:
         key_cache_block = block_size * num_heads * head_size
         value_cache_block = key_cache_block
         total = num_layers * (key_cache_block + value_cache_block)
+
         dtype_size = _get_dtype_size(model_config.dtype)
         return dtype_size * total
 
