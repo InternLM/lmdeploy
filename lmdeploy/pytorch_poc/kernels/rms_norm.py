@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
@@ -33,6 +34,10 @@ def rms_norm(x: Tensor, weight: Tensor, eps: float = 1e-6):
 
     out = torch.empty_like(x)
 
+    device = x.device
+    device_idx = device.index
+    device_type = device.type
+    stream = get_cuda_stream(device_idx)
     grid = [
         seq_len,
     ]
@@ -42,6 +47,9 @@ def rms_norm(x: Tensor, weight: Tensor, eps: float = 1e-6):
                           eps,
                           BLOCK_N,
                           num_warps=4,
-                          num_stages=2)
+                          num_stages=2,
+                          stream=stream,
+                          device=device_idx,
+                          device_type=device_type)
 
     return out

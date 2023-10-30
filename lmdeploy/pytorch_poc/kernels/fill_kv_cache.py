@@ -5,6 +5,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
@@ -187,6 +188,10 @@ def fill_kv_cache(k_states: Tensor,
     BLOCK_M = k_caches.size(-3)
     BLOCK_N = min(128, k_caches.stride(-3), v_caches.stride(-3))
 
+    device = k_states.device
+    device_idx = device.index
+    device_type = device.type
+    stream = get_cuda_stream(device_idx)
     _fill_kv_cache_kernel[grid](
         k_states,
         v_states,
@@ -204,4 +209,7 @@ def fill_kv_cache(k_states: Tensor,
         BLOCK_N=BLOCK_N,
         num_warps=4,
         num_stages=1,
+        stream=stream,
+        device=device_idx,
+        device_type=device_type,
     )

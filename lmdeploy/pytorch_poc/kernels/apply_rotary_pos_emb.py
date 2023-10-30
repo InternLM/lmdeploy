@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
@@ -144,6 +145,10 @@ def apply_rotary_pos_emb(q: Tensor,
     num_warps = 4
     num_stages = 2
 
+    device = q.device
+    device_idx = device.index
+    device_type = device.type
+    stream = get_cuda_stream(device_idx)
     if num_heads_k == num_heads_q:
         grid = [triton.cdiv(seq_len, BLOCK), num_heads_q]
         apply_rotary_pos_emb_qk_kernel[grid](q,
@@ -159,7 +164,10 @@ def apply_rotary_pos_emb(q: Tensor,
                                              BLOCK=BLOCK,
                                              BLOCK_N=q.size(-1) // 2,
                                              num_warps=num_warps,
-                                             num_stages=num_stages)
+                                             num_stages=num_stages,
+                                             stream=stream,
+                                             device=device_idx,
+                                             device_type=device_type)
 
     else:
         grid_q = [triton.cdiv(seq_len, BLOCK), num_heads_q]
@@ -174,7 +182,10 @@ def apply_rotary_pos_emb(q: Tensor,
                                             BLOCK=BLOCK,
                                             BLOCK_N=q.size(-1) // 2,
                                             num_warps=num_warps,
-                                            num_stages=num_stages)
+                                            num_stages=num_stages,
+                                            stream=stream,
+                                            device=device_idx,
+                                            device_type=device_type)
         apply_rotary_pos_emb_kernel[grid_k](k,
                                             cos,
                                             sin,
@@ -185,6 +196,9 @@ def apply_rotary_pos_emb(q: Tensor,
                                             BLOCK=BLOCK,
                                             BLOCK_N=k.size(-1) // 2,
                                             num_warps=num_warps,
-                                            num_stages=num_stages)
+                                            num_stages=num_stages,
+                                            stream=stream,
+                                            device=device_idx,
+                                            device_type=device_type)
 
     return q_embed, k_embed
