@@ -6,6 +6,8 @@ gradio
 mmengine
 numpy
 pybind11
+
+pycuda
 safetensors
 sentencepiece
 setuptools
@@ -15,4 +17,3 @@ torch
 transformers>=4.33.0
 tritonclient[all]
 uvicorn
-pycuda
