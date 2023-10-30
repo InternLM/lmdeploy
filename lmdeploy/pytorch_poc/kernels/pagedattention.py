@@ -1,11 +1,11 @@
+
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
 import torch
 import triton
 import triton.language as tl
 from torch import Tensor
-
-from lmdeploy.pytorch_poc.dist_utils import try_to_local
+from triton.runtime.jit import get_cuda_stream
 
 assert triton.__version__ >= '2.1.0'
 
@@ -170,36 +170,26 @@ def _reduce_split_kernel(
 
     # initialize offsets
     offs_d = tl.arange(0, BLOCK_DMODEL)
+    offs_k = tl.arange(0, SPLIT_K)
 
     offs_acc = (cur_batch * stride_abs + cur_head * stride_ah +
-                offs_d * stride_ad)
-    offs_mi = cur_batch * stride_mbs + cur_head * stride_mh
+                offs_k[:, None] * stride_ak + offs_d[None, :] * stride_ad)
+    offs_mi = (cur_batch * stride_mbs + cur_head * stride_mh +
+               stride_mk * offs_k)
 
-    m = tl.load(Meta + offs_mi)
-    l_sum = tl.load(Meta + offs_mi + stride_md)
-    acc = tl.load(Acc + offs_acc)
-    for k_id in range(1, SPLIT_K):
-        acc_k = tl.load(Acc + offs_acc + k_id * stride_ak)
-        m_k = tl.load(Meta + offs_mi + k_id * stride_mk)
-        l_k = tl.load(Meta + offs_mi + k_id * stride_mk + stride_md)
+    acc_k = tl.load(Acc + offs_acc)
+    m_k = tl.load(Meta + offs_mi)
+    l_k = tl.load(Meta + offs_mi + stride_md)
 
-        m_new = tl.maximum(m, m_k)
-        if m_k < m:
-            # Scale incoming values
-            alpha = tl.exp(m_k - m_new)
-            acc_k = acc_k * alpha
-            l_k = l_k * alpha
-        else:
-            # Scale our values
-            alpha = tl.exp(m - m_new)
-            acc = acc * alpha
-            l_sum = l_sum * alpha
+    m_max = tl.max(m_k, 0)
+    alpha = tl.exp(m_k - m_max)
+    acc_k = acc_k * alpha[:, None]
+    l_k = l_k * alpha
 
-        m = m_new
-        l_sum += l_k
-        acc += acc_k
-
+    acc = tl.sum(acc_k, 0)
+    l_sum = tl.sum(l_k, 0)
     acc = acc / l_sum
+
     out_offs = (cur_batch * stride_obs + cur_head * stride_oh +
                 offs_d * stride_od)
     tl.store(Out + out_offs, acc)
@@ -352,14 +342,6 @@ def paged_attention_fwd(
         max_input_len (int): The max input length.
         BLOCK (int): The kernel block size.
     """
-    q = try_to_local(q)
-    k = try_to_local(k)
-    v = try_to_local(v)
-    o = try_to_local(o)
-    block_offsets = try_to_local(block_offsets)
-    b_start_loc = try_to_local(b_start_loc)
-    b_seq_len = try_to_local(b_seq_len)
-    b_kv_seq_len = try_to_local(b_kv_seq_len)
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
@@ -372,99 +354,106 @@ def paged_attention_fwd(
 
     num_warps = 4 if Lk <= 64 else 8
 
+    device = q.device
+    device_idx = device.index
+    device_type = device.type
+    stream = get_cuda_stream(device_idx)
     is_decoding = q.shape[-3] == b_seq_len.size(0)
     if not is_decoding:
         grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
-        _fwd_kernel[grid](
-            q,
-            k,
-            v,
-            sm_scale,
-            b_start_loc,
-            b_seq_len,
-            b_kv_seq_len,
-            block_offsets,
-            o,
-            q.stride(-3),
-            q.stride(-2),
-            q.stride(-1),
-            k.stride(-3),
-            k.stride(-2),
-            k.stride(-1),
-            v.stride(-3),
-            v.stride(-2),
-            v.stride(-1),
-            o.stride(-3),
-            o.stride(-2),
-            o.stride(-1),
-            block_offsets.stride(0),
-            kv_group_num=kv_group_num,
-            BLOCK_M=BLOCK,
-            BLOCK_DMODEL=Lk,
-            BLOCK_N=BLOCK,
-            num_warps=num_warps,
-            num_stages=1,
-        )
+        _fwd_kernel[grid](q,
+                          k,
+                          v,
+                          sm_scale,
+                          b_start_loc,
+                          b_seq_len,
+                          b_kv_seq_len,
+                          block_offsets,
+                          o,
+                          q.stride(-3),
+                          q.stride(-2),
+                          q.stride(-1),
+                          k.stride(-3),
+                          k.stride(-2),
+                          k.stride(-1),
+                          v.stride(-3),
+                          v.stride(-2),
+                          v.stride(-1),
+                          o.stride(-3),
+                          o.stride(-2),
+                          o.stride(-1),
+                          block_offsets.stride(0),
+                          kv_group_num=kv_group_num,
+                          BLOCK_M=BLOCK,
+                          BLOCK_DMODEL=Lk,
+                          BLOCK_N=BLOCK,
+                          num_warps=num_warps,
+                          num_stages=1,
+                          stream=stream,
+                          device=device_idx,
+                          device_type=device_type)
     else:
         SPLIT_K = 4
         grid = (batch, head, SPLIT_K)
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lq, dtype=torch.float32)
         meta = acc.new_empty(batch, head, SPLIT_K, 2)
-        _fwd_split_kernel[grid](
-            q,
-            k,
-            v,
-            sm_scale,
-            b_kv_seq_len,
-            block_offsets,
-            acc,
-            meta,
-            stride_qbs=q.stride(-3),
-            stride_qh=q.stride(-2),
-            stride_qd=q.stride(-1),
-            stride_kbs=k.stride(-3),
-            stride_kh=k.stride(-2),
-            stride_kd=k.stride(-1),
-            stride_vbs=v.stride(-3),
-            stride_vh=v.stride(-2),
-            stride_vd=v.stride(-1),
-            stride_ok=acc.stride(-2),
-            stride_obs=acc.stride(-4),
-            stride_oh=acc.stride(-3),
-            stride_od=acc.stride(-1),
-            stride_mk=meta.stride(-2),
-            stride_mbs=meta.stride(-4),
-            stride_mh=meta.stride(-3),
-            stride_md=meta.stride(-1),
-            stride_boffb=block_offsets.stride(0),
-            kv_group_num=kv_group_num,
-            SPLIT_K=SPLIT_K,
-            BLOCK_PER_CTA=block_per_cta,
-            BLOCK_DMODEL=Lk,
-            BLOCK_N=BLOCK,
-            num_warps=num_warps,
-            num_stages=1,
-        )
+        _fwd_split_kernel[grid](q,
+                                k,
+                                v,
+                                sm_scale,
+                                b_kv_seq_len,
+                                block_offsets,
+                                acc,
+                                meta,
+                                stride_qbs=q.stride(-3),
+                                stride_qh=q.stride(-2),
+                                stride_qd=q.stride(-1),
+                                stride_kbs=k.stride(-3),
+                                stride_kh=k.stride(-2),
+                                stride_kd=k.stride(-1),
+                                stride_vbs=v.stride(-3),
+                                stride_vh=v.stride(-2),
+                                stride_vd=v.stride(-1),
+                                stride_ok=acc.stride(-2),
+                                stride_obs=acc.stride(-4),
+                                stride_oh=acc.stride(-3),
+                                stride_od=acc.stride(-1),
+                                stride_mk=meta.stride(-2),
+                                stride_mbs=meta.stride(-4),
+                                stride_mh=meta.stride(-3),
+                                stride_md=meta.stride(-1),
+                                stride_boffb=block_offsets.stride(0),
+                                kv_group_num=kv_group_num,
+                                SPLIT_K=SPLIT_K,
+                                BLOCK_PER_CTA=block_per_cta,
+                                BLOCK_DMODEL=Lk,
+                                BLOCK_N=BLOCK,
+                                num_warps=num_warps,
+                                num_stages=1,
+                                stream=stream,
+                                device=device_idx,
+                                device_type=device_type)
 
         grid = (batch, head)
-        _reduce_split_kernel[grid](
-            acc,
-            meta,
-            o,
-            stride_ak=acc.stride(-2),
-            stride_abs=acc.stride(-4),
-            stride_ah=acc.stride(-3),
-            stride_ad=acc.stride(-1),
-            stride_mk=meta.stride(-2),
-            stride_mbs=meta.stride(-4),
-            stride_mh=meta.stride(-3),
-            stride_md=meta.stride(-1),
-            stride_obs=o.stride(-3),
-            stride_oh=o.stride(-2),
-            stride_od=o.stride(-1),
-            SPLIT_K=SPLIT_K,
-            BLOCK_DMODEL=Lk,
-            num_warps=num_warps,
-            num_stages=1,
-        )
+        _reduce_split_kernel[grid](acc,
+                                   meta,
+                                   o,
+                                   stride_ak=acc.stride(-2),
+                                   stride_abs=acc.stride(-4),
+                                   stride_ah=acc.stride(-3),
+                                   stride_ad=acc.stride(-1),
+                                   stride_mk=meta.stride(-2),
+                                   stride_mbs=meta.stride(-4),
+                                   stride_mh=meta.stride(-3),
+                                   stride_md=meta.stride(-1),
+                                   stride_obs=o.stride(-3),
+                                   stride_oh=o.stride(-2),
+                                   stride_od=o.stride(-1),
+                                   SPLIT_K=SPLIT_K,
+                                   BLOCK_DMODEL=Lk,
+                                   num_warps=num_warps,
+                                   num_stages=1,
+                                   stream=stream,
+                                   device=device_idx,
+                                   device_type=device_type)
