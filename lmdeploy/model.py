@@ -237,6 +237,71 @@ class InternLMChat7B(BaseModel):
         return ret
 
 
+@MODELS.register_module(name='mistral-7B-instruct-v0.1')
+class MistralInstruct7B(BaseModel):
+    """Chat template of Mistral model."""
+
+    def __init__(
+            self,
+            b_inst='[INST]',
+            e_inst='[/INST]',
+            b_sys='<s>\n',
+            e_sys='\n</s>\n\n',
+            system="",  # noqa: E501
+            session_len=4096,
+            **kwargs):
+        super().__init__(**kwargs)
+        self.b_inst = b_inst
+        self.e_inst = e_inst
+        self.b_sys = b_sys
+        self.e_sys = e_sys
+        self.default_sys_prompt = system
+        self.session_len = session_len
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'<BOS>{self.b_inst} ' \
+                   f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
+                   f'{prompt} {self.e_inst} '
+
+        return f'{self.b_inst} {prompt} {self.e_inst} '
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.default_sys_prompt if not system else system
+        ret = f'<BOS>{self.b_inst} {self.b_sys} {system} {self.e_sys}'
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            if i != 0:
+                ret += f'{self.b_inst} '
+            if assistant:
+                ret += f'{user} {self.e_inst} {assistant}'
+            else:
+                ret += f'{user} {self.e_inst} '
+        return ret
+
+
 @MODELS.register_module(name='internlm-chat-20b')
 @MODELS.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
