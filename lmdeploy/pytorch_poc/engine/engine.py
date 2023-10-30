@@ -116,7 +116,7 @@ class Engine:
 
         if scheduler_config is None:
             scheduler_config = SchedulerConfig(max_batches=64,
-                                               max_session_len=2048,
+                                               max_session_len=4096,
                                                max_request_output_len=512)
         if cache_config is None:
             cache_config = CacheConfig(block_size=128,
