@@ -56,7 +56,7 @@ void CheckNan(const T* ptr, size_t size, std::string key, cudaStream_t stream)
 }
 
 template<typename T>
-void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
+void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream, std::string msg)
 {
     // wait for b
     check_cuda_error(cudaStreamSynchronize(stream));
@@ -88,7 +88,7 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
     auto                  transform_iter = thrust::make_transform_iterator(zip_iter, abs_diff<T>{});
     // sum(abs(a - b))
     auto asum = thrust::reduce(thrust::device, transform_iter, transform_iter + size);
-    std::cerr << key << ": " << asum << " " << asum / size << "\n";
+    std::cerr << key << msg << ": " << asum << " " << asum / size << "\n";
 }
 
 template<typename T>
@@ -106,11 +106,11 @@ void CmpWrite(T* ptr, size_t size, std::string key, cudaStream_t stream)
 }
 
 template<typename T>
-void Compare(T* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream)
+void Compare(T* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream, std::string msg)
 {
     // std::cerr << "Comparing " << key << "\n";
     if (mode == kCmpRead) {
-        CmpRead(ptr, size, key, stream);
+        CmpRead(ptr, size, key, stream, msg);
     }
     else if (mode == kCmpWrite) {
         CmpWrite(ptr, size, key, stream);
@@ -120,9 +120,9 @@ void Compare(T* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t st
     }
 }
 
-template void Compare(int* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
-template void Compare(float* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
-template void Compare(half* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
+template void Compare(int* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream, std::string msg);
+template void Compare(float* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream, std::string msg);
+template void Compare(half* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream, std::string msg);
 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
 template void CheckNan(const half* ptr, size_t size, std::string key, cudaStream_t stream);
@@ -256,5 +256,11 @@ void CheckValues(const T* data, int count, const std::string& msg, cudaStream_t 
 
 template void CheckValues(const half* data, int count, const std::string& msg, cudaStream_t stream);
 template void CheckValues(const float* data, int count, const std::string& msg, cudaStream_t stream);
+
+Barrier*& model_instance_barrier()
+{
+    thread_local Barrier* p{};
+    return p;
+}
 
 }  // namespace turbomind

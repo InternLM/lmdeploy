@@ -505,7 +505,30 @@ bool LlamaBatch<T>::generate()
     // T x = 999999.f;
     // cudaMemcpyAsync(decoder_input_buf_, &x, sizeof(x), cudaMemcpyDefault, stream_);
 
-    CheckValues(decoder_input_buf_, batch_size_ * llama_->hidden_units_, "embedding_lookup", stream_);
+    // CheckValues(decoder_input_buf_, batch_size_ * llama_->hidden_units_, "embedding_lookup", stream_);
+
+    // if (compare_mode == kCmpWrite) {
+    //     if (rank_ == 0) {
+    //         Compare(decoder_input_buf_, llama_->hidden_units_, Concat("decoder_input", step_), compare_mode,
+    //         stream_);
+    //     }
+    // }
+    // else {
+    //     for (int i = 0; i < batch_size_; ++i) {
+    //         Compare(decoder_input_buf_ + i * llama_->hidden_units_,
+    //                 llama_->hidden_units_,
+    //                 Concat("decoder_input", step_),
+    //                 compare_mode,
+    //                 stream_,
+    //                 Concat("", rank_, i));
+    //     }
+    // }
+    // CheckBatchConsistency(decoder_input_buf_,  //
+    //                       llama_->hidden_units_,
+    //                       batch_size_,
+    //                       Concat("decoder_input", step_),
+    //                       rank_,
+    //                       stream_);
 
     llama_->decoderForward(decoder_output_buf_,
                            k_cache_ptr_buf_,
@@ -519,12 +542,36 @@ bool LlamaBatch<T>::generate()
                            session_len_,
                            batch_size_);
 
+    // CheckBatchConsistency(decoder_input_buf_,  //
+    //                       llama_->hidden_units_,
+    //                       batch_size_,
+    //                       Concat("decoder_output", step_),
+    //                       rank_,
+    //                       stream_);
+
+    // if (compare_mode == kCmpWrite) {
+    //     if (rank_ == 0) {
+    //         Compare(decoder_output_buf_, llama_->hidden_units_, Concat("decoder_output", step_), compare_mode,
+    //         stream_);
+    //     }
+    // }
+    // else {
+    //     for (int i = 0; i < batch_size_; ++i) {
+    //         Compare(decoder_output_buf_ + i * llama_->hidden_units_,
+    //                 llama_->hidden_units_,
+    //                 Concat("decoder_output", step_),
+    //                 compare_mode,
+    //                 stream_,
+    //                 Concat("", rank_, i));
+    //     }
+    // }
+
     llama_->postDecodeEmbedding(logits_buf_,  //
                                 local_logits_buf_,
                                 decoder_output_buf_,
                                 batch_size_);
 
-    CheckValues(logits_buf_, batch_size_ * llama_->vocab_size_padded_, "post_decode_embedding", stream_);
+    // CheckValues(logits_buf_, batch_size_ * llama_->vocab_size_padded_, "post_decode_embedding", stream_);
 
     // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
     // not supported yet.

@@ -438,8 +438,10 @@ void LlamaV2<T>::internalThreadEntry(int device_id)
     TM_LOG_INFO("[internalThreadEntry] %d", (int)tensor_para_.rank_);
     check_cuda_error(cudaSetDevice(device_id));
 
+    model_instance_barrier() = shared_state_->barrier.get();
+
     // initialize global counters
-    CheckValues((T*)0, 0, {}, 0);
+    // CheckValues((T*)0, 0, {}, 0);
     shared_state_->barrier->wait();
 
     auto& request_queue  = shared_state_->request_queue;
