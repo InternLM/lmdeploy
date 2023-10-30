@@ -15,3 +15,4 @@ torch
 transformers>=4.33.0
 tritonclient[all]
 uvicorn
+pycuda
