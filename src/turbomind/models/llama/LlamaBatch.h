@@ -22,6 +22,8 @@ struct BatchState {
     void* top_p_curand_state;
     int*  output_ids;  // output ids in [B, S]
 
+    float* h_rope_theta;
+
     std::vector<int> seq_len_limit;
     std::vector<int> is_swap_in;
 
@@ -180,6 +182,8 @@ private:
     float* context_logits_buf_{};
     float* local_context_logits_buf_{};
 
+    float* rope_theta_{};
+
     // used by dynamic decoder
     int*      token_ids_buf_{};  // all token IDs in [S, B], indexed using `step`
     int*      end_ids_buf_{};
@@ -194,9 +198,8 @@ private:
     int** h_request_seqlen_ptrs_{};
 
     // pinned buffers
-    int* h_input_ids_buf_{};
-    int* h_input_length_buf_{};
-    // int*       h_sequence_lengths_{};
+    int*       h_input_ids_buf_{};
+    int*       h_input_length_buf_{};
     uint32_t*  h_seq_limit_len_{};
     int*       h_cu_block_counts_{};
     uintptr_t* h_k_block_ptrs_{};

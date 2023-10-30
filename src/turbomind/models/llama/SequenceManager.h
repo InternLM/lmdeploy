@@ -27,6 +27,8 @@ struct Sequence {
     // additional data kept round-to-round
     mutable std::vector<std::byte> random_state;  // update by user
 
+    mutable float rope_theta;
+
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
 };
 

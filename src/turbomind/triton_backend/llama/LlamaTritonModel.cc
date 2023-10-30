@@ -74,6 +74,12 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)session_len_);
     }
 
+    if (!attn_params_.max_position_embeddings) {
+        attn_params_.max_position_embeddings = session_len_;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to `session_len` (%d).",
+                       (int)attn_params_.max_position_embeddings);
+    }
+
     if (!max_context_token_num_) {
         max_context_token_num_ = (int)std::sqrt(max_batch_size_);
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
@@ -142,10 +148,12 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
     group_size_   = reader.GetInteger("llama", "group_size", 0);
 
-    attn_params_.rotray_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
+    // rotary embedding parameters
+    attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
     attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
+    attn_params_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
     attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
-    attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
+    // attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
     attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
 
     handleMissingParams();

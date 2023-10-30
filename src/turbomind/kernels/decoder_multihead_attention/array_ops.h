@@ -87,53 +87,6 @@ inline __device__ Array<T, N> operator*(const Array<T, N>& a, const T& b)
 
 }  // namespace ops
 
-template<int N>
-struct RotaryEmbedding {
-
-    static_assert(N % 2 == 0);
-
-    Array<float, N> inv_freqs_;
-
-    __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset)
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            const float2 tmp  = rotary_embedding_coefficient(offset.x + i, dims, base, timestep);
-            inv_freqs_[i]     = tmp.x;
-            inv_freqs_[i + 1] = tmp.y;
-        }
-    }
-
-    inline __device__ float2 rotary_embedding_coefficient(int idx, int dims, float base, int timestep)
-    {
-        const float inv_freq = timestep / powf(base, idx / (float)dims);
-        return {cos(inv_freq), sin(inv_freq)};
-    }
-
-    template<typename T>
-    __device__ void apply(Array<T, N>& x)
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            float tmp0 = inv_freqs_[i] * (float)x[i] - inv_freqs_[i + 1] * (float)x[i + 1];
-            float tmp1 = inv_freqs_[i] * (float)x[i + 1] + inv_freqs_[i + 1] * (float)x[i];
-            x[i]       = (T)tmp0;
-            x[i + 1]   = (T)tmp1;
-        }
-    }
-};
-
-template<typename VecQk, typename ThreadMap>
-struct LogNScaling {
-    __device__ void apply(VecQk& x)
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < VecQk::kSize; ++i) {
-            // TODO:
-        }
-    }
-};
-
 template<typename To, typename From, int N>
 inline __device__ Array<To, N> cast(const Array<From, N>& src)
 {
@@ -144,6 +97,73 @@ inline __device__ Array<To, N> cast(const Array<From, N>& src)
     }
     return dst;
 }
+
+template<int N>
+struct RotaryEmbedding {
+
+    static_assert(N % 2 == 0);
+
+    Array<float, N> cs_;
+
+    __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset)
+    {
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            const float2 tmp = get_coefficient(offset.x + i, dims, base, timestep);
+            cs_[i]           = tmp.x;
+            cs_[i + 1]       = tmp.y;
+        }
+    }
+
+    static __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
+    {
+        const float inv_freq = timestep / powf(base, idx / (float)dims);
+        float2      cs;
+        sincosf(inv_freq, &cs.y, &cs.x);
+        return cs;
+    }
+
+    template<typename T>
+    __device__ void apply(Array<T, N>& x)
+    {
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1];
+            float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
+            x[i]       = (T)tmp0;
+            x[i + 1]   = (T)tmp1;
+        }
+    }
+};
+
+struct LogNScaling {
+
+    float scale_;
+
+    __device__ static float get_scale(int seq_len, int max_position_embeddings)
+    {
+        if (seq_len <= max_position_embeddings) {
+            return 1.f;
+        }
+        else {
+            return log2(seq_len) / log2(max_position_embeddings);
+        }
+    }
+
+    __device__ LogNScaling(int seq_len, int max_position_embeddings)
+    {
+        scale_ = get_scale(seq_len, max_position_embeddings);
+    }
+
+    template<typename T, int N>
+    __device__ void apply(Array<T, N>& x) const
+    {
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            x[i] = (T)((float)x[i] * scale_);
+        }
+    }
+};
 
 template<typename T, int N>
 inline __device__ void Store(T* dst, const Array<T, N>& src)

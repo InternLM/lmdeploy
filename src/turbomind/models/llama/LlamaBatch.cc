@@ -12,11 +12,12 @@
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
+#include "src/turbomind/utils/gemm_test/gemm_func.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
-#include <math.h>
 #include <mutex>
 #include <numeric>
 #include <sstream>
@@ -59,11 +60,11 @@ void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_r
                     ec = Request::kInvalid;
                 }
                 else if (input_length > session_len_) {
-                    ec = Request::kInvalid;
+                    ec = Request::kTooLong;
                 }
                 else if (!r->start_flag) {
                     if (auto seq = sequence_manager_->Get(r->id); seq == nullptr) {
-                        ec = Request::kTooLong;
+                        ec = Request::kInvalid;
                     }
                     else if (get_offset(seq->tokens.size()) + input_length > session_len_) {
                         ec = Request::kTooLong;
@@ -230,7 +231,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             if (rank_ == 0) {
                 const int trunc_output_len = state.seq_len_limit[i] - state.h_context_length[i];
                 TM_LOG_WARNING(
-                    "[initialize] [%ld] total sequence length (%d + %d) exceeds `session_len` (%d), `request_output_len` is truncated to %d",
+                    "[ProcessInferRequests] [%ld] total sequence length (%d + %d) exceeds `session_len` (%d), `request_output_len` is truncated to %d",
                     (long)seq.id,
                     state.h_context_length[i],
                     request_output_len,
@@ -239,7 +240,35 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             }
         }
 
-        // recover random state HtoD if not a new sequence
+        // compute rope scaling factor
+        if (r->start_flag) {
+            seq.rope_theta      = model_->attn_params_.rotary_embedding_base;
+            auto scaling_factor = 1.f;
+            if (r->inputs[rank_].isExist("rope_scaling_factor")) {  // runtime scaling factor
+                scaling_factor = r->inputs[rank_].getVal<float>("rope_scaling_factor");
+            }
+            else if (model_->attn_params_.rope_scaling_factor >= 1.f) {  // infer by `seq_len_limit`
+                scaling_factor   = model_->attn_params_.rope_scaling_factor;
+                auto max_seq_len = state.seq_len_limit[i];
+                auto max_pos_emb = model_->attn_params_.max_position_embeddings;
+                if (max_seq_len > max_pos_emb) {
+                    scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
+                    // scaling_factor = std::max(exp2f(ceilf(log2f((float)max_seq_len / max_pos_emb) + 1.f))
+                    // - 1.f, 1.f);
+                }
+            }
+            if (scaling_factor != 1.f) {
+                float rope_dim = model_->attn_params_.rotary_embedding_dim;
+                seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
+                TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
+                            (long)seq.id,
+                            scaling_factor,
+                            seq.rope_theta);
+            }
+        }
+        state.h_rope_theta[i] = seq.rope_theta;
+
+        // recover device states if not a new sequence
         if (!r->start_flag) {
             Copy((curandState_t*)seq.random_state.data() + 0, 1, (curandState_t*)state.top_k_curand_state);
             Copy((curandState_t*)seq.random_state.data() + 1, 1, (curandState_t*)state.top_p_curand_state);
@@ -415,6 +444,7 @@ void LlamaBatch<T>::CopyState(const std::pair<BatchState*, int> _src, const std:
 
     dst->h_context_length[j] = src->h_context_length[i];
     dst->h_finished[j]       = src->h_finished[i];
+    dst->h_rope_theta[j]     = src->h_rope_theta[i];
     dst->seq_len_limit[j]    = src->seq_len_limit[i];
     dst->sequences[j]        = src->sequences[i];
     dst->is_swap_in[j]       = src->is_swap_in[i];
@@ -495,6 +525,8 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     request_output_ids_lens_ = (int*)allocator_->reMalloc(request_output_ids_lens_, sizeof(int) * batch_size, true);
     request_seqlen_ptrs_     = (int**)allocator_->reMalloc(request_seqlen_ptrs_, sizeof(int*) * batch_size, true);
 
+    rope_theta_ = (float*)allocator_->reMalloc(rope_theta_, sizeof(float) * batch_size, false);
+
     is_allocate_buffer_ = true;
 }
 
@@ -549,7 +581,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
         for (auto& s : states_) {
             s.h_context_length =
                 (int*)allocator_->reMalloc(s.h_context_length, sizeof(int) * max_batch_size, false, true);
-            s.h_finished = (bool*)allocator_->reMalloc(s.h_finished, sizeof(bool) * max_batch_size * 2, false, true);
+            s.h_finished   = (bool*)allocator_->reMalloc(s.h_finished, sizeof(bool) * max_batch_size * 2, false, true);
+            s.h_rope_theta = (float*)allocator_->reMalloc(s.h_rope_theta, sizeof(float) * max_batch_size, false, true);
         }
 
         h_seq_limit_len_ =
@@ -613,6 +646,8 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&request_output_ids_lens_);
         allocator_->free((void**)&request_seqlen_ptrs_);
 
+        allocator_->free((void**)&rope_theta_);
+
         is_allocate_buffer_ = false;
     }
 
@@ -620,6 +655,7 @@ void LlamaBatch<T>::FreeBuffer()
         for (auto& s : states_) {
             allocator_->free((void**)&s.h_context_length, true);
             allocator_->free((void**)&s.h_finished, true);
+            allocator_->free((void**)&s.h_rope_theta, true);
             allocator_->free((void**)&s.output_ids);
         }
         allocator_->free((void**)&h_tmp_k_ptrs_, true);
@@ -792,6 +828,8 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     Copy(h_request_output_ids_lens_, batch_size, request_output_ids_lens_);
     Copy(h_request_seqlen_ptrs_, batch_size, request_seqlen_ptrs_);
 
+    Copy(state_->h_rope_theta, batch_size, rope_theta_);
+
     // ! range of step_ [1, 2 * session_len]
     // consider a sequence with context_len == session_len and another sequence with context_len == 1 and
     // request_output_len == session_len - 1 => step_ will loop in [session_len, 2 * session_len)
@@ -851,6 +889,7 @@ bool LlamaBatch<T>::Generate(GenerationState& g)
                            sequence_lengths_,
                            finished_buf_,
                            cu_block_counts_,
+                           rope_theta_,
                            g.step,
                            0,
                            g.sum_seq_len,
@@ -938,6 +977,7 @@ void LlamaBatch<T>::ContextDecode()
     const int context_decode_count = batch_size - base;
 
     Copy(state_->h_context_length, batch_size, context_length_buf_);
+    Copy(state_->h_rope_theta, batch_size, rope_theta_);
     Copy(h_input_length_buf_, batch_size, input_length_buf_);
 
     check_cuda_error(cudaStreamSynchronize(stream_));
@@ -1042,6 +1082,7 @@ void LlamaBatch<T>::ContextDecode()
                               input_length_buf_ + first,
                               context_length_buf_ + first,
                               cu_block_counts_ + first,
+                              rope_theta_ + first,
                               token_count,
                               max_input_len,
                               max_context_cnts[k],

@@ -149,6 +149,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     int*       cu_seqlens      = input_tensors->at("cu_seqlens").getPtr<int>();
     int*       cu_block_counts = input_tensors->at("cu_block_counts").getPtr<int>();
 
+    const float* rope_theta = input_tensors->getPtr<const float>("rope_theta", nullptr);
+
     const auto padding_offset = input_tensors->at("padding_offset").getPtr<int>();
 
     auto Show = [&](const T* x, size_t n) {
@@ -179,16 +181,17 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    padding_offset,  // padding_offset,
                                    context_length,  // used for applying rotary embedding
                                    input_length,
+                                   rope_theta,
                                    batch_size,
                                    max_q_len,  // seq_len
                                    num_token,  // batch_size * seq_len
                                    local_head_num_,
                                    local_kv_head_num_,
                                    size_per_head_,
-                                   params_.rotray_embedding_dim,
+                                   params_.rotary_embedding_dim,
                                    params_.rotary_embedding_base,
                                    params_.max_position_embeddings,
-                                   params_.use_dynamic_ntk,
+                                   false,  // params_.use_dynamic_ntk,
                                    params_.use_logn_attn,
                                    stream_);
     sync_check_cuda_error();

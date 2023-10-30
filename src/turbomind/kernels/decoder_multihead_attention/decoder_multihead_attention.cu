@@ -40,7 +40,7 @@ void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
 
         static const size_t kDynSmemSize = Attn::GetDynamicSmemSize();
 
-        [[maybe_unused]] static const bool _ = Print<Attn>(kDynSmemSize);
+        // [[maybe_unused]] static const bool _ = Print<Attn>(kDynSmemSize);
 
         const int slice_count = (params.max_seq_len + Attn::kSliceLen - 1) / Attn::kSliceLen;
         const int max_split_k = std::min(params.max_split_k, std::max(1, slice_count));

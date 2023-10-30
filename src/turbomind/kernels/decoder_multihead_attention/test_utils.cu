@@ -226,7 +226,7 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t
     params.hidden_size_per_head    = p.size_per_head;
     params.rotary_embedding_dim    = p.rotary_embedding_dim;
     params.max_position_embeddings = p.max_position_embeddings;
-    params.use_dynamic_ntk         = p.use_dynamic_ntk;
+    params.use_dynamic_ntk         = false;
     params.use_logn_attn           = p.use_logn_attn;
 
     // Note: keep norm factor (sqrt(K_dim)) when adopting megatron T5 structure (may adjust)

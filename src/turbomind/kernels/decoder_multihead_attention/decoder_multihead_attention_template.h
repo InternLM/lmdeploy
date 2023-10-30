@@ -233,15 +233,29 @@ struct DecoderMultiHeadAttentionKernel {
             frag_V = frag_V + bias_V;
         }
 
+        // for (int i = 0; i < kVecQSize; ++i) {
+        //     printf("q[%2d][%3d] = %f\n", (int)head_idx_, (int)(offset.x + i), (float)frag_Q[0][i]);
+        // }
+
+        float rotary_embedding_base =
+            params_.rope_theta ? params_.rope_theta[batch_idx_] : params_.rotary_embedding_base;
+
         // Apply rotary embedding
-        RotaryEmbedding<kVecQSize> rotary_emb(
-            params_.rotary_embedding_base, params_.rotary_embedding_dim, timestep_, offset);
+        RotaryEmbedding<kVecQSize> rotary_emb(rotary_embedding_base, params_.rotary_embedding_dim, timestep_, offset);
 
         PRAGMA_UNROLL
         for (int s = 0; s < kQHeadPerThread; ++s) {
             rotary_emb.apply(frag_Q[s]);
         }
         rotary_emb.apply(frag_K);
+
+        if (params_.use_logn_attn) {
+            LogNScaling logn_scaling(timestep_ + 1, params_.max_position_embeddings);
+            PRAGMA_UNROLL
+            for (int s = 0; s < kQHeadPerThread; ++s) {
+                logn_scaling.apply(frag_Q[s]);
+            }
+        }
 
         if (kSplitK && step_begin_) {  // Split idx > 0
             PRAGMA_UNROLL
@@ -268,6 +282,7 @@ struct DecoderMultiHeadAttentionKernel {
                 qk *= params_.inv_sqrt_dh;
                 smem_M_[qi] = qk;
                 smem_L_[qi] = 1.f;
+                // printf("qk[%2d] = %f\n", head_idx_, qk);
             }
             // write Q and O
             Store(&smem_Q_[qi * kMaxHeadDim + offset.x], frag_Q[s]);
@@ -467,10 +482,6 @@ struct DecoderMultiHeadAttentionKernel {
         /// block synchronization
         frag_M = qk_max<MapKv>(frag_M, smem_red_max_, warp_id_, lane_id_);
 
-        if (threadIdx.x == 0 && step == timestep_ - kSliceLen) {
-            // printf("frag_M[%d] = %f\n", head_idx_, (float)frag_M[0]);
-        }
-
         // wait while smem_red_ is being used.
         // __syncthreads();
 
@@ -487,6 +498,10 @@ struct DecoderMultiHeadAttentionKernel {
                 smem_M_[i] = frag_M[i];
             }
         }
+
+        // if (threadIdx.x == 0 && step + iter_length == timestep_) {
+        //     printf("frag_M[%2d] = %f\n", head_idx_, (float)frag_M[0]);
+        // }
 
         // __syncthreads();  // DEBUG
 
@@ -506,16 +521,8 @@ struct DecoderMultiHeadAttentionKernel {
             }
         }
 
-        // if (thread0()) {
-        // printf("frag_L0 = %f\n", (float)frag_L[0]);
-        // }
-
         /// block synchronization
         frag_L = blockSum<kWarpCount>(frag_L, smem_red_sum_, warp_id_, lane_id_);
-
-        if (thread0()) {
-            // printf("frag_L = %f\n", (float)frag_L[0]);
-        }
 
         for (int qi = 0; qi < kHeadPerCta; ++qi) {
             // exp(m1 - m2) * l1

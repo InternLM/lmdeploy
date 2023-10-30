@@ -98,18 +98,14 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     const int layer_id = input_tensors->getVal<int>("layer_id");
 
-    // const int step = input_tensors->getVal<int>("step");
+    const int step = input_tensors->getVal<int>("step");
     // const int step_1 = step - 1;
 
     const int batch_size = input_tensors->at("input_query").shape[0];
 
-    allocateBuffer(batch_size);
+    const float* rope_theta = input_tensors->getPtr<const float>("rope_theta", nullptr);
 
-    // std::vector<int> seqlens(batch_size);
-    // check_cuda_error(
-    //     cudaMemcpyAsync(seqlens.data(), sequence_lengths_data, sizeof(int) * batch_size, cudaMemcpyDefault,
-    //     stream_));
-    // check_cuda_error(cudaStreamSynchronize(stream_));
+    allocateBuffer(batch_size);
 
     // for (int i = 0; i < batch_size; ++i) {
     //     if (gSequenceIds(i) == 1) {
@@ -126,6 +122,10 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
     }
 
+    // if (layer_id == 0) {
+    //     Compare(qkv_buf_, batch_size * 3 * hidden_units_, Concat("qkv_buf", step, layer_id), kCmpRead, stream_);
+    // }
+
     const auto layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
     // const int  memory_len   = max_seq_len;
 
@@ -137,6 +137,10 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.v      = params.k + local_kv_head_num_ * size_per_head_;
     params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
 
+    params.q_bias = weights->qkv.bias;
+    params.k_bias = params.q_bias + local_head_num_ * size_per_head_;
+    params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
+
     params.batch_size    = batch_size;
     params.cu_block_cnts = cu_block_counts;
 
@@ -146,6 +150,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     params.finished          = finished_data;
     params.per_sample_length = sequence_lengths_data;
+    params.rope_theta        = rope_theta;
 
     params.layer_offset = layer_offset;
 
@@ -154,8 +159,11 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.size_per_head = size_per_head_;
     params.inv_sqrt_dh   = 1.f / std::sqrt((float)params.size_per_head);
 
-    params.rotary_embedding_dim  = size_per_head_;
-    params.rotary_embedding_base = 10000.f;
+    params.rotary_embedding_dim    = size_per_head_;
+    params.rotary_embedding_base   = params_.rotary_embedding_base;
+    params.max_position_embeddings = params_.max_position_embeddings;
+    // params.use_dynamic_ntk = params_.use_dynamic_ntk;
+    params.use_logn_attn = params_.use_logn_attn;
 
     params.partial_O = workspace_;
     params.partial_M = params.partial_O + batch_size * local_head_num_ * kMaxSplitK * size_per_head_;
@@ -196,6 +204,10 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     //                 compare_mode,
     //                 stream_);
     //     }
+    // }
+
+    // if (layer_id == 0) {
+    //     Compare(context_buf_, batch_size * hidden_units_, Concat("context_buf", step, layer_id), kCmpRead, stream_);
     // }
 
     {

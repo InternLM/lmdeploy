@@ -114,6 +114,7 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
         {"input_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.input_length}},
         {"context_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.context_length}},
         {"cu_block_counts", input_tensors->at("cu_block_counts")},
+        {"rope_theta", input_tensors->at("rope_theta")},
         {"max_seq_len", input_tensors->at("max_seq_len")}};
 
     TensorMap self_attention_output_tensors{

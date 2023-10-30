@@ -109,13 +109,13 @@ int main(int argc, char* argv[])
     constexpr int kHeadNum    = 32;
     constexpr int kHeadDim    = 128;
     constexpr int KvHeadNum   = 32;
-    constexpr int kBatchSize  = 1;
-    constexpr int kContextLen = 1024;
+    constexpr int kBatchSize  = 32;
+    constexpr int kContextLen = 7306;
     // constexpr int kContextLen  = 1024;
     constexpr int kSequenceLen = kContextLen + 1;
     constexpr int kBlockSz     = 128;
     constexpr int kTestIter    = 1;
-    constexpr int kMaxSplitK   = 4;
+    constexpr int kMaxSplitK   = 1;
 
     RNG rng{};
 

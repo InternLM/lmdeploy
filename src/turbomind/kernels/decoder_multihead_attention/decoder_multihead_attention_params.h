@@ -22,6 +22,7 @@ struct DecoderMultiHeadAttentionParams {
     // sequence-level buffers
     const int* __restrict__ per_sample_length;
     const bool* __restrict__ finished;
+    const float* __restrict__ rope_theta;
 
     // kv cache
     void** __restrict__ per_sample_k_cache;  // [H, S, D]
@@ -50,7 +51,7 @@ struct DecoderMultiHeadAttentionParams {
     int   rotary_embedding_dim;
     float rotary_embedding_base;
     int   max_position_embeddings;
-    bool  use_dynamic_ntk;
+    // bool  use_dynamic_ntk;
 
     // log(n) attention
     bool use_logn_attn;

@@ -36,7 +36,7 @@ SequenceManager::SequenceManager(size_t      layer_num,
 
 const Sequence* SequenceManager::Create(uint64_t id)
 {
-    Sequence sequence{id, {}, {}, {}, {}, {}};
+    Sequence sequence{id, {}, {}, {}, {}, {}, {}, 0.f};
 
     auto it = sequences_.find(id);
     if (it != sequences_.end()) {
