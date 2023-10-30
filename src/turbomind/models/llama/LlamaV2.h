@@ -78,7 +78,10 @@ public:
             cublasMMWrapper*             cublas_wrapper,
             IAllocator*                  allocator,
             bool                         is_free_buffer_after_forward,
-            cudaDeviceProp*              cuda_device_prop);
+            cudaDeviceProp*              cuda_device_prop,
+            int                          has_image_embs,
+            size_t                       image_seq_length,
+            size_t                       max_image_per_request);
 
     struct Control {
         AbstractInstanceComm* comm;
@@ -124,7 +127,11 @@ private:
                        size_t     max_input_len,
                        size_t     max_context_len,
                        size_t     session_len,
-                       size_t     batch_size);
+                       size_t     batch_size,
+                       const int* decode_image_offsets,
+                       const T*   input_image_embs,
+                       const int* input_image_lengths,
+                       const int* input_image_offsets);
 
     void decoderForward(T*         decoder_output,
                         uintptr_t* k_cache_ptr,
@@ -168,6 +175,10 @@ private:
     const size_t vocab_size_;
     size_t       vocab_size_padded_;
     float        rmsnorm_eps_ = 1e-6f;
+
+    const int    has_image_embs_;
+    const size_t image_seq_length_;
+    const size_t max_image_per_request_;
 
     static constexpr bool neox_rotary_style_ = false;
 

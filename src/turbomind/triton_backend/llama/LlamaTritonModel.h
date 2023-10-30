@@ -102,6 +102,9 @@ private:
     bool                            attn_bias_;
     int                             quant_policy_;
     int                             group_size_;
+    int                             has_image_embs_;
+    size_t                          image_seq_length_;
+    size_t                          max_image_per_request_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;
