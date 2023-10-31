@@ -247,7 +247,7 @@ class MistralInstruct7B(BaseModel):
             e_inst='[/INST]',
             b_sys='<s>\n',
             e_sys='\n</s>\n\n',
-            system="",  # noqa: E501
+            system='',  # noqa: E501
             session_len=4096,
             **kwargs):
         super().__init__(**kwargs)
