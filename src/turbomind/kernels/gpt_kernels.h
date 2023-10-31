@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
@@ -131,14 +132,20 @@ void invokeFindContextDups(int*         shared_contexts,
                            cudaStream_t stream = 0);
 
 template<typename T>
-void handleOptArg(TensorMap* input_tensors, const std::string& arg_name, T* d_ptr, T default_value, size_t size)
+void handleOptArg(TensorMap*         input_tensors,
+                  const std::string& arg_name,
+                  T*                 d_ptr,
+                  T                  default_value,
+                  size_t             size,
+                  cudaStream_t       stream = {})
 {
     if (input_tensors->isExist(arg_name)) {
         FT_CHECK(input_tensors->at(arg_name).size() == size);
-        cudaH2Dcpy(d_ptr, input_tensors->at(arg_name).getPtr<const T>(), size);
+        check_cuda_error(cudaMemcpyAsync(
+            d_ptr, input_tensors->at(arg_name).getPtr<const T>(), sizeof(T) * size, cudaMemcpyDefault, stream));
     }
     else {
-        deviceFill(d_ptr, size, default_value);
+        deviceFill(d_ptr, size, default_value, stream);
     }
 }
 

@@ -25,6 +25,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include <string>
 // #include <glog/logging.h>
@@ -236,9 +237,23 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
     allocateBuffer(batch_size, step, max_seq_len);
 
+    // CheckBatchConsistency((T*)input_query_data,
+    //                       hidden_units_,
+    //                       batch_size,
+    //                       Concat("before_qkv_gemm", step, layer_id),
+    //                       tensor_para_.rank_,
+    //                       stream_);
+
     PUSH_RANGE("qkv_gemm");
     linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
     POP_RANGE;
+
+    // CheckBatchConsistency(qkv_buf_,
+    //                       (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_,
+    //                       batch_size,
+    //                       Concat("after_qkv_gemm", step, layer_id),
+    //                       tensor_para_.rank_,
+    //                       stream_);
 
     const auto kv_cache_layer_offset = layer_id * local_kv_head_num_ * max_seq_len * size_per_head_;
     const int  memory_len            = max_seq_len;
@@ -287,14 +302,37 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         stream_);
     sync_check_cuda_error();
 
+    // CheckBatchConsistency((T*)context_buf_,
+    //                       local_hidden_units_,
+    //                       batch_size,
+    //                       Concat("before_o_gemm", step, layer_id),
+    //                       tensor_para_.rank_,
+    //                       stream_);
+
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
+
+    // CheckBatchConsistency(hidden_features_data,
+    //                       hidden_units_,
+    //                       batch_size,
+    //                       Concat("after_o_gemm", step, layer_id),
+    //                       tensor_para_.rank_,
+    //                       stream_);
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);
         ftNcclAllReduceSum(
             hidden_features_data, hidden_features_data, batch_size * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
+        // ftNcclStreamSynchronize(tensor_para_, {}, stream_);
+        // sync_check_cuda_error();
     }
+
+    // CheckBatchConsistency(hidden_features_data,
+    //                       hidden_units_,
+    //                       batch_size,
+    //                       Concat("self_attn_allreduce", step, layer_id),
+    //                       tensor_para_.rank_,
+    //                       stream_);
 
     if (is_free_buffer_after_forward_) {
         freeBuffer();

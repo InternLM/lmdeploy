@@ -93,10 +93,9 @@ template void deviceFree(__nv_fp8_e4m3*& ptr);
 template<typename T>
 void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream)
 {
-    T* arr = new T[size];
-    std::fill(arr, arr + size, value);
-    check_cuda_error(cudaMemcpyAsync(devptr, arr, sizeof(T) * size, cudaMemcpyHostToDevice, stream));
-    delete[] arr;
+    std::unique_ptr<T[]> arr(new T[size]);
+    std::fill(arr.get(), arr.get() + size, value);
+    check_cuda_error(cudaMemcpyAsync(devptr, arr.get(), sizeof(T) * size, cudaMemcpyDefault, stream));
 }
 
 template void deviceFill(float* devptr, size_t size, float value, cudaStream_t stream);
