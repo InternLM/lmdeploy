@@ -184,10 +184,10 @@ void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         cudaAutoCpy(runtime_top_p_buf_, runtime_top_p.getPtr<float>(), batch_size, stream_);
     }
 
-    if (isDebug()) {
-        TM_LOG_INFO("[TopKSamplingLayer] runtime_top_k: %s", format<int>(runtime_top_k).c_str());
-        TM_LOG_INFO("[TopKSamplingLayer] runtime_top_p: %s", format<float>(runtime_top_p).c_str());
-    }
+    // if (isDebug()) {
+    TM_LOG_INFO("[TopKSamplingLayer] runtime_top_k: %s", format<int>(runtime_top_k).c_str());
+    TM_LOG_INFO("[TopKSamplingLayer] runtime_top_p: %s", format<float>(runtime_top_p).c_str());
+    // }
 
     dim3 block(std::min((int)batch_size, 256));
     dim3 grid(div_up((int)batch_size, (int)block.x));
