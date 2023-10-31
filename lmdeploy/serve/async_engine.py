@@ -204,7 +204,7 @@ class AsyncEngine:
         input_ids = self.tokenizer.encode(prompt)
         finish_reason = 'stop' if stop else None
         if self.steps[str(session_id)] + len(
-                input_ids) >= self.tm_model.session_len:
+                input_ids) + request_output_len >= self.tm_model.session_len:
             finish_reason = 'length'
             yield GenOut('', self.steps[str(session_id)], len(input_ids), 0,
                          finish_reason)
