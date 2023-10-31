@@ -115,6 +115,7 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
         print(f'elapsed time for read data: '
               f'{round(time.perf_counter() - start, 2)} s')
 
+    print('start tokenization. This takes a while, please wait...')
     start = time.perf_counter()
     tokenizer = Tokenizer(tokenizer_path)
     prompts_token_lens = [len(tokenizer.encode(prompt)) for prompt in prompts]

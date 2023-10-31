@@ -84,6 +84,7 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
         completions = [completion for _, completion in dataset]
         print(f'elapsed time for read data: '
               f'{round(time.perf_counter() - start, 2)} s')
+    print('start tokenization. This takes a while, please wait...')
 
     start = time.perf_counter()
     tokenizer = Tokenizer(tokenizer_path)
@@ -124,7 +125,6 @@ def main(tritonserver_addr: str,
     res_que = mp.Queue()
 
     procs = []
-    _start = time.perf_counter()
     for i in range(concurrency):
         chatbot = Chatbot(tritonserver_addr=tritonserver_addr,
                           display=False,
@@ -134,13 +134,18 @@ def main(tritonserver_addr: str,
         proc = mp.Process(target=infer,
                           args=(chatbot, i + 1, req_que, res_que))
         procs.append(proc)
-        proc.start()
 
     # read data and put it to queue
     n_req = read_dataset(tokenizer_path, dataset_path, samples, session_len,
                          req_que)
     for i in range(concurrency):
         req_que.put([None, None, None])
+    _start = time.perf_counter()
+    for proc in procs:
+        proc.start()
+    for proc in procs:
+        proc.join()
+    _end = time.perf_counter()
 
     stats = []
     for i in range(concurrency):
@@ -150,7 +155,6 @@ def main(tritonserver_addr: str,
               f'stats: \n{_stats}\n{"-" * 50}\n')
         stats.append(np.array(_stats))
 
-    _end = time.perf_counter()
     elapsed_time = _end - _start
 
     stats = np.concatenate(stats).reshape(-1, 3)
@@ -169,9 +173,6 @@ def main(tritonserver_addr: str,
           f'token throughput: {token_throughput:.3f} token/s\n'
           f'req throughput: {req_throughput:.3f} req/s\n'
           f'{"-" * 50}\n')
-
-    for proc in procs:
-        proc.join()
 
 
 if __name__ == '__main__':
