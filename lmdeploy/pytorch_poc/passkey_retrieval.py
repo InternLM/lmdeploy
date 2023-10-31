@@ -114,8 +114,6 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
     return '\n'.join(lines), str(pass_key)
 
 
-# NTK+log on Qwen-7B tokens {'5801': 0.95, '7986': 0.9, '8805': 0.85, '9897': 0.8, '11809': 0.95, '12900': 0.78, '13993':0.06, '14812': 0.0}
-# ReRoPE on Qwen-7B tokens {'5801': 0.95, '7986': 0.9, '8805': 0.85, '9897': 0.8, '11809': 0.95, '12900': 0.78, '13993':0.06, '14812': 0.0}
 def main(args):
     # Load model and tokenizer
     llm = LLM(model_path='/models/openbuddy-llama2-13b-v8.1-fp16',

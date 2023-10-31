@@ -373,23 +373,20 @@ def attention_forward_with_rerope(
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
                 query_states, key_states, value_states, position_ids, window)
 
-            # def _rotary_emb_context_rerope_fn(query_states, key_states,
-            #                                   value_states, position_ids,
-            #                                   window):
-            #     kv_seq_len = key_states.shape[0]
-            #     cos, sin = self.rotary_emb(value_states,
-            #                                seq_len=max(kv_seq_len, window))
-            #     query_states1, key_states1 = apply_rotary_pos_emb_rerope(
-            #         query_states, key_states, cos, sin, position_ids)
-            #     query_states2, _ = apply_rotary_pos_emb_rerope(
-            #         query_states, None, cos, sin, position_ids * 0 + window)
-
-            #     # repeat k/v heads if n_kv_heads < n_heads
-            #     key_states1 = repeat_kv(key_states1, self.num_key_value_groups)
-            #     key_states2 = repeat_kv(key_states, self.num_key_value_groups)
-            #     value_states = repeat_kv(value_states,
-            #                              self.num_key_value_groups)
-            #     return query_states1, query_states2, key_states1, key_states2, value_states
+# def torch_attention_forward(q1, q2, k1, k2, v, causal, sm_scale, window):
+#     # reference implementation
+#     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
+#     p1 = torch.matmul(q1, k1.transpose(2, 3)) * sm_scale
+#     p2 = torch.matmul(q2, k2.transpose(2, 3)) * sm_scale
+#     if causal:
+#         p1[:, :, M == 0] = float("-inf")
+#         p2[:, :, M == 0] = float("-inf")
+#     x = torch.arange(N_CTX, dtype=torch.int, device="cuda")
+#     M2 = ((x[:, None] - x[None, :]).abs() < window)[None, None, :]
+#     p = torch.where(M2, p1, p2)
+#     p = torch.softmax(p.float(), dim=-1).half()
+#     ref_out = torch.matmul(p, v)
+#     return ref_out
 
             attn_weights1 = torch.matmul(query_states1.transpose(
                 0, 1), key_states1.permute(1, 2, 0)) / math.sqrt(head_dim)
