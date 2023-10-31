@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.turbomind.deploy.source_model.awq import (AwqModel,
-                                                        AwqWeightFileMgr,
-                                                        ensure_fp16orint32)
 from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
+from lmdeploy.turbomind.deploy.source_model.hf_awq import (HfAwqModel,
+                                                           HfAwqWeightFileMgr,
+                                                           ensure_fp16orint32)
 
 
-class BaichuanAwqWeightFileMgr(AwqWeightFileMgr):
+class BaichuanAwqWeightFileMgr(HfAwqWeightFileMgr):
     """BaichuanAwqWeightFileMgr."""
 
     def __init__(self, new_params: dict, unused_params: dict):
@@ -58,7 +58,7 @@ class Baichuan2AwqWeightFileMgr(BaichuanAwqWeightFileMgr):
 
 
 @INPUT_MODELS.register_module(name='baichuan-awq')
-class BaichuanAwqModel(AwqModel):
+class BaichuanAwqModel(HfAwqModel):
     """Baichuan awq model in hf format."""
 
     WeightFileMgr = BaichuanAwqWeightFileMgr
@@ -72,7 +72,7 @@ class BaichuanAwqModel(AwqModel):
 
 
 @INPUT_MODELS.register_module(name='baichuan2-awq')
-class Baichuan2AwqModel(AwqModel):
+class Baichuan2AwqModel(HfAwqModel):
     """Baichuan2 awq model in hf format."""
 
     WeightFileMgr = Baichuan2AwqWeightFileMgr

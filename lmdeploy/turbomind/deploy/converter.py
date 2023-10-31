@@ -12,6 +12,13 @@ from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
 from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
                                                          TurbomindModelConfig)
 
+supported_formats = ['llama', 'hf', 'awq', None]
+special_input_model_map = {
+    'qwen': 'qwen',
+    'baichuan': 'baichuan',
+    'baichuan2': 'baichuan2'
+}
+
 
 def get_package_root_path():
     """Get lmdeploy root path."""
@@ -19,9 +26,11 @@ def get_package_root_path():
     return Path(lmdeploy.__file__).parent
 
 
-def guess_tokenizer_path(model_path: str):
-    """Guess tokenizer path if not given."""
-    tokenizer_path = None
+def get_tokenizer_path(model_path: str, tokenizer_path: str):
+    """Get tokenizer path if not given."""
+    if tokenizer_path is not None:
+        assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
+        return tokenizer_path
     candidate = ['tokenizer.model', 'qwen.tiktoken']
     for name in candidate:
         tmp_path = osp.join(model_path, name)
@@ -32,25 +41,21 @@ def guess_tokenizer_path(model_path: str):
     return tokenizer_path
 
 
-def guess_model_format(model_name: str, model_format: str):
-    """Guess model format if not given or equal awq."""
-    if model_format == 'awq':
-        if model_name.startswith('qwen'):
-            model_format = 'qwen-awq'
-        elif model_name.startswith('baichuan2'):
-            model_format = 'baichuan2-awq'
-        elif model_name.startswith('baichuan'):
-            model_format = 'baichuan-awq'
-    elif model_format is None:
-        if model_name.startswith('qwen'):
-            model_format = 'qwen'
-        elif model_name.startswith('baichuan2'):
-            model_format = 'baichuan2'
-        elif model_name.startswith('baichuan'):
-            model_format = 'baichuan'
-    if model_format is None:
-        model_format = 'hf'
-    return model_format
+def get_model_format(model_name: str, model_format: str):
+    """Get model format if not given or equal awq."""
+    # get model name prefix
+    if model_name.find('-') != -1:
+        model_name = model_name[:model_name.find('-')]
+    # rules:
+    # 1) llama -> match special -> hf (if not matched)
+    # 2) append awq (if model_format is awq)
+    inferred_model_format = model_format
+    if model_format in [None, 'hf']:
+        inferred_model_format = special_input_model_map.get(model_name, 'hf')
+    elif model_format == 'awq':
+        inferred_model_format = special_input_model_map.get(model_name,
+                                                            'hf') + '-awq'
+    return inferred_model_format
 
 
 def create_workspace(_path: str):
@@ -112,22 +117,22 @@ def pack_model_repository(workspace_path: str):
     Args:
         workspace_path: the path of workspace
     """
-    os.symlink(src='../../tokenizer',
+    os.symlink(src=osp.join('..', '..', 'tokenizer'),
                dst=osp.join(workspace_path, 'triton_models', 'preprocessing',
                             '1', 'tokenizer'))
-    os.symlink(src='../../tokenizer',
+    os.symlink(src=osp.join('..', '..', 'tokenizer'),
                dst=osp.join(workspace_path, 'triton_models', 'postprocessing',
                             '1', 'tokenizer'))
-    os.symlink(src='../../weights',
+    os.symlink(src=osp.join('..', '..', 'weights'),
                dst=osp.join(workspace_path, 'triton_models', 'interactive',
                             '1', 'weights'))
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(src=osp.join('../triton_models/interactive'),
+    os.symlink(src=osp.join('..', 'triton_models/interactive'),
                dst=osp.join(model_repo_dir, 'turbomind'))
-    os.symlink(src=osp.join('../triton_models/preprocessing'),
+    os.symlink(src=osp.join('..', 'triton_models/preprocessing'),
                dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(src=osp.join('../triton_models/postprocessing'),
+    os.symlink(src=osp.join('..', 'triton_models/postprocessing'),
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
@@ -144,8 +149,12 @@ def main(model_name: str,
         model_name (str): the name of the to-be-deployed model, such as
             llama-7b, llama-13b, vicuna-7b and etc
         model_path (str): the directory path of the model
-        model_format (str): the format of the model, fb or hf. 'fb' stands for
-            META's llama format, and 'hf' means huggingface format
+        model_format (str): the format of the model, should choose from
+            ['llama', 'hf', 'awq', None]. 'llama' stands for META's llama
+            format, 'hf' means huggingface format, and 'awq' means awq model
+            quantized by lmdeploy/lite/quantization/awq.py. the default value
+            is None, which means the model_format will be inferred based
+            on model_name
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism, should be 2^n
@@ -161,17 +170,20 @@ def main(model_name: str,
 
     output_format = 'fp16'
 
-    # gusss input model format
-    model_format = guess_model_format(model_name, model_format)
-    if model_format not in INPUT_MODELS.module_dict.keys():
+    # get input model format
+    assert model_format in supported_formats, 'the model format ' \
+        f'should be in {supported_formats}'
+
+    inferred_model_format = get_model_format(model_name, model_format)
+    if inferred_model_format not in INPUT_MODELS.module_dict.keys():
         supported_keys = list(INPUT_MODELS.module_dict.keys())
-        print(f'the model format "{model_format}" is not supported. '
-              f'The supported format are: {supported_keys}')
+        print(f'with model name {model_name} and model formst {model_format}, '
+              f'the inferred model format is {inferred_model_format}, '
+              f'which is not in supported list {supported_keys}')
         exit(-1)
 
-    # guess tokenizer path
-    if tokenizer_path is None:
-        tokenizer_path = guess_tokenizer_path(model_path)
+    # get tokenizer path
+    tokenizer_path = get_tokenizer_path(model_path, tokenizer_path)
 
     # create workspace
     create_workspace(dst_path)
@@ -186,17 +198,20 @@ def main(model_name: str,
     cfg.tensor_para_size = tp
     cfg.rotary_embedding = cfg.size_per_head
     cfg.group_size = group_size
-    if model_format.find('awq') != -1:
+    if inferred_model_format.find('awq') != -1:
         cfg.weight_type = 'int4'
         output_format = 'w4a16'
 
     # convert
-    print('model_path', model_path)
-    print('tokenizer_path', tokenizer_path)
-    print('model_format', model_format)
-    print('output_format', output_format)
+    print('model_name            ', model_name)
+    print('model_format          ', model_format)
+    print('inferred_model_format ', inferred_model_format)
+    print('model_path            ', model_path)
+    print('tokenizer_path        ', tokenizer_path)
+    print('output_format         ', output_format)
     weight_path = osp.join(triton_models_path, 'weights')
-    input_model = INPUT_MODELS.get(model_format)(model_path, tokenizer_path)
+    input_model = INPUT_MODELS.get(inferred_model_format)(model_path,
+                                                          tokenizer_path)
     output_model = OUTPUT_MODELS.get(output_format)(input_model, cfg, True,
                                                     weight_path)
     output_model.export()

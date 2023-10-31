@@ -20,8 +20,8 @@ def ensure_fp16orint32(tensors: torch.Tensor):
     return (*result, )
 
 
-class AwqWeightFileMgr(HfWeightFileMgr):
-    """AwqWeightFileMgr."""
+class HfAwqWeightFileMgr(HfWeightFileMgr):
+    """HfAwqWeightFileMgr."""
 
     def __init__(self, new_params: dict, unused_params: dict):
         super().__init__(new_params, unused_params)
@@ -78,11 +78,11 @@ class AwqWeightFileMgr(HfWeightFileMgr):
         return ensure_fp16orint32(result)
 
 
-@INPUT_MODELS.register_module(name='awq')
-class AwqModel(HfModel):
+@INPUT_MODELS.register_module(name='hf-awq')
+class HfAwqModel(HfModel):
     """Awq model in hf format."""
 
-    WeightFileMgr = AwqWeightFileMgr
+    WeightFileMgr = HfAwqWeightFileMgr
 
     def __init__(self,
                  model_path: str,
