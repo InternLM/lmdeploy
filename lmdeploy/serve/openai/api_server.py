@@ -6,7 +6,6 @@ import time
 from http import HTTPStatus
 from typing import AsyncGenerator, List, Optional
 
-import fire
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -514,4 +513,6 @@ def main(model_path: str,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

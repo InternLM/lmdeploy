@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import fire
 
 
 def run(model_path_or_server: str,
@@ -37,4 +36,6 @@ def run(model_path_or_server: str,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(run)

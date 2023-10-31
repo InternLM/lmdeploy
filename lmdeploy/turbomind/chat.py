@@ -4,11 +4,7 @@ import os
 import os.path as osp
 import random
 
-import fire
-
-from lmdeploy import turbomind as tm
 from lmdeploy.model import MODELS
-from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -73,7 +69,6 @@ def get_gen_param(cap,
 def main(model_path,
          session_id: int = 1,
          cap: str = 'chat',
-         sys_instruct: str = None,
          tp=1,
          stream_output=True,
          **kwargs):
@@ -85,12 +80,13 @@ def main(model_path,
         session_id (int): the identical id of a session
         cap (str): the capability of a model. For example, codellama has
             the ability among ['completion', 'infilling', 'chat', 'python']
-        sys_instruct (str): the content of 'system' role, which is used by
-            conversational model
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
         **kwarg (dict): other arguments for initializing model's chat template
     """
+    from lmdeploy import turbomind as tm
+    from lmdeploy.tokenizer import Tokenizer
+
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
     tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id, tp=tp)
@@ -100,9 +96,7 @@ def main(model_path,
     step = 0
     seed = random.getrandbits(64)
     model_name = tm_model.model_name
-    model = MODELS.get(model_name)(capability=cap, **kwargs) \
-        if sys_instruct is None else MODELS.get(model_name)(
-            capability=cap, system=sys_instruct, **kwargs)
+    model = MODELS.get(model_name)(capability=cap, **kwargs)
 
     print(f'session {session_id}')
     while True:
@@ -162,4 +156,6 @@ def main(model_path,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

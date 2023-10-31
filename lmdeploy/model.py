@@ -585,9 +585,9 @@ class SOLAR(BaseModel):
     def __init__(self,
                  b_sys='### System:\n',
                  e_sys='\n\n',
-                 boh='### User:\n',
+                 user='### User:\n',
                  eoh='\n\n',
-                 boa='### Assistant:\n',
+                 assistant='### Assistant:\n',
                  eoa='\n\n',
                  system='',
                  session_len=2048,
@@ -595,9 +595,9 @@ class SOLAR(BaseModel):
         super().__init__(**kwargs)
         self.b_sys = b_sys
         self.e_sys = e_sys
-        self.boh = boh
+        self.user = user
         self.eoh = eoh
-        self.boa = boa
+        self.assistant = assistant
         self.eoa = eoa
         self.system = system
         self.session_len = session_len
@@ -617,9 +617,9 @@ class SOLAR(BaseModel):
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
             return f'{self.b_sys}{self.system}{self.e_sys}' \
-                   f'{self.boh}{prompt}{self.eoh}{self.boa}'
+                   f'{self.user}{prompt}{self.eoh}{self.assistant}'
 
-        return f'{self.boh}{prompt} {self.eoh}{self.boa}'
+        return f'{self.user}{prompt}{self.eoh}{self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -636,7 +636,7 @@ class SOLAR(BaseModel):
         system = self.system if not system else system
         ret = f'{self.b_sys}{system}{self.e_sys}'
         for i, (user, assistant) in enumerate(zip(users, assistants)):
-            ret += f'{self.boh}{user}{self.eoh}{self.boa}'
+            ret += f'{self.user}{user}{self.eoh}{self.assistant}'
             if assistant:
                 ret += f'{assistant}{self.eoa}'
         return ret
@@ -654,4 +654,5 @@ def main(model_name: str = 'test'):
 
 if __name__ == '__main__':
     import fire
+
     fire.Fire(main)

@@ -181,7 +181,7 @@ class CompletionStreamResponse(BaseModel):
 class EmbeddingsRequest(BaseModel):
     """Embedding request."""
     model: str = None
-    input: Union[str, List[Any]]
+    input: Union[str, List[str]]
     user: Optional[str] = None
 
 

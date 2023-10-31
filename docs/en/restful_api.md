@@ -3,7 +3,7 @@
 ### Launch Service
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace 0.0.0.0 server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
@@ -128,8 +128,8 @@ curl http://{server_ip}:{server_port}/v1/completions \
 There is a client script for restful api server.
 
 ```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client api_server_url
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+lmdeploy serve api_client api_server_url
 ```
 
 ### webui
@@ -139,8 +139,8 @@ You can also test restful-api through webui.
 ```shell
 # api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006
-python -m lmdeploy.serve.gradio.app api_server_url gradio_server_ip gradio_server_port
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 ### FAQ

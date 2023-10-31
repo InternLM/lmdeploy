@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import fire
 import torch
 from accelerate import (infer_auto_device_map, init_empty_weights,
                         load_checkpoint_in_model)
@@ -81,5 +80,6 @@ def auto_awq(model: str,
 
 
 if __name__ == '__main__':
+    import fire
 
     fire.Fire(auto_awq)
