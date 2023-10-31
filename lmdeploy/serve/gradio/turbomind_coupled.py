@@ -42,7 +42,8 @@ async def chat_stream_local(
             instruction,
             session_id,
             stream_response=True,
-            sequence_start=(len(state_chatbot) == 1)):
+            sequence_start=(len(state_chatbot) == 1),
+            sequence_end=False):
         response = outputs.response
         if outputs.finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
