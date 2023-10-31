@@ -177,8 +177,8 @@ class Engine:
                 cache_config=cache_config,
                 world_size=tp,
                 trust_remote_code=trust_remote_code)
-            cache_config = self.model_agent.cache_config
 
+        cache_config = self.model_agent.cache_config
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
         self.requests = Queue(scheduler_config.max_batches)
