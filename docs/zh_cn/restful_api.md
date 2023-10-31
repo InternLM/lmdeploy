@@ -86,10 +86,10 @@ cURL 也可以用于查看 API 的输出结果
 curl http://{server_ip}:{server_port}/v1/models
 ```
 
-使用 generate:
+Interactive Chat:
 
 ```bash
-curl http://{server_ip}:{server_port}/generate \
+curl http://{server_ip}:{server_port}/v1/chat/interactive \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Hello! How are you?",

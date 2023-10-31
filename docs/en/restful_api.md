@@ -89,10 +89,10 @@ List Models:
 curl http://{server_ip}:{server_port}/v1/models
 ```
 
-Generate:
+Interactive Chat:
 
 ```bash
-curl http://{server_ip}:{server_port}/generate \
+curl http://{server_ip}:{server_port}/v1/chat/interactive \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Hello! How are you?",
