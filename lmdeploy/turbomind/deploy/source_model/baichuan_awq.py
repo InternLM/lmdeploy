@@ -66,9 +66,9 @@ class BaichuanAwqModel(HfAwqModel):
     def __init__(self,
                  model_path: str,
                  tokenizer_path: str,
-                 quant_path: str = None,
+                 ckpt_path: str = None,
                  **kwargs):
-        super().__init__(model_path, tokenizer_path)
+        super().__init__(model_path, tokenizer_path, ckpt_path)
 
 
 @INPUT_MODELS.register_module(name='baichuan2-awq')
@@ -80,6 +80,6 @@ class Baichuan2AwqModel(HfAwqModel):
     def __init__(self,
                  model_path: str,
                  tokenizer_path: str,
-                 quant_path: str = None,
+                 ckpt_path: str = None,
                  **kwargs):
-        super().__init__(model_path, tokenizer_path)
+        super().__init__(model_path, tokenizer_path, ckpt_path)

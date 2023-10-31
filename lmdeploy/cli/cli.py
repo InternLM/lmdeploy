@@ -38,7 +38,7 @@ class CLI(object):
             group_size (int): A parameter used in AWQ to quantize fp16 weights
                 to 4 bits.
         """
-        from lmdeploy.serve.turbomind.deploy import main as convert
+        from lmdeploy.turbomind.deploy.converter import main as convert
 
         convert(model_name,
                 model_path,

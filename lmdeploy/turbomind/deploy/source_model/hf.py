@@ -111,8 +111,15 @@ class HfModel(BaseInputModel):
 
     WeightFileMgr = HfWeightFileMgr
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
+    def __init__(self,
+                 model_path: str,
+                 tokenizer_path: str,
+                 ckpt_path: str = None,
+                 **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
+        if ckpt_path is None:
+            ckpt_path = model_path
+        self.ckpt_path = ckpt_path
         self.ckpt_files = self.get_ckpt()
 
     def get_ckpt(self):
@@ -121,7 +128,7 @@ class HfModel(BaseInputModel):
         files = []
         for suffix in suffixes:
             files = [
-                file for file in os.listdir(self.model_path)
+                file for file in os.listdir(self.ckpt_path)
                 if file.endswith(suffix)
             ]
             if len(files) > 0:
@@ -137,16 +144,16 @@ class HfModel(BaseInputModel):
     def get_mgrs(self):
         """Conctruct all WeightFileMgr."""
         assert self.nmgrs > 0, \
-            f'could not find checkpoints in {self.model_path}'
+            f'could not find checkpoints in {self.ckpt_path}'
         unused_params = {}
         try:
             for i, ckpt in enumerate(self.ckpt_files):
                 is_last_bin = i == len(self.ckpt_files) - 1
                 if ckpt.endswith('.bin'):
-                    new_params = torch.load(osp.join(self.model_path, ckpt),
+                    new_params = torch.load(osp.join(self.ckpt_path, ckpt),
                                             map_location='cpu')
                 else:
-                    new_params = load_file(osp.join(self.model_path, ckpt))
+                    new_params = load_file(osp.join(self.ckpt_path, ckpt))
                 ret = self.WeightFileMgr(new_params, unused_params)
                 yield ret
                 ret.clean_up(is_last_bin)

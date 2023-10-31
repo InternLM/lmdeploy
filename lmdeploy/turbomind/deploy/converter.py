@@ -142,6 +142,7 @@ def main(model_name: str,
          tokenizer_path: str = None,
          dst_path: str = './workspace',
          tp: int = 1,
+         quant_path: str = None,
          group_size: int = 0):
     """deploy llama family models via turbomind.
 
@@ -158,6 +159,7 @@ def main(model_name: str,
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
         tp (int): the number of GPUs used for tensor parallelism, should be 2^n
+        quant_path (str): Path of the quantized model, which can be None.
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
     """
@@ -210,10 +212,14 @@ def main(model_name: str,
     print('tokenizer_path        ', tokenizer_path)
     print('output_format         ', output_format)
     weight_path = osp.join(triton_models_path, 'weights')
-    input_model = INPUT_MODELS.get(inferred_model_format)(model_path,
-                                                          tokenizer_path)
-    output_model = OUTPUT_MODELS.get(output_format)(input_model, cfg, True,
-                                                    weight_path)
+    input_model = INPUT_MODELS.get(inferred_model_format)(
+        model_path=model_path,
+        tokenizer_path=tokenizer_path,
+        ckpt_path=quant_path)
+    output_model = OUTPUT_MODELS.get(output_format)(input_model=input_model,
+                                                    cfg=cfg,
+                                                    to_file=True,
+                                                    out_dir=weight_path)
     output_model.export()
 
     # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
