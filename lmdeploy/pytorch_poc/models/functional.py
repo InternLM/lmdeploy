@@ -373,20 +373,20 @@ def attention_forward_with_rerope(
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
                 query_states, key_states, value_states, position_ids, window)
 
-# def torch_attention_forward(q1, q2, k1, k2, v, causal, sm_scale, window):
-#     # reference implementation
-#     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
-#     p1 = torch.matmul(q1, k1.transpose(2, 3)) * sm_scale
-#     p2 = torch.matmul(q2, k2.transpose(2, 3)) * sm_scale
-#     if causal:
-#         p1[:, :, M == 0] = float("-inf")
-#         p2[:, :, M == 0] = float("-inf")
-#     x = torch.arange(N_CTX, dtype=torch.int, device="cuda")
-#     M2 = ((x[:, None] - x[None, :]).abs() < window)[None, None, :]
-#     p = torch.where(M2, p1, p2)
-#     p = torch.softmax(p.float(), dim=-1).half()
-#     ref_out = torch.matmul(p, v)
-#     return ref_out
+            # def torch_attention_forward(q1, q2, k1, k2, v, causal, sm_scale, window):
+            #     # reference implementation
+            #     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
+            #     p1 = torch.matmul(q1, k1.transpose(2, 3)) * sm_scale
+            #     p2 = torch.matmul(q2, k2.transpose(2, 3)) * sm_scale
+            #     if causal:
+            #         p1[:, :, M == 0] = float("-inf")
+            #         p2[:, :, M == 0] = float("-inf")
+            #     x = torch.arange(N_CTX, dtype=torch.int, device="cuda")
+            #     M2 = ((x[:, None] - x[None, :]).abs() < window)[None, None, :]
+            #     p = torch.where(M2, p1, p2)
+            #     p = torch.softmax(p.float(), dim=-1).half()
+            #     ref_out = torch.matmul(p, v)
+            #     return ref_out
 
             attn_weights1 = torch.matmul(query_states1.transpose(
                 0, 1), key_states1.permute(1, 2, 0)) / math.sqrt(head_dim)
