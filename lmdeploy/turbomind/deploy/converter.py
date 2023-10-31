@@ -81,7 +81,7 @@ def copy_triton_model_templates(_path: str):
     """
 
     root = get_package_root_path()
-    dir_path = osp.join(root, 'serve/turbomind')
+    dir_path = osp.join(root, 'serve', 'turbomind')
     triton_models_path = osp.join(dir_path, 'triton_models')
     dst_path = osp.join(_path, 'triton_models')
     print(f'copy triton model templates from "{triton_models_path}" to '
@@ -128,11 +128,11 @@ def pack_model_repository(workspace_path: str):
                             '1', 'weights'))
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(src=osp.join('..', 'triton_models/interactive'),
+    os.symlink(src=osp.join('..', 'triton_models', 'interactive'),
                dst=osp.join(model_repo_dir, 'turbomind'))
-    os.symlink(src=osp.join('..', 'triton_models/preprocessing'),
+    os.symlink(src=osp.join('..', 'triton_models', 'preprocessing'),
                dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(src=osp.join('..', 'triton_models/postprocessing'),
+    os.symlink(src=osp.join('..', 'triton_models', 'postprocessing'),
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
@@ -140,7 +140,7 @@ def main(model_name: str,
          model_path: str,
          model_format: str = None,
          tokenizer_path: str = None,
-         dst_path: str = './workspace',
+         dst_path: str = 'workspace',
          tp: int = 1,
          quant_path: str = None,
          group_size: int = 0):
@@ -223,7 +223,7 @@ def main(model_name: str,
     output_model.export()
 
     # update `tensor_para_size` in `triton_models/interactive/config.pbtxt`
-    with open(osp.join(triton_models_path, 'interactive/config.pbtxt'),
+    with open(osp.join(triton_models_path, 'interactive', 'config.pbtxt'),
               'a') as f:
         param = \
             'parameters {\n  key: "tensor_para_size"\n  value: {\n    ' \
