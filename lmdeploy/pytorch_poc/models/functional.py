@@ -5,11 +5,13 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from torch import distributed as dist
 
 from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
-                                          fill_kv_cache, paged_attention_fwd)
+                                          fill_kv_cache, paged_attention_fwd,
+                                          rerope_attention_fwd)
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -369,9 +371,21 @@ def attention_forward_with_rerope(
 
             if attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
+
+            # upcast attention to fp32
+            attn_weights = torch.nn.functional.softmax(attn_weights,
+                                                       dim=-1,
+                                                       dtype=torch.float32).to(
+                                                           query_states.dtype)
+            attn_output = torch.matmul(attn_weights,
+                                       value_states.transpose(0, 1))
+
         else:
+
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
                 query_states, key_states, value_states, position_ids, window)
+
+            sm_scale = 1.0 / math.sqrt(head_dim)
 
             # def torch_attention_forward(q1, q2, k1, k2, v, causal, sm_scale, window):
             #     # reference implementation
@@ -388,48 +402,86 @@ def attention_forward_with_rerope(
             #     ref_out = torch.matmul(p, v)
             #     return ref_out
 
-            attn_weights1 = torch.matmul(query_states1.transpose(
-                0, 1), key_states1.permute(1, 2, 0)) / math.sqrt(head_dim)
-            attn_weights2 = torch.matmul(query_states2.transpose(
-                0, 1), key_states2.permute(1, 2, 0)) / math.sqrt(head_dim)
-            rectified_mask = (position_ids[:, -q_len:, None] -
-                              position_ids[:, None]).abs() < window
-            attn_weights = torch.where(rectified_mask, attn_weights1,
-                                       attn_weights2)
-            if attn_weights.size() != (num_heads, q_len, kv_seq_length):
-                raise ValueError(
-                    f'Attention weights should be of size {(num_heads, q_len, kv_seq_length)}, but is'
-                    f' {attn_weights.size()}')
+            def torch_attention_fwd(query_states1, query_states2, key_states1,
+                                    key_states2, value_states, causal,
+                                    sm_scale, window):
+                # query_states1 = query_states1.squeeze(0).contiguous()
+                # query_states2 = query_states2.squeeze(0).contiguous()
+                # key_states1 = key_states1.squeeze(0).contiguous()
+                # key_states2 = key_states2.squeeze(0).contiguous()
+                # value_states = value_states.squeeze(0).contiguous()
+                attn_weights1 = torch.matmul(
+                    query_states1, key_states1.transpose(1, 2)) * sm_scale
+                attn_weights2 = torch.matmul(
+                    query_states2, key_states2.transpose(1, 2)) * sm_scale
 
-            if attention_mask is not None:
-                attn_weights = attn_weights + attention_mask
-            else:
-                tgt_len = attn_weights.shape[-1]
-                dtype = attn_weights.dtype
-                device = attn_weights.device
-                mask = torch.full((tgt_len, tgt_len),
-                                  torch.finfo(dtype).min,
-                                  device=device)
-                mask_cond = torch.arange(mask.size(-1), device=device)
-                mask.masked_fill_(
-                    mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-                mask = mask.to(dtype)
-                attn_weights = attn_weights + mask
+                position_ids = torch.arange(
+                    query_states1.shape[1],
+                    device=query_states1.device).unsqueeze(0)
+                rectified_mask = (position_ids[:, -q_len:, None] -
+                                  position_ids[:, None]).abs() < window
+                attn_weights = torch.where(rectified_mask, attn_weights1,
+                                           attn_weights2)
 
-        # upcast attention to fp32
-        attn_weights = torch.nn.functional.softmax(attn_weights,
-                                                   dim=-1,
-                                                   dtype=torch.float32).to(
-                                                       query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states.transpose(0, 1))
+                if causal:
+                    tgt_len = attn_weights.shape[-1]
+                    dtype = attn_weights.dtype
+                    device = attn_weights.device
+                    mask = torch.full((tgt_len, tgt_len),
+                                      torch.finfo(dtype).min,
+                                      device=device)
+                    mask_cond = torch.arange(mask.size(-1), device=device)
+                    mask.masked_fill_(
+                        mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+                    mask = mask.to(dtype)
+                    attn_weights = attn_weights + mask
+
+                # upcast attention to fp32
+                attn_weights = torch.nn.functional.softmax(
+                    attn_weights, dim=-1,
+                    dtype=torch.float32).to(query_states1.dtype)
+                attn_output = torch.matmul(attn_weights, value_states)
+                return attn_output
+
+            # torch_output = torch_attention_fwd(query_states1, query_states2, key_states1, key_states2, value_states, causal=True, sm_scale=sm_scale, window=window)
+
+            PADDING_UNIT = past_key_value[0].shape[1]
+            assert PADDING_UNIT in {16, 32, 64, 128, 256}
+            padding_len = -query_states1.shape[1] % PADDING_UNIT
+
+            query_states1 = F.pad(
+                query_states1,
+                (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+            query_states2 = F.pad(
+                query_states2,
+                (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+            key_states1 = F.pad(
+                key_states1, (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+            key_states2 = F.pad(
+                key_states2, (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+            value_states = F.pad(
+                value_states,
+                (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+
+            attn_output = rerope_attention_fwd(query_states1,
+                                               query_states2,
+                                               key_states1,
+                                               key_states2,
+                                               value_states,
+                                               True,
+                                               sm_scale,
+                                               window,
+                                               BLOCK_M=PADDING_UNIT).squeeze(0)
+            attn_output = attn_output[:, 0:q_len, :]
+            # print(torch.allclose(attn_output, torch_output, atol=2e-2, rtol=0))
 
         if attn_output.size() != (num_heads, q_len, head_dim):
             raise ValueError(
                 f'`attn_output` should be of size {(bsz, num_heads, q_len, head_dim)}, but is'
                 f' {attn_output.size()}')
 
-        attn_output = attn_output.transpose(0, 1).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, hidden_size)
+        attn_output = attn_output.transpose(0, 1).reshape(
+            bsz, q_len, hidden_size).contiguous()
     else:
         raise ValueError(f'Unknown bias type: {bias_type}')
     # attn_output = attn_output.reshape(*hidden_states.shape[:-1], hidden_size)

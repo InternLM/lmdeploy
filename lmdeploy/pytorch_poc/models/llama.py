@@ -91,7 +91,10 @@ class LlamaAttention(nn.Module):
                 key_states2 = repeat_kv(key_states, self.num_key_value_groups)
                 value_states = repeat_kv(value_states,
                                          self.num_key_value_groups)
-                return query_states1, query_states2, key_states1, key_states2, value_states
+                # return query_states1, query_states2, key_states1, key_states2, value_states
+                return query_states1.transpose(0, 1), query_states2.transpose(
+                    0, 1), key_states1.transpose(0, 1), key_states2.transpose(
+                        0, 1), value_states.transpose(0, 1)
 
             def _rotary_emb_generate_rerope_fn(key_states, value_states,
                                                position_ids, window):
@@ -126,7 +129,6 @@ class LlamaAttention(nn.Module):
                 rotary_emb_generate_fn=_rotary_emb_generate_rerope_fn,
             )
         else:
-            pdb.set_trace()
 
             def _rotary_emb_fn(query_states, key_states, value_states):
                 max_seq_len = position_ids.size(-1)

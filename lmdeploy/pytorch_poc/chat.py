@@ -109,9 +109,9 @@ def main(
                 request_output_len=1024,
                 step=step,
                 sampling_param=sampling_param)
-            pdb.set_trace()
             response = tokenizer.decode(token_ids)
             print(f'{response}', end='', flush=True)
+            pdb.set_trace()
             step += len(input_ids) + token_len
 
             # for outputs in generator.stream_infer(
