@@ -9,11 +9,11 @@ from sentencepiece import SentencePieceProcessor
 
 from lmdeploy.tokenizer import Tokenizer
 
-from .base import INPUT_MODELS, BaseInputModel, BaseWeightFileMgr
+from .base import INPUT_MODELS, BaseInputModel, BaseReader
 
 
-class HfWeightFileMgr(BaseWeightFileMgr):
-    """HfWeightFileMgr."""
+class HfReader(BaseReader):
+    """HfReader."""
 
     attn_layer_patten = r'model.layers.([0-9]+).'
 
@@ -108,7 +108,7 @@ class HfWeightFileMgr(BaseWeightFileMgr):
 class HfModel(BaseInputModel):
     """Llama model in hf format."""
 
-    WeightFileMgr = HfWeightFileMgr
+    Reader = HfReader
 
     def __init__(self,
                  model_path: str,
@@ -141,7 +141,7 @@ class HfModel(BaseInputModel):
         return len(self.ckpt_files)
 
     def get_mgrs(self):
-        """Conctruct all WeightFileMgr."""
+        """Conctruct all Reader."""
         assert self.nmgrs > 0, \
             f'could not find checkpoints in {self.ckpt_path}'
         unused_params = {}
@@ -153,7 +153,7 @@ class HfModel(BaseInputModel):
                                             map_location='cpu')
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
-                ret = self.WeightFileMgr(new_params, unused_params)
+                ret = self.Reader(new_params, unused_params)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:

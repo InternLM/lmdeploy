@@ -3,7 +3,7 @@ from typing import List
 
 import torch
 
-from ..source_model.base import BaseInputModel, BaseWeightFileMgr
+from ..source_model.base import BaseInputModel, BaseReader
 from .base import (OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig,
                    merge_qkv, permute)
 
@@ -46,7 +46,7 @@ class TurbomindModel(BaseOutputModel):
         final_cfg.update(dict(attn_bias=attn_bias, inter_size=inter_size))
         return TurbomindModelConfig.from_dict(final_cfg)
 
-    def export_transformer_block(self, bin: BaseWeightFileMgr, i: int):
+    def export_transformer_block(self, bin: BaseReader, i: int):
         """Export transformer layer i."""
         assert bin.start_layer_id <= i < bin.end_layer_id
         tp = self.cfg.tensor_para_size

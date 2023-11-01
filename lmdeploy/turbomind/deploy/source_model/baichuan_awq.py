@@ -2,11 +2,11 @@
 import torch
 
 from .base import INPUT_MODELS
-from .hf_awq import HfAwqModel, HfAwqWeightFileMgr, ensure_fp16orint32
+from .hf_awq import HfAwqModel, HfAwqReader, ensure_fp16orint32
 
 
-class BaichuanAwqWeightFileMgr(HfAwqWeightFileMgr):
-    """BaichuanAwqWeightFileMgr."""
+class BaichuanAwqReader(HfAwqReader):
+    """BaichuanAwqReader."""
 
     def __init__(self, new_params: dict, unused_params: dict):
         super().__init__(new_params, unused_params)
@@ -39,8 +39,8 @@ class BaichuanAwqWeightFileMgr(HfAwqWeightFileMgr):
         return ensure_fp16orint32(result)
 
 
-class Baichuan2AwqWeightFileMgr(BaichuanAwqWeightFileMgr):
-    """Baichuan2AwqWeightFileMgr."""
+class Baichuan2AwqReader(BaichuanAwqReader):
+    """Baichuan2AwqReader."""
 
     def __init__(self, new_params: dict, unused_params: dict):
         super().__init__(new_params, unused_params)
@@ -59,7 +59,7 @@ class Baichuan2AwqWeightFileMgr(BaichuanAwqWeightFileMgr):
 class BaichuanAwqModel(HfAwqModel):
     """Baichuan awq model in hf format."""
 
-    WeightFileMgr = BaichuanAwqWeightFileMgr
+    Reader = BaichuanAwqReader
 
     def __init__(self,
                  model_path: str,
@@ -73,7 +73,7 @@ class BaichuanAwqModel(HfAwqModel):
 class Baichuan2AwqModel(HfAwqModel):
     """Baichuan2 awq model in hf format."""
 
-    WeightFileMgr = Baichuan2AwqWeightFileMgr
+    Reader = Baichuan2AwqReader
 
     def __init__(self,
                  model_path: str,

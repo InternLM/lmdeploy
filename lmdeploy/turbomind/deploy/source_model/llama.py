@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from sentencepiece import SentencePieceProcessor
 
-from .base import INPUT_MODELS, BaseInputModel, BaseWeightFileMgr
+from .base import INPUT_MODELS, BaseInputModel, BaseReader
 
 
 def reverse_permute(x: torch.Tensor, size_per_head: int = 128):
@@ -23,8 +23,8 @@ def reverse_permute(x: torch.Tensor, size_per_head: int = 128):
                       1).transpose(1, 2).reshape(dim, 1)
 
 
-class LlamaWeightFileMgr(BaseWeightFileMgr):
-    """LlamaWeightFileMgr."""
+class LlamaReader(BaseReader):
+    """LlamaReader."""
 
     def __init__(self, model_path: str, start_layer_id: int,
                  end_layer_id: int):
@@ -188,11 +188,11 @@ class LlamaModel(BaseInputModel):
         return 1
 
     def get_mgrs(self):
-        """Conctruct all BaseWeightFileMgr."""
+        """Conctruct all BaseReader."""
         end_layer_id = self.model_info()['num_layer']
         try:
             for _ in range(1):
-                ret = LlamaWeightFileMgr(self.model_path, 0, end_layer_id)
+                ret = LlamaReader(self.model_path, 0, end_layer_id)
                 yield ret
                 ret.clean_up(True)
         except GeneratorExit:

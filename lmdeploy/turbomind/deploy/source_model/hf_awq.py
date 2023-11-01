@@ -2,7 +2,7 @@
 import torch
 
 from .base import INPUT_MODELS
-from .hf import HfModel, HfWeightFileMgr
+from .hf import HfModel, HfReader
 
 
 def ensure_fp16orint32(tensors: torch.Tensor):
@@ -20,8 +20,8 @@ def ensure_fp16orint32(tensors: torch.Tensor):
     return (*result, )
 
 
-class HfAwqWeightFileMgr(HfWeightFileMgr):
-    """HfAwqWeightFileMgr."""
+class HfAwqReader(HfReader):
+    """HfAwqReader."""
 
     def __init__(self, new_params: dict, unused_params: dict):
         super().__init__(new_params, unused_params)
@@ -82,7 +82,7 @@ class HfAwqWeightFileMgr(HfWeightFileMgr):
 class HfAwqModel(HfModel):
     """Awq model in hf format."""
 
-    WeightFileMgr = HfAwqWeightFileMgr
+    Reader = HfAwqReader
 
     def __init__(self,
                  model_path: str,

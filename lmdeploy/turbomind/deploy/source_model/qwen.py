@@ -4,12 +4,12 @@ import os.path as osp
 
 import torch
 
-from .base import INPUT_MODELS, BaseWeightFileMgr
+from .base import INPUT_MODELS, BaseReader
 from .hf import HfModel
 
 
-class QwenWeightFileMgr(BaseWeightFileMgr):
-    """QwenWeightFileMgr."""
+class QwenReader(BaseReader):
+    """QwenReader."""
 
     attn_layer_patten = r'transformer.h.([0-9]+).'
 
@@ -100,7 +100,7 @@ class QwenWeightFileMgr(BaseWeightFileMgr):
 class QwenModel(HfModel):
     """Qwen model in hf format."""
 
-    WeightFileMgr = QwenWeightFileMgr
+    Reader = QwenReader
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path, **kwargs)

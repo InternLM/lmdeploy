@@ -2,11 +2,11 @@
 
 import torch
 
-from .hf import INPUT_MODELS, HfModel, HfWeightFileMgr
+from .hf import INPUT_MODELS, HfModel, HfReader
 
 
-class BaichuanWeightFileMgr(HfWeightFileMgr):
-    """BaichuanWeightFileMgr."""
+class BaichuanReader(HfReader):
+    """BaichuanReader."""
 
     def __init__(self,
                  new_params: dict,
@@ -37,8 +37,8 @@ class BaichuanWeightFileMgr(HfWeightFileMgr):
         return (*result, )
 
 
-class Baichuan2WeightFileMgr(BaichuanWeightFileMgr):
-    """Baichuan2WeightFileMgr."""
+class Baichuan2Reader(BaichuanReader):
+    """Baichuan2Reader."""
 
     def __init__(self, new_params: dict, unused_params: dict):
         super().__init__(new_params, unused_params)
@@ -57,7 +57,7 @@ class Baichuan2WeightFileMgr(BaichuanWeightFileMgr):
 class BaichuanModel(HfModel):
     """Llama model in baichuan format."""
 
-    WeightFileMgr = BaichuanWeightFileMgr
+    Reader = BaichuanReader
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path, **kwargs)
@@ -67,7 +67,7 @@ class BaichuanModel(HfModel):
 class Baichuan2Model(HfModel):
     """Llama model in baichuan format."""
 
-    WeightFileMgr = Baichuan2WeightFileMgr
+    Reader = Baichuan2Reader
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path, **kwargs)

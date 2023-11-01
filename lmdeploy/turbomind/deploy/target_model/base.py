@@ -11,7 +11,7 @@ from mmengine import Registry
 
 from lmdeploy.model import MODELS
 
-from ..source_model.base import BaseInputModel, BaseWeightFileMgr
+from ..source_model.base import BaseInputModel, BaseReader
 
 OUTPUT_MODELS = Registry(
     'target model', locations=['lmdeploy.turbomind.deploy.target_model.base'])
@@ -174,7 +174,7 @@ class BaseOutputModel(ABC):
                 pbar.update(1)
         pbar.close()
 
-    def export_misc(self, bin: BaseWeightFileMgr) -> None:
+    def export_misc(self, bin: BaseReader) -> None:
         """Export embedding, norm, output weight."""
         emb = bin.tok_embeddings()
         norm_weight = bin.norm_weight()
@@ -202,7 +202,7 @@ class BaseOutputModel(ABC):
             self.export_weight(output_weight, 'output.weight')
 
     @abstractmethod
-    def export_transformer_block(self, bin: BaseWeightFileMgr, i: int) -> None:
+    def export_transformer_block(self, bin: BaseReader, i: int) -> None:
         """Export transformer block."""
         pass
 

@@ -3,11 +3,11 @@ import torch
 
 from .base import INPUT_MODELS
 from .hf_awq import ensure_fp16orint32
-from .qwen import QwenModel, QwenWeightFileMgr
+from .qwen import QwenModel, QwenReader
 
 
-class QwenAwqWeightFileMgr(QwenWeightFileMgr):
-    """QwenAwqWeightFileMgr."""
+class QwenAwqReader(QwenReader):
+    """QwenAwqReader."""
 
     def __init__(self, new_params: dict, unused_params: dict):
         super().__init__(new_params, unused_params)
@@ -68,7 +68,7 @@ class QwenAwqWeightFileMgr(QwenWeightFileMgr):
 class QwenAwqModel(QwenModel):
     """Qwen awq model in hf format."""
 
-    WeightFileMgr = QwenAwqWeightFileMgr
+    Reader = QwenAwqReader
 
     def __init__(self,
                  model_path: str,

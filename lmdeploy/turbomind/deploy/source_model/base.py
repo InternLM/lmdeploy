@@ -10,7 +10,7 @@ INPUT_MODELS = Registry(
     'source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
 
 
-class BaseWeightFileMgr(ABC):
+class BaseReader(ABC):
     """Base checkpoint manager."""
 
     def __init__(self):
@@ -156,8 +156,8 @@ class BaseInputModel(ABC):
         pass
 
     @abstractmethod
-    def get_mgrs(self) -> Iterator[BaseWeightFileMgr]:
-        """Conctruct all BaseWeightFileMgr."""
+    def get_mgrs(self) -> Iterator[BaseReader]:
+        """Conctruct all BaseReader."""
         pass
 
     @abstractmethod
@@ -170,7 +170,7 @@ class BaseInputModel(ABC):
         """Read model info."""
         pass
 
-    def bins(self) -> Iterator[BaseWeightFileMgr]:
-        """Get WeightFileMgr."""
+    def bins(self) -> Iterator[BaseReader]:
+        """Get Reader."""
         for mgr in self.get_mgrs():
             yield mgr
