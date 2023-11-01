@@ -77,12 +77,7 @@ async def check_request(request) -> Optional[JSONResponse]:
 
 def ip2id(host_ip: str):
     """Convert host ip address to session id."""
-    if '.' in host_ip:  # IPv4
-        return int(host_ip.replace('.', '')[-8:])
-    if ':' in host_ip:  # IPv6
-        return int(host_ip.replace(':', '')[-8:], 16)
-    print('Warning, could not get session id from ip, set it 0')
-    return 0
+    return hash(host_ip)
 
 
 @app.post('/v1/chat/completions')
