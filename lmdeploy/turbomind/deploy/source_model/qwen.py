@@ -104,7 +104,7 @@ class QwenModel(HfModel):
     WeightFileMgr = QwenWeightFileMgr
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
+        super().__init__(model_path, tokenizer_path, **kwargs)
 
     def tokenizer_info(self):
         """Read tokenizer info."""

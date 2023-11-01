@@ -61,7 +61,7 @@ class BaichuanModel(HfModel):
     WeightFileMgr = BaichuanWeightFileMgr
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
-        super().__init__(model_path, tokenizer_path)
+        super().__init__(model_path, tokenizer_path, **kwargs)
 
 
 @INPUT_MODELS.register_module(name='baichuan2')
@@ -71,4 +71,4 @@ class Baichuan2Model(HfModel):
     WeightFileMgr = Baichuan2WeightFileMgr
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
-        super().__init__(model_path, tokenizer_path)
+        super().__init__(model_path, tokenizer_path, **kwargs)

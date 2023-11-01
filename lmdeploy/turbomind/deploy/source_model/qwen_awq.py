@@ -76,4 +76,4 @@ class QwenAwqModel(QwenModel):
                  tokenizer_path: str,
                  ckpt_path: str = None,
                  **kwargs):
-        super().__init__(model_path, tokenizer_path, ckpt_path)
+        super().__init__(model_path, tokenizer_path, ckpt_path=ckpt_path)
