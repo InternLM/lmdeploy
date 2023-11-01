@@ -203,6 +203,7 @@ def main(model_name: str,
     if inferred_model_format.find('awq') != -1:
         cfg.weight_type = 'int4'
         output_format = 'w4a16'
+        assert group_size > 0, 'group_size should > 0'
 
     # convert
     print('model_name            ', model_name)

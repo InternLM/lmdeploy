@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import torch
+import tqdm
 from mmengine import Registry
 
 from lmdeploy.turbomind.deploy.source_model.base import (BaseInputModel,
@@ -13,6 +14,13 @@ from lmdeploy.turbomind.deploy.source_model.base import (BaseInputModel,
 
 OUTPUT_MODELS = Registry(
     'target model', locations=['lmdeploy.turbomind.deploy.target_model.base'])
+
+
+def tprint(*args, **kwargs):
+    from io import StringIO
+    s = StringIO()
+    print(*args, **kwargs, file=s, end='')
+    tqdm.tqdm.write(s.getvalue())
 
 
 @dataclass
@@ -106,7 +114,7 @@ class BaseOutputModel(ABC):
         if self.to_file:
             if param.dtype in [torch.float, torch.bfloat16]:
                 param = param.half()
-            # print(name, param.shape)
+            tprint(name, param.shape)
             param.contiguous().cpu().numpy().tofile(
                 osp.join(self.out_dir, name))
 
@@ -118,8 +126,8 @@ class BaseOutputModel(ABC):
         """save split."""
         tp = self.cfg.tensor_para_size
         if split_dim is not None:
-            # print(f'*** splitting {name}, shape={tensor.shape}, '
-            #       f'split_dim={split_dim}')
+            tprint(f'*** splitting {name}, shape={tensor.shape}, '
+                   f'split_dim={split_dim}, tp={tp}')
             assert tensor.shape[split_dim] % tp == 0
             split_size = tensor.shape[split_dim] // tp
             splits = torch.split(tensor, split_size, dim=split_dim)
@@ -127,7 +135,7 @@ class BaseOutputModel(ABC):
                 prefix, ext = osp.splitext(name)
                 self.export_weight(split, f'{prefix}.{i}{ext}')
         elif copy:
-            # print(f'### copying {name}, shape={tensor.shape}')
+            tprint(f'### copying {name}, shape={tensor.shape}')
             copies = [tensor] * tp
             for i, copy in enumerate(copies):
                 prefix, ext = osp.splitext(name)
