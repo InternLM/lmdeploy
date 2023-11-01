@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
-from lmdeploy.turbomind.deploy.source_model.hf_awq import ensure_fp16orint32
-from lmdeploy.turbomind.deploy.source_model.qwen import (QwenModel,
-                                                         QwenWeightFileMgr)
+from .base import INPUT_MODELS
+from .hf_awq import ensure_fp16orint32
+from .qwen import QwenModel, QwenWeightFileMgr
 
 
 class QwenAwqWeightFileMgr(QwenWeightFileMgr):

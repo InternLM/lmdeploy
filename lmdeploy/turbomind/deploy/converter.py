@@ -8,9 +8,9 @@ from pathlib import Path
 import fire
 
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
-from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
-                                                         TurbomindModelConfig)
+
+from .source_model.base import INPUT_MODELS
+from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
 supported_formats = ['llama', 'hf', 'awq', None]
 special_input_model_map = {

@@ -6,9 +6,7 @@ from pathlib import Path
 import torch
 from sentencepiece import SentencePieceProcessor
 
-from lmdeploy.turbomind.deploy.source_model.base import (INPUT_MODELS,
-                                                         BaseInputModel,
-                                                         BaseWeightFileMgr)
+from .base import INPUT_MODELS, BaseInputModel, BaseWeightFileMgr
 
 
 def reverse_permute(x: torch.Tensor, size_per_head: int = 128):

@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
-from lmdeploy.turbomind.deploy.source_model.hf import HfModel, HfWeightFileMgr
+from .base import INPUT_MODELS
+from .hf import HfModel, HfWeightFileMgr
 
 
 def ensure_fp16orint32(tensors: torch.Tensor):

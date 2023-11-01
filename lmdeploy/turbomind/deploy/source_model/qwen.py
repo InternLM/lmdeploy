@@ -4,9 +4,8 @@ import os.path as osp
 
 import torch
 
-from lmdeploy.turbomind.deploy.source_model.base import (INPUT_MODELS,
-                                                         BaseWeightFileMgr)
-from lmdeploy.turbomind.deploy.source_model.hf import HfModel
+from .base import INPUT_MODELS, BaseWeightFileMgr
+from .hf import HfModel
 
 
 class QwenWeightFileMgr(BaseWeightFileMgr):

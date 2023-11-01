@@ -9,8 +9,7 @@ import torch
 import tqdm
 from mmengine import Registry
 
-from lmdeploy.turbomind.deploy.source_model.base import (BaseInputModel,
-                                                         BaseWeightFileMgr)
+from ..source_model.base import BaseInputModel, BaseWeightFileMgr
 
 OUTPUT_MODELS = Registry(
     'target model', locations=['lmdeploy.turbomind.deploy.target_model.base'])

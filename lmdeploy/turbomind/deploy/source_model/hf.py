@@ -8,9 +8,8 @@ from safetensors.torch import load_file
 from sentencepiece import SentencePieceProcessor
 
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.turbomind.deploy.source_model.base import (INPUT_MODELS,
-                                                         BaseInputModel,
-                                                         BaseWeightFileMgr)
+
+from .base import INPUT_MODELS, BaseInputModel, BaseWeightFileMgr
 
 
 class HfWeightFileMgr(BaseWeightFileMgr):

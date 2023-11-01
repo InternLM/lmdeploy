@@ -2,8 +2,7 @@
 
 import torch
 
-from lmdeploy.turbomind.deploy.source_model.hf import (INPUT_MODELS, HfModel,
-                                                       HfWeightFileMgr)
+from .hf import INPUT_MODELS, HfModel, HfWeightFileMgr
 
 
 class BaichuanWeightFileMgr(HfWeightFileMgr):

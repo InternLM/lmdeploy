@@ -6,12 +6,10 @@ import torch
 
 import lmdeploy
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind.deploy.source_model.base import (BaseInputModel,
-                                                         BaseWeightFileMgr)
-from lmdeploy.turbomind.deploy.target_model.base import (OUTPUT_MODELS,
-                                                         BaseOutputModel,
-                                                         TurbomindModelConfig,
-                                                         merge_qkv, permute)
+
+from ..source_model.base import BaseInputModel, BaseWeightFileMgr
+from .base import (OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig,
+                   merge_qkv, permute)
 
 # import _turbomind as _tm
 # TODO: find another way import _turbomind
