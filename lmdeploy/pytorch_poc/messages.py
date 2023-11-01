@@ -106,7 +106,7 @@ class SchedulerSession:
             seq_id=_new_msg_id(),
             token_ids=token_ids,
             session=self,
-            history_token_ids=seq.history_token_ids.clone(),
+            history_token_ids=seq.history_token_ids.copy(),
             status=seq.status,
             remain_output_len=max_output_len,
             logical_blocks=deepcopy(seq.logical_blocks),
@@ -124,7 +124,7 @@ class SchedulerSequence:
     seq_id: int
     token_ids: Tensor
     session: SchedulerSession
-    history_token_ids: Tensor = field(default=torch.empty(0, dtype=torch.long))
+    history_token_ids: list = field(default_factory=list)
     remain_output_len: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     status: MessageStatus = MessageStatus.WAITING
@@ -181,13 +181,7 @@ class SchedulerSequence:
 
     def update_token_ids(self, token_ids: Tensor):
         """Update token ids, old token ids will be added to history."""
-        if len(self.history_token_ids) == 0:
-            self.history_token_ids = self.token_ids
-        else:
-            self.history_token_ids = torch.cat([
-                self.history_token_ids,
-                self.token_ids.to(self.history_token_ids.device)
-            ])
+        self.history_token_ids += self.token_ids.tolist()
         if not isinstance(token_ids, Tensor):
             token_ids = self.token_ids.new_tensor(token_ids)
         if token_ids.dim() == 0:

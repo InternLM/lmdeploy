@@ -88,10 +88,14 @@ class ModelContext:
         self.world_size = world_size
 
         # padding zero
-        pad_sequence = torch.nn.utils.rnn.pad_sequence
-        block_offsets = [torch.tensor(offset) for offset in block_offsets]
-        block_offsets = pad_sequence(block_offsets, True)
-        self.block_offsets = block_offsets.to(device)
+        # torch.nn.utils.rnn.pad_sequence is slower than manually concate
+        offset_len = [len(offset) for offset in block_offsets]
+        max_offsets_len = max(offset_len)
+        pad_block_offsets = [
+            offset + [0] * (max_offsets_len - off_len)
+            for offset, off_len in zip(block_offsets, offset_len)
+        ]
+        self.block_offsets = torch.tensor(pad_block_offsets).to(device)
 
         # update position_ids_1d
         if position_ids.size(1) == 1:

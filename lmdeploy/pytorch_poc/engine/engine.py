@@ -8,10 +8,6 @@ from typing import Any, Dict, List
 
 import torch
 from transformers import AutoConfig
-from transformers.generation.logits_process import (LogitsProcessorList,
-                                                    TemperatureLogitsWarper,
-                                                    TopKLogitsWarper,
-                                                    TopPLogitsWarper)
 
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
@@ -21,6 +17,8 @@ from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerSequence, SchedulerSession)
 from lmdeploy.pytorch_poc.paging import Scheduler
 from lmdeploy.utils import get_logger
+
+from .logits_process import FusedLogitsProcessor
 
 logger = get_logger('lmdeploy')
 
@@ -388,11 +386,12 @@ class Engine:
             split_logits = logits[last_idx, :]
             for param, idx in grouped_params.items():
                 top_k, top_p, temperature, _ = param
-                logits_processor = LogitsProcessorList([
-                    TopKLogitsWarper(top_k),
-                    TopPLogitsWarper(top_p),
-                    TemperatureLogitsWarper(temperature),
-                ])
+                logits_processor = FusedLogitsProcessor(
+                    SamplingParam(
+                        top_k=top_k,
+                        top_p=top_p,
+                        temperature=temperature,
+                    ))
                 input_ids = None
                 new_logits = split_logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
@@ -405,11 +404,12 @@ class Engine:
 
             for param, idx in grouped_params.items():
                 top_k, top_p, temperature, _ = param
-                logits_processor = LogitsProcessorList([
-                    TopKLogitsWarper(top_k),
-                    TopPLogitsWarper(top_p),
-                    TemperatureLogitsWarper(temperature),
-                ])
+                logits_processor = FusedLogitsProcessor(
+                    SamplingParam(
+                        top_k=top_k,
+                        top_p=top_p,
+                        temperature=temperature,
+                    ))
                 input_ids = inputs['input_ids'].reshape(-1, 1)
                 new_logits = logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)

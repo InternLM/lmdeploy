@@ -359,7 +359,7 @@ def paged_attention_fwd(
     stream = get_cuda_stream(device_idx)
     is_decoding = q.shape[-3] == b_seq_len.size(0)
     if not is_decoding:
-        grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
+        grid = (batch, head, triton.cdiv(max_input_len, BLOCK))
         _fwd_kernel[grid](q,
                           k,
                           v,
@@ -428,7 +428,7 @@ def paged_attention_fwd(
                                 BLOCK_PER_CTA=block_per_cta,
                                 BLOCK_DMODEL=Lk,
                                 BLOCK_N=BLOCK,
-                                num_warps=num_warps,
+                                num_warps=4,
                                 num_stages=1,
                                 stream=stream,
                                 device=device_idx,
