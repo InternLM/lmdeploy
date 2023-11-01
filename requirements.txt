@@ -2,7 +2,7 @@ accelerate
 datasets
 fastapi
 fire
-gradio
+gradio<4.0.0
 mmengine
 numpy
 pybind11
