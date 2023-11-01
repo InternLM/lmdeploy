@@ -42,6 +42,8 @@ class BaseReader(ABC):
             if layer_id not in layer_count:
                 layer_count[layer_id] = 0
             layer_count[layer_id] += 1
+        if len(layer_count) == 0:
+            return
         if not (len(layer_count) > 1 or self.last_bin):
             return
         max_count = max([layer_count[layer_id] for layer_id in layer_count])
