@@ -69,8 +69,9 @@ def get_gen_param(cap,
 def main(model_path,
          session_id: int = 1,
          cap: str = 'chat',
-         tp=1,
-         stream_output=True,
+         tp: int = 1,
+         stream_output: bool = True,
+         request_output_len: int = 512,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -106,12 +107,13 @@ def main(model_path,
         elif prompt == 'end':
             prompt = model.get_prompt('', nth_round == 1)
             input_ids = tokenizer.encode(prompt)
-            for outputs in generator.stream_infer(session_id=session_id,
-                                                  input_ids=[input_ids],
-                                                  request_output_len=512,
-                                                  sequence_start=False,
-                                                  sequence_end=True,
-                                                  stream_output=stream_output):
+            for outputs in generator.stream_infer(
+                    session_id=session_id,
+                    input_ids=[input_ids],
+                    request_output_len=request_output_len,
+                    sequence_start=False,
+                    sequence_end=True,
+                    stream_output=stream_output):
                 pass
             nth_round = 1
             step = 0
@@ -119,13 +121,14 @@ def main(model_path,
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt)
-            if step + len(input_ids) >= tm_model.session_len:
+            if step + len(
+                    input_ids) + request_output_len >= tm_model.session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
 
             gen_param = get_gen_param(cap, model.sampling_param, nth_round,
-                                      step, **kwargs)
+                                      step, request_output_len, **kwargs)
 
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
