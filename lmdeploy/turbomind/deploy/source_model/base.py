@@ -45,7 +45,7 @@ class BaseWeightFileMgr(ABC):
         if len(layer_count) == 0:
             return
         max_count = max([layer_count[layer_id] for layer_id in layer_count])
-        if not hasattr(self, '_attn_layer_count') and len(layer_count) > 0:
+        if not hasattr(self, '_attn_layer_count') and len(layer_count) > 1:
             self._attn_layer_count = max_count
         else:
             return
