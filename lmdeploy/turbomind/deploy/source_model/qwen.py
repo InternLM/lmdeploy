@@ -12,21 +12,12 @@ class QwenReader(LlamaReader):
     """QwenReader."""
 
     attn_layer_patten = r'transformer.h.([0-9]+).'
+    tok_embeddings_key = 'transformer.wte.weight'
+    norm_weight_key = 'transformer.ln_f.weight'
+    output_weight_key = 'lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
         super().__init__(new_params, unused_params, last_bin)
-
-    def tok_embeddings(self):
-        """Get embeddings."""
-        return self.params.get('transformer.wte.weight', None)
-
-    def norm_weight(self):
-        """Get norm."""
-        return self.params.get('transformer.ln_f.weight', None)
-
-    def output_weight(self):
-        """Get output."""
-        return self.params.get('lm_head.weight', None)
 
     def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
         """Get q, k, v, o kind for layer i."""

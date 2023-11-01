@@ -16,6 +16,9 @@ class LlamaReader(BaseReader):
     """LlamaReader."""
 
     attn_layer_patten = r'model.layers.([0-9]+).'
+    tok_embeddings_key = 'model.embed_tokens.weight'
+    norm_weight_key = 'model.norm.weight'
+    output_weight_key = 'lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
         super().__init__()
@@ -44,15 +47,15 @@ class LlamaReader(BaseReader):
 
     def tok_embeddings(self):
         """Get embeddings."""
-        return self.params.get('model.embed_tokens.weight', None)
+        return self.params.get(self.tok_embeddings_key, None)
 
     def norm_weight(self):
         """Get norm."""
-        return self.params.get('model.norm.weight', None)
+        return self.params.get(self.norm_weight_key, None)
 
     def output_weight(self):
         """Get output."""
-        return self.params.get('lm_head.weight', None)
+        return self.params.get(self.output_weight_key, None)
 
     def _attn(self, i: int, kind: str, allow_none=False):
         """Get q, k, v, o kind for layer i."""
