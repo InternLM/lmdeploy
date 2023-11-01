@@ -17,10 +17,11 @@ class HfReader(BaseReader):
 
     attn_layer_patten = r'model.layers.([0-9]+).'
 
-    def __init__(self, new_params: dict, unused_params: dict):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
+        self.last_bin = last_bin
         self.init_layer_id()
 
     def init_layer_id(self):
@@ -53,23 +54,24 @@ class HfReader(BaseReader):
         """Get output."""
         return self.params.get('lm_head.weight', None)
 
-    def attn(self, i: int):
-        """Get q, k, v, o weight for layer i."""
-        result = []
-        for key in ['q', 'k', 'v', 'o']:
-            tensor = self.params[
-                f'model.layers.{i}.self_attn.{key}_proj.weight']
-            result.append(tensor)
-        return (*result, )
-
-    def attn_bias(self, i: int):
-        """Get q, k, v, o bias for layer i."""
+    def _attn(self, i: int, kind: str, allow_none=False):
+        """Get q, k, v, o kind for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.bias', None)
+                f'model.layers.{i}.self_attn.{key}_proj.{kind}')
+            if not allow_none:
+                assert tensor is not None
             result.append(tensor)
         return (*result, )
+
+    def attn(self, i: int):
+        """Get q, k, v, o weight for layer i."""
+        return self._attn(i, 'weight')
+
+    def attn_bias(self, i: int):
+        """Get q, k, v, o bias for layer i."""
+        return self._attn(i, 'bias', allow_none=True)
 
     def attn_zero(self, i: int):
         """Get q, k, v, o zero point for layer i."""
@@ -83,13 +85,17 @@ class HfReader(BaseReader):
         """Get attn norm for layer i."""
         return self.params[f'model.layers.{i}.input_layernorm.weight']
 
-    def ffn(self, i: int):
-        """Get ffn weight for layer i."""
+    def _ffn(self, i: int, kind: str):
+        """Get ffn kind for layer i."""
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.weight']
+            tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.{kind}']
             result.append(tensor)
         return (*result, )
+
+    def ffn(self, i: int):
+        """Get ffn weight for layer i."""
+        return self._ffn(i, 'weight')
 
     def ffn_zero(self, i: int):
         """Get ffn zero point for layer i."""
@@ -110,12 +116,9 @@ class HfModel(BaseInputModel):
 
     Reader = HfReader
 
-    def __init__(self,
-                 model_path: str,
-                 tokenizer_path: str,
-                 ckpt_path: str = None,
-                 **kwargs: dict):
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
+        ckpt_path = kwargs.get('ckpt_path')
         if ckpt_path is None:
             ckpt_path = model_path
         self.ckpt_path = ckpt_path
@@ -153,7 +156,8 @@ class HfModel(BaseInputModel):
                                             map_location='cpu')
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
-                ret = self.Reader(new_params, unused_params)
+                ret = self.Reader(new_params, unused_params,
+                                  i == self.nmgrs - 1)
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:

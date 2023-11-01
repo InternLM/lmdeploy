@@ -42,17 +42,12 @@ class BaseReader(ABC):
             if layer_id not in layer_count:
                 layer_count[layer_id] = 0
             layer_count[layer_id] += 1
-        if len(layer_count) == 0:
+        if not (len(layer_count) > 1 or self.last_bin):
             return
         max_count = max([layer_count[layer_id] for layer_id in layer_count])
-        if not hasattr(self, '_attn_layer_count') and len(layer_count) > 1:
-            self._attn_layer_count = max_count
-        else:
-            return
-
         valid_layer_id = [
             layer_id for layer_id in layer_count
-            if layer_count[layer_id] == self._attn_layer_count
+            if layer_count[layer_id] == max_count
         ]
         self._start_layer_id = min(valid_layer_id)
         self._end_layer_id = max(valid_layer_id) + 1

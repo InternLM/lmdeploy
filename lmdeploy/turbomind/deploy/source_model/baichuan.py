@@ -2,46 +2,40 @@
 
 import torch
 
-from .hf import INPUT_MODELS, HfModel, HfReader
+from .base import INPUT_MODELS
+from .hf import HfModel, HfReader
 
 
 class BaichuanReader(HfReader):
     """BaichuanReader."""
 
-    def __init__(self,
-                 new_params: dict,
-                 unused_params: dict,
-                 is_baichuan2: bool = True):
-        super().__init__(new_params, unused_params)
-        self.is_baichuan2 = is_baichuan2
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+        super().__init__(new_params, unused_params, last_bin)
 
-    def attn(self, i: int):
-        """Get q, k, v, o weight for layer i."""
+    def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
+        """Get q, k, v, o kind for layer i."""
         result = []
-        qkv = self.params[f'model.layers.{i}.self_attn.W_pack.weight']
-        o = self.params[f'model.layers.{i}.self_attn.o_proj.weight']
-        result.extend(torch.split(qkv, qkv.shape[0] // 3, dim=0))
+        pack_key = f'model.layers.{i}.self_attn.W_pack.{kind}'
+        qkv = self.params[pack_key]
+        result.extend(torch.split(qkv, qkv.shape[size_dim] // 3, dim=dim))
+        o = self.params[f'model.layers.{i}.self_attn.o_proj.{kind}']
         result.append(o)
         return (*result, )
 
+    def attn(self, i: int):
+        """Get q, k, v, o weight for layer i."""
+        return self._attn(i, 'weight', 0, 0)
+
     def attn_bias(self, i: int):
         """Get q, k, v, o bias for layer i."""
-        result = []
-        qkv = self.params.get(f'model.layers.{i}.self_attn.W_pack.bias', None)
-        if qkv is not None:
-            result.extend(torch.split(qkv, qkv.shape[0] // 3, dim=0))
-            result.extend(
-                self.params[f'model.layers.{i}.self_attn.o_proj.bias'])
-        else:
-            result.extend([None] * 4)
-        return (*result, )
+        return (None, ) * 4
 
 
 class Baichuan2Reader(BaichuanReader):
     """Baichuan2Reader."""
 
-    def __init__(self, new_params: dict, unused_params: dict):
-        super().__init__(new_params, unused_params)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+        super().__init__(new_params, unused_params, last_bin)
 
     def output_weight(self):
         """Get output."""

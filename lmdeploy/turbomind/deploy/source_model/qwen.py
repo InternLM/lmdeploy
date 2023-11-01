@@ -4,38 +4,17 @@ import os.path as osp
 
 import torch
 
-from .base import INPUT_MODELS, BaseReader
-from .hf import HfModel
+from .base import INPUT_MODELS
+from .hf import HfModel, HfReader
 
 
-class QwenReader(BaseReader):
+class QwenReader(HfReader):
     """QwenReader."""
 
     attn_layer_patten = r'transformer.h.([0-9]+).'
 
-    def __init__(self, new_params: dict, unused_params: dict):
-        super().__init__()
-        self.params = unused_params
-        self.params.update(new_params)
-        self.init_layer_id()
-
-    def init_layer_id(self):
-        """Get start/end transformer layer id."""
-        super().init_layer_id()
-
-    def clean_up(self, last: bool) -> None:
-        """Clean up unused params."""
-        super().clean_up(last)
-
-    @property
-    def start_layer_id(self):
-        """Get start transformer layer id."""
-        return self._start_layer_id
-
-    @property
-    def end_layer_id(self):
-        """Get end transformer layer id."""
-        return self._end_layer_id
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+        super().__init__(new_params, unused_params, last_bin)
 
     def tok_embeddings(self):
         """Get embeddings."""
@@ -49,19 +28,22 @@ class QwenReader(BaseReader):
         """Get output."""
         return self.params.get('lm_head.weight', None)
 
+    def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
+        """Get q, k, v, o kind for layer i."""
+        qkv = self.params[f'transformer.h.{i}.attn.c_attn.{kind}']
+        q, k, v = torch.split(qkv, qkv.size(size_dim) // 3, dim=dim)
+        o = self.params.get(f'transformer.h.{i}.attn.c_proj.{kind}', None)
+        if o is None:
+            o = torch.zeros_like(q)
+        return q, k, v, o
+
     def attn(self, i: int):
         """Get q, k, v, o weight for layer i."""
-        qkv_w = self.params[f'transformer.h.{i}.attn.c_attn.weight']
-        qw, kw, vw = torch.split(qkv_w, qkv_w.size(0) // 3, dim=0)
-        ow = self.params[f'transformer.h.{i}.attn.c_proj.weight']
-        return qw, kw, vw, ow
+        return self._attn(i, 'weight', 0, 0)
 
     def attn_bias(self, i: int):
         """Get q, k, v, o bias for layer i."""
-        qkv_b = self.params[f'transformer.h.{i}.attn.c_attn.bias']
-        qb, kb, vb = torch.split(qkv_b, qkv_b.size(-1) // 3)
-        ob = torch.zeros_like(qb)
-        return qb, kb, vb, ob
+        return self._attn(i, 'bias', -1, 0)
 
     def attn_zero(self, i: int):
         """Get q, k, v, o zero point for layer i."""
@@ -75,13 +57,17 @@ class QwenReader(BaseReader):
         """Get attn norm for layer i."""
         return self.params[f'transformer.h.{i}.ln_1.weight']
 
-    def ffn(self, i: int):
-        """Get ffn weight for layer i."""
+    def _ffn(self, i: int, kind: str):
+        """Get ffn kind for layer i."""
         result = []
         for key in ['w2', 'c_proj', 'w1']:
-            tensor = self.params[f'transformer.h.{i}.mlp.{key}.weight']
+            tensor = self.params[f'transformer.h.{i}.mlp.{key}.{kind}']
             result.append(tensor)
         return (*result, )
+
+    def ffn(self, i: int):
+        """Get ffn weight for layer i."""
+        return self._ffn(i, 'weight')
 
     def ffn_zero(self, i: int):
         """Get ffn zero point for layer i."""

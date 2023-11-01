@@ -68,8 +68,8 @@ def get_cuda_tensor(tensors):
     return (*result, )
 
 
-@OUTPUT_MODELS.register_module(name='w4a16')
-class TurbomindW4A16Model(BaseOutputModel):
+@OUTPUT_MODELS.register_module(name='w4')
+class TurbomindW4Model(BaseOutputModel):
     """Export to turbomind w4a16 format."""
 
     def __init__(self,

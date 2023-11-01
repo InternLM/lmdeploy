@@ -180,7 +180,7 @@ class LlamaModel(BaseInputModel):
     """Llama model in fb format."""
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
+        super().__init__(model_path, tokenizer_path, **kwargs)
 
     @property
     def nmgrs(self):

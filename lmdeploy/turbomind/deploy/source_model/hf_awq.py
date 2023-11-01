@@ -23,59 +23,32 @@ def ensure_fp16orint32(tensors: torch.Tensor):
 class HfAwqReader(HfReader):
     """HfAwqReader."""
 
-    def __init__(self, new_params: dict, unused_params: dict):
-        super().__init__(new_params, unused_params)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+        super().__init__(new_params, unused_params, last_bin)
 
     def attn(self, i: int):
         """Get q, k, v, o qweight for layer i."""
-        result = []
-        for key in ['q', 'k', 'v', 'o']:
-            tensor = self.params[
-                f'model.layers.{i}.self_attn.{key}_proj.qweight']
-            result.append(tensor)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._attn(i, 'qweight'))
 
     def attn_zero(self, i: int):
         """Get q, k, v, o qzeros for layer i."""
-        result = []
-        for key in ['q', 'k', 'v', 'o']:
-            tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.qzeros', None)
-            result.append(tensor)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._attn(i, 'qzeros'))
 
     def attn_scale(self, i: int):
         """Get q, k, v, o scales for layer i."""
-        result = []
-        for key in ['q', 'k', 'v', 'o']:
-            tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.scales', None)
-            result.append(tensor)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._attn(i, 'scales'))
 
     def ffn(self, i: int):
         """Get ffn qweight for layer i."""
-        result = []
-        for key in ['gate_proj', 'down_proj', 'up_proj']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}.qweight']
-            result.append(tensor)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._ffn(i, 'qweight'))
 
     def ffn_zero(self, i: int):
         """Get ffn qzeros for layer i."""
-        result = []
-        for key in ['gate_proj', 'down_proj', 'up_proj']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}.qzeros']
-            result.append(tensor)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._ffn(i, 'qzeros'))
 
     def ffn_scale(self, i: int):
         """Get ffn scales for layer i."""
-        result = []
-        for key in ['gate_proj', 'down_proj', 'up_proj']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}.scales']
-            result.append(tensor)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._ffn(i, 'scales'))
 
 
 @INPUT_MODELS.register_module(name='hf-awq')
@@ -89,4 +62,7 @@ class HfAwqModel(HfModel):
                  tokenizer_path: str,
                  ckpt_path: str = None,
                  **kwargs):
-        super().__init__(model_path, tokenizer_path, ckpt_path)
+        super().__init__(model_path,
+                         tokenizer_path,
+                         ckpt_path=ckpt_path,
+                         **kwargs)

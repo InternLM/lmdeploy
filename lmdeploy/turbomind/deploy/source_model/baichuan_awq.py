@@ -1,49 +1,47 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from .baichuan import Baichuan2Model, BaichuanModel, BaichuanReader
 from .base import INPUT_MODELS
-from .hf_awq import HfAwqModel, HfAwqReader, ensure_fp16orint32
+from .hf_awq import ensure_fp16orint32
 
 
-class BaichuanAwqReader(HfAwqReader):
+class BaichuanAwqReader(BaichuanReader):
     """BaichuanAwqReader."""
 
-    def __init__(self, new_params: dict, unused_params: dict):
-        super().__init__(new_params, unused_params)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+        super().__init__(new_params, unused_params, last_bin)
 
     def attn(self, i: int):
         """Get q, k, v, o qweight for layer i."""
-        result = []
-        qkv = self.params[f'model.layers.{i}.self_attn.W_pack.qweight']
-        o = self.params[f'model.layers.{i}.self_attn.o_proj.qweight']
-        result.extend(torch.split(qkv, qkv.shape[-1] // 3, dim=-1))
-        result.append(o)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._attn(i, 'qweight', -1, -1))
 
     def attn_zero(self, i: int):
         """Get q, k, v, o qzeros for layer i."""
-        result = []
-        qkv = self.params[f'model.layers.{i}.self_attn.W_pack.qzeros']
-        o = self.params[f'model.layers.{i}.self_attn.o_proj.qzeros']
-        result.extend(torch.split(qkv, qkv.shape[-1] // 3, dim=-1))
-        result.append(o)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._attn(i, 'qzeros', -1, -1))
 
     def attn_scale(self, i: int):
         """Get q, k, v, o scales for layer i."""
-        result = []
-        qkv = self.params[f'model.layers.{i}.self_attn.W_pack.scales']
-        o = self.params[f'model.layers.{i}.self_attn.o_proj.scales']
-        result.extend(torch.split(qkv, qkv.shape[-1] // 3, dim=-1))
-        result.append(o)
-        return ensure_fp16orint32(result)
+        return ensure_fp16orint32(self._attn(i, 'scales', -1, -1))
+
+    def ffn(self, i: int):
+        """Get ffn qweight for layer i."""
+        return ensure_fp16orint32(self._ffn(i, 'qweight'))
+
+    def ffn_zero(self, i: int):
+        """Get ffn qzeros for layer i."""
+        return ensure_fp16orint32(self._ffn(i, 'qzeros'))
+
+    def ffn_scale(self, i: int):
+        """Get ffn scales for layer i."""
+        return ensure_fp16orint32(self._ffn(i, 'scales'))
 
 
 class Baichuan2AwqReader(BaichuanAwqReader):
     """Baichuan2AwqReader."""
 
-    def __init__(self, new_params: dict, unused_params: dict):
-        super().__init__(new_params, unused_params)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+        super().__init__(new_params, unused_params, last_bin)
 
     def output_weight(self):
         """Get output."""
@@ -56,7 +54,7 @@ class Baichuan2AwqReader(BaichuanAwqReader):
 
 
 @INPUT_MODELS.register_module(name='baichuan-awq')
-class BaichuanAwqModel(HfAwqModel):
+class BaichuanAwqModel(BaichuanModel):
     """Baichuan awq model in hf format."""
 
     Reader = BaichuanAwqReader
@@ -66,11 +64,14 @@ class BaichuanAwqModel(HfAwqModel):
                  tokenizer_path: str,
                  ckpt_path: str = None,
                  **kwargs):
-        super().__init__(model_path, tokenizer_path, ckpt_path)
+        super().__init__(model_path,
+                         tokenizer_path,
+                         ckpt_path=ckpt_path,
+                         **kwargs)
 
 
 @INPUT_MODELS.register_module(name='baichuan2-awq')
-class Baichuan2AwqModel(HfAwqModel):
+class Baichuan2AwqModel(Baichuan2Model):
     """Baichuan2 awq model in hf format."""
 
     Reader = Baichuan2AwqReader
@@ -80,4 +81,7 @@ class Baichuan2AwqModel(HfAwqModel):
                  tokenizer_path: str,
                  ckpt_path: str = None,
                  **kwargs):
-        super().__init__(model_path, tokenizer_path, ckpt_path)
+        super().__init__(model_path,
+                         tokenizer_path,
+                         ckpt_path=ckpt_path,
+                         **kwargs)
