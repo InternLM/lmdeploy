@@ -145,6 +145,22 @@ def calibrate(model: str,
                                                      trust_remote_code=True)
         model.config.use_cache = False
 
+    model_type = type(model).__name__
+    if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
+        raise RuntimeError(
+            f'Currently, quantification and calibration of {model_type} are '
+            f'not supported. The supported model types are '
+            f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+
+    if model_type == 'QWenLMHeadModel':
+        try:
+            import flash_attn  # noqa: F401
+        except ImportError:
+            raise RuntimeError(
+                'When using Qwen, you need to `pip install flash-attn` first, '
+                'otherwise calibration and quantification will not work '
+                'properly.')
+
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
 
