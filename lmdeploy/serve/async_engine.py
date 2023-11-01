@@ -28,7 +28,7 @@ class AsyncEngine:
         tp (int): tensor parallel
     """
 
-    def __init__(self, model_path, instance_num=32, tp=1) -> None:
+    def __init__(self, model_path, instance_num=32, tp=1, **kwargs) -> None:
         from lmdeploy import turbomind as tm
         from lmdeploy.tokenizer import Tokenizer
         tokenizer_model_path = osp.join(model_path, 'triton_models',
@@ -42,7 +42,7 @@ class AsyncEngine:
             self.tm_model.create_instance() for i in range(instance_num)
         ]
         self.instance_num = instance_num
-        self.model: BaseModel = MODELS.get(self.tm_model.model_name)()
+        self.model: BaseModel = MODELS.get(self.tm_model.model_name)(**kwargs)
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}

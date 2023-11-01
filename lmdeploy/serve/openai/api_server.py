@@ -481,7 +481,8 @@ def main(model_path: str,
          allow_origins: List[str] = ['*'],
          allow_credentials: bool = True,
          allow_methods: List[str] = ['*'],
-         allow_headers: List[str] = ['*']):
+         allow_headers: List[str] = ['*'],
+         **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -507,7 +508,8 @@ def main(model_path: str,
 
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  instance_num=instance_num,
-                                                 tp=tp)
+                                                 tp=tp,
+                                                 **kwargs)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 
