@@ -54,7 +54,7 @@ def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
             f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         timestamps = []
         tokens = []
-        start = time.perf_counter()
+        timestamps.append(time.perf_counter())
         for res, token in get_streaming_response(
                 prompt,
                 server_addr,
@@ -65,7 +65,7 @@ def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
-        first_token_latency = timestamps[1] - start
+        first_token_latency = timestamps[1] - timestamps[0]
         token_latency = timestamps[-1] - timestamps[0]
         token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])

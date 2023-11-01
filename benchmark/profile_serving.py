@@ -17,7 +17,7 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
                                                     [None, None, None]):
         timestamps = []
         tokens = []
-        start = time.perf_counter()
+        timestamps.append(time.perf_counter())
         for status, res, token in chatbot.stream_infer(
                 session_id,
                 prompt,
@@ -27,7 +27,7 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
-        first_token_latency = np.round(timestamps[1] - start, 3)
+        first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
         token_latency = np.round(timestamps[-1] - timestamps[0], 3)
         token = tokens[-1] - tokens[0]
         stats.append([first_token_latency, token, token_latency])
