@@ -3,7 +3,7 @@ import torch
 
 from .baichuan import Baichuan2Model, BaichuanModel, BaichuanReader
 from .base import INPUT_MODELS
-from .hf_awq import ensure_fp16orint32
+from .llama_awq import ensure_fp16orint32
 
 
 class BaichuanAwqReader(BaichuanReader):

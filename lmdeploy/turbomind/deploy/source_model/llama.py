@@ -1,106 +1,36 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
+import os
 import os.path as osp
-from pathlib import Path
 
 import torch
+from safetensors.torch import load_file
 from sentencepiece import SentencePieceProcessor
 
+from lmdeploy.tokenizer import Tokenizer
+
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
-
-
-def reverse_permute(x: torch.Tensor, size_per_head: int = 128):
-    """reverse permute to hf format."""
-    if x.shape[-1] > 1:
-        dim = x.shape[-1]
-        n_heads = dim // size_per_head
-        return x.view(-1, n_heads, dim // n_heads // 2,
-                      2).transpose(2, 3).reshape(-1, dim)
-    else:  # scales, zeros
-        dim = x.shape[0]
-        n_heads = dim // size_per_head
-        return x.view(n_heads, dim // n_heads // 2, 2,
-                      1).transpose(1, 2).reshape(dim, 1)
 
 
 class LlamaReader(BaseReader):
     """LlamaReader."""
 
-    def __init__(self, model_path: str, start_layer_id: int,
-                 end_layer_id: int):
+    attn_layer_patten = r'model.layers.([0-9]+).'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
         super().__init__()
-        self._start_layer_id = start_layer_id
-        self._end_layer_id = end_layer_id
-        self.params = self.load_model(model_path)
+        self.params = unused_params
+        self.params.update(new_params)
+        self.last_bin = last_bin
+        self.init_layer_id()
 
     def init_layer_id(self):
-        """Empty."""
-        pass
-
-    def load_model(self, model_path):
-        """Load all parameters."""
-        checkpoints = []
-        for pattern in ['*.pth', '*.pt']:
-            checkpoints += sorted(Path(model_path).glob(pattern))
-        n_ckpt = len(checkpoints)
-        model_params = {}
-
-        def get_param(_name, _size):
-            if _name not in model_params:
-                model_params[_name] = torch.zeros(_size,
-                                                  dtype=torch.float16,
-                                                  device='cpu')
-            return model_params[_name]
-
-        for i, ckpt_path in enumerate(checkpoints):
-            ckpt = torch.load(ckpt_path, map_location='cpu')
-
-            for i, ckpt_path in enumerate(checkpoints):
-                ckpt = torch.load(ckpt_path, map_location='cpu')
-
-                for param_name, param_data in ckpt.items():
-                    key, ext = param_name.split('.')[-2:]
-                    # column-parallel
-                    if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'output']:
-                        size = param_data.size(0)
-                        if ext == 'weight':
-                            param = get_param(
-                                param_name,
-                                [size * n_ckpt,
-                                 param_data.size(1)])
-                            param.data[size * i:size * (i + 1), :] = param_data
-                        else:  # bias
-                            param = get_param(param_name, [size * n_ckpt])
-                            param.data[size * i:size * (i + 1)] = param_data
-                    # row-parallel
-                    elif key in ['w2', 'wo', 'tok_embeddings']:
-                        size = param_data.size(-1)
-                        if ext == 'weight':
-                            param = get_param(
-                                param_name,
-                                [param_data.size(0), size * n_ckpt])
-                            param.data[:, size * i:size * (i + 1)] = param_data
-                        else:  # bias
-                            param = get_param(param_name, [size])
-                            param.data = param_data
-                    elif i == 0:
-                        param = get_param(param_name, param_data.size())
-                        param.data = param_data
-                del ckpt
-
-        for name, param in model_params.items():
-            # transpose all weights as TurboMind is expecting column-major
-            # (output_dims, input_dims) -> (input_dims, output_dims)
-            key = name.split('.')[-2]
-            if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'w2', 'wo']:
-                param.data = param.data.t()
-                if key in ['wq', 'wk']:
-                    param.data = reverse_permute(param.data)
-        return model_params
+        """Get start/end transformer layer id."""
+        super().init_layer_id()
 
     def clean_up(self, last: bool) -> None:
         """Clean up unused params."""
-        self.params.clear()
+        super().clean_up(last)
 
     @property
     def start_layer_id(self):
@@ -114,33 +44,34 @@ class LlamaReader(BaseReader):
 
     def tok_embeddings(self):
         """Get embeddings."""
-        return self.params.get('tok_embeddings.weight')
+        return self.params.get('model.embed_tokens.weight', None)
 
     def norm_weight(self):
         """Get norm."""
-        return self.params.get('norm.weight')
+        return self.params.get('model.norm.weight', None)
 
     def output_weight(self):
         """Get output."""
-        return self.params.get('output.weight')
+        return self.params.get('lm_head.weight', None)
+
+    def _attn(self, i: int, kind: str, allow_none=False):
+        """Get q, k, v, o kind for layer i."""
+        result = []
+        for key in ['q', 'k', 'v', 'o']:
+            tensor = self.params.get(
+                f'model.layers.{i}.self_attn.{key}_proj.{kind}')
+            if not allow_none:
+                assert tensor is not None
+            result.append(tensor)
+        return (*result, )
 
     def attn(self, i: int):
         """Get q, k, v, o weight for layer i."""
-        result = []
-        for key in ['wq', 'wk', 'wv', 'wo']:
-            tensor = self.params.pop(f'layers.{i}.attention.{key}.weight')
-            tensor = tensor.t() if tensor is not None else None
-            result.append(tensor)
-        return (*result, )
+        return self._attn(i, 'weight')
 
     def attn_bias(self, i: int):
         """Get q, k, v, o bias for layer i."""
-        result = []
-        for key in ['wq', 'wk', 'wv', 'wo']:
-            tensor = self.params.pop(f'layers.{i}.attention.{key}.bias', None)
-            tensor = tensor.t() if tensor is not None else None
-            result.append(tensor)
-        return (*result, )
+        return self._attn(i, 'bias', allow_none=True)
 
     def attn_zero(self, i: int):
         """Get q, k, v, o zero point for layer i."""
@@ -152,15 +83,19 @@ class LlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params.pop(f'layers.{i}.attention_norm.weight')
+        return self.params[f'model.layers.{i}.input_layernorm.weight']
+
+    def _ffn(self, i: int, kind: str):
+        """Get ffn kind for layer i."""
+        result = []
+        for key in ['gate', 'down', 'up']:
+            tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.{kind}']
+            result.append(tensor)
+        return (*result, )
 
     def ffn(self, i: int):
         """Get ffn weight for layer i."""
-        result = []
-        for key in ['w1', 'w2', 'w3']:
-            tensor = self.params.pop(f'layers.{i}.feed_forward.{key}.weight')
-            result.append(tensor.t())
-        return (*result, )
+        return self._ffn(i, 'weight')
 
     def ffn_zero(self, i: int):
         """Get ffn zero point for layer i."""
@@ -172,53 +107,97 @@ class LlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params.pop(f'layers.{i}.ffn_norm.weight')
+        return self.params[f'model.layers.{i}.post_attention_layernorm.weight']
 
 
-@INPUT_MODELS.register_module(name='llama')
+@INPUT_MODELS.register_module(name='hf')
 class LlamaModel(BaseInputModel):
-    """Llama model in fb format."""
+    """Llama model in hf format."""
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path, **kwargs)
+    Reader = LlamaReader
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
+        super().__init__(model_path, tokenizer_path)
+        ckpt_path = kwargs.get('ckpt_path')
+        if ckpt_path is None:
+            ckpt_path = model_path
+        self.ckpt_path = ckpt_path
+        self.ckpt_files = self.get_ckpt()
+
+    def get_ckpt(self):
+        """Get weight files."""
+        suffixes = ['.safetensors', '.bin']
+        files = []
+        for suffix in suffixes:
+            files = [
+                file for file in os.listdir(self.ckpt_path)
+                if file.endswith(suffix)
+            ]
+            if len(files) > 0:
+                break
+        files = sorted(files)
+        return files
 
     @property
     def nmgrs(self):
         """Get number of checkpoint."""
-        return 1
+        return len(self.ckpt_files)
 
     def get_mgrs(self):
-        """Conctruct all BaseReader."""
-        end_layer_id = self.model_info()['num_layer']
+        """Conctruct all Reader."""
+        assert self.nmgrs > 0, \
+            f'could not find checkpoints in {self.ckpt_path}'
+        unused_params = {}
         try:
-            for _ in range(1):
-                ret = LlamaReader(self.model_path, 0, end_layer_id)
+            for i, ckpt in enumerate(self.ckpt_files):
+                is_last_bin = i == len(self.ckpt_files) - 1
+                if ckpt.endswith('.bin'):
+                    new_params = torch.load(osp.join(self.ckpt_path, ckpt),
+                                            map_location='cpu')
+                else:
+                    new_params = load_file(osp.join(self.ckpt_path, ckpt))
+                ret = self.Reader(new_params, unused_params,
+                                  i == self.nmgrs - 1)
                 yield ret
-                ret.clean_up(True)
+                ret.clean_up(is_last_bin)
         except GeneratorExit:
             ret.clean_up(True)
 
     def tokenizer_info(self):
         """Read tokenizer info."""
         assert osp.isfile(self.tokenizer_path), self.tokenizer_path
-        sp_model = SentencePieceProcessor(model_file=self.tokenizer_path)
-        # BOS / EOS token IDs
-        n_words = sp_model.vocab_size()
-        bos_id = sp_model.bos_id()
-        eos_id = sp_model.eos_id()
+        try:
+            tk_model = SentencePieceProcessor(model_file=self.tokenizer_path)
+            # BOS / EOS token IDs
+            n_words = tk_model.vocab_size
+            bos_id = tk_model.bos_token_id
+            eos_id = tk_model.eos_token_id
+        except Exception:
+            tk_model = Tokenizer(self.model_path)
+            n_words = tk_model.vocab_size
+            bos_id = tk_model.bos_token_id
+            eos_id = tk_model.eos_token_id
         return n_words, bos_id, eos_id
 
     def model_info(self):
         """Read model info."""
-        params_path = osp.join(self.model_path, 'params.json')
+        params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             model_arg = json.load(f)
-            num_layer = model_arg['n_layers']
-            norm_eps = model_arg['norm_eps']
-            head_num = model_arg.get('n_heads', 32)
-            kv_head_num = model_arg.get('n_kv_heads', head_num)
+            num_layer = model_arg['num_hidden_layers']
+            norm_eps = model_arg['rms_norm_eps']
+            if 'num_key_value_heads' in model_arg:
+                kv_head_num = model_arg['num_key_value_heads']
+            else:
+                kv_head_num = model_arg['num_attention_heads']
+            rope_theta = float(model_arg.get('rope_theta', 10000.0))
+            max_position_embeddings = int(
+                model_arg.get('max_position_embeddings', 0))
+            repo_scaling = bool(model_arg.get('rope_scaling', False))
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
-                    head_num=head_num,
-                    kv_head_num=kv_head_num)
+                    kv_head_num=kv_head_num,
+                    rope_theta=rope_theta,
+                    max_position_embeddings=max_position_embeddings,
+                    use_dynamic_ntk=int(repo_scaling))

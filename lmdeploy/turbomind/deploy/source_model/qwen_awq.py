@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .base import INPUT_MODELS
-from .hf_awq import ensure_fp16orint32
+from .llama_awq import ensure_fp16orint32
 from .qwen import QwenModel, QwenReader
 
 

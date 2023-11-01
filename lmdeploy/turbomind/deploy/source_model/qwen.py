@@ -5,10 +5,10 @@ import os.path as osp
 import torch
 
 from .base import INPUT_MODELS
-from .hf import HfModel, HfReader
+from .llama import LlamaModel, LlamaReader
 
 
-class QwenReader(HfReader):
+class QwenReader(LlamaReader):
     """QwenReader."""
 
     attn_layer_patten = r'transformer.h.([0-9]+).'
@@ -83,7 +83,7 @@ class QwenReader(HfReader):
 
 
 @INPUT_MODELS.register_module(name='qwen')
-class QwenModel(HfModel):
+class QwenModel(LlamaModel):
     """Qwen model in hf format."""
 
     Reader = QwenReader

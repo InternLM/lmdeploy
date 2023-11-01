@@ -3,10 +3,10 @@
 import torch
 
 from .base import INPUT_MODELS
-from .hf import HfModel, HfReader
+from .llama import LlamaModel, LlamaReader
 
 
-class BaichuanReader(HfReader):
+class BaichuanReader(LlamaReader):
     """BaichuanReader."""
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
@@ -48,7 +48,7 @@ class Baichuan2Reader(BaichuanReader):
 
 
 @INPUT_MODELS.register_module(name='baichuan')
-class BaichuanModel(HfModel):
+class BaichuanModel(LlamaModel):
     """Llama model in baichuan format."""
 
     Reader = BaichuanReader
@@ -58,7 +58,7 @@ class BaichuanModel(HfModel):
 
 
 @INPUT_MODELS.register_module(name='baichuan2')
-class Baichuan2Model(HfModel):
+class Baichuan2Model(LlamaModel):
     """Llama model in baichuan format."""
 
     Reader = Baichuan2Reader
