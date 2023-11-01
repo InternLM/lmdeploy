@@ -9,6 +9,8 @@ import torch
 import tqdm
 from mmengine import Registry
 
+from lmdeploy.model import MODELS
+
 from ..source_model.base import BaseInputModel, BaseWeightFileMgr
 
 OUTPUT_MODELS = Registry(
@@ -95,7 +97,24 @@ class BaseOutputModel(ABC):
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
-        pass
+        _, bos_id, eos_id = self.input_model.tokenizer_info()
+        model = MODELS.get(cfg.model_name)()
+        final_cfg = cfg.__dict__
+        final_cfg.update(
+            dict(start_id=bos_id,
+                 end_id=eos_id,
+                 session_len=model.session_len + 8))
+        final_cfg.update(self.input_model.model_info())
+
+        # head_num, vocab_size
+        for bin in self.input_model.bins():
+            emb = bin.tok_embeddings()
+            if emb is not None:
+                _vocab_size, dim = emb.shape
+                head_num = dim // cfg.size_per_head
+                break
+        final_cfg.update(dict(head_num=head_num, vocab_size=_vocab_size))
+        return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
     def export_config(self) -> None:
         """export turbomind config."""

@@ -5,7 +5,6 @@ import sys
 import torch
 
 import lmdeploy
-from lmdeploy.model import MODELS
 
 from ..source_model.base import BaseInputModel, BaseWeightFileMgr
 from .base import (OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig,
@@ -82,22 +81,7 @@ class TurbomindW4A16Model(BaseOutputModel):
 
     def get_config(self, cfg: TurbomindModelConfig):
         """Get turbomind config."""
-        _, bos_id, eos_id = self.input_model.tokenizer_info()
-        model = MODELS.get(cfg.model_name)()
-        final_cfg = cfg.__dict__
-        final_cfg.update(
-            dict(start_id=bos_id,
-                 end_id=eos_id,
-                 session_len=model.session_len + 8))
-        final_cfg.update(self.input_model.model_info())
-        # head_num, vocab_size
-        for bin in self.input_model.bins():
-            emb = bin.tok_embeddings()
-            if emb is not None:
-                _vocab_size, dim = emb.shape
-                head_num = dim // cfg.size_per_head
-                break
-        final_cfg.update(dict(head_num=head_num, vocab_size=_vocab_size))
+        final_cfg = super().get_config(cfg).__dict__
 
         # attn_bias, inter_size
         visit = False
