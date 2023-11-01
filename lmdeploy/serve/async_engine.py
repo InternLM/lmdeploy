@@ -6,8 +6,6 @@ import random
 from contextlib import contextmanager
 from typing import List, Literal, Optional
 
-from lmdeploy.model import MODELS, BaseModel
-
 
 @dataclasses.dataclass
 class GenOut:
@@ -36,13 +34,14 @@ class AsyncEngine:
         tokenizer = Tokenizer(tokenizer_model_path)
         self.tm_model = tm.TurboMind(model_path,
                                      eos_id=tokenizer.eos_token_id,
-                                     tp=tp)
+                                     tp=tp,
+                                     **kwargs)
         self.tokenizer = tokenizer
         self.generators = [
             self.tm_model.create_instance() for i in range(instance_num)
         ]
         self.instance_num = instance_num
-        self.model: BaseModel = MODELS.get(self.tm_model.model_name)(**kwargs)
+        self.model = self.tm_model.model
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}
