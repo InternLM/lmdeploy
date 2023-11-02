@@ -216,7 +216,7 @@ int BlockManager::Lock(const std::vector<const Block*>& bs)
 
     Move(cached_ids_, idxs, active_ids_);
 
-    dbg(cached_ids_, active_ids_);
+    // dbg(cached_ids_, active_ids_);
 
     return idxs.size();
 }

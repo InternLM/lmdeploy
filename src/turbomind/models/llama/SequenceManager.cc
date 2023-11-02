@@ -97,9 +97,6 @@ bool SequenceManager::Erase(uint64_t id)
 
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
 {
-    if (!need_verify_) {
-        return;
-    }
     std::vector<const Block*> blocks;
     for (const auto& p : sequences) {
         auto& seq = const_cast<Sequence&>(*p);
@@ -107,11 +104,13 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
             continue;
         }
         FT_CHECK(seq.blocks.size() == seq.block_unique_ids.size());
-        for (int i = 0; i < seq.blocks.size(); ++i) {
-            if (seq.blocks[i]->unique_id != seq.block_unique_ids[i]) {
-                seq.blocks.resize(i);
-                seq.block_unique_ids.resize(i);
-                break;
+        if (need_verify_) {
+            for (int i = 0; i < seq.blocks.size(); ++i) {
+                if (seq.blocks[i]->unique_id != seq.block_unique_ids[i]) {
+                    seq.blocks.resize(i);
+                    seq.block_unique_ids.resize(i);
+                    break;
+                }
             }
         }
         blocks.insert(blocks.end(), seq.blocks.begin(), seq.blocks.end());
@@ -334,7 +333,7 @@ void SequenceManager::AssignAndActivate(const Sequences&                 sequenc
     for (int i = 0; i < sequences.size(); ++i) {
         auto& s     = const_cast<Sequence&>(*sequences[i]);
         auto  count = counts[i];
-        dbg(count);
+        // dbg(count);
         auto last = first + count;
         std::for_each(first, last, [&](const Block* b) {
             s.blocks.push_back(b);
@@ -417,8 +416,11 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     }
 
     // allocate & assign blocks
-    if (schedule.allocate) {
-        auto blocks = block_manager_->Allocate(schedule.allocate);
+    {
+        std::vector<const Block*> blocks;
+        if (schedule.allocate) {
+            blocks = block_manager_->Allocate(schedule.allocate);
+        }
         AssignAndActivate(schedule.active, schedule.block_counts, blocks);
     }
 
