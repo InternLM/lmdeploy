@@ -61,7 +61,7 @@ option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF
 
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
 
-# the environment variable 
+# the environment variable
 #   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
 # must be set at runtime
 # https://github.com/google/sanitizers/issues/1322

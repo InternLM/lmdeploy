@@ -59,4 +59,3 @@ if (Catch2_FOUND)
         add_executable(test_cache_manager test_cache_manager.cc)
         target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
 endif ()
-

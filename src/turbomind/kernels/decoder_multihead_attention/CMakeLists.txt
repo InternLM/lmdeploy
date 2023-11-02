@@ -10,7 +10,7 @@ target_link_libraries(decoder_multihead_attention PRIVATE nvidia::cutlass::cutla
 add_executable(test_decoder_multihead_attention test_utils.cu test_decoder_multihead_attention.cu)
 # target_compile_options(test_decoder_multihead_attention PRIVATE
 #   --generate-line-info -O3 -use_fast_math -Xptxas=-v --expt-relaxed-constexpr)
-target_link_libraries(test_decoder_multihead_attention PRIVATE 
-    decoder_multihead_attention 
+target_link_libraries(test_decoder_multihead_attention PRIVATE
+    decoder_multihead_attention
     decoder_masked_multihead_attention
     cublas)

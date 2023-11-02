@@ -116,7 +116,7 @@ struct DecoderMultiHeadAttentionKernel {
 
     __device__ bool thread0()
     {
-        return blockIdx.x == 0 && threadIdx.x == 0;
+        return blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0;
     }
 
     __device__ DecoderMultiHeadAttentionKernel(const ParamType& params, SharedStorage& smem, uint8_t* dsmem):

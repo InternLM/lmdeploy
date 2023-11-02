@@ -386,7 +386,7 @@ struct ConvertKvCache<Ti, int8_t> {
         Array<int8_t, N> vo;
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {
-            // convert to unsigned int by offseting +128
+            // convert to unsigned int by offsetting +128
             (uint8_t&)vo[i] = round(((float)vi[i] - zero_) / scale_ + 128.f);
         }
         return vo;
