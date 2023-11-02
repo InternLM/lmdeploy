@@ -1,7 +1,8 @@
 import json
-import multiprocessing as mp
 import random
 import time
+from queue import Queue
+from threading import Thread
 
 import fire
 import numpy as np
@@ -11,11 +12,13 @@ from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 
-def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
-          res_que: mp.Queue):
+def infer(server_addr: str, session_id: int, req_queue: Queue, res_que: Queue):
     stats = []
     while not req_queue.empty():
         prompt, input_seqlen, output_seqlen = req_queue.get()
+        if prompt is None:
+            req_queue.put((None, None, None))
+            break
         get_logger('profile_restful_api').info(
             f'request info: session {session_id}, '
             f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
@@ -27,7 +30,8 @@ def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
                 server_addr,
                 session_id,
                 request_output_len=output_seqlen,
-                interactive_mode=False):
+                interactive_mode=False,
+                ignore_eos=True):
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
@@ -56,7 +60,7 @@ def warmup(server_addr: str,
     _start = time.perf_counter()
     procs = []
     for i in range(concurrency):
-        proc = mp.Process(target=_infer, args=(server_addr, i + 1))
+        proc = Thread(target=_infer, args=(server_addr, i + 1))
         procs.append(proc)
         proc.start()
     for proc in procs:
@@ -101,9 +105,10 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
     if samples > 0:
         filtered_dataset = random.sample(filtered_dataset, samples)
 
-    que = mp.Queue()
+    que = Queue()
     for data in filtered_dataset:
         que.put(data)
+    que.put((None, None, None))
     print(f'elapsed time for filtering: '
           f'{round(time.perf_counter() - start, 2)} s')
     return que, len(filtered_dataset)
@@ -116,15 +121,14 @@ def main(server_addr: str,
          session_len: int = 2048,
          samples: int = 1000):
     api_url = server_addr + '/v1/chat/interactive'
-    warmup(api_url, concurrency, session_len - 1)
+    warmup(api_url, concurrency, session_len - 1, 4)
     req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,
                                     session_len)
-    res_que = mp.Queue()
+    res_que = Queue()
     procs = []
     _start = time.perf_counter()
     for i in range(concurrency):
-        proc = mp.Process(target=infer,
-                          args=(api_url, i + 1, req_queue, res_que))
+        proc = Thread(target=infer, args=(api_url, i + 1, req_queue, res_que))
         procs.append(proc)
         proc.start()
     for proc in procs:
