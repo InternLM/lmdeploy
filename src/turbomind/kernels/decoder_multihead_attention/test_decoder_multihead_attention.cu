@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <numeric>
+#include <random>
 
 using namespace turbomind;
 
@@ -48,7 +49,9 @@ void TestBlocks(thrust::universal_vector<half>&  linear,          // linear data
     std::vector<size_t> idxs(batch_size * n_blocks);
     std::iota(idxs.begin(), idxs.end(), 0);
 
-    std::random_shuffle(idxs.begin(), idxs.end());
+    std::random_device rd;
+    std::mt19937       g(rd());
+    std::shuffle(idxs.begin(), idxs.end(), g);
 
     for (int i = 0; i < idxs.size(); ++i) {
         ptrs[i] = blocks.data().get() + idxs[i] * head_num * block_size * head_dim;
