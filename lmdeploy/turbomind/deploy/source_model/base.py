@@ -136,7 +136,7 @@ class BaseReader(ABC):
 class BaseInputModel(ABC):
     """Base class for input model."""
 
-    def __init__(self, model_path: str, tokenizer_path: str):
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         """Constructor for BaseInputModel.
 
         Args:
