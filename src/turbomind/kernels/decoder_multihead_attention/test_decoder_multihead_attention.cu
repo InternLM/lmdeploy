@@ -8,9 +8,9 @@
 #include <iostream>
 #include <thrust/universal_vector.h>
 
+#include <algorithm>
 #include <iomanip>
 #include <numeric>
-#include <random>
 
 using namespace turbomind;
 
