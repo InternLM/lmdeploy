@@ -3,6 +3,7 @@
 #pragma once
 
 #include "decoder_multihead_attention.h"
+#include "src/turbomind/macro.h"
 #include <cuda_fp16.h>
 #include <memory>
 

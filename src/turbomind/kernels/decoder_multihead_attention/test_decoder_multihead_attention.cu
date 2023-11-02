@@ -10,6 +10,7 @@
 
 #include <iomanip>
 #include <numeric>
+#include <random>
 
 using namespace turbomind;
 
@@ -106,15 +107,15 @@ int main(int argc, char* argv[])
 
     DecoderMultiHeadAttentionParams<half> params{};
 
-    constexpr int kHeadNum    = 32;
-    constexpr int kHeadDim    = 128;
-    constexpr int KvHeadNum   = 32;
-    constexpr int kBatchSize  = 32;
-    constexpr int kContextLen = 7306;
-    // constexpr int kContextLen  = 1024;
+    constexpr int kHeadNum   = 32;
+    constexpr int kHeadDim   = 128;
+    constexpr int KvHeadNum  = 32;
+    constexpr int kBatchSize = 1;
+    // constexpr int kContextLen = 7306;
+    constexpr int kContextLen  = 1024;
     constexpr int kSequenceLen = kContextLen + 1;
     constexpr int kBlockSz     = 128;
-    constexpr int kTestIter    = 1;
+    constexpr int kTestIter    = 10;
     constexpr int kMaxSplitK   = 1;
 
     RNG rng{};
@@ -256,7 +257,7 @@ int main(int argc, char* argv[])
 
     std::vector<thrust::universal_vector<half>> outputs;
 
-    for (int i = 0; i < std::max(kTestIter, 10); ++i) {
+    for (int i = 0; i < std::max(kTestIter, 1); ++i) {
         DispatchDecoderMultiheadAttention<half>(params);
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
