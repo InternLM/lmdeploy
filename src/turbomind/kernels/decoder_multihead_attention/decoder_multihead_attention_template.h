@@ -289,8 +289,8 @@ struct DecoderMultiHeadAttentionKernel {
             Store(&smem_O_[qi * kMaxHeadDim + offset.x], cast<float>(frag_V));
         }
 
-        auto farg_K_store = conv_k_store_(frag_K);
-        auto farg_V_store = conv_v_store_(frag_V);
+        auto frag_K_store = conv_k_store_(frag_K);
+        auto frag_V_store = conv_v_store_(frag_V);
 
         // store
         if (warp_id_ == 0 && is_gqa_leader_) {
@@ -304,12 +304,12 @@ struct DecoderMultiHeadAttentionKernel {
                            + kv_head_idx_ * params_.kv_cache_block_size * kHeadDim;
                 v_cache_ = (Tkv*)v_cache_ptrs_[block_index] + params_.layer_offset
                            + kv_head_idx_ * params_.kv_cache_block_size * kHeadDim;
-                Store(&k_cache_[block_offset * kHeadDim + offset.x], farg_K_store);
-                Store(&v_cache_[block_offset * kHeadDim + offset.x], farg_V_store);
+                Store(&k_cache_[block_offset * kHeadDim + offset.x], frag_K_store);
+                Store(&v_cache_[block_offset * kHeadDim + offset.x], frag_V_store);
             }
             else {
-                Store(&k_cache_[timestep_ * kHeadDim + offset.x], farg_K_store);
-                Store(&v_cache_[timestep_ * kHeadDim + offset.x], farg_V_store);
+                Store(&k_cache_[timestep_ * kHeadDim + offset.x], frag_K_store);
+                Store(&v_cache_[timestep_ * kHeadDim + offset.x], frag_V_store);
             }
         }
     }

@@ -146,7 +146,7 @@ struct LogNScaling {
             return 1.f;
         }
         else {
-            return log2(seq_len) / log2(max_position_embeddings);
+            return log2f(seq_len) / log2f(max_position_embeddings);
         }
     }
 
