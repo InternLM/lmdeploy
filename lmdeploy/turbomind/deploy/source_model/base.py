@@ -71,6 +71,7 @@ class BaseReader(ABC):
                         to_remove.append(key)
             for key in to_remove:
                 self.params.pop(key, None)
+        torch.cuda.empty_cache()
 
     @abstractmethod
     def tok_embeddings(self) -> Union[torch.Tensor, None]:

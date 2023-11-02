@@ -52,41 +52,39 @@ class MetaLlamaReader(BaseReader):
                                                   device='cpu')
             return model_params[_name]
 
+        from tqdm import tqdm
+        pbar = tqdm(total=n_ckpt, desc='load meta ckpt', leave=False)
         for i, ckpt_path in enumerate(checkpoints):
             ckpt = torch.load(ckpt_path, map_location='cpu')
-
-            for i, ckpt_path in enumerate(checkpoints):
-                ckpt = torch.load(ckpt_path, map_location='cpu')
-
-                for param_name, param_data in ckpt.items():
-                    key, ext = param_name.split('.')[-2:]
-                    # column-parallel
-                    if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'output']:
-                        size = param_data.size(0)
-                        if ext == 'weight':
-                            param = get_param(
-                                param_name,
-                                [size * n_ckpt,
-                                 param_data.size(1)])
-                            param.data[size * i:size * (i + 1), :] = param_data
-                        else:  # bias
-                            param = get_param(param_name, [size * n_ckpt])
-                            param.data[size * i:size * (i + 1)] = param_data
-                    # row-parallel
-                    elif key in ['w2', 'wo', 'tok_embeddings']:
-                        size = param_data.size(-1)
-                        if ext == 'weight':
-                            param = get_param(
-                                param_name,
-                                [param_data.size(0), size * n_ckpt])
-                            param.data[:, size * i:size * (i + 1)] = param_data
-                        else:  # bias
-                            param = get_param(param_name, [size])
-                            param.data = param_data
-                    elif i == 0:
-                        param = get_param(param_name, param_data.size())
+            for param_name, param_data in ckpt.items():
+                key, ext = param_name.split('.')[-2:]
+                # column-parallel
+                if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'output']:
+                    size = param_data.size(0)
+                    if ext == 'weight':
+                        param = get_param(
+                            param_name,
+                            [size * n_ckpt, param_data.size(1)])
+                        param.data[size * i:size * (i + 1), :] = param_data
+                    else:  # bias
+                        param = get_param(param_name, [size * n_ckpt])
+                        param.data[size * i:size * (i + 1)] = param_data
+                # row-parallel
+                elif key in ['w2', 'wo', 'tok_embeddings']:
+                    size = param_data.size(-1)
+                    if ext == 'weight':
+                        param = get_param(param_name,
+                                          [param_data.size(0), size * n_ckpt])
+                        param.data[:, size * i:size * (i + 1)] = param_data
+                    else:  # bias
+                        param = get_param(param_name, [size])
                         param.data = param_data
-                del ckpt
+                elif i == 0:
+                    param = get_param(param_name, param_data.size())
+                    param.data = param_data
+            del ckpt
+            pbar.update(1)
+        pbar.close()
 
         for name, param in model_params.items():
             # transpose all weights as TurboMind is expecting column-major
@@ -128,7 +126,7 @@ class MetaLlamaReader(BaseReader):
         """Get q, k, v, o weight for layer i."""
         result = []
         for key in ['wq', 'wk', 'wv', 'wo']:
-            tensor = self.params.pop(f'layers.{i}.attention.{key}.weight')
+            tensor = self.params[f'layers.{i}.attention.{key}.weight']
             tensor = tensor.t() if tensor is not None else None
             result.append(tensor)
         return (*result, )
@@ -137,7 +135,7 @@ class MetaLlamaReader(BaseReader):
         """Get q, k, v, o bias for layer i."""
         result = []
         for key in ['wq', 'wk', 'wv', 'wo']:
-            tensor = self.params.pop(f'layers.{i}.attention.{key}.bias', None)
+            tensor = self.params.get(f'layers.{i}.attention.{key}.bias')
             tensor = tensor.t() if tensor is not None else None
             result.append(tensor)
         return (*result, )
@@ -152,13 +150,13 @@ class MetaLlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params.pop(f'layers.{i}.attention_norm.weight')
+        return self.params[f'layers.{i}.attention_norm.weight']
 
     def ffn(self, i: int):
         """Get ffn weight for layer i."""
         result = []
         for key in ['w1', 'w2', 'w3']:
-            tensor = self.params.pop(f'layers.{i}.feed_forward.{key}.weight')
+            tensor = self.params[f'layers.{i}.feed_forward.{key}.weight']
             result.append(tensor.t())
         return (*result, )
 
@@ -172,7 +170,7 @@ class MetaLlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params.pop(f'layers.{i}.ffn_norm.weight')
+        return self.params[f'layers.{i}.ffn_norm.weight']
 
 
 @INPUT_MODELS.register_module(name='llama')
@@ -191,12 +189,14 @@ class MetaLlamaModel(BaseInputModel):
         """Conctruct all BaseReader."""
         end_layer_id = self.model_info()['num_layer']
         try:
-            for _ in range(1):
-                ret = MetaLlamaReader(self.model_path, 0, end_layer_id)
-                yield ret
-                ret.clean_up(True)
+            if hasattr(self, 'meta_reader'):
+                yield self.meta_reader
+            else:
+                self.meta_reader = MetaLlamaReader(self.model_path, 0,
+                                                   end_layer_id)
+                yield self.meta_reader
         except GeneratorExit:
-            ret.clean_up(True)
+            pass
 
     def tokenizer_info(self):
         """Read tokenizer info."""

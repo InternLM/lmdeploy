@@ -173,6 +173,11 @@ class BaseOutputModel(ABC):
                 self.export_transformer_block(bin, i)
                 pbar.update(1)
         pbar.close()
+        # manually clean up meta reader
+        if hasattr(self.input_model, 'meta_reader'):
+            self.input_model.meta_reader.clean_up(True)
+            del self.input_model.meta_reader
+            torch.cuda.empty_cache()
 
     def export_misc(self, bin: BaseReader) -> None:
         """Export embedding, norm, output weight."""
