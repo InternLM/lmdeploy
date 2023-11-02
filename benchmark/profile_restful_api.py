@@ -2,46 +2,13 @@ import json
 import multiprocessing as mp
 import random
 import time
-from typing import Iterable, List
 
 import fire
 import numpy as np
-import requests
 
+from lmdeploy.serve.openai.api_client import get_streaming_response
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
-
-
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int,
-                           stream: bool = True,
-                           sequence_start: bool = True,
-                           sequence_end: bool = False,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
-    headers = {'User-Agent': 'Test Client'}
-    pload = {
-        'prompt': prompt,
-        'stream': stream,
-        'session_id': session_id,
-        'request_output_len': request_output_len,
-        'sequence_start': sequence_start,
-        'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
-    }
-    response = requests.post(api_url,
-                             headers=headers,
-                             json=pload,
-                             stream=stream)
-    for chunk in response.iter_lines(chunk_size=8192,
-                                     decode_unicode=False,
-                                     delimiter=b'\n'):
-        if chunk:
-            data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            yield output, tokens
 
 
 def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
@@ -55,13 +22,12 @@ def infer(server_addr: str, session_id: int, req_queue: mp.Queue,
         timestamps = []
         tokens = []
         timestamps.append(time.perf_counter())
-        for res, token in get_streaming_response(
+        for res, token, status in get_streaming_response(
                 prompt,
                 server_addr,
                 session_id,
                 request_output_len=output_seqlen,
-                sequence_start=True,
-                sequence_end=True):
+                interactive_mode=False):
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
@@ -80,13 +46,11 @@ def warmup(server_addr: str,
 
     def _infer(server_addr, session_id):
         for _ in range(warmup_round):
-            for _, _ in get_streaming_response(
-                    '',
-                    server_addr,
-                    session_id,
-                    request_output_len=output_seqlen,
-                    sequence_start=True,
-                    sequence_end=True):
+            for _ in get_streaming_response('',
+                                            server_addr,
+                                            session_id,
+                                            request_output_len=output_seqlen,
+                                            interactive_mode=False):
                 continue
 
     _start = time.perf_counter()
@@ -151,7 +115,7 @@ def main(server_addr: str,
          concurrency: int = 1,
          session_len: int = 2048,
          samples: int = 1000):
-    api_url = server_addr + '/generate'
+    api_url = server_addr + '/v1/chat/interactive'
     warmup(api_url, concurrency, session_len - 1)
     req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,
                                     session_len)

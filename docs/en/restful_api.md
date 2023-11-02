@@ -7,52 +7,57 @@ lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${serv
 ```
 
 Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
-We provide four restful api in total. Three of them are in OpenAI format. However, we recommend users try
-our own api which provides more arguments for users to modify. The performance is comparatively better.
+We provide four restful api in total. Three of them are in OpenAI format.
+
+- /v1/chat/completions
+- /v1/models
+- /v1/completions
+
+However, we recommend users try
+our own api `/v1/chat/interactive` which provides more arguments for users to modify. The performance is comparatively better.
+
+**Note** please, if you want to launch multiple requests, you'd better set different `session_id` for both
+`/v1/chat/completions` and `/v1/chat/interactive` apis. Or, we will set them random values.
 
 ### python
 
-Here is an example for our own api `generate`.
+We have integrated the client-side functionalities of these services into the `APIClient` class. Below are some examples demonstrating how to invoke the `api_server` service on the client side.
+
+If you want to use the `/v1/chat/completions` endpoint, you can try the following code:
 
 ```python
-import json
-import requests
-from typing import Iterable, List
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+messages = [{"role": "user", "content": "Say this is a test!"}]
+for item in api_client.chat_completions_v1(model=model_name, messages=messages):
+    print(item)
+```
 
+For the `/v1/completions` endpoint. If you want to use the `/v1/completions` endpoint, you can try:
 
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int,
-                           stream: bool = True,
-                           sequence_start: bool = True,
-                           sequence_end: bool = True,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
-    headers = {'User-Agent': 'Test Client'}
-    pload = {
-        'prompt': prompt,
-        'stream': stream,
-        'session_id': session_id,
-        'request_output_len': request_output_len,
-        'sequence_start': sequence_start,
-        'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
-    }
-    response = requests.post(
-        api_url, headers=headers, json=pload, stream=stream)
-    for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
-        if chunk:
-            data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            yield output, tokens
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+for item in api_client.completions_v1(model=model_name, prompt='hi'):
+    print(item)
+```
 
+Lmdeploy supports maintaining session histories on the server for `/v1/chat/interactive` api. We disable the
+feature by default.
 
-for output, tokens in get_streaming_response(
-        "Hi, how are you?", "http://{server_ip}:{server_port}/generate", 0,
-        512):
-    print(output, end='')
+- On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
+  `interactive_mode = True` and the same `session_id` (can't be -1, it's the default number) to `/v1/chat/interactive` for requests.
+- On normal mode, no chat history is kept on the server.
+
+The interactive mode can be controlled by the `interactive_mode` boolean parameter. The following is an example of normal mode. If you want to experience the interactive mode, simply pass in `interactive_mode=True`.
+
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+for item in api_client.generate(prompt='hi'):
+    print(item)
 ```
 
 ### Java/Golang/Rust
@@ -84,16 +89,15 @@ List Models:
 curl http://{server_ip}:{server_port}/v1/models
 ```
 
-Generate:
+Interactive Chat:
 
 ```bash
-curl http://{server_ip}:{server_port}/generate \
+curl http://{server_ip}:{server_port}/v1/chat/interactive \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Hello! How are you?",
     "session_id": 1,
-    "sequence_start": true,
-    "sequence_end": true
+    "interactive_mode": true
   }'
 ```
 
@@ -104,19 +108,19 @@ curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
-    "messages": [{"role": "user", "content": "Hello! Ho are you?"}]
+    "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```
 
-Embeddings:
+Text Completions:
 
-```bash
-curl http://{server_ip}:{server_port}/v1/embeddings \
-  -H "Content-Type: application/json" \
+```shell
+curl http://{server_ip}:{server_port}/v1/completions \
+  -H 'Content-Type: application/json' \
   -d '{
-    "model": "internlm-chat-7b",
-    "input": "Hello world!"
-  }'
+  "model": "llama",
+  "prompt": "two steps to build a house:"
+}'
 ```
 
 ### CLI client
@@ -125,7 +129,7 @@ There is a client script for restful api server.
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client restful_api_url
+lmdeploy serve api_client api_server_url
 ```
 
 ### webui
@@ -133,10 +137,10 @@ lmdeploy serve api_client restful_api_url
 You can also test restful-api through webui.
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 ### FAQ
@@ -146,10 +150,6 @@ lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port $
 
 2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
 
-3. When the request with the same `session_id` to `generate` got a empty return value and a negative `tokens`, please consider setting `sequence_start=false` for the second question and the same for the afterwards.
+3. When the request with the same `session_id` to `/v1/chat/interactive` got a empty return value and a negative `tokens`, please consider setting `interactive_mode=false` to restart the session.
 
-4. Requests were previously being handled sequentially rather than concurrently. To resolve this issue,
-
-   - kindly provide unique session_id values when calling the `generate` API or else your requests may be associated with client IP addresses
-
-5. Both `generate` api and `v1/chat/completions` upport engaging in multiple rounds of conversation, where input `prompt` or `messages` consists of either single strings or entire chat histories.These inputs are interpreted using multi-turn dialogue modes. However, ff you want to turn the mode of and manage the chat history in clients, please the parameter `sequence_end: true` when utilizing the `generate` function, or specify `renew_session: true` when making use of `v1/chat/completions`
+4. The `/v1/chat/interactive` api disables engaging in multiple rounds of conversation by default. The input argument `prompt` consists of either single strings or entire chat histories.

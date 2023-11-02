@@ -9,52 +9,52 @@ lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --ins
 ```
 
 然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
-我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。不过，我们建议用户用我们提供的另一个 API: `generate`。
+我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。
+
+- /v1/chat/completions
+- /v1/models
+- /v1/completions
+
+不过，我们建议用户用我们提供的另一个 API: `/v1/chat/interactive`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
 ### python
 
-这是一个 python 示例，展示如何使用 `generate`。
+我们将这些服务的客户端功能集成在 `APIClient` 类中。下面是一些例子，展示如何在客户端调用 `api_server` 服务。
+如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
 
 ```python
-import json
-import requests
-from typing import Iterable, List
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+messages = [{"role": "user", "content": "Say this is a test!"}]
+for item in api_client.chat_completions_v1(model=model_name, messages=messages):
+    print(item)
+```
 
+如果你想用 `/v1/completions` 接口，你可以尝试：
 
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int,
-                           stream: bool = True,
-                           sequence_start: bool = True,
-                           sequence_end: bool = True,
-                           ignore_eos: bool = False) -> Iterable[List[str]]:
-    headers = {'User-Agent': 'Test Client'}
-    pload = {
-        'prompt': prompt,
-        'stream': stream,
-        'session_id': session_id,
-        'request_output_len': request_output_len,
-        'sequence_start': sequence_start,
-        'sequence_end': sequence_end,
-        'ignore_eos': ignore_eos
-    }
-    response = requests.post(
-        api_url, headers=headers, json=pload, stream=stream)
-    for chunk in response.iter_lines(
-            chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
-        if chunk:
-            data = json.loads(chunk.decode('utf-8'))
-            output = data['text']
-            tokens = data['tokens']
-            yield output, tokens
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+model_name = api_client.available_models[0]
+for item in api_client.completions_v1(model=model_name, prompt='hi'):
+    print(item)
+```
 
+LMDeploy 的 `/v1/chat/interactive` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
 
-for output, tokens in get_streaming_response(
-        "Hi, how are you?", "http://{server_ip}:{server_port}/generate", 0,
-        512):
-    print(output, end='')
+- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置`interactive_mode = True`, `session_id`保持相同 (不为 -1，这是缺省值)。
+- 非交互模式下，server 不保存历史记录。
+
+交互模式可以通过 `interactive_mode` 布尔量参数控制。下面是一个普通模式的例子，
+如果要体验交互模式，将 `interactive_mode=True` 传入即可。
+
+```python
+from lmdeploy.serve.openai.api_client import APIClient
+api_client = APIClient('http://{server_ip}:{server_port}')
+for item in api_client.generate(prompt='hi'):
+    print(item)
 ```
 
 ### Java/Golang/Rust
@@ -86,16 +86,15 @@ cURL 也可以用于查看 API 的输出结果
 curl http://{server_ip}:{server_port}/v1/models
 ```
 
-使用 generate:
+Interactive Chat:
 
 ```bash
-curl http://{server_ip}:{server_port}/generate \
+curl http://{server_ip}:{server_port}/v1/chat/interactive \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Hello! How are you?",
     "session_id": 1,
-    "sequence_start": true,
-    "sequence_end": true
+    "interactive_mode": true
   }'
 ```
 
@@ -106,19 +105,19 @@ curl http://{server_ip}:{server_port}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "internlm-chat-7b",
-    "messages": [{"role": "user", "content": "Hello! Ho are you?"}]
+    "messages": [{"role": "user", "content": "Hello! How are you?"}]
   }'
 ```
 
-Embeddings:
+Text Completions:
 
-```bash
-curl http://{server_ip}:{server_port}/v1/embeddings \
-  -H "Content-Type: application/json" \
+```shell
+curl http://{server_ip}:{server_port}/v1/completions \
+  -H 'Content-Type: application/json' \
   -d '{
-    "model": "internlm-chat-7b",
-    "input": "Hello world!"
-  }'
+  "model": "llama",
+  "prompt": "two steps to build a house:"
+}'
 ```
 
 ### CLI client
@@ -126,8 +125,8 @@ curl http://{server_ip}:{server_port}/v1/embeddings \
 restful api 服务可以通过客户端测试，例如
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-lmdeploy serve api_client restful_api_url
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+lmdeploy serve api_client api_server_url
 ```
 
 ### webui
@@ -135,10 +134,10 @@ lmdeploy serve api_client restful_api_url
 也可以直接用 webui 测试使用 restful-api。
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-# server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
+# server_name 和 server_port 是用来提供 gradio ui 访问服务的
+# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 ### FAQ
@@ -148,12 +147,6 @@ lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port $
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
 
-3. 当同一个 `session_id` 的请求给 `generate` 函数后，出现返回空字符串和负值的 `tokens`，应该是第二次问话没有设置 `sequence_start=false`
+3. 当同一个 `session_id` 的请求给 `/v1/chat/interactive` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
 
-4. 如果感觉请求不是并发地被处理，而是一个一个地处理，请设置好以下参数：
-
-   - 不同的 session_id 传入 `generate` api。否则，我们将自动绑定会话 id 为请求端的 ip 地址编号。
-
-5. `generate` api 和 `v1/chat/completions` 均支持多轮对话。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
-   两个 api 都是默认开启多伦对话的，如果你想关闭这个功能，然后在客户端管理会话记录，请设置 `sequence_end: true` 传入 `generate`，或者设置
-   `renew_session: true` 传入 `v1/chat/completions`。
+4. `/v1/chat/interactive` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
