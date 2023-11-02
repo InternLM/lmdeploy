@@ -356,6 +356,8 @@ def attention_forward_with_rerope(
     if bias_type == 'default':
 
         if q_len == 1:
+            # before_free_gpu_mem = torch.cuda.memory_allocated()
+
             key_states = past_key_value[0][block_offsets].view(
                 -1, num_heads, head_dim)[0:history_lengths[-1] + 1]
             value_states = past_key_value[1][block_offsets].view(
@@ -372,6 +374,8 @@ def attention_forward_with_rerope(
             if attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
 
+            # middle_free_gpu_mem = torch.cuda.memory_allocated()
+
             # upcast attention to fp32
             attn_weights = torch.nn.functional.softmax(attn_weights,
                                                        dim=-1,
@@ -380,7 +384,13 @@ def attention_forward_with_rerope(
             attn_output = torch.matmul(attn_weights,
                                        value_states.transpose(0, 1))
 
+            # end_free_gpu_mem = torch.cuda.memory_allocated()
+            # MB = 1024 * 1024
+            # print('{} {} {}'.format(before_free_gpu_mem, middle_free_gpu_mem, end_free_gpu_mem))
+            # print('{} {}'.format((middle_free_gpu_mem - before_free_gpu_mem) / MB, (end_free_gpu_mem - middle_free_gpu_mem) / MB))
+
         else:
+            # before_free_gpu_mem = torch.cuda.memory_allocated()
 
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
                 query_states, key_states, value_states, position_ids, window)
@@ -443,36 +453,42 @@ def attention_forward_with_rerope(
                 attn_output = torch.matmul(attn_weights, value_states)
                 return attn_output
 
-            # torch_output = torch_attention_fwd(query_states1, query_states2, key_states1, key_states2, value_states, causal=True, sm_scale=sm_scale, window=window)
+            # attn_output = torch_attention_fwd(query_states1, query_states2, key_states1, key_states2, value_states, causal=True, sm_scale=sm_scale, window=window)
 
-            PADDING_UNIT = past_key_value[0].shape[1]
-            assert PADDING_UNIT in {16, 32, 64, 128, 256}
-            padding_len = -query_states1.shape[1] % PADDING_UNIT
+            if False:
+                PADDING_UNIT = past_key_value[0].shape[1]
+                assert PADDING_UNIT in {16, 32, 64, 128, 256}
+                padding_len = -query_states1.shape[1] % PADDING_UNIT
 
-            query_states1 = F.pad(
-                query_states1,
-                (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
-            query_states2 = F.pad(
-                query_states2,
-                (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
-            key_states1 = F.pad(
-                key_states1, (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
-            key_states2 = F.pad(
-                key_states2, (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
-            value_states = F.pad(
-                value_states,
-                (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+                query_states1 = F.pad(
+                    query_states1,
+                    (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+                query_states2 = F.pad(
+                    query_states2,
+                    (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+                key_states1 = F.pad(
+                    key_states1,
+                    (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+                key_states2 = F.pad(
+                    key_states2,
+                    (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+                value_states = F.pad(
+                    value_states,
+                    (0, 0, 0, padding_len)).unsqueeze(0).contiguous()
+            # middle_free_gpu_mem = torch.cuda.memory_allocated()
 
-            attn_output = rerope_attention_fwd(query_states1,
-                                               query_states2,
-                                               key_states1,
-                                               key_states2,
-                                               value_states,
-                                               True,
-                                               sm_scale,
-                                               window,
-                                               BLOCK_M=PADDING_UNIT).squeeze(0)
-            attn_output = attn_output[:, 0:q_len, :]
+            attn_output = rerope_attention_fwd(query_states1, query_states2,
+                                               key_states1, key_states2,
+                                               value_states, True, sm_scale,
+                                               window).squeeze(0)
+            # attn_output = attn_output[:, 0:q_len, :]
+
+            # end_free_gpu_mem = torch.cuda.memory_allocated()
+            # MB = int(1024 * 1024)
+            # print('{} {} {}'.format(before_free_gpu_mem, middle_free_gpu_mem, end_free_gpu_mem))
+            # print('{} {}'.format((middle_free_gpu_mem - before_free_gpu_mem) / MB, (end_free_gpu_mem - middle_free_gpu_mem) / MB))
+
+            # pdb.set_trace()
             # print(torch.allclose(attn_output, torch_output, atol=2e-2, rtol=0))
 
         if attn_output.size() != (num_heads, q_len, head_dim):

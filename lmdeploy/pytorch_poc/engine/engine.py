@@ -227,6 +227,8 @@ def _update_cache_config(model_config: ModelConfig,
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
 
+    print('block num: ', cache_config.num_gpu_blocks)
+
 
 def _get_torch_dtype(config: Any, default: str = 'float16'):
     """Get the torch dtype from the model config.

@@ -2,6 +2,7 @@
 import pdb
 
 import torch
+import torch.utils.benchmark as benchmark
 import triton
 import triton.language as tl
 
@@ -87,9 +88,9 @@ def _rerope_fwd_kernel(
     # don't work as expected with `exp` in the loop
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout
-    q1 = tl.load(Q1_block_ptr)
+    q1 = tl.load(Q1_block_ptr, boundary_check=(0, 1))
     q1 = (q1 * qk_scale).to(tl.float16)
-    q2 = tl.load(Q2_block_ptr)
+    q2 = tl.load(Q2_block_ptr, boundary_check=(0, 1))
     q2 = (q2 * qk_scale).to(tl.float16)
     # loop over k, v and update accumulator
     lo = 0
@@ -147,7 +148,7 @@ def _rerope_fwd_kernel(
                                     offsets=(start_m * BLOCK_M, 0),
                                     block_shape=(BLOCK_M, BLOCK_DMODEL),
                                     order=(1, 0))
-    tl.store(O_block_ptr, acc.to(tl.float16))
+    tl.store(O_block_ptr, acc.to(tl.float16), boundary_check=(0, 1))
 
 
 def rerope_attention_fwd(q1,
@@ -212,7 +213,7 @@ def test_rerope():
 
     Z = 1
     H = 40
-    N_CTX = 1984  # must pad to BLOCK_M*n
+    N_CTX = 2237  # must pad to BLOCK_M*n
     # currently backward is VERY slow for d_head = 128
     # https://github.com/openai/triton/issues/1975
     D_HEAD = 128
@@ -292,6 +293,32 @@ def test_rerope():
     triton_output = rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale,
                                          WINDOW)
     assert torch.allclose(torch_output, triton_output, atol=2e-2, rtol=0)
+
+    def f(fn, q1, q2, k1, k2, v, sm_scale, window):
+        fn(q1, q2, k1, k2, v, True, sm_scale, window)
+
+    t0 = benchmark.Timer(stmt='f(fn, q1, q2, k1, k2, v, sm_scale, window)',
+                         globals={
+                             'f': f,
+                             'fn': torch_attention2,
+                             'q1': q1,
+                             'q2': q2,
+                             'k1': k1,
+                             'k2': k2,
+                             'v': v,
+                             'sm_scale': sm_scale,
+                             'window': WINDOW
+                         },
+                         num_threads=torch.get_num_threads())
+    print(t0.timeit(20))
+
+    import time
+    begin = time.time()
+    LOOP = 100
+    for i in range(LOOP):
+        rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
+    timecost = (time.time() - begin) / LOOP
+    print(time.time() - begin)
 
 
 if __name__ == '__main__':

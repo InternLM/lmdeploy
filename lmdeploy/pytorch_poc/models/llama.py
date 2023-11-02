@@ -75,26 +75,61 @@ class LlamaAttention(nn.Module):
                            ).squeeze(0) if k is not None else None
                 return q_embed, k_embed
 
+            def apply_rotary_pos_emb_rerope_v2(q, k, cos, sin, position_ids):
+                # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
+                assert 1 == position_ids.shape[0]
+
+                _, __, seq_len, dim = cos.shape
+
+                cos = cos[0, 0][position_ids].reshape(
+                    seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
+                sin = sin[0, 0][position_ids].reshape(
+                    seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
+
+                if q is not None:
+                    q = rotate_half(q).mul_(sin[-q.shape[0]:]).add_(
+                        q.mul_(cos[-q.shape[0]:]))
+                if k is not None:
+                    k = rotate_half(k).mul_(sin).add_(k.mul_(cos))
+                return q, k
+
             def _rotary_emb_context_rerope_fn(query_states, key_states,
                                               value_states, position_ids,
                                               window):
-                kv_seq_len = key_states.shape[0]
+                kv_seq_len, num_dim, dim = key_states.shape
+
                 cos, sin = self.rotary_emb(value_states,
                                            seq_len=max(kv_seq_len, window + 1))
-                query_states1, key_states1 = apply_rotary_pos_emb_rerope(
+
+                query_states1, key_states1 = apply_rotary_pos_emb_rerope_v2(
                     query_states, key_states, cos, sin, position_ids)
-                query_states2, _ = apply_rotary_pos_emb_rerope(
+
+                query_states2, _ = apply_rotary_pos_emb_rerope_v2(
                     query_states, None, cos, sin, position_ids * 0 + window)
 
                 # repeat k/v heads if n_kv_heads < n_heads
-                key_states1 = repeat_kv(key_states1, self.num_key_value_groups)
-                key_states2 = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states,
-                                         self.num_key_value_groups)
-                # return query_states1, query_states2, key_states1, key_states2, value_states
-                return query_states1.transpose(0, 1), query_states2.transpose(
-                    0, 1), key_states1.transpose(0, 1), key_states2.transpose(
-                        0, 1), value_states.transpose(0, 1)
+                if self.num_key_value_groups > 1:
+                    key_states1 = repeat_kv(key_states1,
+                                            self.num_key_value_groups)
+                    key_states2 = repeat_kv(key_states,
+                                            self.num_key_value_groups)
+                    value_states = repeat_kv(value_states,
+                                             self.num_key_value_groups)
+                else:
+                    key_states2 = key_states
+
+                query_states1 = query_states1.transpose(0, 1).reshape(
+                    1, num_dim, kv_seq_len, dim).contiguous()
+                query_states2 = query_states2.transpose(0, 1).reshape(
+                    1, num_dim, kv_seq_len, dim).contiguous()
+                key_states1 = key_states1.transpose(0, 1).reshape(
+                    1, num_dim, kv_seq_len, dim).contiguous()
+                key_states2 = key_states2.transpose(0, 1).reshape(
+                    1, num_dim, kv_seq_len, dim).contiguous()
+                value_states = value_states.transpose(0, 1).reshape(
+                    1, num_dim, kv_seq_len, dim).contiguous()
+
+                return query_states1, query_states2, key_states1, key_states2, value_states
 
             def _rotary_emb_generate_rerope_fn(key_states, value_states,
                                                position_ids, window):
@@ -103,7 +138,7 @@ class LlamaAttention(nn.Module):
 
                 position_ids = (position_ids[:, -1] -
                                 position_ids).clip(max=window)
-                _, key_states = apply_rotary_pos_emb_rerope(
+                _, key_states = apply_rotary_pos_emb_rerope_v2(
                     None, key_states, cos, -sin, position_ids)
                 key_states = repeat_kv(key_states, self.num_key_value_groups)
                 value_states = repeat_kv(value_states,

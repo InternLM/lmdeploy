@@ -70,7 +70,7 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--max_tokens',
                         type=int,
-                        default=9000,
+                        default=12000,
                         help='maximum token length for evaluation')
     parser.add_argument('--interval',
                         type=int,
