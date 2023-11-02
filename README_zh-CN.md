@@ -53,7 +53,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 支持的模型
 
-`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端
+`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端。运行`lmdeploy list`可查看支持模型列表
 
 ### TurboMind
 
