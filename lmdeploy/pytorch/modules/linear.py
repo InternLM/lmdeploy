@@ -4,6 +4,11 @@ from typing import Optional, Type, TypeVar
 import torch
 from torch import nn
 
+try:
+    import awq_inference_engine
+except ModuleNotFoundError:
+    awq_inference_engine = None
+
 
 class WeightOnlyQLinear(nn.Module):
     """This class implements weight only quantization linear.
@@ -18,13 +23,15 @@ class WeightOnlyQLinear(nn.Module):
         bias (Tensor, optional): Defaults to None.
     """
 
-    def __init__(self,
-                 w_bit: int,
-                 symmetry: bool,
-                 group_size: int,
-                 in_features: int,
-                 out_features: int,
-                 bias: Optional[torch.Tensor] = None) -> None:
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: Optional[torch.Tensor] = True,
+        w_bit: int = 4,
+        symmetry: bool = False,
+        group_size: int = 128,
+    ) -> None:
         super().__init__()
 
         if w_bit not in [2, 4, 8]:
@@ -92,8 +99,8 @@ class WeightOnlyQLinear(nn.Module):
         out_features = linear.out_features
         bias = False if linear.bias is None else True
 
-        qlinear = cls(w_bit, symmetry, group_size, in_features, out_features,
-                      bias)
+        qlinear = cls(in_features, out_features, bias, w_bit, symmetry,
+                      group_size)
         qlinear.bias = linear.bias
 
         qparams = quantizer.calculate_qparams(linear.weight)
@@ -124,3 +131,24 @@ class WeightOnlyQLinear(nn.Module):
         qlinear.to('cpu')
 
         return qlinear
+
+    @torch.no_grad()
+    def forward(self, x):
+        if awq_inference_engine is None:
+            raise RuntimeError(
+                'Run the following command to install '
+                'the kernel for 4bit inference\n\n'
+                'git clone https://github.com/mit-han-lab/llm-awq.git\n'
+                'cd awq/kernels\n'
+                'python setup.py install\n')
+        out_shape = x.shape[:-1] + (self.out_features, )
+        inputs = x.reshape(-1, x.shape[-1])
+
+        out = awq_inference_engine.gemm_forward_cuda(inputs.half(),
+                                                     self.qweight,
+                                                     self.scales.half(),
+                                                     self.qzeros,
+                                                     self.group_size)
+        out = out + self.bias if self.bias is not None else out
+
+        return out.reshape(out_shape)

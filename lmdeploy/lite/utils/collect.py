@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Dict, List, Tuple, Union
 
-from mmengine.config.lazy import LazyAttr
 from torch import nn
 
 
@@ -21,9 +20,6 @@ def collect_target_modules(model: nn.Module,
     Returns:
         A dictionary mapping from module names to module instances.
     """
-
-    if isinstance(target, LazyAttr):
-        target = target.build()
 
     if not isinstance(target, (type, str)):
         raise TypeError('Target must be a string (name of the module) '
