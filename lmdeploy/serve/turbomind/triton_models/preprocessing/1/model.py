@@ -140,10 +140,18 @@ class TritonPythonModel:
         Returns:
             tuple: token ids and their length
         """
-        start_ids = [
-            torch.IntTensor(self.tokenizer.encode(s[0].decode()))
-            for s in query
-        ]
+        start_ids = []
+        for s in query:
+            _s = s[0].decode()
+            if _s == '<BOS>':
+                start_id = [self.start_id
+                            ] if self.start_id is not None else [-1]
+            elif _s == '<EOS>':
+                start_id = [self.end_id] if self.end_id is not None else [-1]
+            else:
+                start_id = self.tokenizer.encode(s[0].decode())
+            start_ids.append(torch.IntTensor(start_id))
+
         start_lengths = torch.IntTensor([[len(ids)] for ids in start_ids])
         start_ids = pad_sequence(start_ids,
                                  batch_first=True,
