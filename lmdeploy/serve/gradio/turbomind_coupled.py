@@ -146,8 +146,6 @@ def run_local(model_path: str,
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
 
-            session_id_box = gr.Number(label='Session ID')
-
             chatbot = gr.Chatbot(
                 elem_id='chatbot',
                 label=InterFace.async_engine.tm_model.model_name)
@@ -173,22 +171,18 @@ def run_local(model_path: str,
             [state_chatbot, cancel_btn, reset_btn, state_session_id],
             cancels=[send_event])
 
-        reset_btn.click(reset_local_func,
-                        [instruction_txtbox, state_chatbot, state_session_id],
-                        [
-                            state_chatbot, chatbot, instruction_txtbox,
-                            session_id_box, state_session_id
-                        ],
-                        cancels=[send_event])
+        reset_btn.click(
+            reset_local_func,
+            [instruction_txtbox, state_chatbot, state_session_id],
+            [state_chatbot, chatbot, instruction_txtbox, state_session_id],
+            cancels=[send_event])
 
         def init():
             InterFace.global_session_id += 1
             new_session_id = InterFace.global_session_id
             return [new_session_id, new_session_id]
 
-        demo.load(init,
-                  inputs=None,
-                  outputs=[state_session_id, session_id_box])
+        demo.load(init, inputs=None, outputs=[state_session_id])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=batch_size, max_size=100,
