@@ -98,27 +98,27 @@ def _rerope_fwd_kernel(
 
     for start_n in range(lo, hi, BLOCK_N):
         # -- compute qk ---
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float16)
+        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         if IS_CAUSAL:
             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk,
-                          -65504)
+                          float('-inf'))
         if start_n <= start_m * BLOCK_M - WINDOW - BLOCK_N or start_n >= (
                 start_m + 1) * BLOCK_M + WINDOW:
             k2 = tl.load(K2_block_ptr)
             v = tl.load(V_block_ptr)
-            qk += tl.dot(q2, k2, out_dtype=tl.float16)
+            qk += tl.dot(q2, k2, out_dtype=tl.float32)
         elif start_n > (
                 start_m + 1
         ) * BLOCK_M - WINDOW and start_n < start_m * BLOCK_M + WINDOW - BLOCK_N:
             k1 = tl.load(K1_block_ptr)
             v = tl.load(V_block_ptr)
-            qk += tl.dot(q1, k1, out_dtype=tl.float16)
+            qk += tl.dot(q1, k1, out_dtype=tl.float32)
         else:
             k1 = tl.load(K1_block_ptr)
             k2 = tl.load(K2_block_ptr)
             v = tl.load(V_block_ptr)
-            qk1 = tl.dot(q1, k1, out_dtype=tl.float16)
-            qk2 = tl.dot(q2, k2, out_dtype=tl.float16)
+            qk1 = tl.dot(q1, k1, out_dtype=tl.float32)
+            qk2 = tl.dot(q2, k2, out_dtype=tl.float32)
             qk += tl.where(
                 tl.abs(offs_m[:, None] - (start_n + offs_n[None, :])) < WINDOW,
                 qk1, qk2)
@@ -129,7 +129,7 @@ def _rerope_fwd_kernel(
         # -- scale and update acc --
         acc_scale = l_i * 0 + alpha  # workaround some compiler bug
         acc *= acc_scale[:, None]
-        acc += tl.dot(p.to(tl.float16), v)
+        acc += tl.dot(p, v.to(tl.float32))
         # -- update m_i and l_i --
         l_i = l_i * alpha + tl.sum(p, 1)
         m_i = m_i_new
@@ -213,12 +213,12 @@ def test_rerope():
 
     Z = 1
     H = 40
-    N_CTX = 2237  # must pad to BLOCK_M*n
+    N_CTX = 2176  # must pad to BLOCK_M*n
     # currently backward is VERY slow for d_head = 128
     # https://github.com/openai/triton/issues/1975
     D_HEAD = 128
     WINDOW = 512
-    sm_scale = 0.5
+    sm_scale = 0.0883883
 
     def torch_attention(q1, q2, k1, k2, v, causal, sm_scale, window):
         # reference implementation
@@ -276,23 +276,38 @@ def test_rerope():
         attn_output = torch.matmul(attn_weights, value_states)
         return attn_output
 
-    q1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    q2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    k1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    k2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                    device='cuda').normal_(mean=0., std=0.5).contiguous()
+    # q1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
+    # q2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
+    # k1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
+    # k2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
+    # v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+    #                 device='cuda').normal_(mean=0., std=0.5).contiguous()
+
+    q1 = torch.load('/workspace/GitProjects/lmdeploy/q1.pt',
+                    map_location='cuda').contiguous()
+    q2 = torch.load('/workspace/GitProjects/lmdeploy/q2.pt',
+                    map_location='cuda').contiguous()
+
+    k1 = torch.load('/workspace/GitProjects/lmdeploy/k1.pt',
+                    map_location='cuda').contiguous()
+    k2 = torch.load('/workspace/GitProjects/lmdeploy/k2.pt',
+                    map_location='cuda').contiguous()
+
+    v = torch.load('/workspace/GitProjects/lmdeploy/v.pt',
+                   map_location='cuda').contiguous()
 
     torch_output = torch_attention(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
     torch_output2 = torch_attention2(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
-    assert torch.allclose(torch_output, torch_output2, atol=2e-2, rtol=0)
-    triton_output = rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale,
-                                         WINDOW)
-    assert torch.allclose(torch_output, triton_output, atol=2e-2, rtol=0)
+    assert torch.allclose(torch_output, torch_output2, atol=1e-2, rtol=0)
+    for i in range(100):
+        triton_output = rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale,
+                                             WINDOW)
+        if not torch.allclose(torch_output, triton_output, atol=2e-2, rtol=0):
+            pdb.set_trace()
 
     def f(fn, q1, q2, k1, k2, v, sm_scale, window):
         fn(q1, q2, k1, k2, v, True, sm_scale, window)

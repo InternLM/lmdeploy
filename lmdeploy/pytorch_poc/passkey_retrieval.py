@@ -44,7 +44,7 @@ class LLM(object):
         _, token_ids, __ = self.generator.infer(
             session_id=self.session_id,
             prompt_token_ids=input_ids,
-            request_output_len=1024,
+            request_output_len=8,
             sampling_param=self.sampling_param)
         response = self.tokenizer.decode(token_ids)
         self.generator.end(self.session_id)
@@ -70,7 +70,7 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--max_tokens',
                         type=int,
-                        default=12000,
+                        default=20000,
                         help='maximum token length for evaluation')
     parser.add_argument('--interval',
                         type=int,
@@ -78,7 +78,7 @@ def parse_config():
                         help='interval for evaluation')
     parser.add_argument('--num_tests',
                         type=int,
-                        default=10,
+                        default=30,
                         help='number of repeat testing for each length')
 
     args = parser.parse_args()
@@ -122,15 +122,23 @@ def main(args):
     all_accuries = {}
     # This is a rough ratio to control the number of texts and tokens
     # for val in [8000, 9000, 10000, 11000, 13000, 14000, 15000, 16000, 17000]:
-    for val in range(4000, args.max_tokens, args.interval):
+    # '7036': 1.0, '11132': 0.97
+    for val in range(8000, args.max_tokens, args.interval):
         n_garbage = int(3.75 * val // 1024 * 1024)
         passed_tests = 0
         total_tokens = 0
 
         for j in range(args.num_tests):
+            # if 1 == j:
+            #     pdb.set_trace()
             question, pass_key = generate_prompt_landmark(n_garbage=n_garbage,
                                                           seed=j)
             response = llm.say(question)
+
+            if response is None or len(response) < 1:
+                with open('badcase.txt', 'w') as f:
+                    f.write(question)
+
             print(response)
             if pass_key in response:
                 passed_tests += 1

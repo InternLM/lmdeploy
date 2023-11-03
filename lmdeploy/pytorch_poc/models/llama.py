@@ -86,12 +86,12 @@ class LlamaAttention(nn.Module):
                 sin = sin[0, 0][position_ids].reshape(
                     seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
 
-                if q is not None:
-                    q = rotate_half(q).mul_(sin[-q.shape[0]:]).add_(
-                        q.mul_(cos[-q.shape[0]:]))
-                if k is not None:
-                    k = rotate_half(k).mul_(sin).add_(k.mul_(cos))
-                return q, k
+                q_embed = ((q * cos[-q.shape[0]:]) +
+                           (rotate_half(q) *
+                            sin[-q.shape[0]:])) if q is not None else None
+                k_embed = ((k * cos) +
+                           (rotate_half(k) * sin)) if k is not None else None
+                return q_embed, k_embed
 
             def _rotary_emb_context_rerope_fn(query_states, key_states,
                                               value_states, position_ids,
@@ -140,10 +140,12 @@ class LlamaAttention(nn.Module):
                                 position_ids).clip(max=window)
                 _, key_states = apply_rotary_pos_emb_rerope_v2(
                     None, key_states, cos, -sin, position_ids)
-                key_states = repeat_kv(key_states, self.num_key_value_groups)
-                value_states = repeat_kv(value_states,
-                                         self.num_key_value_groups)
-                return key_states, value_states
+
+                assert self.num_key_value_groups == 1
+                # key_states = repeat_kv(key_states, self.num_key_value_groups)
+                # value_states = repeat_kv(value_states,
+                #                          self.num_key_value_groups)
+                return key_states
 
             attn_output = attention_forward_with_rerope(
                 hidden_states,

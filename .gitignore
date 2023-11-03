@@ -9,6 +9,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+triton-rerope/
 develop-eggs/
 dist/
 downloads/
@@ -60,6 +61,7 @@ work_dir*/
 *generate_config.json
 
 # Pytorch
+*.pt
 *.pth
 *.py~
 *.sh~

@@ -215,7 +215,7 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config (CacheConfig): The config of the cache info.
         gpu_id (int): The GPU id to use.
     """
-    GPU_MEM_PERCENT = 0.7
+    GPU_MEM_PERCENT = 0.34
     SWAP_SPACE = 4 * (1 << 30)
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
     gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
