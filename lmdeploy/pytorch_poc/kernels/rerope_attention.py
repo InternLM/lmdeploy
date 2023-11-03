@@ -107,7 +107,7 @@ def _rerope_fwd_kernel(
             qk += tl.dot(q2, k2, out_dtype=tl.float32)
         elif start_n > (
                 start_m + 1
-        ) * BLOCK_M - WINDOW and start_n < start_m * BLOCK_M + WINDOW - BLOCK_N:
+        ) * BLOCK_M - WINDOW and start_n < start_m * BLOCK_M + WINDOW - BLOCK_N:  # noqa: E501
             k1 = tl.load(K1_block_ptr)
             v = tl.load(V_block_ptr)
             qk += tl.dot(q1, k1, out_dtype=tl.float32)
@@ -328,9 +328,8 @@ def test_rerope():
     import time
     begin = time.time()
     LOOP = 100
-    for i in range(LOOP):
+    for _ in range(LOOP):
         rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
-    timecost = (time.time() - begin) / LOOP
     print(time.time() - begin)
 
 

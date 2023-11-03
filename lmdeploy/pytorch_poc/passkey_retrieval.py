@@ -9,7 +9,6 @@ from lmdeploy.pytorch_poc.messages import SamplingParam
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
-import pdb
 
 
 class LLM(object):
@@ -85,7 +84,7 @@ def parse_config():
     return args
 
 
-# copy from https://github.com/dvlab-research/LongLoRA/blob/main/passkey_retrivial.py
+# copy from https://github.com/dvlab-research/LongLoRA/blob/main/passkey_retrivial.py  # noqa: E501
 def generate_prompt_landmark(n_garbage=60000, seed=666):
     """Generates a text file and inserts an passkey at a random position."""
     from numpy import random as nprandom
@@ -94,14 +93,14 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
     n_garbage_prefix = nprandom.randint(0, n_garbage)
     n_garbage_suffix = n_garbage - n_garbage_prefix
 
-    task_description = 'There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there.'
-    garbage = 'The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.'
+    task_description = 'There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there.'  # noqa: E501
+    garbage = 'The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.'  # noqa: E501
     garbage_inf = ' '.join([garbage] * 5000)
     assert len(garbage_inf) >= n_garbage
     garbage_prefix = garbage_inf[:n_garbage_prefix]
     garbage_suffix = garbage_inf[:n_garbage_suffix]
     pass_key = nprandom.randint(1, 50000)
-    information_line = f'The pass key is {pass_key}. Remember it. {pass_key} is the pass key.'
+    information_line = f'The pass key is {pass_key}. Remember it. {pass_key} is the pass key.'  # noqa: E501
     final_question = 'What is the pass key? The pass key is'
     lines = [
         task_description,
@@ -111,6 +110,7 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
         final_question,
     ]
     nprandom.set_state(rnd_state)
+
     return '\n'.join(lines), str(pass_key)
 
 
@@ -145,6 +145,7 @@ def main(args):
         accuracy = passed_tests / args.num_tests
         print('accuracy on the token length %d is %f' % (avg_tokens, accuracy))
         all_accuries[str(avg_tokens)] = accuracy
+
     print('accuries over tokens', all_accuries)
 
 
