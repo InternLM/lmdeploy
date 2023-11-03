@@ -492,10 +492,17 @@ class Engine:
             self.json_config = json.load(f)
 
         if 'falcon' in model_path:
+            if hf_config.new_decoder_architecture:
+                # 40b-instruct, GQA
+                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+                kv_dim *= hf_config.num_kv_heads
+                kv_head = hf_config.num_kv_heads
             if hf_config.multi_query:
+                # 7b-instruct, MQA
                 kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
                 kv_head = 1
             else:
+                # rw-1b, MHA
                 kv_dim = hf_config.hidden_size
                 kv_head = hf_config.num_attention_heads
             model_config = ModelConfig(
@@ -505,7 +512,7 @@ class Engine:
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 dtype=torch_dtype,
-            )
+                multi_query_attention=hf_config.multi_query)
         elif 'chatglm' in model_path:
             model_config = ModelConfig(
                 hf_config.hidden_size // hf_config.num_attention_heads *
@@ -1048,6 +1055,7 @@ class Engine:
                     msg = next(iter(sess.sequences.values()))
                     msg.update_token_ids(req.data['token_ids'])
                     msg.status = MessageStatus.WAITING
+                    msg.remain_output_len = req.data['max_request_output_len']
                     self.scheduler.update()
 
                 msg.meta = dict(req_id=req.data['req_id'])
@@ -1224,6 +1232,7 @@ class EngineInstance:
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
+
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
 
     def decode(self, prompt_token_ids: List[List[int]]):

@@ -14,21 +14,25 @@ LOG2 = math.log(2)
 
 @triton.jit
 def tl_pow(a, b):
+    """triton pow."""
     return tl.exp(b * tl.log(a))
 
 
 @triton.jit
 def tl_2pow(b):
+    """triton pow2."""
     return tl.exp(b * LOG2)
 
 
 @triton.jit
 def tl_log2(a):
+    """triton log2."""
     return tl.log(a) / LOG2
 
 
 @triton.jit
 def _get_interleave_power_of_2(i, n):
+    """get interleave power of 2."""
     start = -tl_2pow(3 - tl_log2(n))
     start = tl_2pow(start)
     ratio = start
@@ -37,6 +41,7 @@ def _get_interleave_power_of_2(i, n):
 
 @triton.jit
 def get_slope(i, n):
+    """get slope."""
     closest_power_of_2 = tl_2pow(tl_log2(n).to(tl.int32))
     if i < closest_power_of_2:
         return _get_interleave_power_of_2(i, closest_power_of_2)
@@ -77,6 +82,7 @@ def _fwd_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
+    """forward kernel."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     start_m = tl.program_id(2)
@@ -145,22 +151,14 @@ def _fwd_kernel(
             float(-1e30),
         )
 
-        # -- compute m_ij, p, l_ij
-        m_ij = tl.max(qk, 1)
-        p = tl.exp(qk - m_ij[:, None])
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        m_i_new = tl.maximum(m_i, m_ij)
+        # -- compute p, m_i and l_i
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        p = tl.exp(qk - m_i_new[:, None])
         alpha = tl.exp(m_i - m_i_new)
-        beta = tl.exp(m_ij - m_i_new)
-        l_i_new = alpha * l_i + beta * l_ij
+        l_i_new = alpha * l_i + tl.sum(p, 1)
         # -- update output accumulator --
-        # scale p
-        p_scale = beta / l_i_new
-        p = p * p_scale[:, None]
         # scale acc
-        acc_scale = l_i / l_i_new * alpha
-        acc = acc * acc_scale[:, None]
+        acc = acc * alpha[:, None]
         # update acc
         v = tl.load(
             v_ptrs + b_offset * BLOCK_N * stride_vbs,
@@ -173,6 +171,8 @@ def _fwd_kernel(
         # update m_i and l_i
         l_i = l_i_new
         m_i = m_i_new
+
+    acc = acc / l_i[:, None]
     # initialize pointers to output
     off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs +
              cur_head * stride_oh + offs_d[None, :] * stride_od)
@@ -261,5 +261,3 @@ def alibi_paged_attention_fwd(
         num_warps=num_warps,
         num_stages=1,
     )
-
-    return

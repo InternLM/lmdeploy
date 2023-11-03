@@ -15,6 +15,18 @@ from .functional import (apply_rotary_pos_emb,
                          attention_forward_with_rerope, repeat_kv, rotate_half)
 
 
+class LlamaRMSNorm(nn.Module):
+    """Rewrite RMSNorm."""
+
+    def forward(self, hidden_states):
+        # torch.nn.functional.normalize based implementation might leads
+        # to wrong output
+        from lmdeploy.pytorch_poc.kernels import rms_norm
+        ret = rms_norm(hidden_states, self.weight, self.variance_epsilon)
+
+        return ret
+
+
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
@@ -297,7 +309,6 @@ class LlamaModel(nn.Module):
                 output_attentions=output_attentions,
                 use_cache=use_cache,
             )
-
             hidden_states = layer_outputs[0]
 
             if use_cache:

@@ -24,26 +24,31 @@ MODULE_MAP = {
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'transformers.models.llama.modeling_llama.LlamaMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.llama.modeling_llama.LlamaRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 }
 
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
-    'transformers.models.falcon.modeling_falcon.FalconAttention':
+    'modeling_falcon.FalconAttention':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
-    'transformers.models.falcon.modeling_falcon.FalconModel':
+    'modeling_falcon.FalconModel':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
-    'transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding':
+    'modeling_falcon.FalconRotaryEmbedding':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
+    'modeling_falcon.FalconMLP':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconMLP',
+    'modeling_falcon.FalconForCausalLM':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconForCausalLM',
+    # for old implementations on hub
     'modelling_RW.Attention':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
+    'modelling_RW.MLP':
+    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconMLP',
     'modelling_RW.RWModel':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
     'modelling_RW.RotaryEmbedding':
     'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
-    'transformers.models.falcon.modeling_falcon.FalconForCausalLM':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconForCausalLM',
-    # 'transformers.models.falcon.modeling_falcon.FalconDecoderLayer':
-    # 'lmdeploy.pytorch_poc.models.falcon.PatchedFalconDecoderLayer',
 })
 
 # baichuan

@@ -24,6 +24,7 @@ def _fill_kv_cache_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
+    """fill kv cache kernel."""
     prog_id = tl.program_id(0)
 
     stride_kb = stride_kcs * BLOCK_M
