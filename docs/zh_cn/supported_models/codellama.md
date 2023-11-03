@@ -98,17 +98,17 @@ lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${serv
 你可以用命令行，在控制台与 server 通信：
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
-lmdeploy serve api_client restful_api_url
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
+lmdeploy serve api_client api_server_url
 ```
 
 或者，启动 gradio，在 webui 的聊天对话框中，与 codellama 交流：
 
 ```shell
-# restful_api_url 就是 api_server 产生的，比如 http://localhost:23333
+# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
+# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 关于 RESTful API的详细介绍，请参考[这份](../restful_api.md)文档。

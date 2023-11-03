@@ -70,7 +70,9 @@ class ChatCompletionRequest(BaseModel):
     user: Optional[str] = None
     # additional argument of lmdeploy
     repetition_penalty: Optional[float] = 1.0
-    renew_session: Optional[bool] = False
+    session_id: Optional[int] = -1
+    renew_session: Optional[
+        bool] = False  # lagecy and useless, will be removed
     ignore_eos: Optional[bool] = False
 
 
@@ -135,6 +137,10 @@ class CompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
+    # additional argument of lmdeploy
+    repetition_penalty: Optional[float] = 1.0
+    session_id: Optional[int] = -1
+    ignore_eos: Optional[bool] = False
 
 
 class CompletionResponseChoice(BaseModel):
@@ -175,7 +181,7 @@ class CompletionStreamResponse(BaseModel):
 class EmbeddingsRequest(BaseModel):
     """Embedding request."""
     model: str = None
-    input: Union[str, List[Any]]
+    input: Union[str, List[str]]
     user: Optional[str] = None
 
 
@@ -191,8 +197,7 @@ class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: Union[str, List[Dict[str, str]]]
     session_id: int = -1
-    sequence_start: bool = True
-    sequence_end: bool = False
+    interactive_mode: bool = False
     stream: bool = False
     stop: bool = False
     request_output_len: int = 512

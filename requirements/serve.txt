@@ -1,5 +1,5 @@
 fastapi
-gradio
+gradio<4.0.0
 pydantic>2.0.0
 shortuuid
 uvicorn

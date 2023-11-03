@@ -53,7 +53,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 支持的模型
 
-`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端
+`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端。运行`lmdeploy list`可查看支持模型列表
 
 ### TurboMind
 
@@ -164,16 +164,16 @@ lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${serv
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client restful_api_url
+lmdeploy serve api_client api_server_url
 ```
 
 也可以通过 WebUI 方式来对话：
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port${server_port} --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。

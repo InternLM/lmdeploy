@@ -97,16 +97,16 @@ Then, you can communicate with it by command line,
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client restful_api_url
+lmdeploy serve api_client api_server_url
 ```
 
 or through webui after launching gradio,
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006 --restful_api True
-lmdeploy serve gradio restful_api_url --server_name ${server_ip} --server_port ${server_port} --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../restful_api.md).

@@ -7,7 +7,7 @@ class SubCliServe(object):
 
     def gradio(self,
                model_path_or_server: str,
-               server_name: str = 'localhost',
+               server_name: str = '0.0.0.0',
                server_port: int = 6006,
                batch_size: int = 32,
                tp: int = 1,
@@ -18,8 +18,8 @@ class SubCliServe(object):
             lmdeploy serve gradio ./workspace
 
         Example 2:
-            lmdeploy serve gradio http://localhost:23333
-            --server_name localhost
+            lmdeploy serve gradio http://0.0.0.0:23333
+            --server_name 0.0.0.0
             --server_port 6006
             --restful_api True
 
@@ -48,7 +48,7 @@ class SubCliServe(object):
 
     def api_server(self,
                    model_path: str,
-                   server_name: str = 'localhost',
+                   server_name: str = '0.0.0.0',
                    server_port: int = 23333,
                    instance_num: int = 32,
                    tp: int = 1,
