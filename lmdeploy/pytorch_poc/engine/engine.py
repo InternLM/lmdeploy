@@ -230,7 +230,7 @@ class Engine:
             token_ids = [token_ids]
 
         batch_size = len(messages)
-        input_ids = [ids for ids in token_ids]
+        input_ids = token_ids
         input_ids = torch.cat(input_ids).to(device)
 
         is_decoding = input_ids.size(0) == batch_size
@@ -619,6 +619,26 @@ class Engine:
                                  req_id=req.req_id))
                 return False
 
+        send_resp_que = Queue()
+
+        def _send_resp():
+            while True:
+                step_tokens = send_resp_que.get()
+                for session_id, out in step_tokens.items():
+                    if out.finish:
+                        resp_type = ResponseType.FINISH
+                    else:
+                        resp_type = ResponseType.SUCCESS
+                    out_ques[session_id].put(
+                        Response(
+                            type=resp_type,
+                            req_id=out.req_id,
+                            data=dict(token_ids=out.token_ids),
+                        ))
+
+        send_thread = Thread(target=_send_resp, daemon=True)
+        send_thread.start()
+
         while True:
             # get all requests
             num_requests = self.requests.qsize()
@@ -703,17 +723,8 @@ class Engine:
             with torch.no_grad():
                 step_tokens: Dict[int, InferOutput] = self.step()
 
-            for session_id, out in step_tokens.items():
-                if out.finish:
-                    resp_type = ResponseType.FINISH
-                else:
-                    resp_type = ResponseType.SUCCESS
-                out_ques[session_id].put(
-                    Response(
-                        type=resp_type,
-                        req_id=out.req_id,
-                        data=dict(token_ids=out.token_ids),
-                    ))
+            # send response
+            send_resp_que.put(step_tokens)
 
 
 class EngineInstance:
