@@ -1,9 +1,8 @@
 import json
 import logging
+import multiprocessing as mp
 import random
 import time
-from queue import Queue
-from threading import Thread
 
 import fire
 import numpy as np
@@ -12,13 +11,10 @@ from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.tokenizer import Tokenizer
 
 
-def infer(chatbot, session_id: int, req_que: Queue, res_que: Queue):
+def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
     stats = []
-    while not req_que.empty():
-        prompt, input_seqlen, output_seqlen = req_que.get()
-        if prompt is None:
-            req_que.put((None, None, None))
-            break
+    for prompt, input_seqlen, output_seqlen in iter(req_que.get,
+                                                    [None, None, None]):
         timestamps = []
         tokens = []
         timestamps.append(time.perf_counter())
@@ -66,7 +62,7 @@ def warmup(tritonserver_addr: str,
     ]
     procs = []
     for i, chatbot in enumerate(chatbots):
-        proc = Thread(target=_infer, args=(chatbot, i + 1))
+        proc = mp.Process(target=_infer, args=(chatbot, i + 1))
         procs.append(proc)
         proc.start()
     for proc in procs:
@@ -76,14 +72,15 @@ def warmup(tritonserver_addr: str,
 
 
 def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
-                 session_len: int, que: Queue):
+                 session_len: int, que: mp.Queue):
     start = time.perf_counter()
     with open(dataset_path) as f:
         dataset = json.load(f)
         dataset = [data for data in dataset if len(data['conversations']) >= 2]
         # Only keep the first two turns of each conversation.
         dataset = [(data['conversations'][0]['value'],
-                    data['conversations'][1]['value']) for data in dataset]
+                    data['conversations'][1]['value'])
+                   for data in dataset][:samples * 2]
         prompts = [prompt for prompt, _ in dataset]
         completions = [completion for _, completion in dataset]
         print(f'elapsed time for read data: '
@@ -113,7 +110,6 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
 
     for data in filtered_dataset:
         que.put(data)
-    que.put((None, None, None))
     print(f'elapsed time for filtering: '
           f'{round(time.perf_counter() - start, 2)} s')
     return len(filtered_dataset)
@@ -126,28 +122,28 @@ def main(tritonserver_addr: str,
          session_len: int = 2048,
          samples: int = 1000):
     warmup(tritonserver_addr, concurrency, session_len - 1)
-    req_que = Queue()
-    res_que = Queue()
+    req_que = mp.Queue()
+    res_que = mp.Queue()
 
     procs = []
-    # read data and put it to queue
-    n_req = read_dataset(tokenizer_path, dataset_path, samples, session_len,
-                         req_que)
     for i in range(concurrency):
         chatbot = Chatbot(tritonserver_addr=tritonserver_addr,
                           display=False,
                           profile_serving=True,
                           ignore_eos=True,
                           log_level=logging.ERROR)
-        proc = Thread(target=infer, args=(chatbot, i + 1, req_que, res_que))
+        proc = mp.Process(target=infer,
+                          args=(chatbot, i + 1, req_que, res_que))
         procs.append(proc)
 
+    # read data and put it to queue
+    n_req = read_dataset(tokenizer_path, dataset_path, samples, session_len,
+                         req_que)
+    for i in range(concurrency):
+        req_que.put([None, None, None])
     _start = time.perf_counter()
     for proc in procs:
         proc.start()
-    for proc in procs:
-        proc.join()
-    _end = time.perf_counter()
 
     stats = []
     for i in range(concurrency):
@@ -156,6 +152,7 @@ def main(tritonserver_addr: str,
               f'session {session_id}: processed reqs {len(_stats)}, '
               f'stats: \n{_stats}\n{"-" * 50}\n')
         stats.append(np.array(_stats))
+    _end = time.perf_counter()
 
     elapsed_time = _end - _start
 
@@ -175,6 +172,8 @@ def main(tritonserver_addr: str,
           f'token throughput: {token_throughput:.3f} token/s\n'
           f'req throughput: {req_throughput:.3f} req/s\n'
           f'{"-" * 50}\n')
+    for proc in procs:
+        proc.join()
 
 
 if __name__ == '__main__':
