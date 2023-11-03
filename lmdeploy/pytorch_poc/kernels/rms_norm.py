@@ -28,7 +28,7 @@ def rms_norm(x: Tensor, weight: Tensor, eps: float = 1e-6):
     """rms norm."""
 
     feat_size = weight.size(-1)
-    seq_len = x.flatten(0, -2).size(0)
+    seq_len = x.numel() // x.size(-1)
 
     BLOCK_N = feat_size
 

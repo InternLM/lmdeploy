@@ -87,6 +87,9 @@ class ModelContext:
         self.seq_length = seq_length
         self.world_size = world_size
 
+        # seq_len + history_length
+        self.kv_seq_length = position_ids[..., -1] + 1
+
         # padding zero
         # torch.nn.utils.rnn.pad_sequence is slower than manually concate
         offset_len = [len(offset) for offset in block_offsets]

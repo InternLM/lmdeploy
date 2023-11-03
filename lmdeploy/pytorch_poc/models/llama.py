@@ -69,7 +69,12 @@ class LlamaAttention(nn.Module):
         def _rotary_emb_fn(query_states, key_states, value_states):
             max_seq_len = position_ids.size(-1)
             kv_seq_len = max_seq_len + max(history_lengths)
-            cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            if kv_seq_len >= self.rotary_emb.max_seq_len_cached:
+                # create larger cache
+                cos, sin = self.rotary_emb(value_states,
+                                           seq_len=kv_seq_len + 128)
+            cos = self.rotary_emb.cos_cached
+            sin = self.rotary_emb.sin_cached
             query_states, key_states = apply_rotary_pos_emb(
                 query_states,
                 key_states,

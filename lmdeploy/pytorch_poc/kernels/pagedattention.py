@@ -349,7 +349,7 @@ def paged_attention_fwd(
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[-2]
-    kv_group_num = q.shape[-2] // k[0].shape[-2]
+    kv_group_num = q.shape[-2] // k.shape[-2]
 
     num_warps = 4 if Lk <= 64 else 8
 
