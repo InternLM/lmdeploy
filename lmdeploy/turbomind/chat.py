@@ -4,8 +4,6 @@ import os
 import os.path as osp
 import random
 
-from lmdeploy.model import MODELS
-
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
@@ -90,14 +88,18 @@ def main(model_path,
 
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = tm.TurboMind(model_path, eos_id=tokenizer.eos_token_id, tp=tp)
+    tm_model = tm.TurboMind(model_path,
+                            eos_id=tokenizer.eos_token_id,
+                            tp=tp,
+                            capability=cap,
+                            **kwargs)
     generator = tm_model.create_instance()
 
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
     model_name = tm_model.model_name
-    model = MODELS.get(model_name)(capability=cap, **kwargs)
+    model = tm_model.model
 
     print(f'session {session_id}')
     while True:

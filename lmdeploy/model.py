@@ -173,15 +173,16 @@ class InternLMChat7B(BaseModel):
 
     def __init__(
             self,
-            system='<|System|>',
+            system='<|System|>:',
             meta_instruction="""You are an AI assistant whose name is InternLM (书生·浦语).
 - InternLM (书生·浦语) is a conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
 - InternLM (书生·浦语) can understand and communicate fluently in the language chosen by the user such as English and 中文.
 """,  # noqa: E501
-            user='<|User|>',
-            eoh='',
-            eoa='<eoa>',
-            assistant='<|Bot|>',
+            user='<|User|>:',
+            eoh='\n',
+            eoa='<eoa>\n',
+            eosys='\n',
+            assistant='<|Bot|>:',
             stop_words=['<eoa>'],
             **kwargs):
         super().__init__(**kwargs)
@@ -190,6 +191,7 @@ class InternLMChat7B(BaseModel):
         self.user = user
         self.eoh = eoh
         self.eoa = eoa
+        self.eosys = eosys
         self.assistant = assistant
         self.stop_words = stop_words
 
@@ -207,12 +209,12 @@ class InternLMChat7B(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.system}:{self.meta_instruction}\n' \
-                   f'{self.user}:{prompt}{self.eoh}\n' \
-                   f'{self.assistant}:'
+            return f'{self.system}{self.meta_instruction}{self.eosys}' \
+                   f'{self.user}{prompt}{self.eoh}' \
+                   f'{self.assistant}'
         else:
-            return f'\n{self.user}:{prompt}{self.eoh}\n' \
-                   f'{self.assistant}:'
+            return f'\n{self.user}{prompt}{self.eoh}' \
+                   f'{self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -223,17 +225,19 @@ class InternLMChat7B(BaseModel):
         Returns:
             str: the concatenated prompt
         """
+
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
-        system, users, assistants = self._translate_messages(messages)
-        system = self.meta_instruction if not system else system
-        ret = f'{self.system}:{system}\n'
-        for user, assistant in zip(users, assistants):
-            if assistant:
-                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
-                       f'{assistant}{self.eoa}\n'
-            else:
-                ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:'
+        eox_map = dict(user=self.eoh, assistant=self.eoa, system=self.eosys)
+        ret = ''
+        if self.meta_instruction:
+            ret += f'{self.system}:{self.meta_instruction}{self.eosys}'
+
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            ret += f'{eval(f"self.{role}")}{content}{eox_map[role]}'
+        ret += f'{self.assistant}:'
         return ret
 
 
@@ -368,15 +372,16 @@ class Puyu(BaseModel):
         """
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
-        system, users, assistants = self._translate_messages(messages)
-        system = self.system if not system else system
-        ret = f'{system}{self.meta_instruction}{self.eosys}'
-        for user, assistant in zip(users, assistants):
-            if assistant:
-                ret += f'{self.user}{user}{self.eoh}{self.assistant}' \
-                       f'{assistant}{self.eoa}'
-            else:
-                ret += f'{self.user}{user}{self.eoh}{self.assistant}'
+        eox_map = dict(user=self.eoh, assistant=self.eoa, system=self.eosys)
+        ret = ''
+        if self.meta_instruction:
+            ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            ret += f'{eval(f"self.{role}")}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
         return ret
 
 

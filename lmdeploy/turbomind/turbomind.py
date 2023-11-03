@@ -13,7 +13,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.model import MODELS
+from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -80,7 +80,11 @@ class TurboMind:
         tp (int): tensor parallel
     """
 
-    def __init__(self, model_path: str, eos_id: int = 2, tp: int = 1):
+    def __init__(self,
+                 model_path: str,
+                 eos_id: int = 2,
+                 tp: int = 1,
+                 **kwargs):
         self.eos_id = eos_id
 
         # TODO: support mpi
@@ -90,7 +94,6 @@ class TurboMind:
         # read meta from model path
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
-        self.session_len = 2048
         data_type = 'fp16'
         ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
         with open(ini_path, 'r') as f:
@@ -104,18 +107,18 @@ class TurboMind:
 
             if len(section_name) > 0:
                 tp_cfg = parser.getint(section_name, 'tensor_para_size')
-                self.session_len = parser.getint(section_name, 'session_len')
                 if tp_cfg != 1 and tp_cfg != tp:
                     get_logger('turbomind').info(
                         f'found tp={tp_cfg} in config.ini.')
                     self.gpu_count = tp_cfg
             self.model_name = parser.get(section_name, 'model_name')
             data_type = parser.get(section_name, 'weight_type')
-        model = MODELS.get(self.model_name)()
+        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
+        self.session_len = self.model.session_len
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
-        self.stop_words = _stop_words(model.stop_words, tokenizer)
+        self.stop_words = _stop_words(self.model.stop_words, tokenizer)
 
         # params
         self.node_id = node_id
@@ -124,17 +127,17 @@ class TurboMind:
 
         # create model
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model = _tm.AbstractTransformerModel.create_llama_model(
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(
             weight_dir, tensor_para_size=self.gpu_count, data_type=data_type)
-        self.model = model
-        self.nccl_params = model.create_nccl_params(self.node_id)
+        self.model_comm = model_comm
+        self.nccl_params = model_comm.create_nccl_params(self.node_id)
         torch.cuda.synchronize()
 
         # create weight
         def _create_weight(device_id):
             with cuda_ctx(device_id):
                 rank = self.node_id * self.gpu_count + device_id
-                model.create_shared_weights(device_id, rank)
+                model_comm.create_shared_weights(device_id, rank)
 
         threads = []
         for device_id in range(self.gpu_count):
@@ -163,7 +166,7 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, tm_model, cuda_stream_id=0):
+    def __init__(self, tm_model: TurboMind, cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
@@ -177,7 +180,7 @@ class TurboMindInstance:
         self.session_len = tm_model.session_len
 
         self.nccl_params = tm_model.nccl_params
-        self.instance_comm = tm_model.model.create_instance_comm(
+        self.instance_comm = tm_model.model_comm.create_instance_comm(
             self.gpu_count)
 
         # create model instances
@@ -198,7 +201,7 @@ class TurboMindInstance:
     def _create_model_instance(self, device_id, model_insts):
         with cuda_ctx(device_id):
             rank = self.node_id * self.gpu_count + device_id
-            model_inst = self.tm_model.model.create_model_instance(
+            model_inst = self.tm_model.model_comm.create_model_instance(
                 device_id, rank, self.cuda_stream_id, self.nccl_params)
             model_insts[device_id] = model_inst
 

@@ -28,8 +28,12 @@ class CLI(object):
             model_name (str): The name of the to-be-deployed model, such as
                 llama-7b, llama-13b, vicuna-7b and etc.
             model_path (str): The directory path of the model
-            model_format (str): The format of the model, fb or hf. 'fb' stands
-                for META's llama format, and 'hf' means huggingface format.
+            model_format (str): the format of the model, should choose from
+                ['llama', 'hf', 'awq', None]. 'llama' stands for META's llama
+                format, 'hf' means huggingface llama format, and 'awq' means
+                llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
+                the default value is None, which means the model_format will be
+                inferred based on model_name
             tokenizer_path (str): The path of tokenizer model.
             dst_path (str): The destination path that saves outputs.
             tp (int): The number of GPUs used for tensor parallelism, which
@@ -38,7 +42,7 @@ class CLI(object):
             group_size (int): A parameter used in AWQ to quantize fp16 weights
                 to 4 bits.
         """
-        from lmdeploy.serve.turbomind.deploy import main as convert
+        from lmdeploy.turbomind.deploy.converter import main as convert
 
         convert(model_name,
                 model_path,
@@ -48,6 +52,30 @@ class CLI(object):
                 tp=tp,
                 quant_path=quant_path,
                 group_size=group_size)
+
+    def list(self, engine: str = 'turbomind'):
+        """List supported model names.
+
+        Examples 1:
+            lmdeploy list
+
+        Examples 2:
+            lmdeploy list --engine pytorch
+
+        Args:
+            engine (str): The backend for the model to run. Choice from
+                ['turbomind', 'pytorch'].
+        """
+        assert engine in ['turbomind', 'pytorch']
+        if engine == 'pytorch':
+            model_names = ['llama', 'llama2', 'internlm-7b']
+        elif engine == 'turbomind':
+            from lmdeploy.model import MODELS
+            model_names = list(MODELS.module_dict.keys())
+            model_names = [n for n in model_names if n.lower() not in ['base']]
+        model_names.sort()
+        print('Supported model names:')
+        print('\n'.join(model_names))
 
 
 def run():
