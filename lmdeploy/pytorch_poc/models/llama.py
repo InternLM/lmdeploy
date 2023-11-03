@@ -74,7 +74,6 @@ class LlamaAttention(nn.Module):
         if use_rerope:
 
             def apply_rotary_pos_emb_rerope(q, k, cos, sin, position_ids):
-                # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
                 assert 1 == position_ids.shape[0]
 
                 _, __, seq_len, dim = cos.shape
@@ -127,7 +126,7 @@ class LlamaAttention(nn.Module):
                 value_states = value_states.transpose(0, 1).reshape(
                     1, num_dim, kv_seq_len, dim)
 
-                return query_states1, query_states2, key_states1, key_states2, value_states
+                return query_states1, query_states2, key_states1, key_states2, value_states  # noqa: E501
 
             def _rotary_emb_generate_rerope_fn(key_states, value_states,
                                                position_ids, window):
