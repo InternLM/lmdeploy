@@ -9,8 +9,10 @@ from torch import Tensor
 from torch import distributed as dist
 
 from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
-                                          apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd,
+                                          apply_rotary_pos_emb, fill_kv_cache,
+                                          paged_attention_fwd,
                                           rerope_attention_fwd)
+
 __all__ = ['apply_rotary_pos_emb']
 
 
@@ -335,7 +337,7 @@ def attention_forward_with_rerope(
 
         else:
 
-            query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
+            query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(  # noqa: E501
                 query_states, key_states, value_states, position_ids, window)
 
             sm_scale = 1.0 / math.sqrt(head_dim)
@@ -369,7 +371,7 @@ def attention_forward_with_rerope(
 
         if attn_output.size() != (num_heads, q_len, head_dim):
             raise ValueError(
-                f'`attn_output` should be of size {(bsz, num_heads, q_len, head_dim)}, but is'
+                f'`attn_output` should be of size {(bsz, num_heads, q_len, head_dim)}, but is'  # noqa: E501
                 f' {attn_output.size()}')
 
         attn_output = attn_output.transpose(0, 1).reshape(
