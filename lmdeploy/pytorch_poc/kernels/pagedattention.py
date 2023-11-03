@@ -33,8 +33,8 @@ def _fwd_split_kernel(
     stride_od,
     stride_boffb,
     kv_group_num,
+    block_per_cta,
     SPLIT_K: tl.constexpr,
-    BLOCK_PER_CTA: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -71,7 +71,7 @@ def _fwd_split_kernel(
     l_i = float(0)
     acc = tl.zeros([BLOCK_DMODEL], dtype=tl.float32)
 
-    kv_len_per_prog = BLOCK_PER_CTA * BLOCK_N
+    kv_len_per_prog = block_per_cta * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, cur_batch_kv_len)
 
@@ -408,8 +408,8 @@ def paged_attention_fwd(
                                 stride_od=acc.stride(-1),
                                 stride_boffb=block_offsets.stride(0),
                                 kv_group_num=kv_group_num,
+                                block_per_cta=block_per_cta,
                                 SPLIT_K=SPLIT_K,
-                                BLOCK_PER_CTA=block_per_cta,
                                 BLOCK_DMODEL=Lk,
                                 BLOCK_N=BLOCK,
                                 num_warps=4,

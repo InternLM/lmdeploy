@@ -130,17 +130,19 @@ def apply_rotary_pos_emb(q: Tensor,
     Returns:
         Tuple[Tensor, Tensor]: Embedded query and key.
     """
-    q = q.contiguous()
-    k = k.contiguous()
-    cos = cos.to(device=q.device, dtype=q.dtype)
-    sin = sin.to(device=q.device, dtype=q.dtype)
+    if not q.is_contiguous():
+        q = q.contiguous()
+    if not k.is_contiguous():
+        k = k.contiguous()
+    if cos.device != q.device or cos.dtype != q.dtype:
+        cos = cos.to(device=q.device, dtype=q.dtype)
+    if sin.device != q.device or sin.dtype != q.dtype:
+        sin = sin.to(device=q.device, dtype=q.dtype)
     if position_ids_1d is None:
         seq_length = position_ids[..., -1] + 1
         position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
         position_ids_1d = torch.cat(position_ids_1d)
 
-    # q_embed = torch.empty_like(q)
-    # k_embed = torch.empty_like(k)
     if q_embed is None:
         q_embed = torch.empty_like(q)
     if k_embed is None:
