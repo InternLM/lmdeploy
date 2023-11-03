@@ -107,7 +107,6 @@ def main(
 
             # update step
             step += len(input_ids) + tokens
-
             print()
 
             nth_round += 1

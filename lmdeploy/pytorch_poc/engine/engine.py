@@ -215,7 +215,7 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config (CacheConfig): The config of the cache info.
         gpu_id (int): The GPU id to use.
     """
-    GPU_MEM_PERCENT = 0.34
+    GPU_MEM_PERCENT = 0.7
     SWAP_SPACE = 4 * (1 << 30)
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
     gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
@@ -848,7 +848,7 @@ class Engine:
 
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
-            # input_ids = torch.tensor(msg.token_ids)
+            input_ids = torch.tensor(msg.token_ids)
             input_ids = msg.token_ids.clone().detach()
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
