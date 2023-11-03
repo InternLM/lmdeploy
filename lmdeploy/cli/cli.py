@@ -49,6 +49,30 @@ class CLI(object):
                 quant_path=quant_path,
                 group_size=group_size)
 
+    def list(self, engine: str = 'turbomind'):
+        """List supported model names.
+
+        Examples 1:
+            lmdeploy list
+
+        Examples 2:
+            lmdeploy list --engine pytorch
+
+        Args:
+            engine (str): The backend for the model to run. Choice from
+                ['turbomind', 'pytorch'].
+        """
+        assert engine in ['turbomind', 'pytorch']
+        if engine == 'pytorch':
+            model_names = ['llama', 'llama2', 'internlm-7b']
+        elif engine == 'turbomind':
+            from lmdeploy.model import MODELS
+            model_names = list(MODELS.module_dict.keys())
+            model_names = [n for n in model_names if n.lower() not in ['base']]
+        model_names.sort()
+        print('Supported model names:')
+        print('\n'.join(model_names))
+
 
 def run():
     """The entry point of running LMDeploy CLI."""
