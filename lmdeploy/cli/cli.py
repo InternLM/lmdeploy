@@ -49,22 +49,23 @@ class CLI(object):
                 quant_path=quant_path,
                 group_size=group_size)
 
-    def list(self, is_torch: bool = False):
+    def list(self, engine: str = 'turbomind'):
         """List supported model names.
 
         Examples 1:
             lmdeploy list
 
         Examples 2:
-            lmdeploy list --is_torch True
+            lmdeploy list --engine pytorch
 
         Args:
-            is_torch (bool): A flag to list model names for
-                turbomind or pytorch.
+            engine (str): The backend for the model to run. Choice from
+                ['turbomind', 'pytorch'].
         """
-        if is_torch:
+        assert engine in ['turbomind', 'pytorch']
+        if engine == 'pytorch':
             model_names = ['llama', 'llama2', 'internlm-7b']
-        else:
+        elif engine == 'turbomind':
             from lmdeploy.model import MODELS
             model_names = list(MODELS.module_dict.keys())
             model_names = [n for n in model_names if n.lower() not in ['base']]
