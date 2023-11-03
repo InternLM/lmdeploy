@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/09\] TurboMind 支持 Qwen-14B
 - \[2023/09\] TurboMind 支持 InternLM-20B 模型
 - \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
 - \[2023/09\] TurboMind 支持 Baichuan2-7B
@@ -52,7 +53,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 支持的模型
 
-`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端
+`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端。运行`lmdeploy list`可查看支持模型列表
 
 ### TurboMind
 
@@ -63,9 +64,11 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 | :----------: | :------: | :--: | :-----: | :---: | :--: |
 |    Llama     |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |    Llama2    |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|    SOLAR     |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |   QWen-7B    |   Yes    | Yes  |   Yes   |  No   |  No  |
+|   QWen-14B   |   Yes    | Yes  |   Yes   |  No   |  No  |
 | Baichuan-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan2-7B |   Yes    | Yes  |   No    |  No   |  No  |
 |  Code Llama  |   Yes    | Yes  |   No    |  No   |  No  |
@@ -117,14 +120,14 @@ git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internl
 GIT_LFS_SKIP_SMUDGE=1
 
 # 2. 转换为 trubomind 要求的格式。默认存放路径为 ./workspace
-python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
+lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
 
 ```
 
 #### 使用 turbomind 推理
 
 ```shell
-python3 -m lmdeploy.turbomind.chat ./workspace
+lmdeploy chat turbomind ./workspace
 ```
 
 > **Note**<br />
@@ -137,7 +140,7 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 #### 启动 gradio server
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app ./workspace
+lmdeploy serve gradio ./workspace
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -147,23 +150,23 @@ python3 -m lmdeploy.serve.gradio.app ./workspace
 使用下面的命令启动推理服务：
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+lmdeploy serve api_client api_server_url
 ```
 
 也可以通过 WebUI 方式来对话：
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。
@@ -179,13 +182,13 @@ bash workspace/service_docker_up.sh
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
+lmdeploy serve triton_client {server_ip_addresss}:33337
 ```
 
 也可以通过 WebUI 方式来对话：
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
+lmdeploy serve gradio {server_ip_addresss}:33337
 ```
 
 其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
@@ -201,7 +204,7 @@ pip install deepspeed
 #### 单个 GPU
 
 ```shell
-python3 -m lmdeploy.pytorch.chat $NAME_OR_PATH_TO_HF_MODEL\
+lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL\
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \

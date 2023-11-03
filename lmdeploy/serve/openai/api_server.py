@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os
+import random
 import time
 from http import HTTPStatus
 from typing import AsyncGenerator, List, Optional
 
-import fire
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,8 +15,10 @@ from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, DeltaMessage, EmbeddingsRequest,
-    EmbeddingsResponse, ErrorResponse, GenerateRequest, GenerateResponse,
+    ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
+    CompletionResponse, CompletionResponseChoice,
+    CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
+    EmbeddingsRequest, ErrorResponse, GenerateRequest, GenerateResponse,
     ModelCard, ModelList, ModelPermission, UsageInfo)
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -105,9 +108,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         1.0 means no penalty
 
     Additional arguments supported by LMDeploy:
-    - renew_session (bool): Whether renew the session. Can be used when the
-        session length is exceeded.
     - ignore_eos (bool): indicator for ignoring eos
+    - session_id (int): if not specified, will set random value
 
     Currently we do not support the following features:
     - function_call (Users should implement this by themselves)
@@ -115,20 +117,22 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    session_id = ip2id(raw_request.client.host)
+    if request.session_id == -1:
+        request.session_id = random.randint(1, 10086)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
 
     model_name = request.model
-    request_id = str(session_id)
+    request_id = str(request.session_id)
     created_time = int(time.time())
 
-    result_generator = VariableInterface.async_engine.generate_openai(
+    result_generator = VariableInterface.async_engine.generate(
         request.messages,
-        session_id,
+        request.session_id,
         True,  # always use stream to enable batching
-        request.renew_session,
+        sequence_start=True,
+        sequence_end=True,
         request_output_len=request.max_tokens if request.max_tokens else 512,
         stop=request.stop,
         top_p=request.top_p,
@@ -189,7 +193,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            VariableInterface.async_engine.stop_session(session_id)
+            VariableInterface.async_engine.stop_session(request.session_id)
             return create_error_response(HTTPStatus.BAD_REQUEST,
                                          'Client disconnected')
         final_res = res
@@ -223,43 +227,191 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     return response
 
 
-@app.post('/v1/embeddings')
-async def create_embeddings(request: EmbeddingsRequest,
-                            raw_request: Request = None):
-    """Creates embeddings for the text."""
+@app.post('/v1/completions')
+async def completions_v1(request: CompletionRequest,
+                         raw_request: Request = None):
+    """Completion API similar to OpenAI's API.
+
+    Go to `https://platform.openai.com/docs/api-reference/completions/create`
+    for the API specification.
+
+    The request should be a JSON object with the following fields:
+    - model (str): model name. Available from /v1/models.
+    - prompt (str): the input prompt.
+    - suffix (str): The suffix that comes after a completion of inserted text.
+    - max_tokens (int): output token nums
+    - temperature (float): to modulate the next token probability
+    - top_p (float): If set to float < 1, only the smallest set of most
+        probable tokens with probabilities that add up to top_p or higher
+        are kept for generation.
+    - n (int): How many chat completion choices to generate for each input
+        message. Only support one here.
+    - stream: whether to stream the results or not. Default to false.
+    - repetition_penalty (float): The parameter for repetition penalty.
+        1.0 means no penalty
+    - user (str): A unique identifier representing your end-user.
+
+    Additional arguments supported by LMDeploy:
+    - ignore_eos (bool): indicator for ignoring eos
+    - session_id (int): if not specified, will set random value
+
+    Currently we do not support the following features:
+    - logprobs (not supported yet)
+    - presence_penalty (replaced with repetition_penalty)
+    - frequency_penalty (replaced with repetition_penalty)
+    """
+    if request.session_id == -1:
+        request.session_id = random.randint(1, 10086)
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
 
-    embedding = await VariableInterface.async_engine.get_embeddings(
-        request.input)
-    data = [{'object': 'embedding', 'embedding': embedding, 'index': 0}]
-    token_num = len(embedding)
-    return EmbeddingsResponse(
-        data=data,
-        model=request.model,
-        usage=UsageInfo(
-            prompt_tokens=token_num,
-            total_tokens=token_num,
-            completion_tokens=None,
-        ),
-    ).dict(exclude_none=True)
+    model_name = request.model
+    request_id = str(request.session_id)
+    created_time = int(time.time())
+    if isinstance(request.prompt, str):
+        request.prompt = [request.prompt]
+    generators = []
+    for i in range(len(request.prompt)):
+        result_generator = VariableInterface.async_engine.generate(
+            request.prompt[i],
+            request.session_id + i,
+            True,  # always use stream to enable batching
+            sequence_start=True,
+            sequence_end=True,
+            request_output_len=request.max_tokens
+            if request.max_tokens else 512,
+            stop=False,
+            top_p=request.top_p,
+            temperature=request.temperature,
+            repetition_penalty=request.repetition_penalty,
+            ignore_eos=request.ignore_eos,
+            do_preprocess=False)
+        generators.append(result_generator)
+
+    def create_stream_response_json(
+        index: int,
+        text: str,
+        finish_reason: Optional[str] = None,
+    ) -> str:
+        choice_data = CompletionResponseStreamChoice(
+            index=index,
+            text=text,
+            finish_reason=finish_reason,
+        )
+        response = CompletionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[choice_data],
+        )
+        response_json = response.model_dump_json()
+
+        return response_json
+
+    async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        # First chunk with role
+        for generator in generators:
+            for i in range(request.n):
+                choice_data = CompletionResponseStreamChoice(
+                    index=i,
+                    text='',
+                    finish_reason=None,
+                )
+                chunk = CompletionStreamResponse(id=request_id,
+                                                 choices=[choice_data],
+                                                 model=model_name)
+                data = chunk.model_dump_json(exclude_unset=True)
+                yield f'data: {data}\n\n'
+
+            async for res in generator:
+                response_json = create_stream_response_json(
+                    index=0,
+                    text=res.response,
+                )
+                yield f'data: {response_json}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    # Streaming response
+    if request.stream:
+        return StreamingResponse(completion_stream_generator(),
+                                 media_type='text/event-stream')
+
+    # Non-streaming response
+    usage = UsageInfo()
+    choices = []
+
+    async def _inner_call(i, generator):
+        final_res = None
+        text = ''
+        async for res in generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                VariableInterface.async_engine.stop_session(request.session_id)
+                return create_error_response(HTTPStatus.BAD_REQUEST,
+                                             'Client disconnected')
+            final_res = res
+            text += res.response
+        assert final_res is not None
+        choice_data = CompletionResponseChoice(
+            index=0,
+            text=text,
+            finish_reason=final_res.finish_reason,
+        )
+        choices.append(choice_data)
+
+        total_tokens = sum([
+            final_res.history_token_len, final_res.input_token_len,
+            final_res.generate_token_len
+        ])
+        usage.prompt_tokens += final_res.input_token_len
+        usage.completion_tokens += final_res.generate_token_len
+        usage.total_tokens += total_tokens
+
+    await asyncio.gather(
+        *[_inner_call(i, generators[i]) for i in range(len(generators))])
+
+    response = CompletionResponse(
+        id=request_id,
+        created=created_time,
+        model=model_name,
+        choices=choices,
+        usage=usage,
+    )
+
+    return response
 
 
-@app.post('/generate')
-async def generate(request: GenerateRequest, raw_request: Request = None):
+@app.post('/v1/embeddings', tags=['unsupported'])
+async def create_embeddings(request: EmbeddingsRequest,
+                            raw_request: Request = None):
+    """Creates embeddings for the text."""
+    return create_error_response(HTTPStatus.BAD_REQUEST,
+                                 'Unsupported by turbomind.')
+
+
+@app.post('/generate',
+          tags=['deprecated'],
+          description='please use /v1/chat/interactive')
+@app.post('/v1/chat/interactive')
+async def chat_interactive_v1(request: GenerateRequest,
+                              raw_request: Request = None):
     """Generate completion for the request.
+
+    - On interactive mode, the chat history is kept on the server. Please set
+    `interactive_mode = True`.
+    - On normal mode, no chat history is kept on the server. Set
+    `interactive_mode = False`.
 
     The request should be a JSON object with the following fields:
     - prompt: the prompt to use for the generation.
     - session_id: determine which instance will be called. If not specified
-        with a value other than -1, using host ip directly.
-    - sequence_start (bool): indicator for starting a sequence.
-    - sequence_end (bool): indicator for ending a sequence
+        with a value other than -1, using random value directly.
+    - interactive_mode (bool): turn on interactive mode or not. On interactive
+        mode, session history is kept on the server (and vice versa).
     - stream: whether to stream the results or not.
     - stop: whether to stop the session response or not.
     - request_output_len (int): output token nums
-    - step (int): the offset of the k/v cache
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
@@ -271,15 +423,18 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
     - ignore_eos (bool): indicator for ignoring eos
     """
     if request.session_id == -1:
-        session_id = ip2id(raw_request.client.host)
-        request.session_id = session_id
+        request.session_id = random.randint(10087, 23333)
 
-    generation = VariableInterface.async_engine.generate(
+    async_engine = VariableInterface.async_engine
+    sequence_start = async_engine.steps.get(str(request.session_id), 0) == 0
+    sequence_end = not request.interactive_mode
+
+    generation = async_engine.generate(
         request.prompt,
         request.session_id,
         stream_response=True,  # always use stream to enable batching
-        sequence_start=request.sequence_start,
-        sequence_end=request.sequence_end,
+        sequence_start=sequence_start,
+        sequence_end=sequence_end,
         request_output_len=request.request_output_len,
         top_p=request.top_p,
         top_k=request.top_k,
@@ -308,7 +463,7 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                VariableInterface.async_engine.stop_session(session_id)
+                async_engine.stop_session(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Client disconnected')
             text += out.response
@@ -319,14 +474,15 @@ async def generate(request: GenerateRequest, raw_request: Request = None):
 
 
 def main(model_path: str,
-         server_name: str = 'localhost',
+         server_name: str = '0.0.0.0',
          server_port: int = 23333,
          instance_num: int = 32,
          tp: int = 1,
          allow_origins: List[str] = ['*'],
          allow_credentials: bool = True,
          allow_methods: List[str] = ['*'],
-         allow_headers: List[str] = ['*']):
+         allow_headers: List[str] = ['*'],
+         **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -352,9 +508,12 @@ def main(model_path: str,
 
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  instance_num=instance_num,
-                                                 tp=tp)
+                                                 tp=tp,
+                                                 **kwargs)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

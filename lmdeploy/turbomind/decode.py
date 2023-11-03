@@ -2,11 +2,10 @@
 import os
 import os.path as osp
 
-import fire
 import torch
 
 from lmdeploy import turbomind as tm
-from lmdeploy.turbomind.tokenizer import Tokenizer
+from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -37,4 +36,6 @@ def main(model_path, inputs):
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)
