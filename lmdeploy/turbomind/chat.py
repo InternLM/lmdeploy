@@ -120,7 +120,7 @@ def main(model_path,
             seed = random.getrandbits(64)
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt)
+            input_ids = tokenizer.encode(prompt, nth_round == 1)
             if step + len(
                     input_ids) + request_output_len >= tm_model.session_len:
                 print('WARNING: exceed session max length.'

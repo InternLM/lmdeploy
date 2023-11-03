@@ -207,7 +207,7 @@ class InternLMChat7B(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.system}:{self.meta_instruction}\n' \
+            return f'{self.system}:{self.meta_instruction}\n' \
                    f'{self.user}:{prompt}{self.eoh}\n' \
                    f'{self.assistant}:'
         else:
@@ -227,7 +227,7 @@ class InternLMChat7B(BaseModel):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.meta_instruction if not system else system
-        ret = f'<BOS>{self.system}:{system}\n'
+        ret = f'{self.system}:{system}\n'
         for user, assistant in zip(users, assistants):
             if assistant:
                 ret += f'{self.user}:{user}{self.eoh}\n{self.assistant}:' \
@@ -350,7 +350,7 @@ class Puyu(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.system}{self.meta_instruction}{self.eosys}' \
+            return f'{self.system}{self.meta_instruction}{self.eosys}' \
                    f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
         else:
@@ -370,7 +370,7 @@ class Puyu(BaseModel):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.system if not system else system
-        ret = f'<BOS>{system}{self.meta_instruction}{self.eosys}'
+        ret = f'{system}{self.meta_instruction}{self.eosys}'
         for user, assistant in zip(users, assistants):
             if assistant:
                 ret += f'{self.user}{user}{self.eoh}{self.assistant}' \
@@ -418,7 +418,7 @@ If a question does not make any sense, or is not factually coherent, explain why
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'<BOS>{self.b_inst} ' \
+            return f'{self.b_inst} ' \
                    f'{self.b_sys} {self.default_sys_prompt} {self.e_sys}' \
                    f'{prompt} {self.e_inst} '
 
@@ -437,7 +437,7 @@ If a question does not make any sense, or is not factually coherent, explain why
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
         system = self.default_sys_prompt if not system else system
-        ret = f'<BOS>{self.b_inst} {self.b_sys} {system} {self.e_sys}'
+        ret = f'{self.b_inst} {self.b_sys} {system} {self.e_sys}'
         for i, (user, assistant) in enumerate(zip(users, assistants)):
             if i != 0:
                 ret += f'{self.b_inst} '
@@ -553,16 +553,16 @@ class CodeLlama(Llama2):
         prefix, suffix = prompt.split('<FILL>')
         if self.suffix_first:
             # format as "<PRE> <SUF>{suf} <MID> {pre}"
-            prompt = f'<BOS><PRE> <SUF>{suffix} <MID> {prefix}'
+            prompt = f'<PRE> <SUF>{suffix} <MID> {prefix}'
         else:
             # format as "<PRE> {pre} <SUF>{suf} <MID>"
-            prompt = f'<BOS><PRE> {prefix} <SUF>{suffix} <MID>'
+            prompt = f'<PRE> {prefix} <SUF>{suffix} <MID>'
         return prompt
 
     def _get_prompt(self, prompt, sequence_start):
         prompt = prompt.strip()
         if sequence_start:
-            return f'<BOS>{self.b_inst} ' \
+            return f'{self.b_inst} ' \
                    f'{self.b_sys}{self.default_sys_prompt}{self.e_sys}' \
                    f'{prompt} {self.e_inst}'
 
