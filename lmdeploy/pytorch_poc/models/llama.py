@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import pdb
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -64,19 +63,6 @@ class LlamaAttention(nn.Module):
 
             def apply_rotary_pos_emb_rerope(q, k, cos, sin, position_ids):
                 # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
-                cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
-                sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-                cos = cos[position_ids].unsqueeze(2)  # [bs, seq_len, 1, dim]
-                sin = sin[position_ids].unsqueeze(2)  # [bs, seq_len, 1, dim]
-                q_embed = ((q * cos[:, -q.shape[0]:]) +
-                           (rotate_half(q) * sin[:, -q.shape[0]:])
-                           ).squeeze(0) if q is not None else None
-                k_embed = ((k * cos) + (rotate_half(k) * sin)
-                           ).squeeze(0) if k is not None else None
-                return q_embed, k_embed
-
-            def apply_rotary_pos_emb_rerope_v2(q, k, cos, sin, position_ids):
-                # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
                 assert 1 == position_ids.shape[0]
 
                 _, __, seq_len, dim = cos.shape
@@ -101,10 +87,10 @@ class LlamaAttention(nn.Module):
                 cos, sin = self.rotary_emb(value_states,
                                            seq_len=max(kv_seq_len, window + 1))
 
-                query_states1, key_states1 = apply_rotary_pos_emb_rerope_v2(
+                query_states1, key_states1 = apply_rotary_pos_emb_rerope(
                     query_states, key_states, cos, sin, position_ids)
 
-                query_states2, _ = apply_rotary_pos_emb_rerope_v2(
+                query_states2, _ = apply_rotary_pos_emb_rerope(
                     query_states, None, cos, sin, position_ids * 0 + window)
 
                 # repeat k/v heads if n_kv_heads < n_heads
@@ -119,15 +105,15 @@ class LlamaAttention(nn.Module):
                     key_states2 = key_states
 
                 query_states1 = query_states1.transpose(0, 1).reshape(
-                    1, num_dim, kv_seq_len, dim).contiguous()
+                    1, num_dim, kv_seq_len, dim)
                 query_states2 = query_states2.transpose(0, 1).reshape(
-                    1, num_dim, kv_seq_len, dim).contiguous()
+                    1, num_dim, kv_seq_len, dim)
                 key_states1 = key_states1.transpose(0, 1).reshape(
-                    1, num_dim, kv_seq_len, dim).contiguous()
+                    1, num_dim, kv_seq_len, dim)
                 key_states2 = key_states2.transpose(0, 1).reshape(
-                    1, num_dim, kv_seq_len, dim).contiguous()
+                    1, num_dim, kv_seq_len, dim)
                 value_states = value_states.transpose(0, 1).reshape(
-                    1, num_dim, kv_seq_len, dim).contiguous()
+                    1, num_dim, kv_seq_len, dim)
 
                 return query_states1, query_states2, key_states1, key_states2, value_states
 
@@ -138,13 +124,14 @@ class LlamaAttention(nn.Module):
 
                 position_ids = (position_ids[:, -1] -
                                 position_ids).clip(max=window)
-                _, key_states = apply_rotary_pos_emb_rerope_v2(
+                _, key_states = apply_rotary_pos_emb_rerope(
                     None, key_states, cos, -sin, position_ids)
 
-                assert self.num_key_value_groups == 1
-                # key_states = repeat_kv(key_states, self.num_key_value_groups)
-                # value_states = repeat_kv(value_states,
-                #                          self.num_key_value_groups)
+                if self.num_key_value_groups > 1:
+                    key_states = repeat_kv(key_states,
+                                           self.num_key_value_groups)
+                    value_states = repeat_kv(value_states,
+                                             self.num_key_value_groups)
                 return key_states
 
             attn_output = attention_forward_with_rerope(

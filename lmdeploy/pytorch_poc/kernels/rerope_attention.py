@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import pdb
-
 import torch
 import torch.utils.benchmark as benchmark
 import triton
@@ -210,7 +208,7 @@ def rerope_attention_fwd(q1,
 
 
 def test_rerope():
-
+    import pdb
     Z = 1
     H = 40
     N_CTX = 2176  # must pad to BLOCK_M*n
@@ -276,29 +274,29 @@ def test_rerope():
         attn_output = torch.matmul(attn_weights, value_states)
         return attn_output
 
-    # q1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
-    # q2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
-    # k1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
-    # k2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-    #                  device='cuda').normal_(mean=0., std=0.5).contiguous()
-    # v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-    #                 device='cuda').normal_(mean=0., std=0.5).contiguous()
+    q1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+                     device='cuda').normal_(mean=0., std=0.5).contiguous()
+    q2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+                     device='cuda').normal_(mean=0., std=0.5).contiguous()
+    k1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+                     device='cuda').normal_(mean=0., std=0.5).contiguous()
+    k2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+                     device='cuda').normal_(mean=0., std=0.5).contiguous()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
+                    device='cuda').normal_(mean=0., std=0.5).contiguous()
 
-    q1 = torch.load('/workspace/GitProjects/lmdeploy/q1.pt',
-                    map_location='cuda').contiguous()
-    q2 = torch.load('/workspace/GitProjects/lmdeploy/q2.pt',
-                    map_location='cuda').contiguous()
+    # q1 = torch.load('/workspace/GitProjects/lmdeploy/q1.pt',
+    #                 map_location='cuda').contiguous()
+    # q2 = torch.load('/workspace/GitProjects/lmdeploy/q2.pt',
+    #                 map_location='cuda').contiguous()
 
-    k1 = torch.load('/workspace/GitProjects/lmdeploy/k1.pt',
-                    map_location='cuda').contiguous()
-    k2 = torch.load('/workspace/GitProjects/lmdeploy/k2.pt',
-                    map_location='cuda').contiguous()
+    # k1 = torch.load('/workspace/GitProjects/lmdeploy/k1.pt',
+    #                 map_location='cuda').contiguous()
+    # k2 = torch.load('/workspace/GitProjects/lmdeploy/k2.pt',
+    #                 map_location='cuda').contiguous()
 
-    v = torch.load('/workspace/GitProjects/lmdeploy/v.pt',
-                   map_location='cuda').contiguous()
+    # v = torch.load('/workspace/GitProjects/lmdeploy/v.pt',
+    #                map_location='cuda').contiguous()
 
     torch_output = torch_attention(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
     torch_output2 = torch_attention2(q1, q2, k1, k2, v, True, sm_scale, WINDOW)

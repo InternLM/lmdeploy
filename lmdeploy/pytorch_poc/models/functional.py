@@ -1,7 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
-import pdb
-import time
 from typing import Any, Callable, Optional, Sequence, Tuple
 
 import numpy as np
@@ -284,7 +282,7 @@ def attention_forward_with_rerope(
     training_length=4096,
     window=512,
 ) -> Tensor:
-    """Attention module forward with paced attention.
+    """Attention module forward with ReRoPE.
 
     Args:
         hidden_states (Tensor): Input of attention layer.
@@ -304,7 +302,6 @@ def attention_forward_with_rerope(
         rotary_emb_fn (Callable): rotary embedding callback.
         bias_type (str): type of attention bias. support ['default'].
     """
-    # max_seq_len = position_ids.size(-1)
     hidden_size = -1
     if qkv_proj is not None:
         assert q_proj is None
@@ -339,7 +336,6 @@ def attention_forward_with_rerope(
         q_start_loc = q_seq_length.cumsum(0)
         q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
 
-    # print('start fill_kv_cache {}'.format(time.time()))
     fill_kv_cache(key_states,
                   value_states,
                   past_key_value[0],
@@ -350,21 +346,10 @@ def attention_forward_with_rerope(
                   history_lengths=history_lengths,
                   context=context)
 
-    # print(block_offsets)
-    # if block_offsets[0][0] != 0 and q_len == 1:
-    #     pdb.set_trace()
-    # print('end fill_kv_cache {}'.format(time.time()))
-
-    # attn_output = torch.empty_like(query_states)
-
-    # block_size = past_key_value[0].size(1)
     bsz, q_len, _ = hidden_states.size()
-    bias_type = bias_type.lower()
-    if bias_type == 'default':
+    if bias_type.lower() == 'default':
 
         if q_len == 1:
-            # before_free_gpu_mem = torch.cuda.memory_allocated()
-
             key_states = past_key_value[0][block_offsets].view(
                 -1, num_heads, head_dim)[0:history_lengths[-1] + 1]
             value_states = past_key_value[1][block_offsets].view(
@@ -386,8 +371,6 @@ def attention_forward_with_rerope(
             if attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
 
-            # middle_free_gpu_mem = torch.cuda.memory_allocated()
-
             # upcast attention to fp32
             attn_weights = torch.nn.functional.softmax(attn_weights,
                                                        dim=-1,
@@ -396,79 +379,13 @@ def attention_forward_with_rerope(
             attn_output = torch.matmul(attn_weights,
                                        value_states.transpose(0, 1))
 
-            # end_free_gpu_mem = torch.cuda.memory_allocated()
-            # MB = 1024 * 1024
-            # print('{} {} {}'.format(before_free_gpu_mem, middle_free_gpu_mem, end_free_gpu_mem))
-            # print('{} {}'.format((middle_free_gpu_mem - before_free_gpu_mem) / MB, (end_free_gpu_mem - middle_free_gpu_mem) / MB))
-
         else:
-            # before_free_gpu_mem = torch.cuda.memory_allocated()
 
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(
                 query_states, key_states, value_states, position_ids, window)
 
             sm_scale = 1.0 / math.sqrt(head_dim)
 
-            # def torch_attention_forward(q1, q2, k1, k2, v, causal, sm_scale, window):
-            #     # reference implementation
-            #     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
-            #     p1 = torch.matmul(q1, k1.transpose(2, 3)) * sm_scale
-            #     p2 = torch.matmul(q2, k2.transpose(2, 3)) * sm_scale
-            #     if causal:
-            #         p1[:, :, M == 0] = float("-inf")
-            #         p2[:, :, M == 0] = float("-inf")
-            #     x = torch.arange(N_CTX, dtype=torch.int, device="cuda")
-            #     M2 = ((x[:, None] - x[None, :]).abs() < window)[None, None, :]
-            #     p = torch.where(M2, p1, p2)
-            #     p = torch.softmax(p.float(), dim=-1).half()
-            #     ref_out = torch.matmul(p, v)
-            #     return ref_out
-
-            def torch_attention_fwd(query_states1, query_states2, key_states1,
-                                    key_states2, value_states, causal,
-                                    sm_scale, window):
-                query_states1 = query_states1.squeeze(0).contiguous()
-                query_states2 = query_states2.squeeze(0).contiguous()
-                key_states1 = key_states1.squeeze(0).contiguous()
-                key_states2 = key_states2.squeeze(0).contiguous()
-                value_states = value_states.squeeze(0).contiguous()
-
-                attn_weights1 = torch.matmul(
-                    query_states1, key_states1.transpose(1, 2)) * sm_scale
-                attn_weights2 = torch.matmul(
-                    query_states2, key_states2.transpose(1, 2)) * sm_scale
-
-                position_ids = torch.arange(
-                    query_states1.shape[1],
-                    device=query_states1.device).unsqueeze(0)
-                rectified_mask = (position_ids[:, -q_len:, None] -
-                                  position_ids[:, None]).abs() < window
-                attn_weights = torch.where(rectified_mask, attn_weights1,
-                                           attn_weights2)
-
-                if causal:
-                    tgt_len = attn_weights.shape[-1]
-                    dtype = attn_weights.dtype
-                    device = attn_weights.device
-                    mask = torch.full((tgt_len, tgt_len),
-                                      torch.finfo(dtype).min,
-                                      device=device)
-                    mask_cond = torch.arange(mask.size(-1), device=device)
-                    mask.masked_fill_(
-                        mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-                    mask = mask.to(dtype)
-                    attn_weights = attn_weights + mask
-
-                # upcast attention to fp32
-                attn_weights = torch.nn.functional.softmax(
-                    attn_weights, dim=-1,
-                    dtype=torch.float32).to(query_states1.dtype)
-                attn_output = torch.matmul(attn_weights, value_states)
-                return attn_output
-
-            # torch_attn_output = torch_attention_fwd(query_states1, query_states2, key_states1, key_states2, value_states, causal=True, sm_scale=sm_scale, window=window)
-
-            # if False:
             PADDING_UNIT = past_key_value[0].shape[1]
             assert PADDING_UNIT in {16, 32, 64, 128, 256}
             padding_len = -query_states1.shape[2] % PADDING_UNIT
@@ -483,7 +400,6 @@ def attention_forward_with_rerope(
                                 (0, 0, 0, padding_len)).contiguous()
             value_states = F.pad(value_states,
                                  (0, 0, 0, padding_len)).contiguous()
-            # middle_free_gpu_mem = torch.cuda.memory_allocated()
 
             attn_output = rerope_attention_fwd(query_states1,
                                                query_states2,
@@ -497,24 +413,6 @@ def attention_forward_with_rerope(
 
             attn_output = attn_output[:, 0:q_len]
 
-            # if not torch.allclose(torch_attn_output, attn_output, atol=2e-2, rtol=0):
-            #     torch.save(query_states1, 'q1.pt')
-            #     torch.save(query_states2, 'q2.pt')
-            #     torch.save(key_states1, 'k1.pt')
-            #     torch.save(key_states2, 'k2.pt')
-            #     torch.save(value_states, 'v.pt')
-            #     pdb.set_trace()
-
-            # attn_output = attn_output[:, 0:q_len, :]
-
-            # end_free_gpu_mem = torch.cuda.memory_allocated()
-            # MB = int(1024 * 1024)
-            # print('{} {} {}'.format(before_free_gpu_mem, middle_free_gpu_mem, end_free_gpu_mem))
-            # print('{} {}'.format((middle_free_gpu_mem - before_free_gpu_mem) / MB, (end_free_gpu_mem - middle_free_gpu_mem) / MB))
-
-            # pdb.set_trace()
-            # print(torch.allclose(attn_output, torch_output, atol=2e-2, rtol=0))
-
         if attn_output.size() != (num_heads, q_len, head_dim):
             raise ValueError(
                 f'`attn_output` should be of size {(bsz, num_heads, q_len, head_dim)}, but is'
@@ -524,7 +422,6 @@ def attention_forward_with_rerope(
             bsz, q_len, hidden_size).contiguous()
     else:
         raise ValueError(f'Unknown bias type: {bias_type}')
-    # attn_output = attn_output.reshape(*hidden_states.shape[:-1], hidden_size)
 
     if o_proj is not None:
         attn_output = o_proj(attn_output)

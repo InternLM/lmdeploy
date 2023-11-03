@@ -227,7 +227,7 @@ def _update_cache_config(model_config: ModelConfig,
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
 
-    print('block num: ', cache_config.num_gpu_blocks)
+    logger.info('block num: ', cache_config.num_gpu_blocks)
 
 
 def _get_torch_dtype(config: Any, default: str = 'float16'):
@@ -665,9 +665,6 @@ class Engine:
         max_seq_len = max(seq_length)
 
         input_ids = list(itertools.chain(*token_ids))
-
-        # import numpy as np
-        # x = np.load('/workspace/GitProjects/rerope/inp.npy')
         input_ids = torch.tensor(input_ids).to(device)
 
         attention_mask = torch.tensor([
@@ -1227,7 +1224,6 @@ class EngineInstance:
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
-
         self._send_req(RequestType.STOP_SESSION, dict(session_id=session_id))
 
     def decode(self, prompt_token_ids: List[List[int]]):

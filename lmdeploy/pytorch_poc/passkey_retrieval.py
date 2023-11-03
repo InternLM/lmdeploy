@@ -129,8 +129,6 @@ def main(args):
         total_tokens = 0
 
         for j in range(args.num_tests):
-            # if 1 == j:
-            #     pdb.set_trace()
             question, pass_key = generate_prompt_landmark(n_garbage=n_garbage,
                                                           seed=j)
             response = llm.say(question)
