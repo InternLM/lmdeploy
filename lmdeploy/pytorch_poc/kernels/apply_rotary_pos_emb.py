@@ -112,7 +112,9 @@ def apply_rotary_pos_emb(q: Tensor,
                          cos: Tensor,
                          sin: Tensor,
                          position_ids: Tensor,
-                         position_ids_1d: Tensor = None):
+                         position_ids_1d: Tensor = None,
+                         q_embed: Tensor = None,
+                         k_embed: Tensor = None):
     """Apply rotary positional embedding on query and key.
 
     Args:
@@ -122,6 +124,8 @@ def apply_rotary_pos_emb(q: Tensor,
         sin (Tensor): sine matrix (seq_len, dim).
         position_ids (Tensor): Position ids of q and k.
         position_ids_1d (Tensor): 1d Position ids.
+        q_embed (Tensor): output q, can be same as q
+        k_embed (Tensor): output k, can be same as k
 
     Returns:
         Tuple[Tensor, Tensor]: Embedded query and key.
@@ -135,8 +139,12 @@ def apply_rotary_pos_emb(q: Tensor,
         position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
         position_ids_1d = torch.cat(position_ids_1d)
 
-    q_embed = torch.empty_like(q)
-    k_embed = torch.empty_like(k)
+    # q_embed = torch.empty_like(q)
+    # k_embed = torch.empty_like(k)
+    if q_embed is None:
+        q_embed = torch.empty_like(q)
+    if k_embed is None:
+        k_embed = torch.empty_like(k)
 
     seq_len = position_ids_1d.size(-1)
     BLOCK = 32

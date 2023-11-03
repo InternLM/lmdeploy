@@ -149,7 +149,7 @@ def attention_forward_with_paged_attention(
                   history_lengths=history_lengths,
                   context=context)
 
-    attn_output = torch.empty_like(query_states)
+    attn_output = query_states
 
     block_size = past_key_value[0].size(1)
 
