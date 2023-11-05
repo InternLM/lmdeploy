@@ -249,6 +249,7 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     cudaAutoCpy(skip_decode_, skip_decode_buf_, batch_size, stream_);
     float* runtime_top_ps = new float[batch_size];
     cudaAutoCpy(runtime_top_ps, runtime_top_p_buf_, batch_size, stream_);
+    check_cuda_error(cudaStreamSynchronize(stream_));
     runtime_max_top_p_ = *std::max_element(runtime_top_ps, runtime_top_ps + batch_size);
     delete[] runtime_top_ps;
 }
