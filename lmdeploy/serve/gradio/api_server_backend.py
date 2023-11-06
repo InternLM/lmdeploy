@@ -22,7 +22,7 @@ def chat_stream_restful(instruction: str, state_chatbot: Sequence,
     Args:
         instruction (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        request (gr.Request): the request from a user
+        session_id (int): the session id
     """
     state_chatbot = state_chatbot + [(instruction, None)]
 
@@ -58,7 +58,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
     Args:
         instruction_txtbox (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        request (gr.Request): the request from a user
+        session_id (int): the session id
     """
     state_chatbot = []
     # end the session
@@ -84,7 +84,7 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
     Args:
         instruction_txtbox (str): user's prompt
         state_chatbot (Sequence): the chatting history
-        request (gr.Request): the request from a user
+        session_id (int): the session id
     """
     yield (state_chatbot, disable_btn, disable_btn)
     # end the session

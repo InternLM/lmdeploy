@@ -23,7 +23,7 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
         llama_chatbot (Chatbot): the instance of a chatbot
         cancel_btn (bool): enable the cancel button or not
         reset_btn (bool): enable the reset button or not
-        request (gr.Request): the request from a user
+        session_id (int): the session id
     """
     instruction = state_chatbot[-1][0]
 
