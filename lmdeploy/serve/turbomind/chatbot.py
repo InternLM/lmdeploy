@@ -109,6 +109,7 @@ class Chatbot:
         self.display = display
         self.profile_generation = profile_generation
         self.profile_serving = profile_serving
+        self.interval = 50  # an empirical value
 
     def stream_infer(self,
                      session_id: int,
@@ -617,13 +618,19 @@ class Chatbot:
             tuple: status, text, generated token number
         """
         status, res, n_token = None, '', 0
+        break_flag, prev_result = False, None
         while True:
-            result = res_queue.get()
-            if result is None:
+            if break_flag:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
                 session.status = StatusCode.TRITON_STREAM_END
                 break
+            result = res_queue.get()
+            if result is None:
+                break_flag = True
+                result = prev_result
+            else:
+                prev_result = result
             if 'errcode' in result:
                 logger.error(f'got error from turbomind, code '
                              f"{result['errcode']}, {result['errmsg']}, "
@@ -658,6 +665,8 @@ class Chatbot:
                     yield (StatusCode.TRITON_STREAM_ING,
                            'postprocessing is ignored during profiling '
                            'token generation', output_ids.shape[-1])
+                    continue
+                if not break_flag and output_ids.shape[-1] - n_token < 50:
                     continue
                 output_str = postprocess(
                     output_ids, np.array([[n_token]], dtype=np.uint32))
