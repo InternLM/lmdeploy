@@ -29,8 +29,11 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
 
         first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
         token_latency = np.round(timestamps[-1] - timestamps[0], 3)
-        token = tokens[-1] - tokens[0]
-        stats.append([first_token_latency, token, token_latency])
+        generated_tokens = tokens[-1] - tokens[0]
+        total_tokens = tokens[-1]
+        stats.append([
+            first_token_latency, generated_tokens, total_tokens, token_latency
+        ])
         print(f'session {session_id}: '
               f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
     res_que.put((session_id, stats))
@@ -79,7 +82,8 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
         dataset = [data for data in dataset if len(data['conversations']) >= 2]
         # Only keep the first two turns of each conversation.
         dataset = [(data['conversations'][0]['value'],
-                    data['conversations'][1]['value']) for data in dataset]
+                    data['conversations'][1]['value'])
+                   for data in dataset][:samples * 2]
         prompts = [prompt for prompt, _ in dataset]
         completions = [completion for _, completion in dataset]
         print(f'elapsed time for read data: '
@@ -155,22 +159,27 @@ def main(tritonserver_addr: str,
 
     elapsed_time = _end - _start
 
-    stats = np.concatenate(stats).reshape(-1, 3)
+    stats = np.concatenate(stats).reshape(-1, 4)
 
     first_token_latency_min = np.min(stats[:, 0], axis=0)
     first_token_latency_max = np.max(stats[:, 0], axis=0)
     first_token_latency_ave = np.mean(stats[:, 0], axis=0)
-    token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
-    req_throughput = n_req / elapsed_time
+    generated_token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
+    total_token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
+    rqs = n_req / elapsed_time
+    rqm = rqs * 60
 
-    print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
-          f'elapsed_time: {elapsed_time:.3f}s\n'
-          f'first_token latency(min, max, ave): '
-          f'{first_token_latency_min:.3f}s, {first_token_latency_max:.3f}s, '
-          f'{first_token_latency_ave:.3f}s\n'
-          f'token throughput: {token_throughput:.3f} token/s\n'
-          f'req throughput: {req_throughput:.3f} req/s\n'
-          f'{"-" * 50}\n')
+    print(
+        f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
+        f'elapsed_time: {elapsed_time:.3f}s\n'
+        f'first_token latency(min, max, ave): '
+        f'{first_token_latency_min:.3f}s, {first_token_latency_max:.3f}s, '
+        f'{first_token_latency_ave:.3f}s\n'
+        f'generated token throughput (output only): {generated_token_throughput:.3f} token/s\n'  # noqa
+        f'total token throughput (input + output): {total_token_throughput:.3f} token/s\n'  # noqa
+        f'rqs (request per second): {rqs:.3f} req/s\n'
+        f'rqm (request per minute): {rqm:.3f} req/min\n'
+        f'{"-" * 50}\n')
     for proc in procs:
         proc.join()
 
