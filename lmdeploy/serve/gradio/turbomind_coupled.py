@@ -30,7 +30,7 @@ async def chat_stream_local(
     """
     state_chatbot = state_chatbot + [(instruction, None)]
 
-    yield (state_chatbot, state_chatbot, disable_btn, enable_btn, session_id)
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn)
 
     async for outputs in InterFace.async_engine.generate(
             instruction,
@@ -51,10 +51,9 @@ async def chat_stream_local(
             state_chatbot[-1] = (state_chatbot[-1][0],
                                  state_chatbot[-1][1] + response
                                  )  # piece by piece
-        yield (state_chatbot, state_chatbot, enable_btn, disable_btn,
-               session_id)
+        yield (state_chatbot, state_chatbot, enable_btn, disable_btn)
 
-    yield (state_chatbot, state_chatbot, disable_btn, enable_btn, session_id)
+    yield (state_chatbot, state_chatbot, disable_btn, enable_btn)
 
 
 async def reset_local_func(instruction_txtbox: gr.Textbox,
@@ -75,15 +74,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
                                                      sequence_start=False,
                                                      sequence_end=True):
         pass
-    InterFace.global_session_id += 1
-    new_session_id = InterFace.global_session_id
-    return (
-        state_chatbot,
-        state_chatbot,
-        gr.Textbox.update(value=''),
-        new_session_id,
-        new_session_id,
-    )
+    return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
 
 
 async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
@@ -97,7 +88,7 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
         reset_btn (gr.Button): the reset button
         session_id (int): the session id
     """
-    yield (state_chatbot, disable_btn, enable_btn, session_id)
+    yield (state_chatbot, disable_btn, enable_btn)
     async for out in InterFace.async_engine.generate('',
                                                      session_id,
                                                      request_output_len=0,
@@ -118,7 +109,7 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
                                                      sequence_start=True,
                                                      sequence_end=False):
         pass
-    yield (state_chatbot, disable_btn, enable_btn, session_id)
+    yield (state_chatbot, disable_btn, enable_btn)
 
 
 def run_local(model_path: str,
@@ -141,7 +132,7 @@ def run_local(model_path: str,
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
-        state_session_id = gr.State(-1)
+        state_session_id = gr.State(0)
 
         with gr.Column(elem_id='container'):
             gr.Markdown('## LMDeploy Playground')
@@ -159,7 +150,7 @@ def run_local(model_path: str,
         send_event = instruction_txtbox.submit(chat_stream_local, [
             instruction_txtbox, state_chatbot, cancel_btn, reset_btn,
             state_session_id
-        ], [state_chatbot, chatbot, cancel_btn, reset_btn, state_session_id])
+        ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
             [],
@@ -168,19 +159,18 @@ def run_local(model_path: str,
         cancel_btn.click(
             cancel_local_func,
             [state_chatbot, cancel_btn, reset_btn, state_session_id],
-            [state_chatbot, cancel_btn, reset_btn, state_session_id],
+            [state_chatbot, cancel_btn, reset_btn],
             cancels=[send_event])
 
-        reset_btn.click(
-            reset_local_func,
-            [instruction_txtbox, state_chatbot, state_session_id],
-            [state_chatbot, chatbot, instruction_txtbox, state_session_id],
-            cancels=[send_event])
+        reset_btn.click(reset_local_func,
+                        [instruction_txtbox, state_chatbot, state_session_id],
+                        [state_chatbot, chatbot, instruction_txtbox],
+                        cancels=[send_event])
 
         def init():
             InterFace.global_session_id += 1
             new_session_id = InterFace.global_session_id
-            return [new_session_id, new_session_id]
+            return new_session_id
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
