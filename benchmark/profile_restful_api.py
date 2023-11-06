@@ -77,8 +77,7 @@ def read_dataset(tokenizer_path: str, dataset_path: str, samples: int,
         dataset = [data for data in dataset if len(data['conversations']) >= 2]
         # Only keep the first two turns of each conversation.
         dataset = [(data['conversations'][0]['value'],
-                    data['conversations'][1]['value'])
-                   for data in dataset][:samples * 2]
+                    data['conversations'][1]['value']) for data in dataset]
         prompts = [prompt for prompt, _ in dataset]
         completions = [completion for _, completion in dataset]
         print(f'elapsed time for read data: '
