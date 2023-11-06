@@ -428,6 +428,10 @@ bool LlamaBatch<T>::Initialize()
         static_assert(sizeof(uintptr_t) == sizeof(void*));
     }
 
+    // clear incoming buffer
+    std::fill(incoming_->requests.begin(), incoming_->requests.end(), nullptr);
+    std::fill(incoming_->sequences.begin(), incoming_->sequences.end(), nullptr);
+
     // in case of swap-in/swap-out or there are holes in active buffer, layout of the buffers is changed
     // generation & sampling need to be re-initialized for correctness
     return exchange || active_holes;
