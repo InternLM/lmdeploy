@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+# import torch.nn.functional as F
 from torch import Tensor
 from torch import distributed as dist
 
@@ -266,8 +266,11 @@ def attention_forward_with_rerope(
         v_proj (Callable): value project module/function.
         qkv_proj (Callable): query/key/value project module/function.
         o_proj (Callable): output project module/function.
-        rotary_emb_fn (Callable): rotary embedding callback.
+        rotary_emb_context_fn (Callable): rotary embedding context callback.
+        rotary_emb_generate_fn (Callable): rotary embedding generate callback.
         bias_type (str): type of attention bias. support ['default'].
+        training_lenght (int): model sequence length during trainning.
+        window (int): ReRoPE window size, default value is 512.
     """
     hidden_size = -1
     if qkv_proj is not None:
@@ -351,19 +354,23 @@ def attention_forward_with_rerope(
 
             PADDING_UNIT = past_key_value[0].shape[1]
             assert PADDING_UNIT in {16, 32, 64, 128, 256}
-            padding_len = -query_states1.shape[2] % PADDING_UNIT
+            # padding_len = -query_states1.shape[2] % PADDING_UNIT
+            # query_states1 = F.pad(query_states1,
+            #                       (0, 0, 0, padding_len)).contiguous()
+            # query_states2 = F.pad(query_states2,
+            #                       (0, 0, 0, padding_len)).contiguous()
+            # key_states1 = F.pad(key_states1,
+            #                     (0, 0, 0, padding_len)).contiguous()
+            # key_states2 = F.pad(key_states2,
+            #                     (0, 0, 0, padding_len)).contiguous()
+            # value_states = F.pad(value_states,
+            #                      (0, 0, 0, padding_len)).contiguous()
 
-            query_states1 = F.pad(query_states1,
-                                  (0, 0, 0, padding_len)).contiguous()
-            query_states2 = F.pad(query_states2,
-                                  (0, 0, 0, padding_len)).contiguous()
-            key_states1 = F.pad(key_states1,
-                                (0, 0, 0, padding_len)).contiguous()
-            key_states2 = F.pad(key_states2,
-                                (0, 0, 0, padding_len)).contiguous()
-            value_states = F.pad(value_states,
-                                 (0, 0, 0, padding_len)).contiguous()
-
+            query_states1 = query_states1.contiguous()
+            query_states2 = query_states2.contiguous()
+            key_states1 = key_states1.contiguous()
+            key_states2 = key_states2.contiguous()
+            value_states = value_states.contiguous()
             attn_output = rerope_attention_fwd(query_states1,
                                                query_states2,
                                                key_states1,
@@ -374,7 +381,7 @@ def attention_forward_with_rerope(
                                                window,
                                                BLOCK_M=PADDING_UNIT).squeeze(0)
 
-            attn_output = attn_output[:, 0:q_len]
+            # attn_output = attn_output[:, 0:q_len]
 
         if attn_output.size() != (num_heads, q_len, head_dim):
             raise ValueError(
