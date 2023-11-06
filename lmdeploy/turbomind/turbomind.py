@@ -268,7 +268,7 @@ class TurboMindInstance:
             self.model_insts[0].register_callback(self._forward_callback)
 
         if len(input_ids) == 0:
-            input_ids = []
+            input_ids = [[]]
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
 
@@ -383,7 +383,7 @@ class TurboMindInstance:
         """
 
         if len(input_ids) == 0:
-            input_ids = []
+            input_ids = [[]]
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
 
