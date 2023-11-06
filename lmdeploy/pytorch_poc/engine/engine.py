@@ -481,13 +481,12 @@ class Engine:
                            dict(session_id=session_id))
             self.owned_sessions.append(session_id)
 
-    def batched_infer(
-            self,
-            session_ids: List[int],
-            token_ids: List[List[int]] = None,
-            request_output_len: int = 512,
-            sampling_param: SamplingParam = SamplingParam(),
-    ):
+    def batched_infer(self,
+                      session_ids: List[int],
+                      token_ids: List[List[int]] = None,
+                      request_output_len: int = 512,
+                      sampling_param: SamplingParam = SamplingParam(),
+                      keep_cache: bool = False):
         """Send inference request.
 
         Args:
@@ -496,6 +495,7 @@ class Engine:
             request_output_len (int): The max output length of this request.
             step (int): No use for now.
             sampling_param (SamplingParam): The sampling param of the output.
+            keep_cache (bool): Keep kv cache after infer.
 
         Returns:
             int: Error flags. 0 if success.
@@ -540,6 +540,10 @@ class Engine:
                 token_ids += resp.data['token_ids']
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
+                if not keep_cache:
+                    self._send_req(
+                        RequestType.END_SESSION,
+                        dict(session_id=add_msgs[idx]['session_id']))
                 finish_count -= 1
             else:
                 status = 1
