@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from threading import Lock
 from typing import Sequence
 
 import gradio as gr
@@ -10,6 +11,7 @@ from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
 class InterFace:
     async_engine: AsyncEngine = None
     global_session_id: int = 0
+    lock = Lock()
 
 
 async def chat_stream_local(
@@ -168,7 +170,8 @@ def run_local(model_path: str,
                         cancels=[send_event])
 
         def init():
-            InterFace.global_session_id += 1
+            with InterFace.lock:
+                InterFace.global_session_id += 1
             new_session_id = InterFace.global_session_id
             return new_session_id
 

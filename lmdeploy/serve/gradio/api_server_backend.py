@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
+from threading import Lock
 from typing import Sequence
 
 import gradio as gr
@@ -12,6 +13,7 @@ from lmdeploy.serve.openai.api_client import (get_model_list,
 class InterFace:
     api_server_url: str = None
     global_session_id: int = 0
+    lock = Lock()
 
 
 def chat_stream_restful(instruction: str, state_chatbot: Sequence,
@@ -167,7 +169,8 @@ def run_api_server(api_server_url: str,
                         cancels=[send_event])
 
         def init():
-            InterFace.global_session_id += 1
+            with InterFace.lock:
+                InterFace.global_session_id += 1
             new_session_id = InterFace.global_session_id
             return new_session_id
 
