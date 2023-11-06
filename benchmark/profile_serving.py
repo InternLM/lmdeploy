@@ -26,11 +26,10 @@ def infer(chatbot, session_id: int, req_que: mp.Queue, res_que: mp.Queue):
                 sequence_end=True):
             timestamps.append(time.perf_counter())
             tokens.append(token)
-
         first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
         token_latency = np.round(timestamps[-1] - timestamps[0], 3)
-        generated_tokens = tokens[-1] - tokens[0]
-        total_tokens = tokens[-1]
+        generated_tokens = tokens[-1]
+        total_tokens = tokens[-1] + input_seqlen
         stats.append([
             first_token_latency, generated_tokens, total_tokens, token_latency
         ])
@@ -164,7 +163,7 @@ def main(tritonserver_addr: str,
     first_token_latency_max = np.max(stats[:, 0], axis=0)
     first_token_latency_ave = np.mean(stats[:, 0], axis=0)
     generated_token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
-    total_token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
+    total_token_throughput = np.sum(stats[:, 2], axis=0) / elapsed_time
     rqs = n_req / elapsed_time
     rqm = rqs * 60
 
