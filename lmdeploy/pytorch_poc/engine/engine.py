@@ -724,11 +724,12 @@ class Engine:
                 msg.meta = dict(req_id=req.data['req_id'])
 
             # forward
-            with torch.no_grad():
-                step_tokens: Dict[int, InferOutput] = self.step()
+            if self.scheduler.has_unfinished():
+                with torch.no_grad():
+                    step_tokens: Dict[int, InferOutput] = self.step()
 
-            # send response
-            send_resp_que.put(step_tokens)
+                # send response
+                send_resp_que.put(step_tokens)
 
 
 class EngineInstance:

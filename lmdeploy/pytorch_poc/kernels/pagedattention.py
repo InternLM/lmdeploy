@@ -34,7 +34,6 @@ def _fwd_split_kernel(
     stride_boffb,
     kv_group_num,
     block_per_cta,
-    SPLIT_K: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -409,7 +408,6 @@ def paged_attention_fwd(
                                 stride_boffb=block_offsets.stride(0),
                                 kv_group_num=kv_group_num,
                                 block_per_cta=block_per_cta,
-                                SPLIT_K=SPLIT_K,
                                 BLOCK_DMODEL=Lk,
                                 BLOCK_N=BLOCK,
                                 num_warps=4,
