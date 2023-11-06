@@ -16,6 +16,13 @@ from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
 __all__ = ['apply_rotary_pos_emb']
 
 
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., :x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """This is the equivalent of torch.repeat_interleave(x, dim=1,
     repeats=n_rep).

@@ -123,7 +123,7 @@ def main(args):
     # This is a rough ratio to control the number of texts and tokens
     # for val in [8000, 9000, 10000, 11000, 13000, 14000, 15000, 16000, 17000]:
     # '7036': 1.0, '11132': 0.97
-    for val in range(8000, args.max_tokens, args.interval):
+    for val in range(1000, args.max_tokens, args.interval):
         n_garbage = int(3.75 * val // 1024 * 1024)
         passed_tests = 0
         total_tokens = 0
