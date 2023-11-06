@@ -4,6 +4,8 @@ import torch.utils.benchmark as benchmark
 import triton
 import triton.language as tl
 
+assert triton.__version__ >= '2.1.0'
+
 
 @triton.jit
 def _rerope_fwd_kernel(
@@ -208,12 +210,9 @@ def rerope_attention_fwd(q1,
 
 
 def test_rerope():
-    import pdb
     Z = 1
     H = 40
-    N_CTX = 2176  # must pad to BLOCK_M*n
-    # currently backward is VERY slow for d_head = 128
-    # https://github.com/openai/triton/issues/1975
+    N_CTX = 2176
     D_HEAD = 128
     WINDOW = 512
     sm_scale = 0.0883883
@@ -301,11 +300,11 @@ def test_rerope():
     torch_output = torch_attention(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
     torch_output2 = torch_attention2(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
     assert torch.allclose(torch_output, torch_output2, atol=1e-2, rtol=0)
-    for i in range(100):
+    for _ in range(100):
         triton_output = rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale,
                                              WINDOW)
-        if not torch.allclose(torch_output, triton_output, atol=2e-2, rtol=0):
-            pdb.set_trace()
+        assert torch.allclose(torch_output, triton_output, atol=2e-2,
+                              rtol=0) is True
 
     def f(fn, q1, q2, k1, k2, v, sm_scale, window):
         fn(q1, q2, k1, k2, v, True, sm_scale, window)
