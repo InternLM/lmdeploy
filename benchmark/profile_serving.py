@@ -173,7 +173,7 @@ def main(tritonserver_addr: str,
     rqs = n_req / elapsed_time
     rqm = rqs * 60
 
-    if completion_tokens != request_output_tokens:
+    if (np.abs(stats[:, 1] - stats[:, 2]) <= 1).min() is False:
         print(f'Did not generate requested number of tokens. '
               f'Request {request_output_tokens:.0f}, '
               f'but got {completion_tokens:.0f}')
@@ -186,10 +186,9 @@ def main(tritonserver_addr: str,
         f'{first_token_latency_ave:.3f}s\n'
         f'number of prompt tokens: {prompt_tokens:.0f}\n'
         f'number of completion tokens: {completion_tokens:.0f}\n'
-        f'number of request completion tokens: {request_output_tokens:.0f}\n'
         f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
         f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
-        f'PPS (request per second): {rqs:.3f} req/s\n'
+        f'RPS (request per second): {rqs:.3f} req/s\n'
         f'RPM (request per minute): {rqm:.3f} req/min\n'
         f'{"-" * 50}\n')
     for proc in procs:

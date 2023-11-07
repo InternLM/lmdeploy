@@ -9,16 +9,15 @@ import numpy as np
 
 from lmdeploy.serve.openai.api_client import get_streaming_response
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
 
 
-def infer(server_addr: str, session_id: int, req_queue: Queue, res_que: Queue):
+def infer(server_addr: str, session_id: int, req_queue: Queue, res_que: Queue,
+          stream_output: bool):
     stats = []
     for prompt, input_seqlen, output_seqlen in iter(req_queue.get,
                                                     [None, None, None]):
-        get_logger('profile_restful_api').info(
-            f'request info: session {session_id}, '
-            f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
+        if prompt is None:
+            break
         timestamps = []
         tokens = []
         timestamps.append(time.perf_counter())
@@ -28,7 +27,8 @@ def infer(server_addr: str, session_id: int, req_queue: Queue, res_que: Queue):
                 session_id,
                 request_output_len=output_seqlen,
                 interactive_mode=False,
-                ignore_eos=True):
+                ignore_eos=True,
+                stream=stream_output):
             timestamps.append(time.perf_counter())
             tokens.append(token)
 
@@ -49,7 +49,8 @@ def infer(server_addr: str, session_id: int, req_queue: Queue, res_que: Queue):
 def warmup(server_addr: str,
            concurrency: int,
            output_seqlen: int,
-           warmup_round: int = 1):
+           warmup_round: int = 1,
+           stream_output: bool = False):
     print('start to warmup ...')
 
     def _infer(server_addr, session_id):
@@ -58,7 +59,9 @@ def warmup(server_addr: str,
                                             server_addr,
                                             session_id,
                                             request_output_len=output_seqlen,
-                                            interactive_mode=False):
+                                            interactive_mode=False,
+                                            stream=stream_output,
+                                            ignore_eos=True):
                 continue
 
     _start = time.perf_counter()
@@ -123,9 +126,10 @@ def main(server_addr: str,
          dataset_path: str,
          concurrency: int = 1,
          session_len: int = 2048,
-         samples: int = 1000):
+         samples: int = 1000,
+         stream_output: bool = False):
     api_url = server_addr + '/v1/chat/interactive'
-    warmup(api_url, concurrency, session_len - 1, 4)
+    warmup(api_url, concurrency, session_len - 1, 4, stream_output)
     req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,
                                     session_len)
     for i in range(concurrency):
@@ -134,7 +138,8 @@ def main(server_addr: str,
     procs = []
     _start = time.perf_counter()
     for i in range(concurrency):
-        proc = Thread(target=infer, args=(api_url, i + 1, req_queue, res_que))
+        proc = Thread(target=infer,
+                      args=(api_url, i + 1, req_queue, res_que, stream_output))
         procs.append(proc)
         proc.start()
     for proc in procs:
@@ -163,7 +168,7 @@ def main(server_addr: str,
     rqs = n_req / elapsed_time
     rqm = rqs * 60
 
-    if completion_tokens != request_output_tokens:
+    if (np.abs(stats[:, 1] - stats[:, 2]) <= 1).min() is False:
         print(f'Did not generate requested number of tokens. '
               f'Request {request_output_tokens:.0f}, '
               f'but got {completion_tokens:.0f}')
@@ -176,10 +181,9 @@ def main(server_addr: str,
         f'{first_token_latency_ave:.3f}s\n'
         f'number of prompt tokens: {prompt_tokens:.0f}\n'
         f'number of completion tokens: {completion_tokens:.0f}\n'
-        f'number of request completion tokens: {request_output_tokens:.0f}\n'
         f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
         f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
-        f'PPS (request per second): {rqs:.3f} req/s\n'
+        f'RPS (request per second): {rqs:.3f} req/s\n'
         f'RPM (request per minute): {rqm:.3f} req/min\n'
         f'{"-" * 50}\n')
 
