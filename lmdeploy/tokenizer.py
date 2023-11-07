@@ -52,7 +52,7 @@ class SentencePieceTokenizer:
         else:
             return decoded
 
-    def encode(self, s: str, sequence_start: bool = True, **kwargs):
+    def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -60,7 +60,6 @@ class SentencePieceTokenizer:
         Returns:
             list[int]: token ids
         """
-        add_bos = sequence_start
         return self.model.Encode(s, add_bos=add_bos, **kwargs)
 
     def decode(self, t: Sequence[int], offset: Optional[int] = None):
@@ -166,7 +165,7 @@ class HuggingFaceTokenizer:
         else:
             return decoded
 
-    def encode(self, s: str, sequence_start: bool = True, **kwargs):
+    def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -175,7 +174,7 @@ class HuggingFaceTokenizer:
             list[int]: token ids
         """
         encoded = self.model.encode(s, **kwargs)
-        if not sequence_start:
+        if not add_bos:
             # in the middle of a session
             if len(encoded) and encoded[0] == self.bos_token_id:
                 encoded = encoded[1:]
@@ -250,7 +249,7 @@ class Tokenizer:
         """end of the sentence token id."""
         return self.model.eos_token_id
 
-    def encode(self, s: str, sequence_start: bool = True, **kwargs):
+    def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -258,7 +257,7 @@ class Tokenizer:
         Returns:
             list[int]: token ids
         """
-        return self.model.encode(s, sequence_start, **kwargs)
+        return self.model.encode(s, add_bos, **kwargs)
 
     def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.
