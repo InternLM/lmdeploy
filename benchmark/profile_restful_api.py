@@ -173,12 +173,14 @@ def main(server_addr: str,
               f'Request {request_output_tokens:.0f}, '
               f'but got {completion_tokens:.0f}')
 
+    print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
+          f'elapsed_time: {elapsed_time:.3f}s\n')
+    if stream_output:
+        print(f'first_token latency(min, max, ave): '
+              f'{first_token_latency_min:.3f}s, '
+              f'{first_token_latency_max:.3f}s, '
+              f'{first_token_latency_ave:.3f}s\n')
     print(
-        f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
-        f'elapsed_time: {elapsed_time:.3f}s\n'
-        f'first_token latency(min, max, ave): '
-        f'{first_token_latency_min:.3f}s, {first_token_latency_max:.3f}s, '
-        f'{first_token_latency_ave:.3f}s\n'
         f'number of prompt tokens: {prompt_tokens:.0f}\n'
         f'number of completion tokens: {completion_tokens:.0f}\n'
         f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
