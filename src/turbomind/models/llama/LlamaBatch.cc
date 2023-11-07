@@ -144,6 +144,7 @@ auto LlamaBatch<T>::ProcessStopRequests(const Requests& requests) -> std::vector
             if (state_->requests[i] && state_->requests[i]->id == r->id) {
                 ec = 0;
                 CompleteRequest(i, true, r->end_flag);
+                state_->requests[i].reset();
                 break;
             }
         }
@@ -174,7 +175,8 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 {
     auto& state = *incoming_;
 
-    state.size = state.active_size = 0;
+    FT_CHECK(state.size == 0);
+    FT_CHECK(state.active_size == 0);
 
     int i = 0;
     for (const auto& r : requests) {
@@ -429,8 +431,9 @@ bool LlamaBatch<T>::Initialize()
     }
 
     // clear incoming buffer
-    std::fill(incoming_->requests.begin(), incoming_->requests.end(), nullptr);
-    std::fill(incoming_->sequences.begin(), incoming_->sequences.end(), nullptr);
+    std::fill_n(incoming_->requests.begin(), incoming_->size, nullptr);
+    std::fill_n(incoming_->sequences.begin(), incoming_->size, nullptr);
+    incoming_->size = 0;
 
     // in case of swap-in/swap-out or there are holes in active buffer, layout of the buffers is changed
     // generation & sampling need to be re-initialized for correctness
