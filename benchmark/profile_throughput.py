@@ -92,15 +92,16 @@ class Engine:
                 tokens.append(token)
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
             token_latency = np.round(timestamps[-1] - timestamps[0], 3)
-            generated_tokens = tokens[-1]
+            completion_tokens = tokens[-1]
             total_tokens = tokens[-1] + len(input_ids)
             stats.append([
-                first_token_latency, generated_tokens, output_seqlen,
+                first_token_latency, completion_tokens, output_seqlen,
                 total_tokens, token_latency
             ])
             print(
                 f'session {session_id}: '
-                f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
+                f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}, '
+                f'completion_tokens {completion_tokens}')
         res_queue.put((session_id, stats))
 
     def process_request(self,
