@@ -101,7 +101,7 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 使用 pip ( python 3.8+) 安装 LMDeploy，或者[源码安装](./docs/zh_cn/build.md)
 
 ```shell
-pip install lmdeploy[all]
+pip install lmdeploy
 ```
 
 > **Note**<br />
@@ -147,6 +147,9 @@ lmdeploy chat turbomind ./workspace
 #### 启动 gradio server
 
 ```shell
+# 安装lmdeploy额外依赖
+pip install lmdeploy[serve]
+
 lmdeploy serve gradio ./workspace
 ```
 
@@ -157,6 +160,9 @@ lmdeploy serve gradio ./workspace
 使用下面的命令启动推理服务：
 
 ```shell
+# 安装lmdeploy额外依赖
+pip install lmdeploy[serve]
+
 lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 

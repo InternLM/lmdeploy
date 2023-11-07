@@ -100,7 +100,7 @@ And the request throughput of TurboMind is 30% higher than vLLM.
 Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 
 ```shell
-pip install lmdeploy[all]
+pip install lmdeploy
 ```
 
 > **Note**<br />
@@ -148,6 +148,9 @@ lmdeploy chat turbomind ./workspace
 #### Serving with gradio
 
 ```shell
+# install lmdeploy with extra dependencies
+pip install lmdeploy[serve]
+
 lmdeploy serve gradio ./workspace
 ```
 
@@ -158,6 +161,9 @@ lmdeploy serve gradio ./workspace
 Launch inference server by:
 
 ```shell
+# install lmdeploy with extra dependencies
+pip install lmdeploy[serve]
+
 lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
 ```
 
