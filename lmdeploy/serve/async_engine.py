@@ -200,7 +200,7 @@ class AsyncEngine:
         prompt = messages
         if do_preprocess:
             prompt = self.model.messages2prompt(prompt, sequence_start)
-        input_ids = self.tokenizer.encode(prompt, sequence_start)
+        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = 'stop' if stop else None
         if self.steps[str(session_id)] + len(
                 input_ids) + request_output_len >= self.tm_model.session_len:

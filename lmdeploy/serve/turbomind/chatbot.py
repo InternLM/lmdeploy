@@ -459,7 +459,7 @@ class Chatbot:
             session.sequence_length = 0
 
         input_ids, input_lengths = self.preprocess(prompt)
-        # got input_ids with default sequence_start == True
+        # got input_ids with default add_bos == True
         if not sequence_start and input_ids[0][0] == self.bos_id:
             input_ids = input_ids[:, 1:]
             input_lengths = input_lengths - 1
