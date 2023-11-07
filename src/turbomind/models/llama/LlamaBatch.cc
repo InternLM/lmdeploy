@@ -401,7 +401,7 @@ bool LlamaBatch<T>::Initialize()
     /// Update block ptrs when there were
     //  1. swap-in or swap-out
     //  2. holes in the active buffer
-    //  3. new allocations (for exsiting active sequences)
+    //  3. new allocations (for existing active sequences)
     if (exchange || active_holes || outcome.allocation) {
         // Prepare intermediate buffers
         h_cu_block_counts_[0] = 0;
