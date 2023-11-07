@@ -37,7 +37,6 @@
 #include <functional>
 #include <memory>
 #include <sstream>
-#include <stdexcept>
 
 namespace turbomind {
 
@@ -545,15 +544,25 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
     bool             has_error = 0;
     if (rank == 0) {
         TM_LOG_INFO("[forward] Enqueue requests");
+
+        std::vector<uint64_t> ids;
+        for (const auto& r : requests) {
+            ids.push_back(r->id);
+        }
+
         auto futures = shared_state_->request_queue.enqueue(std::move(requests));
 
+        FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
+
         TM_LOG_INFO("[forward] Wait for requests to complete ...");
-        for (auto& f : futures) {
-            auto ec = f.get();
+
+        for (int i = 0; i < futures.size(); ++i) {
+            auto ec = futures[i].get();
             error_codes.push_back(ec);
             if (ec) {
                 has_error = true;
             }
+            TM_LOG_INFO("[forward] Request complete for %ld, ec = %d", (long)ids[i], (int)ec);
         }
     }
 
