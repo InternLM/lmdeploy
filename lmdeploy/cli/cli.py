@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
+
 import fire
 
 from .chat import SubCliChat
@@ -76,6 +78,44 @@ class CLI(object):
         model_names.sort()
         print('Supported model names:')
         print('\n'.join(model_names))
+
+    def check_env(self, dump_file: str = None):
+        """Check env information.
+
+        Args:
+            dump_file (str): Output file to save env info.
+        """
+
+        import importlib
+
+        import mmengine
+        from mmengine.utils import get_git_hash
+        from mmengine.utils.dl_utils import collect_env
+
+        from lmdeploy.version import __version__
+
+        env_info = collect_env()
+        env_info['LMDeploy'] = __version__ + '+' + get_git_hash()[:7]
+
+        # important dependencies
+        extra_reqs = ['transformers', 'gradio']
+
+        for req in extra_reqs:
+            try:
+                env_info[req] = importlib.import_module(req).__version__
+            except Exception:
+                env_info[req] = 'Not Found'
+
+        # print env info
+        for k, v in env_info.items():
+            print(f'{k}: {v}')
+
+        # dump to local file
+        if dump_file is not None:
+            work_dir, _ = os.path.split(dump_file)
+            if work_dir:
+                os.makedirs(work_dir, exist_ok=True)
+            mmengine.dump(env_info, dump_file)
 
 
 def run():
