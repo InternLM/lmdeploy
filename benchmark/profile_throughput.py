@@ -64,7 +64,8 @@ class Engine:
         self.tm_model = tm_model
         self.tokenizer = tokenizer
 
-    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int):
+    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
+                   stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
         timestamps = []
@@ -83,7 +84,7 @@ class Engine:
                     sequence_start=True,
                     sequence_end=True,
                     ignore_eos=True,
-                    stream_output=True):
+                    stream_output=stream_output):
                 res, token = outputs[0]
                 self.tokenizer.decode(res, offset)
                 offset = token
@@ -94,15 +95,18 @@ class Engine:
             generated_tokens = tokens[-1]
             total_tokens = tokens[-1] + len(input_ids)
             stats.append([
-                first_token_latency, generated_tokens, total_tokens,
-                token_latency
+                first_token_latency, generated_tokens, output_seqlen,
+                total_tokens, token_latency
             ])
             print(
                 f'session {session_id}: '
                 f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}')
         res_queue.put((session_id, stats))
 
-    def process_request(self, requests, concurrency: int = 1):
+    def process_request(self,
+                        requests,
+                        concurrency: int = 1,
+                        stream_output: bool = True):
         res_queue = Queue()
         req_queue = Queue()
         threads = []
@@ -117,7 +121,8 @@ class Engine:
 
         # start threads
         for i in range(concurrency):
-            t = Thread(target=self._inference, args=(req_queue, res_queue, i))
+            t = Thread(target=self._inference,
+                       args=(req_queue, res_queue, i, stream_output))
             t.start()
             threads.append(t)
 
@@ -134,25 +139,40 @@ class Engine:
                   f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
             stats.append(np.array(_stats))
 
-        stats = np.concatenate(stats).reshape(-1, 4)
+        stats = np.concatenate(stats).reshape(-1, 5)
 
         first_token_latency_min = np.min(stats[:, 0], axis=0)
         first_token_latency_max = np.max(stats[:, 0], axis=0)
         first_token_latency_ave = np.mean(stats[:, 0], axis=0)
-        generated_token_throughput = np.sum(stats[:, 1], axis=0) / elapsed_time
-        total_token_throughput = np.sum(stats[:, 2], axis=0) / elapsed_time
+        completion_tokens = np.sum(stats[:, 1], axis=0)
+        request_output_tokens = np.sum(stats[:, 2], axis=0)
+        total_tokens = np.sum(stats[:, 3], axis=0)
+        prompt_tokens = total_tokens - completion_tokens
+        completion_token_throughput = completion_tokens / elapsed_time
+        total_token_throughput = total_tokens / elapsed_time
         rqs = len(requests) / elapsed_time
         rqm = rqs * 60
+
+        if completion_tokens != request_output_tokens:
+            print(f'Did not generate requested number of tokens. '
+                  f'Request {request_output_tokens:.0f}, '
+                  f'but got {completion_tokens:.0f}')
+
+        print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
+              f'elapsed_time: {elapsed_time:.3f}s\n')
+        if stream_output:
+            print(f'first_token latency(min, max, ave): '
+                  f'{first_token_latency_min:.3f}s, '
+                  f'{first_token_latency_max:.3f}s, '
+                  f'{first_token_latency_ave:.3f}s\n')
         print(
-            f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
-            f'elapsed_time: {elapsed_time:.3f}s\n'
-            f'first_token latency(min, max, ave): '
-            f'{first_token_latency_min:.3f}s, {first_token_latency_max:.3f}s, '
-            f'{first_token_latency_ave:.3f}s\n'
-            f'generated token throughput (output only): {generated_token_throughput:.3f} token/s\n'  # noqa
-            f'total token throughput (input + output): {total_token_throughput:.3f} token/s\n'  # noqa
-            f'rqs (request per second): {rqs:.3f} req/s\n'
-            f'rqm (request per minute): {rqm:.3f} req/min\n'
+            f'number of prompt tokens: {prompt_tokens:.0f}\n'
+            f'number of completion tokens: {completion_tokens:.0f}\n'
+            f'number of request completion tokens: {request_output_tokens:.0f}\n'  # noqa
+            f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
+            f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
+            f'PPS (request per second): {rqs:.3f} req/s\n'
+            f'RPM (request per minute): {rqm:.3f} req/min\n'
             f'{"-" * 50}\n')
 
 
@@ -160,14 +180,15 @@ def main(dataset: str,
          model_path: str,
          concurrency: int = 1,
          num_prompts: int = 1000,
-         tp: int = 1):
+         tp: int = 1,
+         stream_output: bool = True):
 
     engine = Engine(model_path, tp=tp)
     tokenizer = engine.tokenizer
 
     requests = sample_requests(dataset, num_prompts, tokenizer)
 
-    engine.process_request(requests, concurrency)
+    engine.process_request(requests, concurrency, stream_output)
 
 
 if __name__ == '__main__':
