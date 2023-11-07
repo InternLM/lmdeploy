@@ -33,13 +33,13 @@ class FusedLogitsProcessor(LogitsWarper):
         # top_k
         top_k_indices = None
         top_k = self.sampling_param.top_k
-        if top_k > 0:
+        if top_k is not None and top_k > 0:
             top_k = min(top_k, scores.size(-1))
             new_scores, top_k_indices = torch.topk(scores, top_k)
 
         # top_p
         top_p = self.sampling_param.top_p
-        if top_p >= 0 and top_p <= 1:
+        if top_p is not None and top_p >= 0 and top_p <= 1:
             sorted_logits, sorted_indices = torch.sort(new_scores,
                                                        descending=False)
             cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)

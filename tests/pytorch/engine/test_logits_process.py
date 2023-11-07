@@ -36,4 +36,4 @@ class TestFusedLogitsProcessor:
         logits_processor = FusedLogitsProcessor(sampling_param)
         output = logits_processor(input_ids, scores)
 
-        torch.testing.assert_allclose(output, gt)
+        torch.testing.assert_close(output, gt)
