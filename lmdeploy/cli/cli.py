@@ -97,7 +97,13 @@ class CLI(object):
         env_info = collect_env()
         env_info['LMDeploy'] = __version__ + '+' + get_git_hash()[:7]
 
-        # important dependencies
+        # remove some unnecessary info
+        remove_reqs = ['MMEngine', 'OpenCV']
+        for req in remove_reqs:
+            if req in env_info:
+                env_info.pop(req)
+
+        # extra important dependencies
         extra_reqs = ['transformers', 'gradio']
 
         for req in extra_reqs:
