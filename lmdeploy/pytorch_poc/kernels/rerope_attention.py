@@ -7,6 +7,7 @@ import triton.language as tl
 assert triton.__version__ >= '2.1.0'
 
 
+# bugfix from https://gist.github.com/chu-tianxiang/4307937fd94b49c75b61a6967716bae9#file-rerope-py  # noqa: E501
 @triton.jit
 def _rerope_fwd_kernel(
     Q1,
