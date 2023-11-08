@@ -63,7 +63,15 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
                             start_loc: Tensor, seq_length: Tensor,
                             block_offsets: Tensor, history_lengths: Sequence,
                             device: torch.device):
-    """create information for cache filling."""
+    """create information for cache filling.
+
+    There are 4 tensor that we need to generate. Each one has shape (N) where
+    N is the number of blocks that need to fill data.
+    1. state_start: the token offset where we copy data from.
+    2. cache_start: the token offset in block that we want to copy to.
+    3. state_len: how many data (tokens) we want to copy
+    4. block_offset1d: which block we want to perform the filling.
+    """
     batch_size = block_offsets.size(0)
 
     # make sure history lengths is a tensor
@@ -75,52 +83,40 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
     if not is_decoding:
         # prefilling
 
-        batch_ids = torch.arange(batch_size, device=device)
+        # initialize
+        kv_seq_length = history_lengths + seq_length
+        last_block_ids = kv_seq_length // block_size
+        num_blocks = last_block_ids - first_block_ids + 1
+        cum_num_blocks = num_blocks.cumsum(0)
 
-        block_offsets1d = block_offsets[batch_ids, first_block_ids]
+        head_idx = torch.cat(
+            [cum_num_blocks.new_zeros((1, )), cum_num_blocks[:-1]])
+        tail_idx = head_idx + num_blocks - 1
+        total_blocks = num_blocks.sum().item()
 
-        first_seq_len = torch.minimum(seq_length, block_size - token_ids_start)
+        # cache start
+        cache_start = torch.zeros((total_blocks, ),
+                                  dtype=torch.long,
+                                  device=device)
+        cache_start.index_put_((head_idx, ), token_ids_start)
 
-        state_start = start_loc[:batch_size]
-        state_len = first_seq_len
-        cache_start = token_ids_start
+        # state_len (cache_end - cache_start)
+        cache_end = torch.full_like(cache_start, block_size)
+        tail_len = (seq_length + token_ids_start + block_size) % block_size
+        cache_end.index_put_((tail_idx, ), tail_len)
+        state_len = cache_end - cache_start
 
-        # middle + last = remain
-        remain_seq_len = torch.maximum(seq_length.new_zeros(1),
-                                       seq_length - first_seq_len)
-        last_seq_len = remain_seq_len % block_size
-        middle_seq_len = remain_seq_len - last_seq_len
-        middle_block_nums = middle_seq_len // block_size
-        remain_block_nums = (remain_seq_len / block_size).ceil().long()
+        # state_start (0~cumed state len)
+        cum_state_len = state_len.cumsum(0)
+        state_start = torch.cat(
+            [state_len.new_zeros((1, )), cum_state_len[:-1]])
 
-        remain_state_start = [
-            ss + slen + torch.arange(0, rlen, block_size, device=device) for
-            ss, slen, rlen in zip(state_start, first_seq_len, remain_seq_len)
+        # block offsets
+        block_offsets1d = [
+            offs[first:last + 1] for offs, first, last in zip(
+                block_offsets, first_block_ids.cpu(), last_block_ids.cpu())
         ]
-        remain_seq_lens = [
-            torch.full((mid, ), block_size, device=device)
-            for mid in middle_block_nums
-        ]
-        remain_seq_lens = [
-            (torch.cat([slen, last]) if last != 0 else slen)
-            for slen, last in zip(remain_seq_lens, last_seq_len.unsqueeze(-1))
-        ]
-        remain_block_offsets1d = [
-            block_offsets[bid, ids:ids + ids_len]
-            for bid, ids, ids_len in zip(range(batch_size), first_block_ids +
-                                         1, remain_block_nums)
-        ]
-
-        # state_start store the state index of the block
-        # state_len store the length to write in the block
-        # cache_start store the first index the write in block
-        # block_offsets1d store the index of block in caches
-        state_start = torch.cat([state_start] + remain_state_start)
-        state_len = torch.cat([state_len] + remain_seq_lens)
-        cache_start = torch.cat(
-            [cache_start] +
-            [state_start.new_zeros(state_start.size(0) - batch_size)])
-        block_offsets1d = torch.cat([block_offsets1d] + remain_block_offsets1d)
+        block_offsets1d = torch.cat(block_offsets1d)
     else:
         # decoding
         state_start = start_loc
