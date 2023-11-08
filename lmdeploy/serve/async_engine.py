@@ -107,6 +107,7 @@ class AsyncEngine:
                     temperature=0.8,
                     repetition_penalty=1.0,
                     ignore_eos=False,
+                    do_preprocess=True,
                     **kwargs):
         """Inference a batch of prompts.
 
@@ -122,6 +123,7 @@ class AsyncEngine:
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
+            do_preprocess (bool): whether pre-process the messages.
         """
         assert isinstance(prompts, List), 'prompts should be a list'
         batch_size = len(prompts)
@@ -139,7 +141,9 @@ class AsyncEngine:
                               top_p=top_p,
                               temperature=temperature,
                               ignore_eos=ignore_eos,
-                              repetition_penalty=repetition_penalty))
+                              repetition_penalty=repetition_penalty,
+                              do_preprocess=do_preprocess,
+                              **kwargs))
 
         async def _inner_call(i, generator):
             async for out in generator:
@@ -153,22 +157,22 @@ class AsyncEngine:
         return outputs
 
     async def generate(
-        self,
-        messages,
-        session_id,
-        stream_response=True,
-        sequence_start=True,
-        sequence_end=True,  # no interactive mode by default
-        step=0,
-        request_output_len=512,
-        stop=False,
-        top_k=40,
-        top_p=0.8,
-        temperature=0.8,
-        repetition_penalty=1.0,
-        ignore_eos=False,
-        do_preprocess=True,
-    ):
+            self,
+            messages,
+            session_id,
+            stream_response=True,
+            sequence_start=True,
+            sequence_end=True,  # no interactive mode by default
+            step=0,
+            request_output_len=512,
+            stop=False,
+            top_k=40,
+            top_p=0.8,
+            temperature=0.8,
+            repetition_penalty=1.0,
+            ignore_eos=False,
+            do_preprocess=True,
+            **kwargs):
         """Generate responses.
 
         Args:

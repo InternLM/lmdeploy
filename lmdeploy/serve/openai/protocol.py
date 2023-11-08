@@ -71,8 +71,6 @@ class ChatCompletionRequest(BaseModel):
     # additional argument of lmdeploy
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
-    renew_session: Optional[
-        bool] = False  # lagecy and useless, will be removed
     ignore_eos: Optional[bool] = False
 
 
