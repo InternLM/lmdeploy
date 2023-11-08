@@ -2,13 +2,16 @@
 
 ### 启动服务
 
-运行脚本
+用户将下面命令输出的 http url 复制到浏览器打开，详细查看所有的 API 及其使用方法。
+请一定查看`http://{server_ip}:{server_port}`！！！
+请一定查看`http://{server_ip}:{server_port}`！！！
+请一定查看`http://{server_ip}:{server_port}`！！！
+重要的事情说三遍。
 
 ```shell
 lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
-然后用户可以打开 swagger UI: `http://{server_ip}:{server_port}` 详细查看所有的 API 及其使用方法。
 我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。
 
 - /v1/chat/completions
@@ -142,8 +145,7 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 
 ### FAQ
 
-1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。
-   请添加 `"renew_session": true` 到下一次请求中。
+1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
 
