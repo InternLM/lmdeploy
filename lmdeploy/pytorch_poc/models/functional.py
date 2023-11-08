@@ -329,8 +329,8 @@ def attention_forward_with_rerope(
                 position_ids.item() + 1,
                 device=position_ids.device).unsqueeze(0)
 
-            key_states = rotary_emb_generate_fn(key_states, value_states,
-                                                full_position_ids, window)
+            key_states, value_states = rotary_emb_generate_fn(
+                key_states, value_states, full_position_ids, window)
             attn_weights = torch.matmul(query_states.transpose(
                 0, 1), key_states.permute(1, 2, 0)) / math.sqrt(head_dim)
 

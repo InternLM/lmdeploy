@@ -143,7 +143,7 @@ class LlamaAttention(nn.Module):
                                            self.num_key_value_groups)
                     value_states = repeat_kv(value_states,
                                              self.num_key_value_groups)
-                return key_states
+                return key_states, value_states
 
             attn_output = attention_forward_with_rerope(
                 hidden_states,

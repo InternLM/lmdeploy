@@ -5,6 +5,7 @@ import random
 
 from lmdeploy.model import MODELS
 from lmdeploy.pytorch_poc import engine as tm
+from lmdeploy.pytorch_poc.config import SchedulerConfig
 from lmdeploy.pytorch_poc.messages import SamplingParam
 from lmdeploy.tokenizer import Tokenizer
 
@@ -19,10 +20,15 @@ class LLM(object):
                  tp: int = 1,
                  max_session_len=16384) -> None:
         self.tokenizer = Tokenizer(model_path, trust_remote_code=True)
+
+        self.scheduler_config = SchedulerConfig(
+            max_batches=64,
+            max_session_len=max_session_len,
+            max_request_output_len=512)
         self.tm_model = tm.Engine(model_path,
                                   tp=tp,
                                   trust_remote_code=True,
-                                  max_session_len=max_session_len)
+                                  scheduler_config=self.scheduler_config)
         self.generator = self.tm_model.create_instance()
         self.model = MODELS.get(model_name)()
         seed = random.getrandbits(64)
@@ -67,6 +73,15 @@ def valid_str(string, coding='utf-8'):
 
 def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
+    parser.add_argument(
+        '--model_path',
+        type=str,
+        default='/models/openbuddy-llama2-13b-v8.1-fp16',
+        help='LLM path, use /models/openbuddy-llama2-13b-v8.1-fp16 by default')
+    parser.add_argument('--model_name',
+                        type=str,
+                        default='llama2',
+                        help='LLM type name, use llama2 by default')
     parser.add_argument('--max_tokens',
                         type=int,
                         default=20000,
@@ -116,13 +131,10 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
 
 def main(args):
     # Load model and tokenizer
-    llm = LLM(model_path='/models/openbuddy-llama2-13b-v8.1-fp16',
-              model_name='llama2')
+    llm = LLM(model_path=args.model_path, model_name=args.model_name)
 
     all_accuries = {}
     # This is a rough ratio to control the number of texts and tokens
-    # for val in [8000, 9000, 10000, 11000, 13000, 14000, 15000, 16000, 17000]:
-    # '7036': 1.0, '11132': 0.97
     for val in range(1000, args.max_tokens, args.interval):
         n_garbage = int(3.75 * val // 1024 * 1024)
         passed_tests = 0
@@ -132,10 +144,6 @@ def main(args):
             question, pass_key = generate_prompt_landmark(n_garbage=n_garbage,
                                                           seed=j)
             response = llm.say(question)
-
-            if response is None or len(response) < 1:
-                with open('badcase.txt', 'w') as f:
-                    f.write(question)
 
             print(response)
             if pass_key in response:

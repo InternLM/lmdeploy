@@ -468,8 +468,7 @@ class Engine:
                  cache_config: CacheConfig = None,
                  tp: int = 1,
                  trust_remote_code=True,
-                 json_config_file: str = 'config.json',
-                 max_session_len=2048) -> None:
+                 json_config_file: str = 'config.json') -> None:
 
         self.tp = tp
         self.gpu_count = tp
@@ -480,7 +479,7 @@ class Engine:
 
         if scheduler_config is None:
             scheduler_config = SchedulerConfig(max_batches=64,
-                                               max_session_len=max_session_len,
+                                               max_session_len=2048,
                                                max_request_output_len=512)
         if cache_config is None:
             cache_config = CacheConfig(block_size=64,
@@ -849,7 +848,6 @@ class Engine:
         next_token_ids = []
         for msg, logit, param in zip(running, split_logits, sampling_params):
             input_ids = torch.tensor(msg.token_ids)
-            input_ids = msg.token_ids.clone().detach()
             logits_processor = LogitsProcessorList([
                 TopKLogitsWarper(param.top_k),
                 TopPLogitsWarper(param.top_p),

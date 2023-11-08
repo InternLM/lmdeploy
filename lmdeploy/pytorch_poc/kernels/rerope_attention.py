@@ -15,7 +15,7 @@ def _rerope_fwd_kernel(
     K2,
     V,
     sm_scale,
-    L,
+    # L,
     Out,
     stride_qz,
     stride_qh,
@@ -89,9 +89,11 @@ def _rerope_fwd_kernel(
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout
     q1 = tl.load(Q1_block_ptr, boundary_check=(0, 1))
-    q1 = (q1 * qk_scale).to(tl.float16)
+    dtype = q1.dtype
+
+    q1 = (q1 * qk_scale).to(dtype)
     q2 = tl.load(Q2_block_ptr, boundary_check=(0, 1))
-    q2 = (q2 * qk_scale).to(tl.float16)
+    q2 = (q2 * qk_scale).to(dtype)
     # loop over k, v and update accumulator
     lo = 0
     hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
@@ -139,8 +141,9 @@ def _rerope_fwd_kernel(
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
     # write back l and m
     acc = acc / l_i[:, None]
-    l_ptrs = L + off_hz * N_CTX + offs_m
-    tl.store(l_ptrs, m_i + tl.math.log2(l_i))
+    # debug softmax output
+    # l_ptrs = L + off_hz * N_CTX + offs_m
+    # tl.store(l_ptrs, m_i + tl.math.log2(l_i))
     # write back O
     O_block_ptr = tl.make_block_ptr(base=Out + q_offset,
                                     shape=(N_CTX, BLOCK_DMODEL),
@@ -148,7 +151,7 @@ def _rerope_fwd_kernel(
                                     offsets=(start_m * BLOCK_M, 0),
                                     block_shape=(BLOCK_M, BLOCK_DMODEL),
                                     order=(1, 0))
-    tl.store(O_block_ptr, acc.to(tl.float16), boundary_check=(0, 1))
+    tl.store(O_block_ptr, acc.to(dtype), boundary_check=(0, 1))
 
 
 def rerope_attention_fwd(q1,
@@ -169,168 +172,178 @@ def rerope_attention_fwd(q1,
     num_stages = 4 if Lk <= 64 else 3
     num_warps = 4
     grid = (triton.cdiv(q1.shape[2], BLOCK_M), q1.shape[0] * q1.shape[1], 1)
-    L = torch.empty((q1.shape[0] * q1.shape[1], q1.shape[2]),
-                    device=q1.device,
-                    dtype=torch.float32)
-    _rerope_fwd_kernel[grid](q1,
-                             q2,
-                             k1,
-                             k2,
-                             v,
-                             sm_scale,
-                             L,
-                             o,
-                             q1.stride(0),
-                             q1.stride(1),
-                             q1.stride(2),
-                             q1.stride(3),
-                             k1.stride(0),
-                             k1.stride(1),
-                             k1.stride(2),
-                             k1.stride(3),
-                             v.stride(0),
-                             v.stride(1),
-                             v.stride(2),
-                             v.stride(3),
-                             o.stride(0),
-                             o.stride(1),
-                             o.stride(2),
-                             o.stride(3),
-                             q1.shape[0],
-                             q1.shape[1],
-                             q1.shape[2],
-                             BLOCK_M=BLOCK_M,
-                             BLOCK_N=BLOCK_N,
-                             BLOCK_DMODEL=Lk,
-                             IS_CAUSAL=causal,
-                             WINDOW=window,
-                             num_warps=num_warps,
-                             num_stages=num_stages)
+    # L = torch.empty((q1.shape[0] * q1.shape[1], q1.shape[2]),
+    #                 device=q1.device,
+    #                 dtype=torch.float32)
+    _rerope_fwd_kernel[grid](
+        q1,
+        q2,
+        k1,
+        k2,
+        v,
+        sm_scale,
+        #  L,
+        o,
+        q1.stride(0),
+        q1.stride(1),
+        q1.stride(2),
+        q1.stride(3),
+        k1.stride(0),
+        k1.stride(1),
+        k1.stride(2),
+        k1.stride(3),
+        v.stride(0),
+        v.stride(1),
+        v.stride(2),
+        v.stride(3),
+        o.stride(0),
+        o.stride(1),
+        o.stride(2),
+        o.stride(3),
+        q1.shape[0],
+        q1.shape[1],
+        q1.shape[2],
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_DMODEL=Lk,
+        IS_CAUSAL=causal,
+        WINDOW=window,
+        num_warps=num_warps,
+        num_stages=num_stages)
     return o
 
 
-def test_rerope():
-    Z = 1
-    H = 40
-    N_CTX = 2176
-    D_HEAD = 128
-    WINDOW = 512
-    sm_scale = 0.0883883
-
-    def torch_attention(q1, q2, k1, k2, v, causal, sm_scale, window):
-        # reference implementation
-        M = torch.tril(torch.ones((N_CTX, N_CTX), device='cuda'))
-        p1 = torch.matmul(q1, k1.transpose(2, 3)) * sm_scale
-        p2 = torch.matmul(q2, k2.transpose(2, 3)) * sm_scale
-        if causal:
-            p1[:, :, M == 0] = float('-inf')
-            p2[:, :, M == 0] = float('-inf')
-        x = torch.arange(N_CTX, dtype=torch.int, device='cuda')
-        M2 = ((x[:, None] - x[None, :]).abs() < window)[None, None, :]
-        p = torch.where(M2, p1, p2)
-        p = torch.softmax(p.float(), dim=-1).half()
-        ref_out = torch.matmul(p, v)
-        return ref_out
-
-    def torch_attention2(query_states1, query_states2, key_states1,
-                         key_states2, value_states, causal, sm_scale, window):
-        query_states1 = query_states1.squeeze(0).contiguous()
-        query_states2 = query_states2.squeeze(0).contiguous()
-        key_states1 = key_states1.squeeze(0).contiguous()
-        key_states2 = key_states2.squeeze(0).contiguous()
-        value_states = value_states.squeeze(0).contiguous()
-
-        attn_weights1 = torch.matmul(query_states1, key_states1.transpose(
-            1, 2)) * sm_scale
-        attn_weights2 = torch.matmul(query_states2, key_states2.transpose(
-            1, 2)) * sm_scale
-
-        position_ids = torch.arange(query_states1.shape[1],
-                                    device=query_states1.device).unsqueeze(0)
-        rectified_mask = (position_ids[:, -N_CTX:, None] -
-                          position_ids[:, None]).abs() < window
-        attn_weights = torch.where(rectified_mask, attn_weights1,
-                                   attn_weights2)
-
-        if causal:
-            tgt_len = attn_weights.shape[-1]
-            dtype = attn_weights.dtype
-            device = attn_weights.device
-            mask = torch.full((tgt_len, tgt_len),
-                              torch.finfo(dtype).min,
-                              device=device)
-            mask_cond = torch.arange(mask.size(-1), device=device)
-            mask.masked_fill_(
-                mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-            mask = mask.to(dtype)
-            attn_weights = attn_weights + mask
-
-        # upcast attention to fp32
-        attn_weights = torch.nn.functional.softmax(attn_weights,
-                                                   dim=-1,
-                                                   dtype=torch.float32).to(
-                                                       query_states1.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
-        return attn_output
-
-    q1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    q2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    k1 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    k2 = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                     device='cuda').normal_(mean=0., std=0.5).contiguous()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=torch.float16,
-                    device='cuda').normal_(mean=0., std=0.5).contiguous()
-
-    # q1 = torch.load('/workspace/GitProjects/lmdeploy/q1.pt',
-    #                 map_location='cuda').contiguous()
-    # q2 = torch.load('/workspace/GitProjects/lmdeploy/q2.pt',
-    #                 map_location='cuda').contiguous()
-
-    # k1 = torch.load('/workspace/GitProjects/lmdeploy/k1.pt',
-    #                 map_location='cuda').contiguous()
-    # k2 = torch.load('/workspace/GitProjects/lmdeploy/k2.pt',
-    #                 map_location='cuda').contiguous()
-
-    # v = torch.load('/workspace/GitProjects/lmdeploy/v.pt',
-    #                map_location='cuda').contiguous()
-
-    torch_output = torch_attention(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
-    torch_output2 = torch_attention2(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
-    assert torch.allclose(torch_output, torch_output2, atol=1e-2, rtol=0)
-    for _ in range(100):
-        triton_output = rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale,
-                                             WINDOW)
-        assert torch.allclose(torch_output, triton_output, atol=2e-2,
-                              rtol=0) is True
-
-    def f(fn, q1, q2, k1, k2, v, sm_scale, window):
-        fn(q1, q2, k1, k2, v, True, sm_scale, window)
-
-    t0 = benchmark.Timer(stmt='f(fn, q1, q2, k1, k2, v, sm_scale, window)',
-                         globals={
-                             'f': f,
-                             'fn': torch_attention2,
-                             'q1': q1,
-                             'q2': q2,
-                             'k1': k1,
-                             'k2': k2,
-                             'v': v,
-                             'sm_scale': sm_scale,
-                             'window': WINDOW
-                         },
-                         num_threads=torch.get_num_threads())
-    print(t0.timeit(20))
-
-    import time
-    begin = time.time()
-    LOOP = 100
-    for _ in range(LOOP):
-        rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
-    print(time.time() - begin)
-
-
 if __name__ == '__main__':
+
+    def test_rerope():
+        Z = 1
+        H = 40
+        N_CTX = 2176
+        D_HEAD = 128
+        WINDOW = 512
+        sm_scale = 0.0883883
+
+        def torch_attention(q1, q2, k1, k2, v, causal, sm_scale, window):
+            # reference implementation
+            M = torch.tril(torch.ones((N_CTX, N_CTX), device='cuda'))
+            p1 = torch.matmul(q1, k1.transpose(2, 3)) * sm_scale
+            p2 = torch.matmul(q2, k2.transpose(2, 3)) * sm_scale
+            if causal:
+                p1[:, :, M == 0] = float('-inf')
+                p2[:, :, M == 0] = float('-inf')
+            x = torch.arange(N_CTX, dtype=torch.int, device='cuda')
+            M2 = ((x[:, None] - x[None, :]).abs() < window)[None, None, :]
+            p = torch.where(M2, p1, p2)
+            p = torch.softmax(p.float(), dim=-1).half()
+            ref_out = torch.matmul(p, v)
+            return ref_out
+
+        def torch_attention2(query_states1, query_states2, key_states1,
+                             key_states2, value_states, causal, sm_scale,
+                             window):
+            query_states1 = query_states1.squeeze(0).contiguous()
+            query_states2 = query_states2.squeeze(0).contiguous()
+            key_states1 = key_states1.squeeze(0).contiguous()
+            key_states2 = key_states2.squeeze(0).contiguous()
+            value_states = value_states.squeeze(0).contiguous()
+
+            attn_weights1 = torch.matmul(
+                query_states1, key_states1.transpose(1, 2)) * sm_scale
+            attn_weights2 = torch.matmul(
+                query_states2, key_states2.transpose(1, 2)) * sm_scale
+
+            position_ids = torch.arange(
+                query_states1.shape[1],
+                device=query_states1.device).unsqueeze(0)
+            rectified_mask = (position_ids[:, -N_CTX:, None] -
+                              position_ids[:, None]).abs() < window
+            attn_weights = torch.where(rectified_mask, attn_weights1,
+                                       attn_weights2)
+
+            if causal:
+                tgt_len = attn_weights.shape[-1]
+                dtype = attn_weights.dtype
+                device = attn_weights.device
+                mask = torch.full((tgt_len, tgt_len),
+                                  torch.finfo(dtype).min,
+                                  device=device)
+                mask_cond = torch.arange(mask.size(-1), device=device)
+                mask.masked_fill_(
+                    mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+                mask = mask.to(dtype)
+                attn_weights = attn_weights + mask
+
+            # upcast attention to fp32
+            attn_weights = torch.nn.functional.softmax(attn_weights,
+                                                       dim=-1,
+                                                       dtype=torch.float32).to(
+                                                           query_states1.dtype)
+            attn_output = torch.matmul(attn_weights, value_states)
+            return attn_output
+
+        q1 = torch.empty((Z, H, N_CTX, D_HEAD),
+                         dtype=torch.float16,
+                         device='cuda').normal_(mean=0., std=0.5).contiguous()
+        q2 = torch.empty((Z, H, N_CTX, D_HEAD),
+                         dtype=torch.float16,
+                         device='cuda').normal_(mean=0., std=0.5).contiguous()
+        k1 = torch.empty((Z, H, N_CTX, D_HEAD),
+                         dtype=torch.float16,
+                         device='cuda').normal_(mean=0., std=0.5).contiguous()
+        k2 = torch.empty((Z, H, N_CTX, D_HEAD),
+                         dtype=torch.float16,
+                         device='cuda').normal_(mean=0., std=0.5).contiguous()
+        v = torch.empty((Z, H, N_CTX, D_HEAD),
+                        dtype=torch.float16,
+                        device='cuda').normal_(mean=0., std=0.5).contiguous()
+
+        # q1 = torch.load('/workspace/GitProjects/lmdeploy/q1.pt',
+        #                 map_location='cuda').contiguous()
+        # q2 = torch.load('/workspace/GitProjects/lmdeploy/q2.pt',
+        #                 map_location='cuda').contiguous()
+
+        # k1 = torch.load('/workspace/GitProjects/lmdeploy/k1.pt',
+        #                 map_location='cuda').contiguous()
+        # k2 = torch.load('/workspace/GitProjects/lmdeploy/k2.pt',
+        #                 map_location='cuda').contiguous()
+
+        # v = torch.load('/workspace/GitProjects/lmdeploy/v.pt',
+        #                map_location='cuda').contiguous()
+
+        torch_output = torch_attention(q1, q2, k1, k2, v, True, sm_scale,
+                                       WINDOW)
+        torch_output2 = torch_attention2(q1, q2, k1, k2, v, True, sm_scale,
+                                         WINDOW)
+        assert torch.allclose(torch_output, torch_output2, atol=1e-2, rtol=0)
+        for _ in range(100):
+            triton_output = rerope_attention_fwd(q1, q2, k1, k2, v, True,
+                                                 sm_scale, WINDOW)
+            assert torch.allclose(
+                torch_output, triton_output, atol=2e-2, rtol=0) is True
+
+        def f(fn, q1, q2, k1, k2, v, sm_scale, window):
+            fn(q1, q2, k1, k2, v, True, sm_scale, window)
+
+        t0 = benchmark.Timer(stmt='f(fn, q1, q2, k1, k2, v, sm_scale, window)',
+                             globals={
+                                 'f': f,
+                                 'fn': torch_attention2,
+                                 'q1': q1,
+                                 'q2': q2,
+                                 'k1': k1,
+                                 'k2': k2,
+                                 'v': v,
+                                 'sm_scale': sm_scale,
+                                 'window': WINDOW
+                             },
+                             num_threads=torch.get_num_threads())
+        print(t0.timeit(20))
+
+        import time
+        begin = time.time()
+        LOOP = 100
+        for _ in range(LOOP):
+            rerope_attention_fwd(q1, q2, k1, k2, v, True, sm_scale, WINDOW)
+        print(time.time() - begin)
+
     test_rerope()

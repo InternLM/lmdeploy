@@ -55,8 +55,7 @@ def main(
     tokenizer = Tokenizer(model_path, trust_remote_code)
     tm_model = tm.Engine(model_path,
                          tp=tp,
-                         trust_remote_code=trust_remote_code,
-                         max_session_len=8192)
+                         trust_remote_code=trust_remote_code)
     generator = tm_model.create_instance()
 
     nth_round = 1
