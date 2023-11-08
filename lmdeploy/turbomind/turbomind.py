@@ -13,7 +13,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.chat_template import CHAT_TEMPLATES, BaseModel
+from lmdeploy.chat_template import CHAT_TEMPLATES, BaseTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -111,7 +111,8 @@ class TurboMind:
                     self.gpu_count = tp_cfg
             self.model_name = parser.get(section_name, 'model_name')
             data_type = parser.get(section_name, 'weight_type')
-        self.model: BaseModel = CHAT_TEMPLATES.get(self.model_name)(**kwargs)
+        self.model: BaseTemplate = CHAT_TEMPLATES.get(
+            self.model_name)(**kwargs)
         self.session_len = self.model.session_len
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
