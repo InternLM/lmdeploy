@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import fire
 import torch
 from accelerate import (infer_auto_device_map, init_empty_weights,
                         load_checkpoint_in_model)
@@ -16,13 +15,15 @@ from lmdeploy.lite.utils import collect_target_modules
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
-    'BaiChuanForCausalLM': 'DecoderLayer',
+    'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
+    'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',
+    'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
+    'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
 }
 
@@ -40,6 +41,9 @@ def auto_awq(model: str,
                                               trust_remote_code=True)
     hf_config = AutoConfig.from_pretrained(model, trust_remote_code=True)
     checkpoint = hf_config._name_or_path
+
+    # hard code for qwen, other configs do not have the `fp16` attribute.
+    hf_config.fp16 = True
 
     with init_empty_weights():
         # Load model
@@ -62,11 +66,14 @@ def auto_awq(model: str,
             device_map[name] = 'cpu'
         else:
             device_map[name] = 0
-    load_checkpoint_in_model(model, checkpoint, device_map)
+    load_checkpoint_in_model(model,
+                             checkpoint,
+                             device_map,
+                             dtype=torch.float16)
 
     work_dir = Path(work_dir)
 
-    act_scales = torch.load(work_dir / 'inputs_stats.pth')['absmean']
+    act_scales = torch.load(work_dir / 'inputs_stats.pth')['absmax']
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():
@@ -81,5 +88,6 @@ def auto_awq(model: str,
 
 
 if __name__ == '__main__':
+    import fire
 
     fire.Fire(auto_awq)

@@ -52,7 +52,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 ## Supported Models
 
-`LMDeploy` has two inference backends, `Pytorch` and `TurboMind`.
+`LMDeploy` has two inference backends, `Pytorch` and `TurboMind`. You can run `lmdeploy list` to check the supported model names.
 
 ### TurboMind
 
@@ -119,14 +119,14 @@ git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internl
 GIT_LFS_SKIP_SMUDGE=1
 
 # 2. Convert InternLM model to turbomind's format, which will be in "./workspace" by default
-python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
+lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
 
 ```
 
 #### Inference by TurboMind
 
 ```shell
-python -m lmdeploy.turbomind.chat ./workspace
+lmdeploy chat turbomind ./workspace
 ```
 
 > **Note**<br />
@@ -140,7 +140,7 @@ python -m lmdeploy.turbomind.chat ./workspace
 #### Serving with gradio
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app ./workspace
+lmdeploy serve gradio ./workspace
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -150,23 +150,23 @@ python3 -m lmdeploy.serve.gradio.app ./workspace
 Launch inference server by:
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
 
 ```shell
 # restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+lmdeploy serve api_client api_server_url
 ```
 
 or webui,
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 Refer to [restful_api.md](docs/en/restful_api.md) for more details.
@@ -182,13 +182,13 @@ bash workspace/service_docker_up.sh
 Then, you can communicate with the inference server by command line,
 
 ```shell
-python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
+lmdeploy serve triton_client {server_ip_addresss}:33337
 ```
 
 or webui,
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
+lmdeploy serve gradio {server_ip_addresss}:33337
 ```
 
 For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
@@ -200,7 +200,7 @@ For detailed instructions on Inference pytorch models, see [here](docs/en/pytorc
 #### Single GPU
 
 ```shell
-python3 -m lmdeploy.pytorch.chat $NAME_OR_PATH_TO_HF_MODEL \
+lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \

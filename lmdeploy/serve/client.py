@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 
-import fire
-
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
@@ -20,7 +18,6 @@ def input_prompt(model_name):
 def main(tritonserver_addr: str,
          session_id: int = 1,
          cap: str = 'chat',
-         sys_instruct: str = None,
          stream_output: bool = True,
          **kwargs):
     """An example to communicate with inference server through the command line
@@ -32,13 +29,11 @@ def main(tritonserver_addr: str,
         session_id (int): the identical id of a session
         cap (str): the capability of a model. For example, codellama has
             the ability among ['completion', 'infill', 'instruct', 'python']
-        sys_instruct (str): the content of 'system' role, which is used by
-            conversational model
         stream_output (bool): indicator for streaming output or not
         **kwargs (dict): other arguments for initializing model's chat template
     """
     log_level = os.environ.get('SERVICE_LOG_LEVEL', 'WARNING')
-    kwargs.update(capability=cap, system=sys_instruct)
+    kwargs.update(capability=cap)
     chatbot = Chatbot(tritonserver_addr,
                       log_level=log_level,
                       display=stream_output,
@@ -69,4 +64,6 @@ def main(tritonserver_addr: str,
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)
