@@ -15,7 +15,7 @@ import numpy as np
 import tritonclient.grpc as grpcclient
 from tritonclient.grpc.service_pb2 import ModelInferResponse
 
-from lmdeploy.chat_template import MODELS
+from lmdeploy.chat_template import CHAT_TEMPLATES
 from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
                                             prepare_tensor)
 from lmdeploy.utils import filter_suffix
@@ -83,10 +83,10 @@ class Chatbot:
         self.model_name = model_name
         if self.model_name == '':
             self.model_name = self._get_model_name()
-        assert self.model_name in MODELS.module_dict.keys(), \
+        assert self.model_name in CHAT_TEMPLATES.module_dict.keys(), \
             f"'{self.model_name}' is not supported. " \
-            f'The supported models are: {MODELS.module_dict.keys()}'
-        self.model = MODELS.get(self.model_name)(**model_kwargs)
+            f'The supported models are: {CHAT_TEMPLATES.module_dict.keys()}'
+        self.model = CHAT_TEMPLATES.get(self.model_name)(**model_kwargs)
         self._session = None
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)

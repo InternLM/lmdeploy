@@ -72,8 +72,8 @@ class CLI(object):
         if engine == 'pytorch':
             model_names = ['llama', 'llama2', 'internlm-7b']
         elif engine == 'turbomind':
-            from lmdeploy.chat_template import MODELS
-            model_names = list(MODELS.module_dict.keys())
+            from lmdeploy.chat_template import CHAT_TEMPLATES
+            model_names = list(CHAT_TEMPLATES.module_dict.keys())
             model_names = [n for n in model_names if n.lower() not in ['base']]
         model_names.sort()
         print('Supported model names:')

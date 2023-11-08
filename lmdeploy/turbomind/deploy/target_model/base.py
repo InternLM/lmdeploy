@@ -9,7 +9,7 @@ import torch
 import tqdm
 from mmengine import Registry
 
-from lmdeploy.chat_template import MODELS
+from lmdeploy.chat_template import CHAT_TEMPLATES
 
 from ..source_model.base import BaseInputModel, BaseReader
 
@@ -98,7 +98,7 @@ class BaseOutputModel(ABC):
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
-        model = MODELS.get(cfg.model_name)()
+        model = CHAT_TEMPLATES.get(cfg.model_name)()
         final_cfg = cfg.__dict__
         final_cfg.update(
             dict(start_id=bos_id,

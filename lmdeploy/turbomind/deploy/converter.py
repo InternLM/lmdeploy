@@ -7,7 +7,7 @@ from pathlib import Path
 
 import fire
 
-from lmdeploy.chat_template import MODELS
+from lmdeploy.chat_template import CHAT_TEMPLATES
 
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
@@ -164,9 +164,9 @@ def main(model_name: str,
             to 4 bits
     """
 
-    assert model_name in MODELS.module_dict.keys(), \
+    assert model_name in CHAT_TEMPLATES.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
-        f'The supported models are: {MODELS.module_dict.keys()}'
+        f'The supported models are: {CHAT_TEMPLATES.module_dict.keys()}'
 
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
