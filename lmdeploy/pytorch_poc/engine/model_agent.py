@@ -44,6 +44,8 @@ def _update_cache_config(model_config: ModelConfig,
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
 
+    logger.info('block num: {}'.format(cache_config.num_gpu_blocks))
+
 
 def _get_torch_dtype(config: Any, default: str = 'float16'):
     """Get the torch dtype from the model config.
@@ -79,6 +81,7 @@ class ModelContext:
         seq_length: torch.Tensor,
         world_size: int = 1,
         device='cuda',
+        json_config: dict = None,
     ):
         self.block_offsets_list = block_offsets
         self.history_lengths = history_lengths
@@ -86,6 +89,7 @@ class ModelContext:
         self.q_start_loc = q_start_loc
         self.seq_length = seq_length
         self.world_size = world_size
+        self.json_config = json_config
 
         # seq_len + history_length
         self.kv_seq_length = position_ids[..., -1] + 1
@@ -198,9 +202,11 @@ class BaseModelAgent:
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 json_config: dict,
                  trust_remote_code: bool = True):
         self.model_config = model_config
         self.cache_config = cache_config
+        self.json_config = json_config
         torch_dtype = model_config.dtype
 
         with LoadNoInit():
@@ -265,6 +271,7 @@ class BaseModelAgent:
                     position_ids=inputs['position_ids'],
                     q_start_loc=inputs['q_start_loc'],
                     seq_length=inputs['seq_length'],
+                    json_config=self.json_config,
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
             )
@@ -278,6 +285,7 @@ def _tp_model_loop(
     extra_args: List[str],
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    json_config: dict,
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
@@ -441,6 +449,7 @@ def _tp_model_loop(
                     q_start_loc=inputs['q_start_loc'],
                     seq_length=inputs['seq_length'],
                     world_size=world_size,
+                    json_config=json_config,
                 ),
                 q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
             )
@@ -498,12 +507,14 @@ class TPModelAgent:
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 json_config: dict,
                  world_size: int,
                  trust_remote_code: bool = True) -> None:
         mp.set_start_method('spawn')
         self.world_size = world_size
         self.model_config = model_config
         self.cache_config = cache_config
+        self.json_config = json_config
         self.tp_model_in_que = mp.Queue(10)
         self.tp_model_out_que = mp.Queue(10)
 
@@ -511,6 +522,7 @@ class TPModelAgent:
                             ['context', 'use_origin', 'q_seq_info'],
                             model_config=model_config,
                             cache_config=cache_config,
+                            json_config=json_config,
                             in_que=self.tp_model_in_que,
                             out_que=self.tp_model_out_que,
                             world_size=world_size,
@@ -525,8 +537,8 @@ class TPModelAgent:
 
     def patch_model_tp(self, model_path: str, extra_args: List[str],
                        model_config: ModelConfig, cache_config: CacheConfig,
-                       in_que: mp.Queue, out_que: mp.Queue, world_size: int,
-                       trust_remote_code: bool):
+                       json_config: dict, in_que: mp.Queue, out_que: mp.Queue,
+                       world_size: int, trust_remote_code: bool):
         """Start tensor parallel sub process.
 
         Args:
@@ -548,6 +560,7 @@ class TPModelAgent:
                 (model_path, extra_args),
                 dict(model_config=model_config,
                      cache_config=cache_config,
+                     json_config=json_config,
                      in_que=in_que,
                      out_que=out_que,
                      world_size=world_size,

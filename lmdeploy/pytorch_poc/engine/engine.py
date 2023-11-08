@@ -56,14 +56,12 @@ class Engine:
         tp (int): Number of tensor parallel.
     """
 
-    def __init__(
-        self,
-        model_path: str,
-        scheduler_config: SchedulerConfig = None,
-        cache_config: CacheConfig = None,
-        tp: int = 1,
-        trust_remote_code=True,
-    ) -> None:
+    def __init__(self,
+                 model_path: str,
+                 scheduler_config: SchedulerConfig = None,
+                 cache_config: CacheConfig = None,
+                 tp: int = 1,
+                 trust_remote_code=True) -> None:
 
         self.tp = tp
         self.gpu_count = tp
@@ -77,9 +75,12 @@ class Engine:
                                                max_session_len=4096,
                                                max_request_output_len=512)
         if cache_config is None:
-            cache_config = CacheConfig(block_size=128,
+            cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
+
+        self.json_config = hf_config.to_dict()
+
         if 'falcon' in model_path:
             if hf_config.new_decoder_architecture:
                 # 40b-instruct, GQA
@@ -127,12 +128,14 @@ class Engine:
                 model_path,
                 model_config=model_config,
                 cache_config=cache_config,
+                json_config=self.json_config,
                 trust_remote_code=trust_remote_code)
         else:
             self.model_agent = TPModelAgent(
                 model_path,
                 model_config=model_config,
                 cache_config=cache_config,
+                json_config=self.json_config,
                 world_size=tp,
                 trust_remote_code=trust_remote_code)
 
