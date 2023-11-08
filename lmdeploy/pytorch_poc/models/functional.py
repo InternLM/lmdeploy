@@ -269,7 +269,7 @@ def attention_forward_with_rerope(
         rotary_emb_context_fn (Callable): rotary embedding context callback.
         rotary_emb_generate_fn (Callable): rotary embedding generate callback.
         bias_type (str): type of attention bias. support ['default'].
-        training_lenght (int): model sequence length during trainning.
+        training_length (int): model sequence length during trainning.
         window (int): ReRoPE window size, default value is 512.
     """
     hidden_size = -1
