@@ -72,7 +72,7 @@ class CLI(object):
         if engine == 'pytorch':
             model_names = ['llama', 'llama2', 'internlm-7b']
         elif engine == 'turbomind':
-            from lmdeploy.model import MODELS
+            from lmdeploy.chat_template import MODELS
             model_names = list(MODELS.module_dict.keys())
             model_names = [n for n in model_names if n.lower() not in ['base']]
         model_names.sort()

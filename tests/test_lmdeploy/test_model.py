@@ -1,6 +1,6 @@
 import pytest
 
-from lmdeploy.model import MODELS, SamplingParam
+from lmdeploy.chat_template import MODELS, SamplingParam
 
 
 def test_base_model():

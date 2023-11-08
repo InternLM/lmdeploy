@@ -7,7 +7,7 @@ from pathlib import Path
 
 import fire
 
-from lmdeploy.model import MODELS
+from lmdeploy.chat_template import MODELS
 
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig

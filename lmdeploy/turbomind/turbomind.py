@@ -13,7 +13,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.chat_template import MODELS, BaseModel
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 

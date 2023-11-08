@@ -9,7 +9,7 @@ import torch
 import tqdm
 from mmengine import Registry
 
-from lmdeploy.model import MODELS
+from lmdeploy.chat_template import MODELS
 
 from ..source_model.base import BaseInputModel, BaseReader
 
