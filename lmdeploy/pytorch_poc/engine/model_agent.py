@@ -21,6 +21,8 @@ from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')
 
+_PATCH_ARG_NAMES = ['context', 'use_origin', 'q_seq_info']
+
 
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
@@ -94,6 +96,14 @@ class ModelContext:
         # seq_len + history_length
         self.kv_seq_length = position_ids[..., -1] + 1
 
+        self.block_offsets = self.tensorlize_block_offsets(
+            block_offsets, device)
+        self.position_ids_1d = self.get_position_ids_1d(
+            position_ids, seq_length, device)
+
+    @classmethod
+    def tensorlize_block_offsets(cls, block_offsets, device):
+        """tensorlize block_offsets."""
         # padding zero
         # torch.nn.utils.rnn.pad_sequence is slower than manually concate
         offset_len = [len(offset) for offset in block_offsets]
@@ -102,9 +112,12 @@ class ModelContext:
             offset + [0] * (max_offsets_len - off_len)
             for offset, off_len in zip(block_offsets, offset_len)
         ]
-        self.block_offsets = torch.tensor(pad_block_offsets).to(device)
+        block_offsets = torch.tensor(pad_block_offsets).to(device)
+        return block_offsets
 
-        # update position_ids_1d
+    @classmethod
+    def get_position_ids_1d(cls, position_ids, seq_length, device):
+        """get 1d position_ids."""
         if position_ids.size(1) == 1:
             position_ids_1d = position_ids.flatten()
         else:
@@ -112,78 +125,70 @@ class ModelContext:
                 ids[:l] for ids, l in zip(position_ids.cpu(), seq_length.cpu())
             ]
             position_ids_1d = torch.cat(position_ids_1d).to(device)
-        self.position_ids_1d = position_ids_1d
+        return position_ids_1d
 
     def get_block_offsets(self):
         """return block offsets."""
         return self.block_offsets
 
-    def fill_cache(
-        self,
-        k_states: torch.Tensor,
-        v_states: torch.Tensor,
-        start_loc: torch.Tensor,
-        seq_length: torch.Tensor,
-        k_caches: torch.Tensor,
-        v_caches: torch.Tensor,
-    ):
-        """Fill current key/value to cache.
 
-        Args:
-            k_states (torch.Tensor): [packed_seq_len, head, dim]
-            v_states (torch.Tensor): [packed_seq_len, head, dim]
-            start_loc (torch.Tensor): [bs]
-            seq_length (torch.Tensor): [bs]
-            k_caches (torch.Tensor): [num_blocks, block_size, head, dim]
-            v_caches (torch.Tensor): [num_blocks, block_size, head, dim]
-        """
+def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
+                   swap_out_map: dict):
+    """perform cache swapping."""
+    issued_cache_op = False
+    if len(swap_in_map) > 0:
+        cache_engine.swap_in(swap_in_map)
+        issued_cache_op = True
+    if len(swap_out_map) > 0:
+        cache_engine.swap_out(swap_out_map)
+        issued_cache_op = True
 
-        block_size = k_caches.size(1)
-        block_offsets = self.block_offsets_list
+    if issued_cache_op:
+        cache_events = cache_engine.events
+    else:
+        cache_events = None
 
-        history_lengths = torch.tensor(self.history_lengths)
-        first_free_block_offsets = history_lengths // block_size
-        first_token_offsets = history_lengths % block_size
+    if cache_events is not None:
+        for event in cache_events:
+            event.wait()
 
-        for bid in range(len(history_lengths)):
-            loc = start_loc[bid]
-            seq_len = seq_length[bid]
-            b_offsets = block_offsets[bid]
-            free_offset = first_free_block_offsets[bid]
-            token_offset = first_token_offsets[bid]
 
-            assert 0 <= loc <= k_states.size(0)
-            assert 0 <= loc + seq_len <= k_states.size(0)
-
-            k_state = k_states[loc:loc + seq_len]
-            v_state = v_states[loc:loc + seq_len]
-
-            # fill remain(last non-full block)
-            block_id = b_offsets[free_offset]
-            fill_token_num = min(block_size - token_offset, seq_len)
-
-            assert 0 <= fill_token_num <= block_size
-
-            k_caches[block_id][token_offset:token_offset +
-                               fill_token_num] = k_state[:fill_token_num]
-            v_caches[block_id][token_offset:token_offset +
-                               fill_token_num] = v_state[:fill_token_num]
-
-            # update offset
-            seq_len = seq_len - fill_token_num
-            free_offset += 1
-            k_state = k_state[fill_token_num:]
-            v_state = v_state[fill_token_num:]
-
-            for seq_offset in range(0, seq_len, block_size):
-                token_num = min(seq_len - seq_offset, block_size)
-                block_id = b_offsets[free_offset]
-                k_caches[block_id][:token_num] = k_state[:token_num]
-                v_caches[block_id][:token_num] = v_state[:token_num]
-
-                free_offset += 1
-                k_state = k_state[token_num:]
-                v_state = v_state[token_num:]
+def model_forward(
+    patched_model: torch.nn.Module,
+    inputs: dict,
+    cache_engine: CacheEngine,
+    json_config: dict = None,
+    world_size: int = 1,
+    stream: torch.cuda.Stream = None,
+):
+    """perform model forward."""
+    if stream is None:
+        stream = torch.cuda.current_stream()
+    with torch.no_grad(), torch.cuda.stream(stream):
+        # forward
+        context = ModelContext(
+            block_offsets=inputs['block_offsets'],
+            history_lengths=inputs['history_lengths'],
+            position_ids=inputs['position_ids'],
+            q_start_loc=inputs['q_start_loc'],
+            seq_length=inputs['seq_length'],
+            world_size=world_size,
+            json_config=json_config,
+        )
+        output = patched_model(
+            input_ids=inputs['input_ids'],
+            position_ids=inputs['position_ids'],
+            attention_mask=inputs['attention_mask'],
+            past_key_values=cache_engine.gpu_cache,
+            return_dict=True,
+            output_attentions=False,
+            output_hidden_states=False,
+            use_origin=False,
+            context=context,
+            q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
+        )
+    stream.synchronize()
+    return output
 
 
 class BaseModelAgent:
@@ -216,8 +221,7 @@ class BaseModelAgent:
                 trust_remote_code=trust_remote_code)
             hf_model.eval()
 
-        self.patched_model = patch(
-            hf_model, ['context', 'use_origin', 'q_seq_info']).cuda()
+        self.patched_model = patch(hf_model, _PATCH_ARG_NAMES).cuda()
         _update_cache_config(model_config, cache_config)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
@@ -236,81 +240,36 @@ class BaseModelAgent:
             swap_out_map (Dict[int, int]): Cache maps to swap out.
         """
 
-        # swap in/out
-        issued_cache_op = False
-        if len(swap_in_map) > 0:
-            self.cache_engine.swap_in(swap_in_map)
-            issued_cache_op = True
-        if len(swap_out_map) > 0:
-            self.cache_engine.swap_out(swap_out_map)
-            issued_cache_op = True
-
-        if issued_cache_op:
-            cache_events = self.cache_engine.events
-        else:
-            cache_events = None
-
-        if cache_events is not None:
-            for event in cache_events:
-                event.wait()
-
-        with torch.no_grad(), torch.cuda.stream(self.stream):
-            # forward
-            output = self.patched_model(
-                input_ids=inputs['input_ids'],
-                position_ids=inputs['position_ids'],
-                attention_mask=inputs['attention_mask'],
-                past_key_values=self.cache_engine.gpu_cache,
-                return_dict=True,
-                output_attentions=False,
-                output_hidden_states=False,
-                use_origin=False,
-                context=ModelContext(
-                    block_offsets=inputs['block_offsets'],
-                    history_lengths=inputs['history_lengths'],
-                    position_ids=inputs['position_ids'],
-                    q_start_loc=inputs['q_start_loc'],
-                    seq_length=inputs['seq_length'],
-                    json_config=self.json_config,
-                ),
-                q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
-            )
-        self.stream.synchronize()
+        cache_swapping(self.cache_engine,
+                       swap_in_map=swap_in_map,
+                       swap_out_map=swap_out_map)
+        output = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            self.json_config,
+            world_size=1,
+            stream=self.stream,
+        )
         return output['logits']
 
 
-def _tp_model_loop(
+def _tp_build_model(
     rank: int,
     model_path: str,
-    extra_args: List[str],
     model_config: ModelConfig,
     cache_config: CacheConfig,
-    json_config: dict,
-    in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
     trust_remote_code=True,
 ):
-    """Start model loops for tensor parallel model inference.
-
-    Args:
-        rank (int): Distribution rank.
-        model_path (int): Path of the hugging face model. Could be
-            local or online.
-        extra_args (List[str]): The extra arguments to add to the
-            patched model.
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache.
-        in_que (mp.Queue): Input queue. Used to receive model input.
-        out_que (mp.Queue): Output queue. Used to send the model output.
-        world_size (int): The distribution world size.
-    """
+    """build tensor parallel model."""
     from accelerate import init_empty_weights
-
-    device_mesh = DeviceMesh('cuda', list(range(world_size)))
 
     error_code = 0
     error_type = None
+    patched_model = None
+    cache_engine = None
 
     try:
         config = AutoConfig.from_pretrained(
@@ -338,7 +297,7 @@ def _tp_model_loop(
             checkpoints = [cached_file(model_path, WEIGHTS_NAME)]
         patched_model = patch(
             model,
-            extra_args=extra_args,
+            extra_args=_PATCH_ARG_NAMES,
             rank=rank,
             world_size=world_size,
             checkpoints=checkpoints,
@@ -349,7 +308,6 @@ def _tp_model_loop(
                                    model_config,
                                    rank=rank,
                                    world_size=world_size)
-        stream = torch.cuda.Stream()
     except Exception as e:
         error_code = 1
         error_type = e
@@ -369,93 +327,105 @@ def _tp_model_loop(
         if rank == 0:
             out_que.put((0, None, cache_config))
 
+    return patched_model, cache_engine
+
+
+def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
+    """get input tensor parallel."""
+    device_mesh = DeviceMesh('cuda', list(range(world_size)))
+    input_tensor_names = [
+        'input_ids',
+        'seq_length',
+        'attention_mask',
+        'position_ids',
+        'q_start_loc',
+    ]
+
+    if rank == 0:
+        inputs, swap_in_map, swap_out_map = in_que.get()
+        input_tensors = dict((name, t) for name, t in inputs.items()
+                             if name in input_tensor_names)
+        input_metas = dict(
+            (name, (t.shape, t.dtype)) for name, t in input_tensors.items())
+        input_metas['block_offsets'] = inputs['block_offsets']
+        input_metas['history_lengths'] = inputs['history_lengths']
+
+        objs = [input_metas, swap_in_map, swap_out_map]
+    else:
+        objs = [None, None, None]
+
+    # broadcast input shapes and dtypes
+    dist.broadcast_object_list(objs)
+
+    if rank != 0:
+        input_metas = objs[0]
+        input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1]))
+                             for name, meta in input_metas.items()
+                             if name in input_tensor_names)
+
+    updated_inputs = dict()
+    for name, t in input_tensors.items():
+        updated_inputs[name] = distribute_tensor(t,
+                                                 device_mesh=device_mesh,
+                                                 placements=[Replicate()
+                                                             ]).to_local()
+
+    inputs = updated_inputs
+    inputs['block_offsets'] = input_metas['block_offsets']
+    inputs['history_lengths'] = input_metas['history_lengths']
+
+    swap_in_map = objs[1]
+    swap_out_map = objs[2]
+    return inputs, swap_in_map, swap_out_map
+
+
+def _tp_model_loop(
+    rank: int,
+    model_path: str,
+    model_config: ModelConfig,
+    cache_config: CacheConfig,
+    json_config: dict,
+    in_que: mp.Queue,
+    out_que: mp.Queue,
+    world_size: int,
+    trust_remote_code=True,
+):
+    """Start model loops for tensor parallel model inference.
+
+    Args:
+        rank (int): Distribution rank.
+        model_path (int): Path of the hugging face model. Could be
+            local or online.
+        model_config (ModelConfig): The config of the model.
+        cache_config (CacheConfig): The config of the cache.
+        in_que (mp.Queue): Input queue. Used to receive model input.
+        out_que (mp.Queue): Output queue. Used to send the model output.
+        world_size (int): The distribution world size.
+    """
+    stream = torch.cuda.Stream()
+    patched_model, cache_engine = _tp_build_model(rank, model_path,
+                                                  model_config, cache_config,
+                                                  out_que, world_size,
+                                                  trust_remote_code)
+
     while True:
-        input_tensor_names = [
-            'input_ids',
-            'seq_length',
-            'attention_mask',
-            'position_ids',
-            'q_start_loc',
-        ]
+        inputs, swap_in_map, swap_out_map = _tp_get_input(
+            rank, in_que, world_size)
 
+        cache_swapping(cache_engine,
+                       swap_in_map=swap_in_map,
+                       swap_out_map=swap_out_map)
+
+        output = model_forward(
+            patched_model,
+            inputs,
+            cache_engine,
+            json_config,
+            world_size=world_size,
+            stream=stream,
+        )
         if rank == 0:
-            inputs, swap_in_map, swap_out_map = in_que.get()
-            input_tensors = dict((name, t) for name, t in inputs.items()
-                                 if name in input_tensor_names)
-            input_metas = dict((name, (t.shape, t.dtype))
-                               for name, t in input_tensors.items())
-            input_metas['block_offsets'] = inputs['block_offsets']
-            input_metas['history_lengths'] = inputs['history_lengths']
-
-            objs = [input_metas, swap_in_map, swap_out_map]
-        else:
-            objs = [None, None, None]
-
-        # broadcast input shapes and dtypes
-        dist.broadcast_object_list(objs)
-
-        if rank != 0:
-            input_metas = objs[0]
-            input_tensors = dict((name, torch.empty(meta[0], dtype=meta[1]))
-                                 for name, meta in input_metas.items()
-                                 if name in input_tensor_names)
-
-        updated_inputs = dict()
-        for name, t in input_tensors.items():
-            updated_inputs[name] = distribute_tensor(t,
-                                                     device_mesh=device_mesh,
-                                                     placements=[Replicate()
-                                                                 ]).to_local()
-
-        inputs = updated_inputs
-        inputs['block_offsets'] = input_metas['block_offsets']
-        inputs['history_lengths'] = input_metas['history_lengths']
-
-        swap_in_map = objs[1]
-        swap_out_map = objs[2]
-
-        # swap in/out
-        issued_cache_op = False
-        if len(swap_in_map) > 0:
-            cache_engine.swap_in(swap_in_map)
-            issued_cache_op = True
-        if len(swap_out_map) > 0:
-            cache_engine.swap_out(swap_out_map)
-            issued_cache_op = True
-
-        if issued_cache_op:
-            cache_events = cache_engine.events
-        else:
-            cache_events = None
-
-        if cache_events is not None:
-            for event in cache_events:
-                event.wait()
-
-        with torch.no_grad(), torch.cuda.stream(stream):
-            output = patched_model(
-                input_ids=inputs['input_ids'],
-                position_ids=inputs['position_ids'],
-                attention_mask=inputs['attention_mask'],
-                past_key_values=cache_engine.gpu_cache,
-                return_dict=True,
-                output_attentions=False,
-                output_hidden_states=False,
-                use_origin=False,
-                context=ModelContext(
-                    block_offsets=inputs['block_offsets'],
-                    history_lengths=inputs['history_lengths'],
-                    position_ids=inputs['position_ids'],
-                    q_start_loc=inputs['q_start_loc'],
-                    seq_length=inputs['seq_length'],
-                    world_size=world_size,
-                    json_config=json_config,
-                ),
-                q_seq_info=(inputs['q_start_loc'], inputs['seq_length']),
-            )
-
-            if rank == 0:
-                out_que.put((0, output['logits'].cpu()))
+            out_que.put((0, output['logits'].cpu()))
 
 
 def _start_tp_process(rank: int,
@@ -519,7 +489,6 @@ class TPModelAgent:
         self.tp_model_out_que = mp.Queue(10)
 
         self.patch_model_tp(model_path,
-                            ['context', 'use_origin', 'q_seq_info'],
                             model_config=model_config,
                             cache_config=cache_config,
                             json_config=json_config,
@@ -527,18 +496,11 @@ class TPModelAgent:
                             out_que=self.tp_model_out_que,
                             world_size=world_size,
                             trust_remote_code=trust_remote_code)
-        ret_code, e, cache_config = self.tp_model_out_que.get()
-        if ret_code != 0:
-            logger.error(f'Init tp model failed with error: {e}')
-            for err in e:
-                if err is not None:
-                    raise err
-        self.cache_config = cache_config
 
-    def patch_model_tp(self, model_path: str, extra_args: List[str],
-                       model_config: ModelConfig, cache_config: CacheConfig,
-                       json_config: dict, in_que: mp.Queue, out_que: mp.Queue,
-                       world_size: int, trust_remote_code: bool):
+    def patch_model_tp(self, model_path: str, model_config: ModelConfig,
+                       cache_config: CacheConfig, json_config: dict,
+                       in_que: mp.Queue, out_que: mp.Queue, world_size: int,
+                       trust_remote_code: bool):
         """Start tensor parallel sub process.
 
         Args:
@@ -557,7 +519,7 @@ class TPModelAgent:
             args=(
                 world_size,
                 _tp_model_loop,
-                (model_path, extra_args),
+                (model_path, ),
                 dict(model_config=model_config,
                      cache_config=cache_config,
                      json_config=json_config,
@@ -570,6 +532,13 @@ class TPModelAgent:
             join=False,
             daemon=True,
         )
+        ret_code, e, cache_config = out_que.get()
+        if ret_code != 0:
+            logger.error(f'Init tp model failed with error: {e}')
+            for err in e:
+                if err is not None:
+                    raise err
+        self.cache_config = cache_config
 
     def forward(self, inputs: Dict, swap_in_map: Dict[int, int],
                 swap_out_map: Dict[int, int]):

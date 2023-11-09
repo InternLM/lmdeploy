@@ -46,6 +46,76 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
     return eval(f'torch.{torch_dtype}')
 
 
+def _build_model_config(model_path: str, hf_config: Any):
+    """build model config."""
+    torch_dtype = _get_torch_dtype(hf_config)
+    if 'falcon' in model_path:
+        if hf_config.new_decoder_architecture:
+            # 40b-instruct, GQA
+            kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+            kv_dim *= hf_config.num_kv_heads
+            kv_head = hf_config.num_kv_heads
+        if hf_config.multi_query:
+            # 7b-instruct, MQA
+            kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
+            kv_head = 1
+        else:
+            # rw-1b, MHA
+            kv_dim = hf_config.hidden_size
+            kv_head = hf_config.num_attention_heads
+        model_config = ModelConfig(kv_dim,
+                                   hf_config.num_hidden_layers,
+                                   kv_head,
+                                   bos_token_id=hf_config.bos_token_id,
+                                   eos_token_id=hf_config.eos_token_id,
+                                   dtype=torch_dtype,
+                                   multi_query_attention=hf_config.multi_query)
+    elif 'chatglm' in model_path:
+        model_config = ModelConfig(
+            hf_config.hidden_size // hf_config.num_attention_heads *
+            hf_config.multi_query_group_num,
+            hf_config.num_layers,
+            hf_config.multi_query_group_num,
+            bos_token_id=hf_config.bos_token_id,
+            eos_token_id=hf_config.eos_token_id,
+            dtype=torch_dtype,
+        )
+    else:
+        model_config = ModelConfig(
+            hf_config.hidden_size,
+            hf_config.num_hidden_layers,
+            hf_config.num_attention_heads,
+            bos_token_id=hf_config.bos_token_id,
+            eos_token_id=hf_config.eos_token_id,
+            dtype=torch_dtype,
+        )
+
+    return model_config
+
+
+def _build_model_agent(model_path: str,
+                       model_config: ModelConfig,
+                       cache_config: CacheConfig,
+                       json_config: dict,
+                       trust_remote_code: bool,
+                       tp: int = 1):
+    """create model agent."""
+    if tp == 1:
+        model_agent = BaseModelAgent(model_path,
+                                     model_config=model_config,
+                                     cache_config=cache_config,
+                                     json_config=json_config,
+                                     trust_remote_code=trust_remote_code)
+    else:
+        model_agent = TPModelAgent(model_path,
+                                   model_config=model_config,
+                                   cache_config=cache_config,
+                                   json_config=json_config,
+                                   world_size=tp,
+                                   trust_remote_code=trust_remote_code)
+    return model_agent
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -65,79 +135,34 @@ class Engine:
 
         self.tp = tp
         self.gpu_count = tp
-        hf_config = AutoConfig.from_pretrained(
-            model_path, trust_remote_code=trust_remote_code)
-        torch_dtype = _get_torch_dtype(hf_config)
-        self.torch_dtype = torch_dtype
 
         if scheduler_config is None:
             scheduler_config = SchedulerConfig(max_batches=64,
                                                max_session_len=4096,
                                                max_request_output_len=512)
+
         if cache_config is None:
             cache_config = CacheConfig(block_size=64,
                                        num_cpu_blocks=0,
                                        num_gpu_blocks=0)
 
+        hf_config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
+
+        torch_dtype = _get_torch_dtype(hf_config)
+        self.torch_dtype = torch_dtype
+
         self.json_config = hf_config.to_dict()
 
-        if 'falcon' in model_path:
-            if hf_config.new_decoder_architecture:
-                # 40b-instruct, GQA
-                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
-                kv_dim *= hf_config.num_kv_heads
-                kv_head = hf_config.num_kv_heads
-            if hf_config.multi_query:
-                # 7b-instruct, MQA
-                kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
-                kv_head = 1
-            else:
-                # rw-1b, MHA
-                kv_dim = hf_config.hidden_size
-                kv_head = hf_config.num_attention_heads
-            model_config = ModelConfig(
-                kv_dim,
-                hf_config.num_hidden_layers,
-                kv_head,
-                bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id,
-                dtype=torch_dtype,
-                multi_query_attention=hf_config.multi_query)
-        elif 'chatglm' in model_path:
-            model_config = ModelConfig(
-                hf_config.hidden_size // hf_config.num_attention_heads *
-                hf_config.multi_query_group_num,
-                hf_config.num_layers,
-                hf_config.multi_query_group_num,
-                bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id,
-                dtype=torch_dtype,
-            )
-        else:
-            model_config = ModelConfig(
-                hf_config.hidden_size,
-                hf_config.num_hidden_layers,
-                hf_config.num_attention_heads,
-                bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id,
-                dtype=torch_dtype,
-            )
+        model_config = _build_model_config(model_path, hf_config)
 
-        if tp == 1:
-            self.model_agent = BaseModelAgent(
-                model_path,
-                model_config=model_config,
-                cache_config=cache_config,
-                json_config=self.json_config,
-                trust_remote_code=trust_remote_code)
-        else:
-            self.model_agent = TPModelAgent(
-                model_path,
-                model_config=model_config,
-                cache_config=cache_config,
-                json_config=self.json_config,
-                world_size=tp,
-                trust_remote_code=trust_remote_code)
+        self.model_agent = _build_model_agent(
+            model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            json_config=self.json_config,
+            trust_remote_code=trust_remote_code,
+            tp=tp)
 
         cache_config = self.model_agent.cache_config
         self.scheduler = Scheduler(scheduler_config, cache_config)
@@ -148,7 +173,14 @@ class Engine:
         self.session_len = scheduler_config.max_session_len
         self.stream = torch.cuda.Stream()
 
-        # request manager
+        self._bind_request_manager()
+        self.owned_sessions = []
+
+        # create main thread
+        self._start_loop()
+
+    def _bind_request_manager(self):
+        """bind request manager."""
         req_manager = RequestManager()
         req_manager.bind_func(RequestType.ADD_SESSION, self._on_add_session)
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
@@ -156,22 +188,12 @@ class Engine:
         req_manager.bind_func(RequestType.ADD_MESSAGE, self._on_add_message)
         self.req_manager = req_manager
         self.req_sender = req_manager.create_sender()
-        self.owned_sessions = []
 
-        # create main thread
+    def _start_loop(self):
+        """start loop."""
         loop_threads = Thread(target=self.loop, daemon=True)
         loop_threads.start()
         self.loop_threads = loop_threads
-
-    def create_instance(self, cuda_stream_id=0):
-        """Create a turbomind instance.
-
-        Args:
-            cuda_stream_id(int): identity of a cuda stream
-        Returns:
-            EngineInstance: an instance of turbomind
-        """
-        return EngineInstance(self)
 
     def _on_add_session(self, reqs: Request, **kwargs):
         for req in reqs:
@@ -239,6 +261,16 @@ class Engine:
                 self.scheduler.update()
 
             msg.meta = dict(sender_id=req.sender_id, req_id=req.req_id)
+
+    def create_instance(self, cuda_stream_id=0):
+        """Create a turbomind instance.
+
+        Args:
+            cuda_stream_id(int): identity of a cuda stream
+        Returns:
+            EngineInstance: an instance of turbomind
+        """
+        return EngineInstance(self)
 
     def add_session(self, session_id: int):
         """Add new session."""
@@ -349,27 +381,85 @@ class Engine:
         Returns:
             bool: Weither the message should be stopped.
         """
+
         # check eof
+        def _check_eof(sampling_param, next_token_id, eos_token_id):
+            return (not sampling_param.ignore_eos
+                    ) and next_token_id == eos_token_id
+
+        def _check_stop_word(sampling_param, next_token_id):
+            return (sampling_param.stop_words is not None
+                    and next_token_id in sampling_param.stop_words)
+
+        def _check_request_len(msg):
+            return msg.remain_output_len <= 0
+
+        def _check_session_len(msg, max_session_len):
+            session_len = sum(block.num_tokens for block in msg.logical_blocks)
+            return session_len >= max_session_len
+
         sampling_param = msg.sampling_param
-        if not sampling_param.ignore_eos:
-            if next_token_id == self.model_config.eos_token_id:
-                return True
-
-        # check stop words
-        if (sampling_param.stop_words is not None
-                and next_token_id in sampling_param.stop_words):
+        if _check_eof(sampling_param, next_token_id,
+                      self.model_config.eos_token_id):
             return True
-
-        # check request_len
-        if msg.remain_output_len <= 0:
+        if _check_stop_word(sampling_param, next_token_id):
             return True
-
-        # check session len
-        session_len = sum(block.num_tokens for block in msg.logical_blocks)
-        if session_len >= self.scheduler_config.max_session_len:
+        if _check_request_len(msg):
             return True
-
+        if _check_session_len(msg, self.scheduler_config.max_session_len):
+            return True
         return False
+
+    def sampling_logits(self, logits, running, inputs):
+        """sampling logits."""
+
+        def _group_params(running):
+            sampling_params: List[SamplingParam] = [
+                msg.sampling_param for msg in running
+            ]
+            grouped_params = dict()
+            for i, p in enumerate(sampling_params):
+                key = (p.top_k, p.top_p, p.temperature, p.repetition_penalty)
+                grouped_params.setdefault(key, list())
+                grouped_params[key].append(i)
+            return grouped_params
+
+        def _sampling(grouped_params, split_logits, inputs):
+            next_token_ids = torch.empty((len(running), ), dtype=torch.long)
+            for param, idx in grouped_params.items():
+                top_k, top_p, temperature, _ = param
+                logits_processor = FusedLogitsProcessor(
+                    SamplingParam(
+                        top_k=top_k,
+                        top_p=top_p,
+                        temperature=temperature,
+                    ))
+                input_ids = inputs['input_ids'].reshape(-1, 1)
+                new_logits = split_logits[idx]
+                new_logits = logits_processor(input_ids, new_logits)
+                argmax_ids = new_logits.argmax(-1).cpu()
+                for i, next_ids in zip(idx, argmax_ids):
+                    next_token_ids[i] = next_ids
+            return next_token_ids
+
+        logits = logits.cuda()
+        next_token_ids = torch.empty((len(running), ), dtype=torch.long)
+        grouped_params = _group_params(running)
+
+        is_decoding = inputs['input_ids'].numel(
+        ) == inputs['seq_length'].numel()
+        # TODO: support repetition_penalty
+        if not is_decoding:
+            seq_length = inputs['seq_length']
+            last_idx = seq_length.cumsum(-1) - 1
+            split_logits = logits[last_idx, :]
+        else:
+            # most step share the same sampling parameters
+            split_logits = logits
+
+        next_token_ids = _sampling(grouped_params, split_logits, inputs)
+
+        return next_token_ids, split_logits
 
     def step(self, return_logits=False):
         """one step inference. Used to perform streaming chat.
@@ -404,59 +494,9 @@ class Engine:
                                           swap_out_map=swap_out_map)
 
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-        logits = logits.cuda()
 
-        # gather output
-        # most step share the same sampling parameters
-        sampling_params: List[SamplingParam] = [
-            msg.sampling_param for msg in running
-        ]
-        grouped_params = dict()
-        next_token_ids = [None] * len(sampling_params)
-        for i, p in enumerate(sampling_params):
-            key = (p.top_k, p.top_p, p.temperature, p.repetition_penalty)
-            grouped_params.setdefault(key, list())
-            grouped_params[key].append(i)
-
-        is_decoding = inputs['input_ids'].numel(
-        ) == inputs['seq_length'].numel()
-        # TODO: support repetition_penalty
-        if not is_decoding:
-            seq_length = inputs['seq_length']
-            last_idx = seq_length.cumsum(-1) - 1
-            split_logits = logits[last_idx, :]
-            for param, idx in grouped_params.items():
-                top_k, top_p, temperature, _ = param
-                logits_processor = FusedLogitsProcessor(
-                    SamplingParam(
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                    ))
-                input_ids = None
-                new_logits = split_logits[idx]
-                new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = new_logits.argmax(-1).cpu()
-                for i, next_ids in zip(idx, argmax_ids):
-                    next_token_ids[i] = next_ids
-        else:
-            # most step share the same sampling parameters
-            split_logits = logits
-
-            for param, idx in grouped_params.items():
-                top_k, top_p, temperature, _ = param
-                logits_processor = FusedLogitsProcessor(
-                    SamplingParam(
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                    ))
-                input_ids = inputs['input_ids'].reshape(-1, 1)
-                new_logits = logits[idx]
-                new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = new_logits.argmax(-1).cpu()
-                for i, next_ids in zip(idx, argmax_ids):
-                    next_token_ids[i] = next_ids
+        next_token_ids, split_logits = self.sampling_logits(
+            logits, running, inputs)
 
         # update scheduler
         for token, msg in zip(next_token_ids, running):
@@ -466,6 +506,7 @@ class Engine:
                 msg.status = MessageStatus.STOPPED
         self.scheduler.update()
 
+        # generate output
         outputs: Dict[int, InferOutput] = dict()
         for idx in range(len(session_ids)):
             session_id = session_ids[idx]

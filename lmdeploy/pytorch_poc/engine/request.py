@@ -178,8 +178,8 @@ class RequestManager:
         resp_que = self.senders[resp.sender_id].resp_que
         resp_que.put(resp, timeout=timeout)
 
-    def step(self, **kwargs):
-        """handle requests."""
+    def get_all_requests(self) -> Dict[RequestType, Request]:
+        """get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: List[Request] = []
         tmp = num_reqs
@@ -195,6 +195,27 @@ class RequestManager:
             (t, []) for t in RequestType)
         for req in reqs:
             reqs_by_type[req.type].append(req)
+        return reqs_by_type
+
+    def process_request(self, req_type, reqs, **kwargs):
+        """process reqs with given req type."""
+        # get callback
+        func = self.callbacks.get(req_type, None)
+        if func is not None:
+            func(reqs, **kwargs)
+        else:
+            # TODO: send error message
+            for req in reqs:
+                resp = Response(ResponseType.HANDLER_NOT_EXIST,
+                                sender_id=req.sender_id,
+                                req_id=req.req_id,
+                                err_msg=(f'callback for {req_type}'
+                                         ' not exists.'))
+                self.response(resp)
+
+    def step(self, **kwargs):
+        """handle requests."""
+        reqs_by_type = self.get_all_requests()
 
         # handle requests
         for req_type in self.request_priority:
@@ -202,18 +223,5 @@ class RequestManager:
             if req_type not in reqs_by_type or len(reqs_by_type) == 0:
                 continue
 
-            cur_reqs: List[Request] = reqs_by_type[req_type]
-
-            # get callback
-            func = self.callbacks.get(req_type, None)
-            if func is not None:
-                func(cur_reqs, **kwargs)
-            else:
-                # TODO: send error message
-                for req in cur_reqs:
-                    resp = Response(ResponseType.HANDLER_NOT_EXIST,
-                                    sender_id=req.sender_id,
-                                    req_id=req.req_id,
-                                    err_msg=(f'callback for {req_type}'
-                                             ' not exists.'))
-                    self.response(resp)
+            reqs: List[Request] = reqs_by_type[req_type]
+            self.process_request(req_type, reqs, **kwargs)
