@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
+import os
 import os.path as osp
 from typing import Optional, Sequence, Union
 
@@ -125,7 +126,8 @@ class HuggingFaceTokenizer:
         # save tokenizer.json to reuse
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
             if hasattr(self.model, 'backend_tokenizer'):
-                self.model.backend_tokenizer.save(backend_tokenizer_file)
+                if os.access(model_dir, os.W_OK):
+                    self.model.backend_tokenizer.save(backend_tokenizer_file)
 
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir,
