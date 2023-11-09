@@ -233,7 +233,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
 
     ft::FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
-    ft::FT_CHECK(pipeline_para.world_size_ = pipeline_para_size_);
+    ft::FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
 
     auto llama = std::make_unique<ft::LlamaV2<T>>(head_num_,
                                                   kv_head_num_,
