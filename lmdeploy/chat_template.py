@@ -5,7 +5,7 @@ from typing import List
 
 from mmengine import Registry
 
-MODELS = Registry('model', locations=['lmdeploy.model'])
+CHAT_TEMPLATES = Registry('model', locations=['lmdeploy.chat_template'])
 
 
 @dataclasses.dataclass
@@ -16,10 +16,10 @@ class SamplingParam:
     repetition_penalty: float = 1.0
 
 
-@MODELS.register_module(name='internlm')
-@MODELS.register_module(name='llama')
-@MODELS.register_module(name='base')
-class BaseModel:
+@CHAT_TEMPLATES.register_module(name='internlm-7b')
+@CHAT_TEMPLATES.register_module(name='llama')
+@CHAT_TEMPLATES.register_module(name='base')
+class BaseTemplate:
     """Base model."""
 
     def __init__(self,
@@ -111,8 +111,8 @@ class BaseModel:
                              repetition_penalty=self.repetition_penalty)
 
 
-@MODELS.register_module(name='vicuna')
-class Vicuna(BaseModel):
+@CHAT_TEMPLATES.register_module(name='vicuna')
+class Vicuna(BaseTemplate):
     """Chat template of vicuna model."""
 
     def __init__(
@@ -166,9 +166,9 @@ class Vicuna(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='internlm-chat')
-@MODELS.register_module(name='internlm-chat-7b')
-class InternLMChat7B(BaseModel):
+@CHAT_TEMPLATES.register_module(name='internlm-chat')
+@CHAT_TEMPLATES.register_module(name='internlm-chat-7b')
+class InternLMChat7B(BaseTemplate):
     """Chat template of InternLM model."""
 
     def __init__(
@@ -224,6 +224,7 @@ class InternLMChat7B(BaseModel):
             messages (str | List): user's input prompt
         Returns:
             str: the concatenated prompt
+            :param sequence_start:
         """
 
         if isinstance(messages, str):
@@ -241,8 +242,8 @@ class InternLMChat7B(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='internlm-chat-20b')
-@MODELS.register_module(name='internlm-chat-7b-8k')
+@CHAT_TEMPLATES.register_module(name='internlm-chat-20b')
+@CHAT_TEMPLATES.register_module(name='internlm-chat-7b-8k')
 class InternLMChat7B8K(InternLMChat7B):
     """Chat template and generation parameters of InternLM-Chat-7B-8K and
     InternLM-Chat-20B models."""
@@ -252,8 +253,8 @@ class InternLMChat7B8K(InternLMChat7B):
         self.session_len = session_len
 
 
-@MODELS.register_module(name='internlm-20b')
-class InternLMBaseModel20B(BaseModel):
+@CHAT_TEMPLATES.register_module(name='internlm-20b')
+class InternLM20B(BaseTemplate):
     """Generation parameters of InternLM-20B-Base model."""
 
     def __init__(self, session_len=4096, capability='completion', **kwargs):
@@ -262,8 +263,8 @@ class InternLMBaseModel20B(BaseModel):
                          **kwargs)
 
 
-@MODELS.register_module(name='baichuan-7b')
-class Baichuan7B(BaseModel):
+@CHAT_TEMPLATES.register_module(name='baichuan-7b')
+class Baichuan7B(BaseTemplate):
     """Generation parameters of Baichuan-7B base model."""
 
     def __init__(self, repetition_penalty=1.1, **kwargs):
@@ -271,8 +272,8 @@ class Baichuan7B(BaseModel):
         self.repetition_penalty = repetition_penalty
 
 
-@MODELS.register_module(name='baichuan2-7b')
-class Baichuan2_7B(BaseModel):
+@CHAT_TEMPLATES.register_module(name='baichuan2-7b')
+class Baichuan2_7B(BaseTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
     Baichuan2-7B-Chat models."""
 
@@ -325,8 +326,8 @@ class Baichuan2_7B(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='puyu')
-class Puyu(BaseModel):
+@CHAT_TEMPLATES.register_module(name='puyu')
+class Puyu(BaseTemplate):
     """Chat template of puyu model.This is only for internal usage in Shanghai
     AI Laboratory."""
 
@@ -385,8 +386,8 @@ class Puyu(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='llama2')
-class Llama2(BaseModel):
+@CHAT_TEMPLATES.register_module(name='llama2')
+class Llama2(BaseTemplate):
     """Chat template of LLaMA2 model."""
 
     def __init__(
@@ -453,9 +454,9 @@ If a question does not make any sense, or is not factually coherent, explain why
         return ret
 
 
-@MODELS.register_module(name='qwen-14b')
-@MODELS.register_module(name='qwen-7b')
-class Qwen7BChat(BaseModel):
+@CHAT_TEMPLATES.register_module(name='qwen-14b')
+@CHAT_TEMPLATES.register_module(name='qwen-7b')
+class Qwen7BChat(BaseTemplate):
     """Chat template for Qwen-7B-Chat."""
 
     def __init__(self,
@@ -514,7 +515,7 @@ class Qwen7BChat(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='codellama')
+@CHAT_TEMPLATES.register_module(name='codellama')
 class CodeLlama(Llama2):
 
     def __init__(self,
@@ -580,8 +581,8 @@ class CodeLlama(Llama2):
         return super().messages2prompt(messages, sequence_start)
 
 
-@MODELS.register_module(name='solar')
-class SOLAR(BaseModel):
+@CHAT_TEMPLATES.register_module(name='solar')
+class SOLAR(BaseTemplate):
     """Chat template of SOLAR model.
 
     `https://huggingface.co/upstage/SOLAR-0-70b-16bit`
@@ -648,10 +649,10 @@ class SOLAR(BaseModel):
 
 
 def main(model_name: str = 'test'):
-    assert model_name in MODELS.module_dict.keys(), \
+    assert model_name in CHAT_TEMPLATES.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
-        f'The supported models are: {MODELS.module_dict.keys()}'
-    model = MODELS.get(model_name)()
+        f'The supported models are: {CHAT_TEMPLATES.module_dict.keys()}'
+    model = CHAT_TEMPLATES.get(model_name)()
     prompt = model.get_prompt(prompt='hi')
     print(prompt)
     print(f'session_len: {model.session_len}')
