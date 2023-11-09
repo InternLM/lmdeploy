@@ -111,6 +111,7 @@ class BaseModel:
                              repetition_penalty=self.repetition_penalty)
 
 
+@MODELS.register_module(name='wizardlM')
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):
     """Chat template of vicuna model."""
@@ -644,6 +645,74 @@ class SOLAR(BaseModel):
             ret += f'{self.user}{user}{self.eoh}{self.assistant}'
             if assistant:
                 ret += f'{assistant}{self.eoa}'
+        return ret
+
+
+@MODELS.register_module(name='ultracm')
+@MODELS.register_module(name='ultralm')
+class UltraChat(BaseModel):
+    """Template of UltraCM and UltraLM models.
+
+    `https://huggingface.co/openbmb/UltraCM-13b`
+    `https://huggingface.co/openbmb/UltraLM-13b`
+    """
+
+    def __init__(
+            self,
+            system="""User: A one-turn chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, very detailed, and polite answers to the user's questions.</s>""",  # noqa: E501
+            eos='</s>',
+            user='User: ',
+            assistant='Assistant: ',
+            session_len=2048,
+            **kwargs):
+        super().__init__(**kwargs)
+        self.system = system
+        self.eos = eos
+        self.session_len = session_len
+        self.user = user
+        self.assistant = assistant
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): the input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'{self.system}\n{self.user}{prompt}{self.eos}' \
+                   f'\n{self.assistant}'
+
+        return f'\n{self.user}{prompt}{self.eos}' \
+               f'\n{self.assistant}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template. Only evaluate the last instruction completion pair.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = f'{system}'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'\n{self.user}{user}{self.eos}' \
+                       f'\n{self.assistant}{assistant}{self.eos}'
+            else:
+                ret += f'\n{self.user}{user}{self.eos}' \
+                       f'\n{self.assistant}'
         return ret
 
 
