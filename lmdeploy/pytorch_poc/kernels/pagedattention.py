@@ -251,11 +251,9 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
+    b_offset = tl.load(block_offset_ptrs)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-
-        start_block_id = start_n // BLOCK_N
-        b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         # -- compute qk ----
         k = tl.load(
@@ -263,6 +261,15 @@ def _fwd_kernel(
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
+
+        v = tl.load(
+            v_ptrs + b_offset * BLOCK_N * stride_vbs,
+            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
+            other=0.0,
+        )
+        if start_n + BLOCK_N < cur_batch_kv_len:
+            start_block_id = start_n // BLOCK_N + 1
+            b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -282,13 +289,8 @@ def _fwd_kernel(
         # -- update output accumulator --
         # scale acc
         acc = acc * alpha[:, None]
-        # update acc
-        v = tl.load(
-            v_ptrs + b_offset * BLOCK_N * stride_vbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
-            other=0.0,
-        )
 
+        # update acc
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
