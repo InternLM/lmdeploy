@@ -1,19 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-import threading
 from functools import partial
+from threading import Lock
 from typing import Sequence
 
 import gradio as gr
 
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
-from lmdeploy.serve.openai.api_server import ip2id
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 
 
+class InterFace:
+    global_session_id: int = 0
+    lock = Lock()
+
+
 def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
-                cancel_btn: gr.Button, reset_btn: gr.Button,
-                request: gr.Request):
+                cancel_btn: gr.Button, reset_btn: gr.Button, session_id: int):
     """Chat with AI assistant.
 
     Args:
@@ -22,12 +25,9 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
         llama_chatbot (Chatbot): the instance of a chatbot
         cancel_btn (bool): enable the cancel button or not
         reset_btn (bool): enable the reset button or not
-        request (gr.Request): the request from a user
+        session_id (int): the session id
     """
     instruction = state_chatbot[-1][0]
-    session_id = threading.current_thread().ident
-    if request is not None:
-        session_id = ip2id(request.kwargs['client']['host'])
 
     bot_response = llama_chatbot.stream_infer(
         session_id, instruction, f'{session_id}-{len(state_chatbot)}')
@@ -92,6 +92,7 @@ def run_triton_server(triton_server_addr: str,
         llama_chatbot = gr.State(
             Chatbot(triton_server_addr, log_level=log_level, display=True))
         state_chatbot = gr.State([])
+        state_session_id = gr.State(0)
         model_name = llama_chatbot.value.model_name
         reset_all = partial(reset_all_func,
                             model_name=model_name,
@@ -110,10 +111,10 @@ def run_triton_server(triton_server_addr: str,
 
         send_event = instruction_txtbox.submit(
             add_instruction, [instruction_txtbox, state_chatbot],
-            [instruction_txtbox, state_chatbot]).then(
-                chat_stream,
-                [state_chatbot, llama_chatbot, cancel_btn, reset_btn],
-                [state_chatbot, chatbot, cancel_btn, reset_btn])
+            [instruction_txtbox, state_chatbot]).then(chat_stream, [
+                state_chatbot, llama_chatbot, cancel_btn, reset_btn,
+                state_session_id
+            ], [state_chatbot, chatbot, cancel_btn, reset_btn])
 
         cancel_btn.click(cancel_func,
                          [state_chatbot, llama_chatbot, cancel_btn, reset_btn],
@@ -124,6 +125,14 @@ def run_triton_server(triton_server_addr: str,
             reset_all, [instruction_txtbox, state_chatbot, llama_chatbot],
             [llama_chatbot, state_chatbot, chatbot, instruction_txtbox],
             cancels=[send_event])
+
+        def init():
+            with InterFace.lock:
+                InterFace.global_session_id += 1
+            new_session_id = InterFace.global_session_id
+            return new_session_id
+
+        demo.load(init, inputs=None, outputs=[state_session_id])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
     demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
