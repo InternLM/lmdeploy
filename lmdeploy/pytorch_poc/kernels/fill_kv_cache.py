@@ -85,8 +85,8 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
 
         # initialize
         kv_seq_length = history_lengths + seq_length
-        last_block_ids = kv_seq_length // block_size
-        num_blocks = last_block_ids - first_block_ids + 1
+        last_block_ids = (kv_seq_length + block_size - 1) // block_size
+        num_blocks = last_block_ids - first_block_ids
         cum_num_blocks = num_blocks.cumsum(0)
 
         head_idx = torch.cat(
@@ -103,6 +103,8 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
         # state_len (cache_end - cache_start)
         cache_end = torch.full_like(cache_start, block_size)
         tail_len = (seq_length + token_ids_start + block_size) % block_size
+        tail_len = torch.where(tail_len == 0,
+                               tail_len.new_tensor([block_size]), tail_len)
         cache_end.index_put_((tail_idx, ), tail_len)
         state_len = cache_end - cache_start
 
@@ -113,7 +115,7 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
 
         # block offsets
         block_offsets1d = [
-            offs[first:last + 1] for offs, first, last in zip(
+            offs[first:last] for offs, first, last in zip(
                 block_offsets, first_block_ids.cpu(), last_block_ids.cpu())
         ]
         block_offsets1d = torch.cat(block_offsets1d)
