@@ -246,6 +246,7 @@ class BaseModelAgent:
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code)
             hf_model.eval()
+            hf_model.config.use_cache = True
         patched_model = patch(hf_model, _PATCH_ARG_NAMES).cuda()
         return patched_model
 
@@ -324,6 +325,8 @@ def _tp_build_model(
                 config,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code)
+            model.eval()
+            model.config.use_cache = True
 
         checkpoints = _get_checkpoints(model_path)
         patched_model = patch(
