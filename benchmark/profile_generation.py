@@ -106,7 +106,7 @@ def warmup(model,
 
 def profile_throughput(model_path: str,
                        concurrency: int = 1,
-                       input_seqlen: int = 0,
+                       input_seqlen: int = 1,
                        output_seqlen: int = 512,
                        test_round: int = 10,
                        tp: int = 1,
@@ -133,8 +133,10 @@ def profile_throughput(model_path: str,
     )
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
-    prompt = '' if input_seqlen == 0 else 'hi' + ' hi' * (input_seqlen - 1)
+    assert input_seqlen > 0, 'input_seqlen should > 0'
+    prompt = 'hi'
     input_ids = tokenizer.encode(prompt)
+    input_ids = input_ids * input_seqlen
 
     warmup(tm_model,
            concurrency,

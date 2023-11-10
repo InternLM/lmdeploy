@@ -18,7 +18,7 @@ dequant: f = q * scale + zp
 把 huggingface 格式的模型，转成 turbomind 推理格式，得到一个 workspace 目录
 
 ```bash
-python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
+lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
 ```
 
 如果已经有 workspace 目录，可以跳过这步。
@@ -29,7 +29,7 @@ python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-ch
 
 ```bash
 # 计算 minmax
-python3 -m lmdeploy.lite.apis.calibrate \
+lmdeploy lite calibrate \
   --model $HF_MODEL \
   --calib_dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
   --calib_samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
@@ -37,7 +37,7 @@ python3 -m lmdeploy.lite.apis.calibrate \
   --work_dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
 
 # 通过 minmax 获取量化参数
-python3 -m lmdeploy.lite.apis.kv_qparams \
+lmdeploy lite kv_qparams \
   --work_dir $WORK_DIR  \                             # 上一步的结果
   --turbomind_dir workspace/triton_models/weights/ \ # 保存量化参数的目录，推理要用
   --kv_sym False \                                    # 对称量化或非对称量化，默认为 False
@@ -64,7 +64,7 @@ python3 -m lmdeploy.lite.apis.kv_qparams \
 测试聊天效果
 
 ```bash
-python3 -m lmdeploy.turbomind.chat ./workspace
+lmdeploy chat turbomind ./workspace
 ```
 
 ## 显存测试
