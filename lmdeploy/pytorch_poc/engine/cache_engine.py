@@ -6,8 +6,11 @@ import torch
 from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
+from lmdeploy.utils import get_logger
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
+
+logger = get_logger('lmdeploy')
 
 
 class CacheEngine:
@@ -57,6 +60,10 @@ class CacheEngine:
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
         self.events = [torch.cuda.Event() for _ in range(self.num_layers)]
+
+        logger.debug(
+            f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+            f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     @property
     def gpu_cache(self):

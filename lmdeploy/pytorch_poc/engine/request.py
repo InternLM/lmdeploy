@@ -148,7 +148,7 @@ class RequestManager:
         self.requests = Queue()
         self.mutex = Lock()
 
-    def create_sender(self):
+    def build_sender(self):
         """create a new sender."""
         with self.mutex:
             sender_id = self._next_sender_id

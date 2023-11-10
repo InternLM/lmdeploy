@@ -11,7 +11,7 @@ from transformers import AutoConfig
 from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
 from lmdeploy.pytorch_poc.engine.model_agent import (BaseModelAgent,
-                                                     TPModelAgent)
+                                                     ModelInputs, TPModelAgent)
 from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
                                            SchedulerSequence, SchedulerSession)
 from lmdeploy.pytorch_poc.paging import Scheduler
@@ -33,6 +33,19 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
+
+
+def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
+    """check if response has state."""
+    ret = resp.type == state
+    if not ret and warning_msg is not None:
+        logger.warning(warning_msg)
+    return ret
+
+
+def _check_resp_success(resp: Response, warning_msg: str = None):
+    """check if response success."""
+    return _check_resp(resp, ResponseType.SUCCESS, warning_msg)
 
 
 def _get_torch_dtype(config: Any, default: str = 'float16'):
@@ -136,15 +149,11 @@ class Engine:
         self.tp = tp
         self.gpu_count = tp
 
-        if scheduler_config is None:
-            scheduler_config = SchedulerConfig(max_batches=64,
-                                               max_session_len=4096,
-                                               max_request_output_len=512)
+        scheduler_config = scheduler_config or SchedulerConfig(
+            max_batches=64, max_session_len=4096, max_request_output_len=512)
 
-        if cache_config is None:
-            cache_config = CacheConfig(block_size=64,
-                                       num_cpu_blocks=0,
-                                       num_gpu_blocks=0)
+        cache_config = cache_config or CacheConfig(
+            block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
 
         hf_config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
@@ -187,7 +196,7 @@ class Engine:
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
         req_manager.bind_func(RequestType.ADD_MESSAGE, self._on_add_message)
         self.req_manager = req_manager
-        self.req_sender = req_manager.create_sender()
+        self.req_sender = req_manager.build_sender()
 
     def _start_loop(self):
         """start loop."""
@@ -277,11 +286,9 @@ class Engine:
         if session_id not in self.owned_sessions:
             resp = self.req_sender.send(RequestType.ADD_SESSION,
                                         dict(session_id=session_id))
-            if resp.type == ResponseType.SUCCESS:
+            if _check_resp_success(resp, (f'Can not add session {session_id} '
+                                          f'with error: {resp.type}')):
                 self.owned_sessions.append(session_id)
-            else:
-                logger.warning(f'Can not add session {session_id} '
-                               f'with error: {resp.type}')
 
     def stop_session(self, session_id: int):
         """Stop the given session."""
@@ -290,9 +297,8 @@ class Engine:
                            'by this instance')
         resp = self.req_sender.send(RequestType.STOP_SESSION,
                                     dict(session_id=session_id))
-        if resp.type != ResponseType.SUCCESS:
-            logger.warning(f'Failed to cancel session: {session_id}. '
-                           f'Error: {resp.type}.')
+        _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
+                                   f'Error: {resp.type}.'))
 
     def end_session(self, session_id: int):
         """End the given session."""
@@ -301,11 +307,9 @@ class Engine:
                            'by this instance')
         resp = self.req_sender.send(RequestType.END_SESSION,
                                     dict(session_id=session_id))
-        if resp.type == ResponseType.SUCCESS:
+        if _check_resp_success(resp, (f'Failed to end session: {session_id}. '
+                                      f'Error: {resp.type}.')):
             self.owned_sessions.remove(session_id)
-        else:
-            logger.warning(f'Failed to end session: {session_id}. '
-                           f'Error: {resp.type}.')
 
     def _make_inputs(self,
                      messages: List[SchedulerSequence],
@@ -362,14 +366,14 @@ class Engine:
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
-        return dict(
-            input_ids=input_ids,
-            seq_length=seq_length,
-            attention_mask=attention_mask,
-            block_offsets=block_offsets,
-            position_ids=position_ids,
-            q_start_loc=q_start_loc,
-        )
+        return ModelInputs(input_ids=input_ids,
+                           seq_length=seq_length,
+                           attention_mask=attention_mask,
+                           block_offsets=block_offsets,
+                           position_ids=position_ids,
+                           q_start_loc=q_start_loc,
+                           history_lengths=history_lengths,
+                           is_decoding=is_decoding)
 
     def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
         """Check if the message should stop.
@@ -410,7 +414,8 @@ class Engine:
             return True
         return False
 
-    def sampling_logits(self, logits, running, inputs):
+    def sampling_logits(self, logits: torch.Tensor,
+                        running: List[SchedulerSequence], inputs: ModelInputs):
         """sampling logits."""
 
         def _group_params(running):
@@ -434,7 +439,7 @@ class Engine:
                         top_p=top_p,
                         temperature=temperature,
                     ))
-                input_ids = inputs['input_ids'].reshape(-1, 1)
+                input_ids = inputs.input_ids.reshape(-1, 1)
                 new_logits = split_logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
                 argmax_ids = new_logits.argmax(-1).cpu()
@@ -443,14 +448,12 @@ class Engine:
             return next_token_ids
 
         logits = logits.cuda()
-        next_token_ids = torch.empty((len(running), ), dtype=torch.long)
         grouped_params = _group_params(running)
 
-        is_decoding = inputs['input_ids'].numel(
-        ) == inputs['seq_length'].numel()
+        is_decoding = inputs.is_decoding
         # TODO: support repetition_penalty
         if not is_decoding:
-            seq_length = inputs['seq_length']
+            seq_length = inputs.seq_length
             last_idx = seq_length.cumsum(-1) - 1
             split_logits = logits[last_idx, :]
         else:
@@ -460,6 +463,16 @@ class Engine:
         next_token_ids = _sampling(grouped_params, split_logits, inputs)
 
         return next_token_ids, split_logits
+
+    def update_scheduler(self, running: List[SchedulerSequence],
+                         next_token_ids: torch.Tensor):
+        """update scheduler."""
+        for token, msg in zip(next_token_ids, running):
+            msg.update_token_ids(token)
+            msg.remain_output_len -= 1
+            if self._stoping_criteria(msg, token):
+                msg.status = MessageStatus.STOPPED
+        self.scheduler.update()
 
     def step(self, return_logits=False):
         """one step inference. Used to perform streaming chat.
@@ -480,13 +493,7 @@ class Engine:
         if len(running) == 0:
             return dict()
 
-        session_ids = [msg.session_id for msg in running]
-        req_metas = [msg.meta for msg in running]
-        history_lengths = [msg.history_len for msg in running]
-
-        # make batch
         inputs = self._make_inputs(running)
-        inputs['history_lengths'] = history_lengths
 
         # inference
         logits = self.model_agent.forward(inputs,
@@ -498,30 +505,23 @@ class Engine:
         next_token_ids, split_logits = self.sampling_logits(
             logits, running, inputs)
 
-        # update scheduler
-        for token, msg in zip(next_token_ids, running):
-            msg.update_token_ids(token)
-            msg.remain_output_len -= 1
-            if self._stoping_criteria(msg, token):
-                msg.status = MessageStatus.STOPPED
-        self.scheduler.update()
+        self.update_scheduler(running, next_token_ids)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
-        for idx in range(len(session_ids)):
-            session_id = session_ids[idx]
-            msg = running[idx]
+        for msg, next_id in zip(running, next_token_ids):
+            session_id = msg.session_id
             out = InferOutput(
                 session_id=session_id,
-                meta=req_metas[idx],
+                meta=msg.meta,
                 finish=(msg.status == MessageStatus.STOPPED),
-                token_ids=[next_token_ids[idx]],
+                token_ids=[next_id],
             )
             outputs[session_id] = out
 
         if return_logits:
-            for idx in range(len(session_ids)):
-                outputs[session_ids[idx]].logits = split_logits[idx]
+            for msg, msg_logit in zip(running, split_logits):
+                outputs[msg.session_id].logits = msg_logit
         return outputs
 
     def batched_infer(self,
@@ -545,39 +545,40 @@ class Engine:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
-
         batch_size = len(token_ids)
         assert len(session_ids) == batch_size
 
-        req_sender = self.req_sender
-        req_ids = []
+        def _add_sessions(session_ids, owned_sessions):
+            for session_id in session_ids:
+                if session_id not in owned_sessions:
+                    self.add_session(session_id)
 
-        # create sessions
-        for session_id in session_ids:
-            if session_id in self.owned_sessions:
-                continue
-            self.add_session(session_id)
+        def _add_messages(session_ids, token_ids):
+            add_msgs = []
+            for session_id, token_id in zip(session_ids, token_ids):
+                msg = dict(
+                    token_ids=token_id,
+                    session_id=session_id,
+                    max_request_output_len=request_output_len,
+                    sampling_param=sampling_param,
+                )
+                add_msgs.append(msg)
+            req_types = [RequestType.ADD_MESSAGE] * batch_size
+            req_ids = self.req_sender.batched_send_async(req_types,
+                                                         data=add_msgs)
+            return req_ids
 
-        # add messages
-        add_msgs = []
-        for session_id, token_id in zip(session_ids, token_ids):
-            msg = dict(
-                token_ids=token_id,
-                session_id=session_id,
-                max_request_output_len=request_output_len,
-                sampling_param=sampling_param,
-            )
-            add_msgs.append(msg)
-        req_types = [RequestType.ADD_MESSAGE] * batch_size
-        req_ids = req_sender.batched_send_async(req_types, data=add_msgs)
+        _add_sessions(session_ids, self.owned_sessions)
+        req_ids = _add_messages(session_ids, token_ids)
 
         # receive messages
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
         output_token_ids = [list() for _ in req_ids]
         status = 0
         finish_count = batch_size
-        while True:
+        while finish_count:
             if not self.loop_threads.is_alive():
+                logger.error('Engine loop is not alive.')
                 status = 1
                 break
 
@@ -591,14 +592,12 @@ class Engine:
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
                 if not keep_cache:
-                    session_id = add_msgs[idx]['session_id']
+                    session_id = session_ids[idx]
                     self.end_session(session_id=session_id)
                 finish_count -= 1
             else:
+                logger.error(f'Unexpected response: {resp.type}')
                 status = 1
-                break
-
-            if finish_count == 0:
                 break
 
         output_token_len = [len(token_ids) for token_ids in output_token_ids]
@@ -699,7 +698,7 @@ class EngineInstance:
 
     def __init__(self, engine: Engine):
         self.engine = engine
-        self.req_sender = engine.req_manager.create_sender()
+        self.req_sender = engine.req_manager.build_sender()
         self.owned_sessions: List[int] = list()
 
     def __del__(self):
@@ -716,11 +715,9 @@ class EngineInstance:
         if session_id not in self.owned_sessions:
             resp = self.req_sender.send(RequestType.ADD_SESSION,
                                         dict(session_id=session_id))
-            if resp.type == ResponseType.SUCCESS:
+            if _check_resp_success(resp, (f'Can not add session {session_id} '
+                                          f'with error: {resp.type}')):
                 self.owned_sessions.append(session_id)
-            else:
-                logger.warning(f'Can not add session {session_id} '
-                               f'with error: {resp.type}')
 
     def stream_infer(self,
                      session_id: int,
@@ -814,11 +811,9 @@ class EngineInstance:
                            'by this instance')
         resp = self.req_sender.send(RequestType.END_SESSION,
                                     dict(session_id=session_id))
-        if resp.type == ResponseType.SUCCESS:
+        if _check_resp_success(resp, (f'Failed to end session: {session_id}. '
+                                      f'Error: {resp.type}.')):
             self.owned_sessions.remove(session_id)
-        else:
-            logger.warning(f'Failed to end session: {session_id}. '
-                           f'Error: {resp.type}.')
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
@@ -827,9 +822,8 @@ class EngineInstance:
                            'by this instance')
         resp = self.req_sender.send(RequestType.STOP_SESSION,
                                     dict(session_id=session_id))
-        if resp.type != ResponseType.SUCCESS:
-            logger.warning(f'Failed to cancel session: {session_id}. '
-                           f'Error: {resp.type}.')
+        _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
+                                   f'Error: {resp.type}.'))
 
     def decode(self, prompt_token_ids: List[List[int]]):
         """Return logits of context decoding.
