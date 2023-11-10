@@ -149,7 +149,7 @@ class TritonPythonModel:
             elif _s == '<EOS>':
                 start_id = [self.end_id] if self.end_id is not None else [-1]
             else:
-                start_id = self.tokenizer.encode(s[0].decode())
+                start_id = self.tokenizer.encode(_s)
             start_ids.append(torch.IntTensor(start_id))
 
         start_lengths = torch.IntTensor([[len(ids)] for ids in start_ids])
