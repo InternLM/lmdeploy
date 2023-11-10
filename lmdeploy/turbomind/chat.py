@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import os
-import os.path as osp
 import random
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -84,15 +83,11 @@ def main(model_path,
         **kwarg (dict): other arguments for initializing model's chat template
     """
     from lmdeploy import turbomind as tm
-    from lmdeploy.tokenizer import Tokenizer
-
-    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = tm.TurboMind(model_path,
-                            eos_id=tokenizer.eos_token_id,
-                            tp=tp,
-                            capability=cap,
-                            **kwargs)
+    tm_model = tm.TurboMind.from_pretrained(model_path,
+                                            tp=tp,
+                                            capability=cap,
+                                            **kwargs)
+    tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
 
     nth_round = 1

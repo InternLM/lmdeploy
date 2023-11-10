@@ -1,26 +1,45 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import copy
+import io
+import json
+import logging
 import os.path as osp
 import sys
 from configparser import ConfigParser
 from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
+from transformers.utils import ExplicitEnum
 
 import lmdeploy
 from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
+from .deploy.converter import get_model_format, supported_formats
+from .deploy.source_model.base import INPUT_MODELS
+from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .utils import download_hf_repo
+
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+class ModelSource(ExplicitEnum):
+    """Turbomind model source."""
+    WORKSPACE = 'workspace'
+    HF_MODEL = 'hf_model'
+    HF_LMDEPLOY = 'hf_lmdeploy'
 
 
 def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
@@ -28,8 +47,8 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     if stop_words is None:
         return None
     assert isinstance(stop_words, List) and \
-           all(isinstance(elem, str) for elem in stop_words), \
-           f'stop_words must be a list but got {type(stop_words)}'
+        all(isinstance(elem, str) for elem in stop_words), \
+        f'stop_words must be a list but got {type(stop_words)}'
     stop_words = [tokenizer.encode(stop_word)[-1] for stop_word in stop_words]
     assert isinstance(stop_words, List) and all(
         isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
@@ -79,63 +98,49 @@ class TurboMind:
     """
 
     def __init__(self,
+                 model_source: ModelSource,
                  model_path: str,
-                 eos_id: int = 2,
-                 tp: int = 1,
+                 model_name: Optional[str] = None,
+                 model_format: Optional[str] = None,
+                 group_size: Optional[int] = None,
+                 tp: Optional[int] = None,
                  **kwargs):
-        self.eos_id = eos_id
-
-        # TODO: support mpi
-        node_id = 0
-        node_num = 1
-
-        # read meta from model path
-        assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
+        if tp is not None:
+            assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
-        data_type = 'fp16'
-        ini_path = osp.join(model_path, 'triton_models/weights/config.ini')
-        with open(ini_path, 'r') as f:
-            parser = ConfigParser()
-            parser.read_file(f)
-            section_name = ''
-            if 'turbomind' in parser:
-                section_name = 'turbomind'
-            elif 'llama' in parser:
-                section_name = 'llama'
 
-            if len(section_name) > 0:
-                tp_cfg = parser.getint(section_name, 'tensor_para_size')
-                if tp_cfg != 1 and tp_cfg != tp:
-                    get_logger('turbomind').info(
-                        f'found tp={tp_cfg} in config.ini.')
-                    self.gpu_count = tp_cfg
-            self.model_name = parser.get(section_name, 'model_name')
-            data_type = parser.get(section_name, 'weight_type')
+        if model_source == ModelSource.WORKSPACE:
+            tokenizer_model_path = osp.join(model_path, 'triton_models',
+                                            'tokenizer')
+            self.tokenizer = Tokenizer(tokenizer_model_path)
+            self.create_common_from_workspace(model_path)
+        else:
+            self.tokenizer = Tokenizer(model_path)
+            output_model = self.create_common_from_hf(
+                model_source=model_source,
+                model_path=model_path,
+                model_name=model_name,
+                model_format=model_format,
+                group_size=group_size,
+                tp=tp,
+                **kwargs)
+        # TODO: support mpi
+        self.node_id = 0
+        self.node_num = 1
+        self.world_size = self.node_num * self.gpu_count
+        self.nccl_params = self.model_comm.create_nccl_params(self.node_id)
+        self.eos_id = self.tokenizer.eos_token_id
+        torch.cuda.synchronize()
+
         self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.model.session_len
-        tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                        'tokenizer')
-        tokenizer = Tokenizer(tokenizer_model_path)
-        self.stop_words = _stop_words(self.model.stop_words, tokenizer)
-
-        # params
-        self.node_id = node_id
-        self.node_num = node_num
-        self.world_size = self.node_num * self.gpu_count
-
-        # create model
-        weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            weight_dir, tensor_para_size=self.gpu_count, data_type=data_type)
-        self.model_comm = model_comm
-        self.nccl_params = model_comm.create_nccl_params(self.node_id)
-        torch.cuda.synchronize()
+        self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
         # create weight
         def _create_weight(device_id):
             with cuda_ctx(device_id):
                 rank = self.node_id * self.gpu_count + device_id
-                model_comm.create_shared_weights(device_id, rank)
+                self.model_comm.create_shared_weights(device_id, rank)
 
         threads = []
         for device_id in range(self.gpu_count):
@@ -144,6 +149,138 @@ class TurboMind:
             threads.append(t)
         for t in threads:
             t.join()
+
+        # convert model to turbomind format if load a hf model
+        if model_source in [ModelSource.HF_LMDEPLOY, ModelSource.HF_MODEL]:
+            tm_params = self.get_model_params()
+            logger.warning(f'get {len(tm_params)} model params')
+            output_model.set_tm_params(tm_params)
+            output_model.export()
+            assert len(tm_params) == 0, f'missing {tm_params.keys()}'
+
+    def get_model_params(self):
+
+        def _get_params(device_id, que):
+            with cuda_ctx(device_id):
+                rank = self.node_id * self.gpu_count + device_id
+                out = self.model_comm.get_params(device_id, rank)
+                que.put(out)
+
+        que = Queue()
+        threads = []
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_get_params, args=(device_id, que))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+
+        tm_params = {}
+        for _ in range(self.gpu_count):
+            tensor_map = que.get()
+            for k, v in tensor_map.items():
+                if k not in tm_params:
+                    tm_params[k] = []
+                tm_params[k].append(v)
+
+        return tm_params
+
+    def create_common_from_hf(self,
+                              model_source: ModelSource,
+                              model_path: str,
+                              model_name: Optional[str] = None,
+                              model_format: Optional[str] = None,
+                              group_size: Optional[int] = None,
+                              tp: Optional[int] = None,
+                              **kwargs):
+        # get model_name, group_size if is lmdeploy managed.
+        if model_source == ModelSource.HF_LMDEPLOY:
+            config_file = osp.join(model_path, 'config.json')
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            tm_config = config['turbomind']
+            model_name = tm_config['model_name']
+            group_size = tm_config['group_size']
+            tm_config.update(kwargs)
+            if tm_config['weight_type'] == 'int4':
+                model_format = 'awq'
+        else:
+            tm_config = kwargs
+
+        assert model_format in supported_formats, 'the model format ' \
+            f'should be in {supported_formats}'
+
+        data_type = 'fp16'
+        output_format = 'fp16'
+        inferred_model_format = get_model_format(model_name, model_format)
+        cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
+        # update cfg with tm_config
+        for k, v in tm_config.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+        # overwrite with input params
+        cfg.model_name = model_name
+        cfg.tensor_para_size = 1 if tp is None else tp
+        cfg.rotary_embedding = cfg.size_per_head
+        cfg.group_size = group_size
+        if inferred_model_format.find('awq') != -1:
+            cfg.weight_type = 'int4'
+            output_format = 'w4'
+            data_type = 'int4'
+            assert group_size > 0, 'group_size should > 0'
+
+        self.model_name = model_name
+        self.data_type = data_type
+
+        input_model = INPUT_MODELS.get(inferred_model_format)(
+            model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
+
+        output_model = OUTPUT_MODELS.get(output_format)(
+            input_model=input_model, cfg=cfg, to_file=False, out_dir='')
+
+        config = copy.deepcopy(output_model.cfg.__dict__)
+        logger.warning(f'model_config:\n{json.dumps(config, indent=2)}')
+        parser = ConfigParser()
+        parser['llama'] = config
+        with io.StringIO() as ss:
+            parser.write(ss)
+            ss.seek(0)
+            config = ss.read()
+
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(
+            '',
+            config=config,
+            tensor_para_size=self.gpu_count,
+            data_type=data_type)
+        self.model_comm = model_comm
+
+        return output_model
+
+    def create_common_from_workspace(self, model_path: str):
+        ini_path = osp.join(model_path, 'triton_models', 'weights',
+                            'config.ini')
+        with open(ini_path, 'r') as f:
+            parser = ConfigParser()
+            parser.read_file(f)
+            section_name = 'llama'
+            tp_cfg = parser.getint(section_name, 'tensor_para_size')
+
+            if self.gpu_count is None:
+                self.gpu_count = 1
+            if tp_cfg != 1 and tp_cfg != self.gpu_count:
+                get_logger('turbomind').info(
+                    f'found tp={tp_cfg} in config.ini.')
+                self.gpu_count = tp_cfg
+            self.model_name = parser.get(section_name, 'model_name')
+            self.data_type = parser.get(section_name, 'weight_type')
+
+        # create model
+        weight_dir = osp.join(model_path, 'triton_models', 'weights')
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(
+            weight_dir,
+            tensor_para_size=self.gpu_count,
+            data_type=self.data_type)
+        self.model_comm = model_comm
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -154,6 +291,76 @@ class TurboMind:
             TurboMindInstance: an instance of turbomind
         """
         return TurboMindInstance(self, cuda_stream_id)
+
+    @classmethod
+    def from_pretrained(cls,
+                        pretrained_model_name_or_path: str,
+                        model_name: Optional[str] = None,
+                        model_format: Optional[str] = None,
+                        group_size: Optional[int] = None,
+                        tp: Optional[int] = None,
+                        **kwargs):
+        """LMDeploy's turbomind inference engine.
+
+        Args:
+            pretrained_model_name_or_path (str):
+                Can be either:
+                    - 1) A path to a *directory* containing model which is
+                      converted previously by `lmdeploy convert` command.
+                    - 2) A repo_id or path which is managed by lmdeploy,
+                      usually a quantized model.
+                    - 3) A repo_id or path which is not managed by lmdeploy,
+                      like Qwen, Baichuan.
+            model_name (str): needed when pretrained_model_name_or_path is 1)
+            model_format (str): needed when pretrained_model_name_or_path is 2)
+            group_size (str): needed when pretrained_model_name_or_path is 3)
+            tp (int): tensor parallel size
+            kwargs (remaining dictionary of keyword arguments, *optional*):
+                Can be used to update configuration when initialize the engine.
+        """
+        triton_model_path = osp.join(pretrained_model_name_or_path,
+                                     'triton_models')
+        is_workspace = osp.exists(triton_model_path)
+        is_local_hf = osp.exists(pretrained_model_name_or_path)
+        if is_workspace:
+            model_source = ModelSource.WORKSPACE
+            local_path = pretrained_model_name_or_path
+        else:
+            if not is_local_hf:
+                # download hf repo first if is not local
+                download_kwargs = {
+                    'revision': None,
+                    'cache_dir': None,
+                    'proxies': None,
+                    'resume_download': True,
+                    'force_download': False,
+                    'token': None,
+                    'local_files_only': False
+                }
+                for k in download_kwargs.keys():
+                    if k in kwargs:
+                        download_kwargs[k] = kwargs[k]
+                local_path = download_hf_repo(pretrained_model_name_or_path,
+                                              **download_kwargs)
+            else:
+                local_path = pretrained_model_name_or_path
+            config_file = osp.join(local_path, 'config.json')
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            is_lmdeploy_managed = 'turbomind' in config
+            if not is_lmdeploy_managed:
+                model_source = ModelSource.HF_MODEL
+            else:
+                model_source = ModelSource.HF_LMDEPLOY
+            logger.warning(f'model_source: {model_source}')
+
+        return cls(model_source=model_source,
+                   model_path=local_path,
+                   model_name=model_name,
+                   model_format=model_format,
+                   group_size=group_size,
+                   tp=tp,
+                   **kwargs)
 
 
 class TurboMindInstance:
