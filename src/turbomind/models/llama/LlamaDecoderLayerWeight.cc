@@ -110,6 +110,47 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
     }
 }
 
+template<typename FirstArg, typename... Args>
+std::string concat(FirstArg&& first, Args&&... args)
+{
+    std::stringstream stream;
+    stream << first;
+    ((stream << "." << args), ...);
+    return stream.str();
+}
+
+template<typename T>
+void getWeightTensor(LlamaDenseWeight<T>& weights, bool bias, const std::string& prefix, TensorMap& output)
+{
+    auto get_name = [=](const std::string& name) { return concat(prefix, name); };
+
+    if (bias) {
+        output.insert(get_name("bias"),
+                      Tensor{MEMORY_GPU, getTensorType<T>(), {weights.output_dims * sizeof(T)}, weights.bias});
+    }
+    const size_t bit_size = getBitSize(weights.type);
+    if (bit_size >= 16) {
+        output.insert(get_name("weight"),
+                      Tensor{MEMORY_GPU,
+                             getTensorType<T>(),
+                             {weights.input_dims * weights.output_dims * sizeof(T)},
+                             weights.kernel});
+    }
+    else {  // int8, int4
+        const int factor = sizeof(float) * 8 / bit_size;
+        output.insert(get_name("qweight"),
+                      Tensor{MEMORY_GPU,
+                             TYPE_INT32,
+                             {weights.input_dims * weights.output_dims * sizeof(int) / factor},
+                             weights.kernel});
+        output.insert(get_name("scales_zeros"),
+                      Tensor{MEMORY_GPU,
+                             getTensorType<T>(),
+                             {weights.input_dims / weights.group_size * weights.output_dims * 2 * sizeof(T)},
+                             weights.scales_and_zeros});
+    }
+}
+
 template<typename T>
 void loadWeights(LlamaDenseWeight<T>& w,
                  std::string          prefix,
@@ -304,6 +345,36 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     else {
         self_attn_weights.past_kv_scale = {1.f, 0.f, 1.f, 0.f};
     }
+}
+
+template<typename T>
+TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
+{
+    // TODO: support KV Cache INT8
+    TensorMap output;
+
+    output.insert(concat(prefix, "attention_norm.weight"),
+                  Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, self_attn_norm_weights});
+
+    output.insert(concat(prefix, "ffn_norm.weight"),
+                  Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, ffn_norm_weights});
+
+    auto get_prefix = [=](std::string_view name) { return concat(prefix, name, tensor_para_rank_); };
+
+    getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
+
+    getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
+
+    if (weight_type_ == WeightType::kINT4) {
+        getWeightTensor(ffn_weights.fused_gating_intermediate, false, get_prefix("feed_forward.w13"), output);
+    }
+    else {
+        getWeightTensor(ffn_weights.gating, false, get_prefix("feed_forward.w1"), output);
+        getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
+    }
+    getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
+
+    return output;
 }
 
 template struct LlamaDecoderLayerWeight<float>;

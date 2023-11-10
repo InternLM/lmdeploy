@@ -21,6 +21,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -42,6 +43,8 @@ public:
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
+
+    TensorMap getParams(std::string prefix);
 
     T*                      self_attn_norm_weights{};
     T*                      ffn_norm_weights{};

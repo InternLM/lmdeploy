@@ -283,6 +283,26 @@ PYBIND11_MODULE(_turbomind, m)
             },
             "new_shape"_a)
         .def(
+            "copy_from",
+            [](triton::Tensor* self, py::object obj) {
+                py::capsule      cap = obj.attr("__dlpack__")();
+                DLManagedTensor* dlmt =
+                    static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+                auto src = DLManagedTensorToTritonTensor(dlmt);
+                if (self->type == triton::TYPE_FP16 || self->type == triton::TYPE_FP32
+                    || self->type == triton::TYPE_INT32) {
+                    auto num_element = std::accumulate(src->shape.begin(), src->shape.end(), 1, std::multiplies<int>());
+                    auto num_bytes   = 1LL * num_element * dlmt->dl_tensor.dtype.bits / 8;
+                    ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
+                    cudaMemcpy(
+                        const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
+                }
+                else {
+                    ft::FT_CHECK(0);
+                }
+            },
+            "tensor"_a)
+        .def(
             "__dlpack__",
             [](triton::Tensor* self, long stream) {
                 auto tensor_ptr = TritonTensorToDLManagedTensor(*self);
@@ -340,6 +360,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def_static(
             "create_llama_model",
             [](std::string model_dir,
+               std::string config,
                size_t      tensor_para_size,
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
@@ -354,18 +375,19 @@ PYBIND11_MODULE(_turbomind, m)
                 };
                 if (data_type == "half" || data_type == "fp16" || data_type == "int4") {
                     auto model = std::make_shared<LlamaTritonModel<half>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
                     model->setFfiLock(gil_control);
                     return model;
                 }
                 else {
                     auto model = std::make_shared<LlamaTritonModel<float>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
                     model->setFfiLock(gil_control);
                     return model;
                 }
             },
             "model_dir"_a,
+            "config"_a                   = "",
             "tensor_para_size"_a         = 1,
             "pipeline_para_size"_a       = 1,
             "enable_custom_all_reduce"_a = 0,
@@ -406,6 +428,15 @@ PYBIND11_MODULE(_turbomind, m)
              py::call_guard<py::gil_scoped_release>(),
              "device_id"_a,
              "rank"_a)
+        .def(
+            "get_params",
+            [](AbstractTransformerModel* model, int deviceId, int rank) {
+                TensorMap output = model->getParams(deviceId, rank);
+                return output;
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "rank"_a)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)

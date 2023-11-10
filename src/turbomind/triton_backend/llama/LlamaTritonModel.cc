@@ -111,18 +111,36 @@ template<typename T>
 LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
                                       size_t      pipeline_para_size,
                                       int         enable_custom_all_reduce,
-                                      std::string model_dir):
+                                      std::string model_dir,
+                                      std::string config):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     shared_weights_(std::vector<std::shared_ptr<ft::LlamaWeight<T>>>(ft::getDeviceCount())),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
-    model_dir_ = model_dir;
-    const std::string inifile{model_dir + "/config.ini"};
-    INIReader         reader = INIReader(inifile);
-    if (reader.ParseError() < 0) {
-        std::cout << "[ERROR] Can't load '" << inifile << "'\n";
-        ft::FT_CHECK(false);
+    INIReader reader;
+    bool      init_with_config = false;
+
+    if (!init_with_config && !config.empty()) {
+        std::FILE* tmpf = std::tmpfile();
+        std::fputs(config.c_str(), tmpf);
+        std::rewind(tmpf);
+        reader = INIReader(tmpf);
+        if (reader.ParseError() < 0) {
+            TM_LOG_ERROR("[ERROR] Can't init with config %s", config.c_str());
+            ft::FT_CHECK(false);
+        }
+        init_with_config = true;
+    }
+
+    if (!init_with_config && !model_dir.empty()) {
+        model_dir_ = model_dir;
+        const std::string inifile{model_dir + "/config.ini"};
+        reader = INIReader(inifile);
+        if (reader.ParseError() < 0) {
+            TM_LOG_ERROR("[ERROR] Can't load %s", inifile.c_str());
+            ft::FT_CHECK(false);
+        }
     }
 
     model_name_            = reader.Get("llama", "model_name");
@@ -154,7 +172,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_params_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
     attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
     // attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
-    attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
+    attn_params_.use_logn_attn = reader.GetInteger("llama", "use_logn_attn", 0);
 
     handleMissingParams();
 
@@ -322,8 +340,25 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       group_size_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
-    shared_weights_[device_id]->loadModel(model_dir_);
+    // model inited with model_dir
+    if (model_dir_ != "") {
+        shared_weights_[device_id]->loadModel(model_dir_);
+    }
     return;
+}
+
+template<typename T>
+TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
+{
+    ft::check_cuda_error(cudaSetDevice(deviceId));
+    // shared_weight should be created before getParams
+    ft::FT_CHECK(shared_weights_[deviceId] != nullptr);
+    ft::TensorMap output = shared_weights_[deviceId]->getParams();
+    TensorMap     result;
+    for (auto [name, tensor] : output) {
+        result.emplace(name, triton::Tensor{tensor.where, tensor.type, tensor.shape, tensor.data});
+    }
+    return result;
 }
 
 template<typename T>
