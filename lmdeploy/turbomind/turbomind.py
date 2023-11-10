@@ -107,7 +107,7 @@ class TurboMind:
                  **kwargs):
         if tp is not None:
             assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
-        self.gpu_count = tp
+        self.gpu_count = tp if tp is not None else 1
 
         if model_source == ModelSource.WORKSPACE:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
@@ -265,8 +265,6 @@ class TurboMind:
             section_name = 'llama'
             tp_cfg = parser.getint(section_name, 'tensor_para_size')
 
-            if self.gpu_count is None:
-                self.gpu_count = 1
             if tp_cfg != 1 and tp_cfg != self.gpu_count:
                 get_logger('turbomind').info(
                     f'found tp={tp_cfg} in config.ini.')
