@@ -30,6 +30,8 @@ class InferOutput:
 
     session_id: int
     token_ids: List[int]
+    sender_id: int
+    req_id: int
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
@@ -269,7 +271,8 @@ class Engine:
                 msg.status = MessageStatus.WAITING
                 self.scheduler.update()
 
-            msg.meta = dict(sender_id=req.sender_id, req_id=req.req_id)
+            msg.sender_id = req.sender_id
+            msg.req_id = req.req_id
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -311,9 +314,9 @@ class Engine:
                                       f'Error: {resp.type}.')):
             self.owned_sessions.remove(session_id)
 
-    def _make_inputs(self,
-                     messages: List[SchedulerSequence],
-                     device: str = 'cuda'):
+    def create_model_inputs(self,
+                            messages: List[SchedulerSequence],
+                            device: str = 'cuda'):
         """create model inputs from messages.
 
         Args:
@@ -464,15 +467,14 @@ class Engine:
 
         return next_token_ids, split_logits
 
-    def update_scheduler(self, running: List[SchedulerSequence],
-                         next_token_ids: torch.Tensor):
+    def update_running(self, running: List[SchedulerSequence],
+                       next_token_ids: torch.Tensor):
         """update scheduler."""
         for token, msg in zip(next_token_ids, running):
             msg.update_token_ids(token)
             msg.remain_output_len -= 1
             if self._stoping_criteria(msg, token):
                 msg.status = MessageStatus.STOPPED
-        self.scheduler.update()
 
     def step(self, return_logits=False):
         """one step inference. Used to perform streaming chat.
@@ -493,19 +495,21 @@ class Engine:
         if len(running) == 0:
             return dict()
 
-        inputs = self._make_inputs(running)
+        inputs = self.create_model_inputs(running)
 
         # inference
-        logits = self.model_agent.forward(inputs,
+        output = self.model_agent.forward(inputs,
                                           swap_in_map=swap_in_map,
                                           swap_out_map=swap_out_map)
 
+        logits = output['logits']
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         next_token_ids, split_logits = self.sampling_logits(
             logits, running, inputs)
 
-        self.update_scheduler(running, next_token_ids)
+        self.update_running(running, next_token_ids)
+        self.scheduler.update()
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
@@ -513,7 +517,8 @@ class Engine:
             session_id = msg.session_id
             out = InferOutput(
                 session_id=session_id,
-                meta=msg.meta,
+                sender_id=msg.sender_id,
+                req_id=msg.req_id,
                 finish=(msg.status == MessageStatus.STOPPED),
                 token_ids=[next_id],
             )
@@ -664,8 +669,8 @@ class Engine:
                     self.req_manager.response(
                         Response(
                             type=resp_type,
-                            sender_id=out.meta['sender_id'],
-                            req_id=out.meta['req_id'],
+                            sender_id=out.sender_id,
+                            req_id=out.req_id,
                             data=dict(token_ids=out.token_ids),
                         ))
 

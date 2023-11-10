@@ -239,7 +239,8 @@ class PatchedFalconAttention(nn.Module):
         context = self.context.context
 
         history_lengths = context.history_lengths
-        q_start_loc, q_seq_length = self.context.q_seq_info
+        q_start_loc = context.q_start_loc
+        q_seq_length = context.q_seq_length
         history_lengths = q_seq_length.new_tensor(history_lengths)
         kv_seq_length = q_seq_length + history_lengths
         max_seq_len = q_seq_length.max().item()

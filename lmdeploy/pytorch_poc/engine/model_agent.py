@@ -22,7 +22,7 @@ from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')
 
-_PATCH_ARG_NAMES = ['context', 'use_origin', 'q_seq_info']
+_PATCH_ARG_NAMES = ['context', 'use_origin']
 
 
 def _update_cache_config(model_config: ModelConfig,
@@ -74,7 +74,7 @@ class ModelInputs:
     is_decoding: bool
 
 
-class ModelContext:
+class StepContext:
     """context of Model.
 
     patched model might need extra information to perform inference.
@@ -95,10 +95,11 @@ class ModelContext:
     ):
         self.inputs = inputs
         self.block_offsets_list = inputs.block_offsets
-        self.history_lengths = inputs.history_lengths
         self.position_ids = inputs.position_ids
         self.q_start_loc = inputs.q_start_loc
+        self.history_lengths = inputs.history_lengths
         self.seq_length = inputs.seq_length
+        self.q_seq_length = self.seq_length
         self.world_size = world_size
         self.json_config = json_config
 
@@ -109,6 +110,8 @@ class ModelContext:
             self.block_offsets_list, device)
         self.position_ids_1d = self.get_position_ids_1d(
             self.position_ids, self.seq_length, device)
+
+        self._outputs = dict()
 
     @classmethod
     def tensorlize_block_offsets(cls, block_offsets, device):
@@ -143,6 +146,12 @@ class ModelContext:
         """return block offsets."""
         return self.block_offsets
 
+    def set_output(self, key, value):
+        self._outputs[key] = value
+
+    def get_output(self, key):
+        return self._outputs[key]
+
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
                    swap_out_map: dict):
@@ -173,7 +182,7 @@ def model_forward(
     stream = stream or torch.cuda.current_stream()
     with torch.no_grad(), torch.cuda.stream(stream):
         # forward
-        context = ModelContext(
+        context = StepContext(
             inputs=inputs,
             world_size=world_size,
             json_config=json_config,
@@ -188,10 +197,9 @@ def model_forward(
             output_hidden_states=False,
             use_origin=False,
             context=context,
-            q_seq_info=(inputs.q_start_loc, inputs.seq_length),
         )
     stream.synchronize()
-    return output
+    return dict(logits=output['logits'], custom_outputs=context._outputs)
 
 
 class BaseModelAgent:
@@ -262,7 +270,7 @@ class BaseModelAgent:
             world_size=1,
             stream=self.stream,
         )
-        return output['logits']
+        return output
 
 
 def _get_checkpoints(model_path: str):
@@ -441,7 +449,8 @@ def _tp_model_loop(
             stream=stream,
         )
         if rank == 0:
-            out_que.put(TPResponse(0, None, output['logits'].cpu()))
+            resp_output = output
+            out_que.put(TPResponse(0, None, resp_output))
 
 
 def _start_tp_process(rank: int,

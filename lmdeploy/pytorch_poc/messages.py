@@ -129,6 +129,8 @@ class SchedulerSequence:
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     status: MessageStatus = MessageStatus.WAITING
     logical_blocks: Sequence[LogicalTokenBlock] = field(default_factory=list)
+    sender_id: int = -1
+    req_id: int = -1
     arrive_time: float = 0.0
     meta: Any = None
 
