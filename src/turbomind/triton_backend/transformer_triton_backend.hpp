@@ -272,6 +272,7 @@ struct AbstractTransformerModelInstance;
 
 struct AbstractTransformerModelInstance {
     virtual ~AbstractTransformerModelInstance() = default;
+
     virtual std::shared_ptr<std::vector<triton::Tensor>>
     forward(std::shared_ptr<std::vector<triton::Tensor>> input_tensors) = 0;
 

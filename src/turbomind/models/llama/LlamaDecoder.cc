@@ -41,6 +41,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t                      head_num,
                               cublasMMWrapper*            cublas_wrapper,
                               IAllocator*                 allocator,
                               bool                        is_free_buffer_after_forward,
+                              int                         cache_block_seq_len,
                               int                         quant_policy):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
@@ -53,7 +54,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t                      head_num,
     data_type_(getTensorType<T>())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    initialize(attn_params, kv_head_num, quant_policy);
+    initialize(attn_params, kv_head_num, cache_block_seq_len, quant_policy);
 }
 
 template<typename T>
@@ -65,7 +66,10 @@ LlamaDecoder<T>::~LlamaDecoder()
 }
 
 template<typename T>
-void LlamaDecoder<T>::initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, int quant_policy)
+void LlamaDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
+                                 size_t                      kv_head_num,
+                                 int                         cache_block_seq_len,
+                                 int                         quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -78,6 +82,7 @@ void LlamaDecoder<T>::initialize(const LlamaAttentionParams& attn_params, size_t
                                                                   cublas_wrapper_,
                                                                   allocator_,
                                                                   is_free_buffer_after_forward_,
+                                                                  cache_block_seq_len,
                                                                   quant_policy);
 
     silu_ffn_layer_ = new LlamaFfnLayer<T>(head_num_,
@@ -118,6 +123,7 @@ void LlamaDecoder<T>::forwardSelfAttn(const LlamaDecoder::Session&              
                                       const std::unordered_map<std::string, Tensor>* input_tensors,
                                       size_t                                         layer)
 {
+    NvtxScope scope("self_attn");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TensorMap self_attention_input_tensors(*input_tensors);
     self_attention_input_tensors.insert("input_query",
@@ -180,60 +186,73 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
 
     // for the shape of key cache, refer to decoder_masked_multihead_attention_template.hpp
 
+    NvtxScope forward_scope("decoder_forward");
+
     Session sess{};
     sess.batch_size = input_tensors->at("decoder_input").shape[0];
     sess.weights    = decoder_layer_weights;
 
     allocateBuffer(sess.batch_size);
 
-    sess.ite     = input_tensors->at("ite").getVal<const int>();
     sess.k_cache = &output_tensors->at("key_cache");
     sess.v_cache = &output_tensors->at("value_cache");
-
-    sess.max_memory_len = input_tensors->at("max_seq_len").getVal<int>();
 
     T* decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
     T* decoder_output = output_tensors->at("decoder_output").getPtr<T>();
 
+    int step = input_tensors->at("step").getVal<int>();
+    // Compare(decoder_input, sess.batch_size * hidden_units_, Concat("decoder_input", 0, step), kCmpRead, stream_);
+
     ////////////////////////////////////////////
     /// RMSNorm
-    invokeRootMeanSquareNorm(decoder_output,
-                             decoder_input,
-                             decoder_layer_weights->at(0)->self_attn_norm_weights,
-                             rmsnorm_eps_,
-                             sess.batch_size,
-                             hidden_units_,
-                             stream_);
-    sync_check_cuda_error();
+    {
+        NvtxScope rms_norm_scope("rms_norm_0");
+        invokeRootMeanSquareNorm(decoder_output,
+                                 decoder_input,
+                                 decoder_layer_weights->at(0)->self_attn_norm_weights,
+                                 rmsnorm_eps_,
+                                 sess.batch_size,
+                                 hidden_units_,
+                                 stream_);
+        sync_check_cuda_error();
+    }
 
     for (size_t layer = 0; layer < num_layer_; ++layer) {
+        NvtxScope layer_scope("decode_layer");
+
         // output: self_attn_output_, k_cache, v_cache = self_attn(decoder_normed_input_)
         forwardSelfAttn(sess, decoder_output, input_tensors, layer);
 
-        invokeFusedAddBiasResidualRMSNorm(decoder_input,
-                                          decoder_output,
-                                          decoder_layer_weights->at(layer)->self_attn_weights.output.bias,
-                                          decoder_layer_weights->at(layer)->ffn_norm_weights,
-                                          rmsnorm_eps_,
-                                          sess.batch_size,
-                                          hidden_units_,
-                                          stream_);
-        sync_check_cuda_error();
+        {
+            NvtxScope rms_norm_scope("rms_norm_1");
+            invokeFusedAddBiasResidualRMSNorm(decoder_input,
+                                              decoder_output,
+                                              decoder_layer_weights->at(layer)->self_attn_weights.output.bias,
+                                              decoder_layer_weights->at(layer)->ffn_norm_weights,
+                                              rmsnorm_eps_,
+                                              sess.batch_size,
+                                              hidden_units_,
+                                              stream_);
+            sync_check_cuda_error();
+        }
 
         // decoder_layer_output_ = ffn(decoder_normed_input_)
         forwardFfn(sess, decoder_output, layer);
 
-        auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
-                                                     input_tensors->at("output_norm_weight").getPtr<T>();
-        invokeFusedAddBiasResidualRMSNorm(decoder_input,  //
-                                          decoder_output,
-                                          decoder_layer_weights->at(layer)->ffn_weights.output.bias,
-                                          scale_weight,
-                                          rmsnorm_eps_,
-                                          sess.batch_size,
-                                          hidden_units_,
-                                          stream_);
-        sync_check_cuda_error();
+        {
+            NvtxScope rms_norm_scope("rms_norm_2");
+            auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
+                                                         input_tensors->at("output_norm_weight").getPtr<T>();
+            invokeFusedAddBiasResidualRMSNorm(decoder_input,  //
+                                              decoder_output,
+                                              decoder_layer_weights->at(layer)->ffn_weights.output.bias,
+                                              scale_weight,
+                                              rmsnorm_eps_,
+                                              sess.batch_size,
+                                              hidden_units_,
+                                              stream_);
+            sync_check_cuda_error();
+        }
     }
 
     if (is_free_buffer_after_forward_) {

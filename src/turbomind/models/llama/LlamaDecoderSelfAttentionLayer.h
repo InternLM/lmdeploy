@@ -24,6 +24,7 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
@@ -32,7 +33,7 @@ template<typename T>
 class LlamaDecoderSelfAttentionLayer {
 public:
     void freeBuffer();
-    void allocateBuffer(size_t batch_size, int key_len, int max_memory_len);
+    void allocateBuffer(size_t batch_size);
 
     LlamaDecoderSelfAttentionLayer(size_t                      head_num,
                                    size_t                      kv_head_num,
@@ -43,6 +44,7 @@ public:
                                    cublasMMWrapper*            cublas_wrapper,
                                    IAllocator*                 allocator,
                                    bool                        is_free_buffer_after_forward,
+                                   int                         cache_block_seq_len,
                                    int                         quant_policy):
         head_num_(head_num),
         kv_head_num_(kv_head_num),
@@ -56,9 +58,11 @@ public:
         stream_(stream),
         linear_(cublas_wrapper, stream),
         allocator_(allocator),
+        kv_cache_block_len_(cache_block_seq_len),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
         quant_policy_(quant_policy)
     {
+        arch_ = getSMVersion();
     }
 
     ~LlamaDecoderSelfAttentionLayer()
@@ -76,6 +80,7 @@ private:
     const size_t local_head_num_;
     const size_t local_kv_head_num_;
     const size_t local_hidden_units_;
+    const size_t kv_cache_block_len_;
     const bool   is_free_buffer_after_forward_;
     const int    quant_policy_;
 
@@ -90,7 +95,11 @@ private:
     T* qkv_buf_     = nullptr;
     T* context_buf_ = nullptr;
 
+    static constexpr int kMaxSplitK = 16;  // must be <= WARP_SIZE
+    float*               workspace_ = nullptr;
+
     bool is_allocate_buffer_{};
+    int  arch_{};
 };
 
 }  // namespace turbomind

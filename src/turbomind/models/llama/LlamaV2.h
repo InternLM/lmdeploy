@@ -28,6 +28,8 @@
 #include "src/turbomind/models/llama/LlamaDecoder.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/instance_comm.h"
@@ -46,9 +48,7 @@ public:
         std::vector<std::shared_ptr<Request>> stop_requests;
         RequestQueue                          request_queue;
         std::shared_ptr<Barrier>              barrier;
-
-        // rank 0 sets flag to true if there are no more tasks in the request_queue
-        bool should_stop = false;
+        bool                                  abort;
     };
 
     ~LlamaV2();
@@ -67,7 +67,8 @@ public:
             int                          step_length,
             int                          start_id,
             int                          end_id,
-            int                          cache_max_entry_count,
+            float                        cache_max_block_count,
+            int                          cache_block_seq_len,
             int                          cache_chunk_size,
             int                          quant_policy,
             bool                         use_context_fmha,
@@ -104,39 +105,45 @@ public:
 private:
     friend class Batch;
 
-    void internalThreadEntry(int device_id);
-
-    void
-    initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, bool use_context_fmha, int quant_policy);
+    void initialize(const LlamaAttentionParams& attn_params,
+                    size_t                      kv_head_num,
+                    bool                        use_context_fmha,
+                    int                         cache_block_seq_len,
+                    int                         quant_policy);
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void contextDecode(T*         deocder_output,
-                       uintptr_t* k_cache_ptr,
-                       uintptr_t* v_cache_ptr,
-                       T*         context_decoder_input_buf,
-                       T*         context_decoder_output_buf,
-                       const int* input_ids,
-                       const int* input_length,
-                       const int* history_length,
-                       const int* context_length,
-                       size_t     token_num,
-                       size_t     max_input_len,
-                       size_t     max_context_len,
-                       size_t     session_len,
-                       size_t     batch_size);
+    void contextDecode(T*           deocder_output,
+                       uintptr_t*   k_block_ptrs,
+                       uintptr_t*   v_block_ptrs,
+                       void**       k_tmp_ptrs,
+                       void**       v_tmp_ptrs,
+                       T*           context_decoder_input_buf,
+                       T*           context_decoder_output_buf,
+                       const int*   input_ids,
+                       const int*   input_length,
+                       const int*   context_length,
+                       const int*   cu_block_counts,
+                       const float* rope_theta,
+                       size_t       token_num,
+                       size_t       max_input_len,
+                       size_t       max_context_len,
+                       size_t       session_len,
+                       size_t       batch_size);
 
-    void decoderForward(T*         decoder_output,
-                        uintptr_t* k_cache_ptr,
-                        uintptr_t* v_cache_ptr,
-                        T*         decoder_input,
-                        const int* sequence_length,
-                        const int* total_padding_count,
-                        bool*      finished,
-                        int        step,
-                        int        ite,
-                        size_t     session_len,
-                        size_t     batch_size);
+    void decoderForward(T*           decoder_output,
+                        uintptr_t*   k_cache_ptr,
+                        uintptr_t*   v_cache_ptr,
+                        T*           decoder_input,
+                        const int*   sequence_length,
+                        const bool*  finished,
+                        const int*   cu_block_counts,
+                        const float* rope_theta,
+                        int          step,
+                        int          ite,
+                        int          sum_seq_len,
+                        int          max_seq_len,
+                        size_t       batch_size);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 
@@ -156,7 +163,15 @@ private:
                        size_t          token_ids_len,
                        size_t          batch_size);
 
-    void start();
+    curandState_t* GetTopKState(int index)
+    {
+        return dynamic_decode_layer_->topk_curandstate_buf() + index;
+    }
+
+    curandState_t* GetTopPState(int index)
+    {
+        return dynamic_decode_layer_->topp_curandstate_buf() + index;
+    }
 
 private:
     friend class LlamaBatch<T>;
@@ -169,6 +184,8 @@ private:
     size_t       vocab_size_padded_;
     float        rmsnorm_eps_ = 1e-6f;
 
+    const LlamaAttentionParams attn_params_;
+
     static constexpr bool neox_rotary_style_ = false;
 
     const int    start_id_;
@@ -176,6 +193,7 @@ private:
     const size_t hidden_units_;
 
     const size_t local_head_num_;
+    const size_t local_kv_head_num_;
     NcclParam    tensor_para_;
 
     cudaStream_t     stream_;
@@ -186,20 +204,15 @@ private:
 
     const bool debug_{false};
 
-    std::unique_ptr<LlamaCacheManager> kv_cache_mgr_;
-
     LlamaWeight<T>*            weights_{};
     LlamaDecoder<T>*           decoder_{};
     LlamaContextDecoder<T>*    context_decoder_{};
     DynamicDecodeLayer<float>* dynamic_decode_layer_{};
 
-    const int                    step_length_;
-    LlamaBatch<T>                batch_;
-    std::shared_ptr<SharedState> shared_state_;
-
-    std::thread internal_thread_;
-
-    ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
+    const int                      step_length_;
+    std::shared_ptr<SharedState>   shared_state_;
+    ffi_api_lock_ctrl_t            ffi_lock_;
+    std::unique_ptr<LlamaBatch<T>> batch_;
 };
 
 }  // namespace turbomind

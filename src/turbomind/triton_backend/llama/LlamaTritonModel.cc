@@ -65,13 +65,19 @@ void LlamaTritonModel<T>::handleMissingParams()
     }
 
     if (!max_batch_size_) {
-        max_batch_size_ = 32;
+        max_batch_size_ = 64;
         TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.", (int)max_batch_size_);
     }
 
     if (!session_len_) {
         session_len_ = 2160;
         TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)session_len_);
+    }
+
+    if (!attn_params_.max_position_embeddings) {
+        attn_params_.max_position_embeddings = session_len_;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to `session_len` (%d).",
+                       (int)attn_params_.max_position_embeddings);
     }
 
     if (!max_context_token_num_) {
@@ -85,14 +91,18 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `step_length` is not set, default to %d.", (int)step_length_);
     }
 
-    if (!cache_max_entry_count_) {
-        cache_max_entry_count_ = 32;
-        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %d.",
-                       (int)cache_max_entry_count_);
+    if (!cache_max_block_count_) {
+        cache_max_block_count_ = .95f;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %f.", cache_max_block_count_);
+    }
+
+    if (!cache_block_seq_len_) {
+        cache_block_seq_len_ = 128;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_block_seq_len` is not set, default to %d.", cache_block_seq_len_);
     }
 
     if (!cache_chunk_size_) {
-        cache_chunk_size_ = cache_max_entry_count_;
+        cache_chunk_size_ = cache_max_block_count_;
         TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.", (int)cache_chunk_size_);
     }
 }
@@ -129,17 +139,21 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     max_context_token_num_ = reader.GetInteger("llama", "max_context_token_num", 0);
     session_len_           = reader.GetInteger("llama", "session_len", 0);
     step_length_           = reader.GetInteger("llama", "step_length", 0);
-    cache_max_entry_count_ = reader.GetInteger("llama", "cache_max_entry_count", 0);
-    use_context_fmha_      = reader.GetInteger("llama", "use_context_fmha", 1);
+    cache_max_block_count_ = reader.GetFloat("llama", "cache_max_entry_count", 0);
+    cache_block_seq_len_   = reader.GetInteger("llama", "cache_block_seq_len", 0);
     cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
-    attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
-    quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
-    group_size_            = reader.GetInteger("llama", "group_size", 0);
+    use_context_fmha_      = reader.GetInteger("llama", "use_context_fmha", 1);
 
-    attn_params_.rotray_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
+    attn_bias_    = reader.GetInteger("llama", "attn_bias", 0);
+    quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
+    group_size_   = reader.GetInteger("llama", "group_size", 0);
+
+    // rotary embedding parameters
+    attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
     attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
+    attn_params_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
     attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
-    attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
+    // attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
     attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
 
     handleMissingParams();
@@ -219,7 +233,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
 
     ft::FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
-    ft::FT_CHECK(pipeline_para.world_size_ = pipeline_para_size_);
+    ft::FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
 
     auto llama = std::make_unique<ft::LlamaV2<T>>(head_num_,
                                                   kv_head_num_,
@@ -235,7 +249,8 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   step_length_,
                                                   start_id_,
                                                   end_id_,
-                                                  cache_max_entry_count_,
+                                                  cache_max_block_count_,
+                                                  cache_block_seq_len_,
                                                   cache_chunk_size_,
                                                   quant_policy_,
                                                   use_context_fmha_,
@@ -320,12 +335,13 @@ std::string LlamaTritonModel<T>::toString()
        << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
        << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << max_batch_size_
        << "\nmax_context_token_num: " << max_context_token_num_ << "\nsession_len: " << session_len_
-       << "\nstep_length: " << step_length_ << "\ncache_max_entry_count: " << cache_max_entry_count_
-       << "\ncache_chunk_size: " << cache_chunk_size_ << "\nuse_context_fmha: " << use_context_fmha_
-       << "\nstart_id: " << start_id_ << "\ntensor_para_size: " << tensor_para_size_
-       << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
-       << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_
-       << "\ngroup_size: " << group_size_ << std::endl;
+       << "\nstep_length: " << step_length_ << "\ncache_max_entry_count: " << cache_max_block_count_
+       << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << cache_chunk_size_
+       << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
+       << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
+       << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
+       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << "\ngroup_size: " << group_size_
+       << std::endl;
 
     return ss.str();
 }

@@ -93,7 +93,8 @@ private:
     int                             step_length_;
     int                             start_id_;
     int                             end_id_;
-    int                             cache_max_entry_count_;
+    float                           cache_max_block_count_;
+    int                             cache_block_seq_len_;
     int                             cache_chunk_size_;
     int                             use_context_fmha_;
     size_t                          tensor_para_size_;

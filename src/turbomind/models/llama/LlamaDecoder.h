@@ -35,7 +35,8 @@ protected:
     void allocateBuffer() override;  // deprecated
     void allocateBuffer(size_t batch_size);
     void freeBuffer() override;
-    void initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, int quant_policy);
+    void
+    initialize(const LlamaAttentionParams& attn_params, size_t kv_head_num, int cache_block_seq_len, int quant_policy);
 
     size_t head_num_;
     size_t size_per_head_;
@@ -53,8 +54,6 @@ protected:
 
     struct Session {
         size_t                                          batch_size;
-        int                                             ite;
-        size_t                                          max_memory_len;
         Tensor*                                         k_cache;
         Tensor*                                         v_cache;
         const std::vector<LlamaDecoderLayerWeight<T>*>* weights;
@@ -80,6 +79,7 @@ public:
                  cublasMMWrapper*            cublas_wrapper,
                  IAllocator*                 allocator,
                  bool                        is_free_buffer_after_forward,
+                 int                         cache_block_seq_len,
                  int                         quant_policy);
 
     ~LlamaDecoder() override;
