@@ -104,6 +104,13 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 pip install lmdeploy
 ```
 
+> **Note**<br />
+> `pip install lmdeploy`默认安装runtime依赖包，使用lmdeploy的lite和serve功能时，用户需要安装额外依赖包。例如: `pip install lmdeploy[lite]` 会额外安装`lmdeploy.lite`模块的依赖包
+>
+> - `all`: 安装`lmdeploy`所有依赖包，具体可查看`requirements.txt`
+> - `lite`: 额外安装`lmdeploy.lite`模块的依赖包，具体可查看`requirements/lite.txt`
+> - `serve`: 额外安装`lmdeploy.serve`模块的依赖包，具体可查看`requirements/serve.txt`
+
 ### 部署 InternLM
 
 #### 获取 InternLM 模型
@@ -140,6 +147,9 @@ lmdeploy chat turbomind ./workspace
 #### 启动 gradio server
 
 ```shell
+# 安装lmdeploy额外依赖
+pip install lmdeploy[serve]
+
 lmdeploy serve gradio ./workspace
 ```
 
@@ -150,6 +160,9 @@ lmdeploy serve gradio ./workspace
 使用下面的命令启动推理服务：
 
 ```shell
+# 安装lmdeploy额外依赖
+pip install lmdeploy[serve]
+
 lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
@@ -182,6 +195,7 @@ bash workspace/service_docker_up.sh
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
+python3 -m pip install tritonclient[grpc]
 lmdeploy serve triton_client {server_ip_addresss}:33337
 ```
 

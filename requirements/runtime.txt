@@ -1,0 +1,8 @@
+fire
+mmengine
+numpy
+safetensors
+sentencepiece
+tiktoken
+torch
+transformers>=4.33.0

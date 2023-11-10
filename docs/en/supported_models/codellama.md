@@ -26,7 +26,7 @@ Based on the above table, download the model that meets your requirements. Execu
 
 ```shell
 # install lmdeploy
-python3 -m pip install lmdeploy
+python3 -m pip install lmdeploy[all]
 
 # convert weight layout
 lmdeploy convert codellama /the/path/of/codellama/model

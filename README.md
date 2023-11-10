@@ -103,6 +103,14 @@ Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 pip install lmdeploy
 ```
 
+> **Note**<br />
+> `pip install lmdeploy` can only install the runtime required packages. If users want to run codes from modules like `lmdeploy.lite` and `lmdeploy.serve`, they need to install the extra required packages.
+> For instance, running `pip install lmdeploy[lite]` would install extra dependencies for `lmdeploy.lite` module.
+>
+> - `all`: Install lmdeploy with all dependencies in `requirements.txt`
+> - `lite`: Install lmdeploy with extra dependencies in `requirements/lite.txt`
+> - `serve`: Install lmdeploy with dependencies in `requirements/serve.txt`
+
 ### Deploy InternLM
 
 #### Get InternLM model
@@ -140,6 +148,9 @@ lmdeploy chat turbomind ./workspace
 #### Serving with gradio
 
 ```shell
+# install lmdeploy with extra dependencies
+pip install lmdeploy[serve]
+
 lmdeploy serve gradio ./workspace
 ```
 
@@ -150,6 +161,9 @@ lmdeploy serve gradio ./workspace
 Launch inference server by:
 
 ```shell
+# install lmdeploy with extra dependencies
+pip install lmdeploy[serve]
+
 lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
 ```
 
@@ -182,6 +196,7 @@ bash workspace/service_docker_up.sh
 Then, you can communicate with the inference server by command line,
 
 ```shell
+python3 -m pip install tritonclient[grpc]
 lmdeploy serve triton_client {server_ip_addresss}:33337
 ```
 
