@@ -542,6 +542,8 @@ bool LlamaBatch<T>::generate()
                            session_len_,
                            batch_size_);
 
+    CheckValues(decoder_output_buf_, batch_size_ * llama_->hidden_units_, "decoderForward", stream_);
+
     // CheckBatchConsistency(decoder_input_buf_,  //
     //                       llama_->hidden_units_,
     //                       batch_size_,
