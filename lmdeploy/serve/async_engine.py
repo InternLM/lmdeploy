@@ -6,6 +6,9 @@ import random
 from contextlib import contextmanager
 from typing import List, Literal, Optional
 
+from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.tokenizer import Tokenizer
+
 
 @dataclasses.dataclass
 class GenOut:
@@ -26,22 +29,37 @@ class AsyncEngine:
         tp (int): tensor parallel
     """
 
-    def __init__(self, model_path, instance_num=32, tp=1, **kwargs) -> None:
-        from lmdeploy import turbomind as tm
-        from lmdeploy.tokenizer import Tokenizer
-        tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                        'tokenizer')
+    def __init__(self,
+                 model_path,
+                 instance_num=32,
+                 tp=1,
+                 model_name: str = None,
+                 **kwargs) -> None:
+        self.is_hf = osp.exists(osp.join(model_path, 'config.json'))
+        if self.is_hf:
+            from lmdeploy.pytorch_poc.engine import Engine
+            assert model_name is not None, 'please set model_name for hf model'
+            tokenizer_model_path = model_path
+        else:
+            from lmdeploy.turbomind import TurboMind as Engine
+            tokenizer_model_path = osp.join(model_path, 'triton_models',
+                                            'tokenizer')
         tokenizer = Tokenizer(tokenizer_model_path)
-        self.tm_model = tm.TurboMind(model_path,
-                                     eos_id=tokenizer.eos_token_id,
-                                     tp=tp,
-                                     **kwargs)
+        self.tm_model = Engine(model_path,
+                               eos_id=tokenizer.eos_token_id,
+                               tp=tp,
+                               **kwargs)
         self.tokenizer = tokenizer
         self.generators = [
             self.tm_model.create_instance() for i in range(instance_num)
         ]
         self.instance_num = instance_num
-        self.model = self.tm_model.model
+        if not self.is_hf:
+            self.model = self.tm_model.model
+            self.model_name = self.tm_model.model_name
+        else:
+            self.model_name = model_name
+            self.model: BaseModel = MODELS.get(model_name)(**kwargs)
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}
@@ -51,6 +69,9 @@ class AsyncEngine:
         """Stop a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
+        if hasattr(self.generators[instance_id], 'end'):  # pytorch model
+            self.generators[instance_id].end(session_id)
+            return
         for outputs in self.generators[instance_id].stream_infer(
                 session_id,
                 input_ids,

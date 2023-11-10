@@ -38,7 +38,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.tm_model.model_name]
+    return [VariableInterface.async_engine.model_name]
 
 
 @app.get('/v1/models')
@@ -423,6 +423,10 @@ async def chat_interactive_v1(request: GenerateRequest,
     - ignore_eos (bool): indicator for ignoring eos
     """
     if request.session_id == -1:
+        if request.interactive_mode:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST, 'Please set a'
+                ' session_id other than -1 for interactive conversation')
         request.session_id = random.randint(10087, 23333)
 
     async_engine = VariableInterface.async_engine
@@ -473,16 +477,18 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
-def main(model_path: str,
-         server_name: str = '0.0.0.0',
-         server_port: int = 23333,
-         instance_num: int = 32,
-         tp: int = 1,
-         allow_origins: List[str] = ['*'],
-         allow_credentials: bool = True,
-         allow_methods: List[str] = ['*'],
-         allow_headers: List[str] = ['*'],
-         **kwargs):
+def main(
+        model_path: str,
+        model_name: str = None,  # for huggingface model, None for turbomind
+        server_name: str = '0.0.0.0',
+        server_port: int = 23333,
+        instance_num: int = 32,
+        tp: int = 1,
+        allow_origins: List[str] = ['*'],
+        allow_credentials: bool = True,
+        allow_methods: List[str] = ['*'],
+        allow_headers: List[str] = ['*'],
+        **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -509,6 +515,7 @@ def main(model_path: str,
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  instance_num=instance_num,
                                                  tp=tp,
+                                                 model_name=model_name,
                                                  **kwargs)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
