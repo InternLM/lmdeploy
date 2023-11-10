@@ -18,7 +18,6 @@ def _fwd_split_kernel(
     B_kvlen,
     Block_offsets,
     Acc_out,
-    Meta_out,
     stride_qbs,
     stride_qh,
     stride_qd,
@@ -32,14 +31,9 @@ def _fwd_split_kernel(
     stride_obs,
     stride_oh,
     stride_od,
-    stride_mk,
-    stride_mbs,
-    stride_mh,
-    stride_md,
     stride_boffb,
     kv_group_num,
-    SPLIT_K: tl.constexpr,
-    BLOCK_PER_CTA: tl.constexpr,
+    block_per_cta,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -76,7 +70,7 @@ def _fwd_split_kernel(
     l_i = float(0)
     acc = tl.zeros([BLOCK_DMODEL], dtype=tl.float32)
 
-    kv_len_per_prog = BLOCK_PER_CTA * BLOCK_N
+    kv_len_per_prog = block_per_cta * BLOCK_N
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, cur_batch_kv_len)
 
@@ -138,25 +132,20 @@ def _fwd_split_kernel(
                cur_head * stride_oh + offs_d * stride_od)
     tl.store(Acc_out + off_acc, acc)
 
-    off_meta = (cur_batch * stride_mbs + split_k_id * stride_mk +
-                cur_head * stride_mh)
-    tl.store(Meta_out + off_meta + tl.arange(0, 1), m_i)
-    tl.store(Meta_out + off_meta + stride_md + tl.arange(0, 1), l_i)
+    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
+                cur_head * stride_oh + BLOCK_DMODEL)
+    tl.store(Acc_out + off_meta + tl.arange(0, 1), m_i)
+    tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
 
 @triton.jit
 def _reduce_split_kernel(
     Acc,
-    Meta,
     Out,
     stride_ak,
     stride_abs,
     stride_ah,
     stride_ad,
-    stride_mk,
-    stride_mbs,
-    stride_mh,
-    stride_md,
     stride_obs,
     stride_oh,
     stride_od,
@@ -173,12 +162,12 @@ def _reduce_split_kernel(
 
     offs_acc = (cur_batch * stride_abs + cur_head * stride_ah +
                 offs_k[:, None] * stride_ak + offs_d[None, :] * stride_ad)
-    offs_mi = (cur_batch * stride_mbs + cur_head * stride_mh +
-               stride_mk * offs_k)
+    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah +
+               stride_ak * offs_k + BLOCK_DMODEL)
 
     acc_k = tl.load(Acc + offs_acc)
-    m_k = tl.load(Meta + offs_mi)
-    l_k = tl.load(Meta + offs_mi + stride_md)
+    m_k = tl.load(Acc + offs_mi)
+    l_k = tl.load(Acc + offs_mi + 1)
 
     m_max = tl.max(m_k, 0)
     alpha = tl.exp(m_k - m_max)
@@ -262,11 +251,9 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
+    b_offset = tl.load(block_offset_ptrs)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-
-        start_block_id = start_n // BLOCK_N
-        b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         # -- compute qk ----
         k = tl.load(
@@ -274,6 +261,15 @@ def _fwd_kernel(
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
+
+        v = tl.load(
+            v_ptrs + b_offset * BLOCK_N * stride_vbs,
+            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
+            other=0.0,
+        )
+        if start_n + BLOCK_N < cur_batch_kv_len:
+            start_block_id = start_n // BLOCK_N + 1
+            b_offset = tl.load(block_offset_ptrs + start_block_id)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -293,13 +289,8 @@ def _fwd_kernel(
         # -- update output accumulator --
         # scale acc
         acc = acc * alpha[:, None]
-        # update acc
-        v = tl.load(
-            v_ptrs + b_offset * BLOCK_N * stride_vbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
-            other=0.0,
-        )
 
+        # update acc
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -349,7 +340,7 @@ def paged_attention_fwd(
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[-2]
-    kv_group_num = q.shape[-2] // k[0].shape[-2]
+    kv_group_num = q.shape[-2] // k.shape[-2]
 
     num_warps = 4 if Lk <= 64 else 8
 
@@ -359,7 +350,7 @@ def paged_attention_fwd(
     stream = get_cuda_stream(device_idx)
     is_decoding = q.shape[-3] == b_seq_len.size(0)
     if not is_decoding:
-        grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
+        grid = (batch, head, triton.cdiv(max_input_len, BLOCK))
         _fwd_kernel[grid](q,
                           k,
                           v,
@@ -395,8 +386,7 @@ def paged_attention_fwd(
         SPLIT_K = 4
         grid = (batch, head, SPLIT_K)
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
-        acc = q.new_empty(batch, head, SPLIT_K, Lq, dtype=torch.float32)
-        meta = acc.new_empty(batch, head, SPLIT_K, 2)
+        acc = q.new_empty(batch, head, SPLIT_K, Lq + 2, dtype=torch.float32)
         _fwd_split_kernel[grid](q,
                                 k,
                                 v,
@@ -404,7 +394,6 @@ def paged_attention_fwd(
                                 b_kv_seq_len,
                                 block_offsets,
                                 acc,
-                                meta,
                                 stride_qbs=q.stride(-3),
                                 stride_qh=q.stride(-2),
                                 stride_qd=q.stride(-1),
@@ -418,17 +407,12 @@ def paged_attention_fwd(
                                 stride_obs=acc.stride(-4),
                                 stride_oh=acc.stride(-3),
                                 stride_od=acc.stride(-1),
-                                stride_mk=meta.stride(-2),
-                                stride_mbs=meta.stride(-4),
-                                stride_mh=meta.stride(-3),
-                                stride_md=meta.stride(-1),
                                 stride_boffb=block_offsets.stride(0),
                                 kv_group_num=kv_group_num,
-                                SPLIT_K=SPLIT_K,
-                                BLOCK_PER_CTA=block_per_cta,
+                                block_per_cta=block_per_cta,
                                 BLOCK_DMODEL=Lk,
                                 BLOCK_N=BLOCK,
-                                num_warps=num_warps,
+                                num_warps=4,
                                 num_stages=1,
                                 stream=stream,
                                 device=device_idx,
@@ -436,16 +420,11 @@ def paged_attention_fwd(
 
         grid = (batch, head)
         _reduce_split_kernel[grid](acc,
-                                   meta,
                                    o,
                                    stride_ak=acc.stride(-2),
                                    stride_abs=acc.stride(-4),
                                    stride_ah=acc.stride(-3),
                                    stride_ad=acc.stride(-1),
-                                   stride_mk=meta.stride(-2),
-                                   stride_mbs=meta.stride(-4),
-                                   stride_mh=meta.stride(-3),
-                                   stride_md=meta.stride(-1),
                                    stride_obs=o.stride(-3),
                                    stride_oh=o.stride(-2),
                                    stride_od=o.stride(-1),

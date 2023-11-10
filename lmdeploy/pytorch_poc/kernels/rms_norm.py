@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
@@ -29,13 +30,17 @@ def rms_norm_kernel(input, weight, output, input_row_stride, n_cols, eps,
 def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
     """rms norm."""
     feat_size = weight.size(-1)
-    seq_len = hidden_states.flatten(0, -2).size(0)
-    input_stride = hidden_states.flatten(0, -2).stride(0)
+    seq_len = hidden_states.numel() // hidden_states.size(-1)
+    input_stride = hidden_states.stride(-2)
 
     BLOCK_N = triton.next_power_of_2(feat_size)
 
     out = torch.empty_like(hidden_states)
 
+    device = hidden_states.device
+    device_idx = device.index
+    device_type = device.type
+    stream = get_cuda_stream(device_idx)
     grid = [
         seq_len,
     ]
@@ -48,7 +53,10 @@ def rms_norm(hidden_states: Tensor, weight: Tensor, eps: float = 1e-6):
                           feat_size,
                           BLOCK_N,
                           num_warps=4,
-                          num_stages=2)
+                          num_stages=2,
+                          stream=stream,
+                          device=device_idx,
+                          device_type=device_type)
 
     return out
 

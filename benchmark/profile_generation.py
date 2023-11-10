@@ -17,7 +17,6 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlDeviceGetMemoryInfo, nvmlDeviceGetName,
                     nvmlDeviceGetPowerState, nvmlDeviceGetTemperature,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
-from tqdm import tqdm
 
 
 def infer(model,
@@ -318,9 +317,9 @@ def main():
     args = parse_args()
     os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
-    for batch in tqdm(args.concurrency):
-        for prompt_tokens, completion_tokens in tqdm(
-                zip(args.prompt_tokens, args.completion_tokens)):
+    for batch in args.concurrency:
+        for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
+                                                    args.completion_tokens):
             from functools import partial
             MemoryMonitor.start()
             profile_target = partial(profile_throughput,

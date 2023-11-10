@@ -232,6 +232,10 @@ class Scheduler:
         running = [
             msg for msg in self.running if msg.status == MessageStatus.RUNNING
         ]
+        if len(running) == 0:
+            logger.warning('No enough resources. Free gpu blocks: '
+                           f'{self.block_manager.get_num_free_gpu_blocks()}, '
+                           'Please end sessions.')
         return running, swap_in_map, swap_out_map, copy_map
 
     def schedule(self):

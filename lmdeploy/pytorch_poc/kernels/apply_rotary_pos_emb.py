@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
@@ -111,7 +112,9 @@ def apply_rotary_pos_emb(q: Tensor,
                          cos: Tensor,
                          sin: Tensor,
                          position_ids: Tensor,
-                         position_ids_1d: Tensor = None):
+                         position_ids_1d: Tensor = None,
+                         q_embed: Tensor = None,
+                         k_embed: Tensor = None):
     """Apply rotary positional embedding on query and key.
 
     Args:
@@ -121,21 +124,29 @@ def apply_rotary_pos_emb(q: Tensor,
         sin (Tensor): sine matrix (seq_len, dim).
         position_ids (Tensor): Position ids of q and k.
         position_ids_1d (Tensor): 1d Position ids.
+        q_embed (Tensor): output q, can be same as q
+        k_embed (Tensor): output k, can be same as k
 
     Returns:
         Tuple[Tensor, Tensor]: Embedded query and key.
     """
-    q = q.contiguous()
-    k = k.contiguous()
-    cos = cos.to(device=q.device, dtype=q.dtype)
-    sin = sin.to(device=q.device, dtype=q.dtype)
+    if not q.is_contiguous():
+        q = q.contiguous()
+    if not k.is_contiguous():
+        k = k.contiguous()
+    if cos.device != q.device or cos.dtype != q.dtype:
+        cos = cos.to(device=q.device, dtype=q.dtype)
+    if sin.device != q.device or sin.dtype != q.dtype:
+        sin = sin.to(device=q.device, dtype=q.dtype)
     if position_ids_1d is None:
         seq_length = position_ids[..., -1] + 1
         position_ids_1d = [ids[:l] for ids, l in zip(position_ids, seq_length)]
         position_ids_1d = torch.cat(position_ids_1d)
 
-    q_embed = torch.empty_like(q)
-    k_embed = torch.empty_like(k)
+    if q_embed is None:
+        q_embed = torch.empty_like(q)
+    if k_embed is None:
+        k_embed = torch.empty_like(k)
 
     seq_len = position_ids_1d.size(-1)
     BLOCK = 32
@@ -144,6 +155,10 @@ def apply_rotary_pos_emb(q: Tensor,
     num_warps = 4
     num_stages = 2
 
+    device = q.device
+    device_idx = device.index
+    device_type = device.type
+    stream = get_cuda_stream(device_idx)
     if num_heads_k == num_heads_q:
         grid = [triton.cdiv(seq_len, BLOCK), num_heads_q]
         apply_rotary_pos_emb_qk_kernel[grid](q,
@@ -159,7 +174,10 @@ def apply_rotary_pos_emb(q: Tensor,
                                              BLOCK=BLOCK,
                                              BLOCK_N=q.size(-1) // 2,
                                              num_warps=num_warps,
-                                             num_stages=num_stages)
+                                             num_stages=num_stages,
+                                             stream=stream,
+                                             device=device_idx,
+                                             device_type=device_type)
 
     else:
         grid_q = [triton.cdiv(seq_len, BLOCK), num_heads_q]
@@ -174,7 +192,10 @@ def apply_rotary_pos_emb(q: Tensor,
                                             BLOCK=BLOCK,
                                             BLOCK_N=q.size(-1) // 2,
                                             num_warps=num_warps,
-                                            num_stages=num_stages)
+                                            num_stages=num_stages,
+                                            stream=stream,
+                                            device=device_idx,
+                                            device_type=device_type)
         apply_rotary_pos_emb_kernel[grid_k](k,
                                             cos,
                                             sin,
@@ -185,6 +206,9 @@ def apply_rotary_pos_emb(q: Tensor,
                                             BLOCK=BLOCK,
                                             BLOCK_N=k.size(-1) // 2,
                                             num_warps=num_warps,
-                                            num_stages=num_stages)
+                                            num_stages=num_stages,
+                                            stream=stream,
+                                            device=device_idx,
+                                            device_type=device_type)
 
     return q_embed, k_embed
