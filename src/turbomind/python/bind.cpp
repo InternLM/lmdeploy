@@ -291,8 +291,9 @@ PYBIND11_MODULE(_turbomind, m)
                 auto src = DLManagedTensorToTritonTensor(dlmt);
                 if (self->type == triton::TYPE_FP16 || self->type == triton::TYPE_FP32
                     || self->type == triton::TYPE_INT32) {
-                    auto num_element = std::accumulate(src->shape.begin(), src->shape.end(), 1, std::multiplies<int>());
-                    auto num_bytes   = 1LL * num_element * dlmt->dl_tensor.dtype.bits / 8;
+                    auto num_element =
+                        std::accumulate(src->shape.begin(), src->shape.end(), 1LL, std::multiplies<int64_t>());
+                    auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
                     ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
                     cudaMemcpy(
                         const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
