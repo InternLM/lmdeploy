@@ -6,8 +6,11 @@ import torch
 from torch.distributed._tensor import DeviceMesh
 
 from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
+from lmdeploy.utils import get_logger
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
+
+logger = get_logger('lmdeploy')
 
 
 class CacheEngine:
@@ -58,6 +61,10 @@ class CacheEngine:
         # Initialize the events for stream synchronization.
         self.events = [torch.cuda.Event() for _ in range(self.num_layers)]
 
+        logger.debug(
+            f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+            f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+
     @property
     def gpu_cache(self):
         """gpu cache."""
@@ -66,8 +73,9 @@ class CacheEngine:
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
         num_heads = self.num_heads
-        if local:
-            assert self.num_heads % self.world_size == 0
+        if local and not self.model_config.multi_query_attention:
+            assert self.num_heads % self.world_size == 0, \
+                f'num_heads: {self.num_heads}, world_size: {self.world_size}'
             num_heads = self.num_heads // self.world_size
         return (
             self.block_size,
@@ -79,8 +87,9 @@ class CacheEngine:
                               local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
         num_heads = self.num_heads
-        if local:
-            assert self.num_heads % self.world_size == 0
+        if local and not self.model_config.multi_query_attention:
+            assert self.num_heads % self.world_size == 0, \
+                f'num_heads: {self.num_heads}, world_size: {self.world_size}'
             num_heads = self.num_heads // self.world_size
         return (
             self.block_size,
@@ -106,6 +115,7 @@ class CacheEngine:
                 device='cuda',
             )
             gpu_cache.append((key_blocks, value_blocks))
+
         return gpu_cache
 
     def allocate_cpu_cache(self):
@@ -187,6 +197,7 @@ class CacheEngine:
         key_cache_block = block_size * num_heads * head_size
         value_cache_block = key_cache_block
         total = num_layers * (key_cache_block + value_cache_block)
+
         dtype_size = _get_dtype_size(model_config.dtype)
         return dtype_size * total
 

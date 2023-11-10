@@ -1,4 +1,5 @@
 import json
+import os
 import os.path as osp
 import random
 import time
@@ -9,7 +10,6 @@ from typing import List, Tuple
 import fire
 
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.turbomind import TurboMind
 
 
 def sample_requests(
@@ -56,10 +56,27 @@ def sample_requests(
 class Engine:
 
     def __init__(self, model_path: str, tp: int = 1):
+        from lmdeploy.pytorch_poc.engine import Engine
+        from lmdeploy.pytorch_poc.messages import SamplingParam
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
-        tokenizer = Tokenizer(tokenizer_model_path)
-        tm_model = TurboMind(model_path=model_path, tp=tp)
+        if os.path.exists(tokenizer_model_path):
+            from lmdeploy.turbomind import TurboMind
+            tokenizer = Tokenizer(tokenizer_model_path)
+            tm_model = TurboMind(model_path=model_path, tp=tp)
+        else:
+            tokenizer = Tokenizer(model_path)
+            tm_model = Engine(model_path, tp=tp)
+
+        self.sampling_param = SamplingParam(
+            top_k=40,
+            top_p=0.8,
+            temperature=0.8,
+            repetition_penalty=1.0,
+            ignore_eos=True,
+            random_seed=random.getrandbits(64),
+        )
+
         self.tm_model = tm_model
         self.tokenizer = tokenizer
 
@@ -84,9 +101,17 @@ class Engine:
                         top_p=1.0,
                         sequence_start=True,
                         sequence_end=True,
-                        ignore_eos=True):
-                    res, tokens = outputs[0]
+                        ignore_eos=True,
+                        sampling_param=self.sampling_param):
+                    if len(outputs) > 1:
+                        res, tokens = outputs[-2:]
+                    else:
+                        res, tokens = outputs[0]
                     self.tokenizer.decode(res)
+
+                # for pytorch engine to restart a session
+                if hasattr(model_inst, 'end'):
+                    model_inst.end(session_id)
 
     def process_request(self, requests, concurrency: int = 1):
         q = Queue()

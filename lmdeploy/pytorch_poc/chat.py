@@ -93,7 +93,7 @@ def main(
                 stop_words=model.stop_words)
             for outputs in generator.stream_infer(
                     session_id=session_id,
-                    prompt_token_ids=input_ids,
+                    input_ids=input_ids,
                     request_output_len=512,
                     step=step,
                     sampling_param=sampling_param):

@@ -1,22 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
-import os.path as osp
-import time
-from datetime import datetime
-
 import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-from triton import Config
-from triton.ops.matmul_perf_model import (early_config_prune,
-                                          estimate_matmul_time)
 
 
 def per_channel_quant2(x, n_bits, eps, dtype):
     assert x.ndim == 2
     # x = x.to(torch.float32)
-    x_absmax = x.view(x.shape[0], -1).abs().max(dim=1)[0]  #.clamp(min=eps)
+    x_absmax = x.view(x.shape[0], -1).abs().max(dim=1)[0]
     q_max = 2**(n_bits - 1) - 1
     q_min = -2**(n_bits - 1)
     scale = x_absmax / (2**(n_bits - 1) - 1)
@@ -27,8 +19,7 @@ def per_channel_quant2(x, n_bits, eps, dtype):
 def per_channel_quant(x, n_bits, eps, dtype):
     assert x.ndim == 2
     x = x.to(torch.float32)
-    x_absmax = x.view(x.shape[0],
-                      -1).abs().max(dim=1, keepdim=True)[0]  #.clamp(min=eps)
+    x_absmax = x.view(x.shape[0], -1).abs().max(dim=1, keepdim=True)[0]
     q_max = 2**(n_bits - 1) - 1
     q_min = -2**(n_bits - 1)
     scale = x_absmax / (2**(n_bits - 1) - 1)
@@ -252,9 +243,8 @@ def _linear_add(
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
 
-    residual_ptrs = residual_ptr + stride_cm * offs_cm[:,
-                                                       None] + stride_cn * offs_cn[
-                                                           None, :]
+    residual_ptrs = (residual_ptr + stride_cm * offs_cm[:, None] +
+                     stride_cn * offs_cn[None, :])
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     residual = tl.load(residual_ptrs, mask=c_mask, other=0.)
     c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -280,8 +270,9 @@ def linear_dynamic_quant_triton_op_fast(x,
         assert residual.is_contiguous()
     c = torch.empty((M, N), device=a.device, dtype=output_dtype)
 
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(
-        N, META['BLOCK_N']), )
+    def grid(META):
+        return (triton.cdiv(M, META['BLOCK_M']) *
+                triton.cdiv(N, META['BLOCK_N']), )
 
     if residual is not None:
         _linear_add[grid](a,
@@ -548,25 +539,21 @@ def bench_rms_and_linear(M, dtype, provider, eps=1e-5, device='cuda'):
 
         def y_fwd():
 
-            linear_out = linear_dynamic_quant_triton_op_fast(
-                rms_out,
-                linear_weight_quant,
-                rms_scale,
-                linear_scale,
-                output_dtype=dtype)
+            linear_dynamic_quant_triton_op_fast(rms_out,
+                                                linear_weight_quant,
+                                                rms_scale,
+                                                linear_scale,
+                                                output_dtype=dtype)
     elif provider == 'float_torch':
         rms_out_torch = rms_norm_torch(x, rms_weight, eps).half()
 
         def y_fwd():
+            linear_torch(rms_out_torch, linear_weight)
 
-            linear_out_torch = linear_torch(rms_out_torch, linear_weight)
-
-    tflops = lambda ms: (x.element_size() * M * N * K * 1e-12) / (ms * 1e-3)
     quantiles = [0.5, 0.2, 0.8]
     ms, min_ms, max_ms = triton.testing.do_bench(y_fwd,
                                                  quantiles=quantiles,
                                                  rep=500)
-    # return tflops(ms), tflops(max_ms), tflops(min_ms)
     return ms, max_ms, min_ms
 
 

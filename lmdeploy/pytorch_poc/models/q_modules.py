@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from torch.nn.parameter import Parameter
 
 from ..kernels.w8a8_triton_kernels import (linear_dynamic_quant_triton_op_fast,
                                            per_channel_quant,

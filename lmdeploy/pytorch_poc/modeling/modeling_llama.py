@@ -131,7 +131,8 @@ class LlamaRotaryEmbedding(torch.nn.Module):
                          dtype=self.inv_freq.dtype)
 
         freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        # Different from paper, but it uses a different permutation in order
+        # to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer('cos_cached',
                              emb.cos()[None, None, :, :].to(dtype),
@@ -176,7 +177,8 @@ class LlamaLinearScalingRotaryEmbedding(LlamaRotaryEmbedding):
         t = t / self.scaling_factor
 
         freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        # Different from paper, but it uses a different permutation in order
+        # to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer('cos_cached',
                              emb.cos()[None, None, :, :].to(dtype),
@@ -218,7 +220,8 @@ class LlamaDynamicNTKScalingRotaryEmbedding(LlamaRotaryEmbedding):
                          dtype=self.inv_freq.dtype)
 
         freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        # Different from paper, but it uses a different permutation in order
+        # to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer('cos_cached',
                              emb.cos()[None, None, :, :].to(dtype),
@@ -236,7 +239,8 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
+    # The first two dimensions of cos and sin are always 1,
+    # so we can `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
     sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
     cos = cos[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
@@ -329,9 +333,9 @@ class LlamaAttention(nn.Module):
         self.rope_theta = config.rope_theta
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f'hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}'
-                f' and `num_heads`: {self.num_heads}).')
+            raise ValueError('hidden_size must be divisible by num_heads '
+                             f'(got `hidden_size`: {self.hidden_size}'
+                             f' and `num_heads`: {self.num_heads}).')
         self.q_proj = nn.Linear(self.hidden_size,
                                 self.num_heads * self.head_dim,
                                 bias=False)
@@ -451,14 +455,15 @@ class LlamaAttention(nn.Module):
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
-                f'Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is'
+                'Attention weights should be of size '
+                f'{(bsz, self.num_heads, q_len, kv_seq_len)}, but is'
                 f' {attn_weights.size()}')
 
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f'Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}'
-                )
+                raise ValueError('Attention mask should be of size '
+                                 f'{(bsz, 1, q_len, kv_seq_len)}, '
+                                 f'but is {attention_mask.size()}')
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
@@ -470,7 +475,8 @@ class LlamaAttention(nn.Module):
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
-                f'`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is'
+                '`attn_output` should be of size '
+                f'{(bsz, self.num_heads, q_len, self.head_dim)}, but is'
                 f' {attn_output.size()}')
 
         attn_output = attn_output.transpose(1, 2).contiguous()
@@ -519,16 +525,21 @@ class LlamaDecoderLayer(nn.Module):
                                                  torch.FloatTensor]]]:
         """
         Args:
-            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
-                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
+            hidden_states (`torch.FloatTensor`): input to the layer of shape
+                `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`, *optional*): attention mask
+                of size `(batch, 1, tgt_len, src_len)` where padding elements
+                are indicated by very large negative values.
             output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+                Whether or not to return the attentions tensors of all
+                attention layers. See `attentions` under
                 returned tensors for more detail.
             use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
+                If set to `True`, `past_key_values` key value states are
+                returned and can be used to speed up decoding
                 (see `past_key_values`).
-            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached
+                past key and value projection states
         """
 
         residual = hidden_states
@@ -563,7 +574,7 @@ class LlamaDecoderLayer(nn.Module):
         return outputs
 
 
-LLAMA_START_DOCSTRING = r"""
+LLAMA_START_DOCSTRING = r"""    # noqa: E501
     This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
     etc.)
@@ -581,7 +592,7 @@ LLAMA_START_DOCSTRING = r"""
 
 
 @add_start_docstrings(
-    'The bare LLaMA Model outputting raw hidden-states without any specific head on top.',
+    'The bare LLaMA Model outputting raw hidden-states without any specific head on top.',  # noqa: E501
     LLAMA_START_DOCSTRING,
 )
 class LlamaPreTrainedModel(PreTrainedModel):
@@ -607,7 +618,7 @@ class LlamaPreTrainedModel(PreTrainedModel):
             module.gradient_checkpointing = value
 
 
-LLAMA_INPUTS_DOCSTRING = r"""
+LLAMA_INPUTS_DOCSTRING = r"""    # noqa: E501
     Args:
         input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
             Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
@@ -672,7 +683,7 @@ LLAMA_INPUTS_DOCSTRING = r"""
 
 
 @add_start_docstrings(
-    'The bare LLaMA Model outputting raw hidden-states without any specific head on top.',
+    'The bare LLaMA Model outputting raw hidden-states without any specific head on top.',  # noqa: E501
     LLAMA_START_DOCSTRING,
 )
 class LlamaModel(LlamaPreTrainedModel):
@@ -705,7 +716,7 @@ class LlamaModel(LlamaPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask
+    # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask    # noqa
     def _prepare_decoder_attention_mask(self, attention_mask, input_shape,
                                         inputs_embeds, past_key_values_length):
         # create causal mask
@@ -745,37 +756,40 @@ class LlamaModel(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (output_attentions if output_attentions is not None
+                             else self.config.output_attentions)
         output_hidden_states = (output_hidden_states
                                 if output_hidden_states is not None else
                                 self.config.output_hidden_states)
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        use_cache = (use_cache
+                     if use_cache is not None else self.config.use_cache)
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (return_dict if return_dict is not None else
+                       self.config.use_return_dict)
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                'You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time'
-            )
+            raise ValueError('You cannot specify both decoder_input_ids'
+                             'and decoder_inputs_embeds at the same time')
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
-            raise ValueError(
-                'You have to specify either decoder_input_ids or decoder_inputs_embeds'
-            )
+            raise ValueError('You have to specify either decoder_input_ids'
+                             'or decoder_inputs_embeds')
 
         seq_length_with_past = seq_length
         past_key_values_length = 0
 
         if past_key_values is not None:
             past_key_values_length = past_key_values[0][0].shape[2]
-            seq_length_with_past = seq_length_with_past + past_key_values_length
+            seq_length_with_past = (seq_length_with_past +
+                                    past_key_values_length)
 
         if position_ids is None:
-            device = input_ids.device if input_ids is not None else inputs_embeds.device
+            device = (input_ids.device
+                      if input_ids is not None else inputs_embeds.device)
             position_ids = torch.arange(past_key_values_length,
                                         seq_length + past_key_values_length,
                                         dtype=torch.long,
@@ -800,8 +814,8 @@ class LlamaModel(LlamaPreTrainedModel):
         if self.gradient_checkpointing and self.training:
             if use_cache:
                 logger.warning_once(
-                    '`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`...'
-                )
+                    '`use_cache=True` is incompatible with gradient'
+                    ' checkpointing. Setting `use_cache=False`...')
                 use_cache = False
 
         # decoder layers
@@ -921,7 +935,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        r"""
+        r""" # noqa: E501
         Args:
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
                 Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
@@ -947,13 +961,15 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (output_attentions if output_attentions is not None
+                             else self.config.output_attentions)
         output_hidden_states = (output_hidden_states
                                 if output_hidden_states is not None else
                                 self.config.output_hidden_states)
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (return_dict if return_dict is not None else
+                       self.config.use_return_dict)
 
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn) # noqa: E501
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1021,7 +1037,8 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             if past_key_values:
                 position_ids = position_ids[:, -1].unsqueeze(-1)
 
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        # if `inputs_embeds` are passed, we only want to use them
+        # in the 1st generation step
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {'inputs_embeds': inputs_embeds}
         else:
@@ -1046,7 +1063,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
 
 
 @add_start_docstrings(
-    """
+    """ # noqa: E501
     The LLaMa Model transformer with a sequence classification head on top (linear layer).
 
     [`LlamaForSequenceClassification`] uses the last token in order to do the classification, as other causal models
@@ -1091,13 +1108,14 @@ class LlamaForSequenceClassification(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, SequenceClassifierOutputWithPast]:
-        r"""
+        r""" # noqa: E501
         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
             Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (return_dict if return_dict is not None else
+                       self.config.use_return_dict)
 
         transformer_outputs = self.model(
             input_ids,
