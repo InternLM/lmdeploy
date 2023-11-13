@@ -44,10 +44,11 @@ class TurbomindModelConfig:
     rope_theta: float = 10000.0
     size_per_head: int = 128
     group_size: int = 0
-    max_batch_size: int = 32
+    max_batch_size: int = 64
     max_context_token_num: int = 4
     step_length: int = 1
-    cache_max_entry_count: int = 48
+    cache_max_entry_count: float = 0.5
+    cache_block_seq_len: int = 128
     cache_chunk_size: int = 1
     use_context_fmha: int = 1
     quant_policy: int = 0
