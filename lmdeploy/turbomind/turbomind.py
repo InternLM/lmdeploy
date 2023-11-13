@@ -4,7 +4,6 @@ import copy
 import io
 import json
 import logging
-import os
 import os.path as osp
 import sys
 from configparser import ConfigParser
@@ -215,14 +214,21 @@ class TurboMind:
             with open(config_file, 'r') as f:
                 config = json.load(f)
             tm_config = config['turbomind']
-            model_name = tm_config['model_name']
-            group_size = tm_config['group_size']
             tm_config.update(kwargs)
+
+            def _get_key(key, value):
+                return value if value is not None else tm_config[key]
+
+            model_name = _get_key('model_name', model_name)
+            group_size = _get_key('group_size', group_size)
             if tm_config['weight_type'] == 'int4':
                 model_format = 'awq'
         else:
             tm_config = kwargs
 
+        assert model_name in MODELS.module_dict.keys(), \
+            f"'{model_name}' is not supported. " \
+            f'The supported models are: {MODELS.module_dict.keys()}'
         assert model_format in supported_formats, 'the model format ' \
             f'should be in {supported_formats}'
 
@@ -243,7 +249,7 @@ class TurboMind:
             cfg.weight_type = 'int4'
             output_format = 'w4'
             data_type = 'int4'
-            assert group_size > 0, 'group_size should > 0'
+            assert group_size > 0, f'group_size: {group_size} should > 0'
 
         self.config = cfg
         self.model_name = model_name

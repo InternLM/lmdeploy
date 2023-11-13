@@ -11,6 +11,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             quant_weights, smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
+from lmdeploy.lite.utils.export_turbomind import export_turbomind_hf_model
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -28,12 +29,16 @@ NORM_TYPE_MAP = {
 }
 
 
-def auto_awq(model: str,
+def auto_awq(model_name: str,
+             model: str,
              work_dir: str,
              w_bits: int = 4,
              w_sym: bool = False,
              w_group_size: int = 128,
              device: str = 'cuda'):
+
+    assert model != work_dir, '$WORK_DIR and $HF_MODEL should be different'
+    model_path = model
 
     # Load tokenizer and configuration
     tokenizer = AutoTokenizer.from_pretrained(model,
@@ -85,6 +90,11 @@ def auto_awq(model: str,
 
     model.save_pretrained(work_dir, max_shard_size='2GB')
     tokenizer.save_pretrained(work_dir)
+
+    export_turbomind_hf_model(model_name,
+                              model_path,
+                              work_dir,
+                              group_size=w_group_size)
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ class SubCliLite(object):
     """CLI for compressing LLMs."""
 
     def auto_awq(self,
+                 model_name: str,
                  model: str,
                  work_dir: str,
                  w_bits: int = 4,
@@ -14,6 +15,7 @@ class SubCliLite(object):
         """Perform weight quantization using AWQ algorithm.
 
         Args:
+            model_name (str): The name of model.
             model (str): The path of model in hf format.
             work_dir (str): The working directory to save results.
             w_bits (int): Bit number for weight quantization.
@@ -23,7 +25,8 @@ class SubCliLite(object):
         """
         from lmdeploy.lite.apis.auto_awq import auto_awq
 
-        auto_awq(model,
+        auto_awq(model_name,
+                 model,
                  work_dir,
                  w_bits=w_bits,
                  w_sym=w_sym,
