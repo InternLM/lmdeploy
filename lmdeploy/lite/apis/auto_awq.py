@@ -83,7 +83,7 @@ def auto_awq(model: str,
     smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size, device)
     quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
 
-    model.save_pretrained(work_dir)
+    model.save_pretrained(work_dir, max_shard_size='2GB')
     tokenizer.save_pretrained(work_dir)
 
 
