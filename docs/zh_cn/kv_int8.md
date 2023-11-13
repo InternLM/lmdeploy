@@ -52,12 +52,7 @@ lmdeploy lite kv_qparams \
 
 修改 `workspace/triton_models/weights/config.ini`：
 
-- use_context_fmha 改为 0，表示关闭 flashattention
 - quant_policy 设置为 4。表示打开 kv_cache int8
-
-这是因为 flashattention 有 v1、v2 两个版本，kv cache int8 曾经也实现过对称版本。
-
-排列组合需要实现 4 套 kernel，在算法不确定的时候过早优化，对软件来说是场灾难。
 
 ### **第四步**
 
