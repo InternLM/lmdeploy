@@ -1,8 +1,12 @@
-# turbomind config
+# TurboMind Config
 
-TurboMind 是 LMDeploy 的推理引擎，在用它推理 LLM 模型时，需要把输入模型转成 TurboMind 模型。在 TurboMind 的模型文件夹中，除模型权重外，TurboMind 模型还包括其他一些文件，其中最重要的是和推理性能息息相关的配置文件`triton_models/weights/config.ini`。
+TurboMind is one of the inference engines of LMDeploy. When using it to do model inference, you need to convert the input model into a TurboMind model. In the TurboMind model folder, besides model weight files, the TurboMind model also includes some other files, among which the most important is the configuration file `triton_models/weights/config.ini` that is closely related to inference performance.
 
-以 `llama-2-7b-chat` 模型为例，它的`config.ini`内容如下：
+If you are using LMDeploy version 0.0.x, please refer to the [turbomind 1.0 config](#turbomind-10-config) section to learn the relevant content in the configuration. Otherwise, please read [turbomind 2.0 config](#turbomind-20-config) to familiarize yourself with the configuration details.
+
+## TurboMind 1.0 config
+
+Taking the `llama-2-7b-chat` model as an example, in TurboMind 1.0, its `config.ini` content is as follows:
 
 ```toml
 [llama]
@@ -23,9 +27,97 @@ rotary_embedding = 128
 rope_theta = 10000.0
 size_per_head = 128
 group_size = 0
+max_batch_size = 32
 max_context_token_num = 4
 step_length = 1
+cache_max_entry_count = 48
+cache_chunk_size = 1
+use_context_fmha = 1
+quant_policy = 0
+max_position_embeddings = 2048
+use_dynamic_ntk = 0
+use_logn_attn = 0
+```
+
+These parameters are composed of model attributes and inference parameters. Model attributes include the number of layers, the number of heads, dimensions, etc., and they are **not modifiable**.
+
+```toml
+model_name = llama2
+head_num = 32
+kv_head_num = 32
+vocab_size = 32000
+num_layer = 32
+inter_size = 11008
+norm_eps = 1e-06
+attn_bias = 0
+start_id = 1
+end_id = 2
+rotary_embedding = 128
+rope_theta = 10000.0
+size_per_head = 128
+```
+
+In the following sections, we will focus on introducing the inference parameters.
+
+### data type
+
+`weight_type` and `group_size` are the relevant parameters, which cannot be modified.
+
+`weight_type` represents the data type of weights. Currently, `fp16` and `int4` are supported. `int4` represents 4bit weights. When `weight_type` is `int4`, `group_size` means the group size used when quantizing weights with `awq`. At present, turbomind only supports `group_size = 128`.
+
+### batch size
+
+`max_batch_size` determines the max size of a batch during inference. In general, the larger the batch size is, the higher the throughput is. But make sure that `max_batch_size <= cache_max_entry_count`
+
+### k/v cache size
+
+TurboMind allocates k/v cache memory based on `session_len`, `cache_chunk_size`, and `cache_max_entry_count`.
+
+- `session_len` denotes the maximum length of a sequence, i.e., the size of the context window.
+- `cache_chunk_size` indicates the size of k/v sequences to be allocated when new sequences are added.
+- `cache_max_entry_count` signifies the maximum number of k/v sequences that can be cached.
+
+### kv int8 switch
+
+When initiating 8bit k/v inference, it's necessary to modify the parameters `quant_policy` and `use_context_fmha`. Please refer to [kv int8](./kv_int8.md) for a guide.
+
+### long context switch
+
+By setting `use_dynamic_ntk = 1`, you can enable the Dynamic NTK option of RoPE, which allows the model to use long-text input and output.
+
+Regarding the principle of Dynamic NTK, please refer to:
+
+1. https://www.reddit.com/r/LocalLLaMA/comments/14mrgpr/dynamically_scaled_rope_further_increases
+2. https://kexue.fm/archives/9675
+
+You can also turn on [LogN attention scaling](https://kexue.fm/archives/8823) by setting `use_logn_attn = 1`.
+
+## TurboMind 2.0 config
+
+In TurboMind 2.0, The model attribute part in the config remains the same with TurboMind 1.0, while the inference parameters have changed. We still take the `llama-2-7b-chat` model as an example. In TurboMind 2.0, its config.ini content is as follows:
+
+```toml
+[llama]
+model_name = llama2
+tensor_para_size = 1
+head_num = 32
+kv_head_num = 32
+vocab_size = 32000
+num_layer = 32
+inter_size = 11008
+norm_eps = 1e-06
+attn_bias = 0
+start_id = 1
+end_id = 2
+session_len = 4104
+weight_type = fp16
+rotary_embedding = 128
+rope_theta = 10000.0
+size_per_head = 128
+group_size = 0
 max_batch_size = 64
+max_context_token_num = 4
+step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
@@ -36,44 +128,37 @@ use_dynamic_ntk = 0
 use_logn_attn = 0
 ```
 
-在这份配置中，可调参数为：
+### data type
 
-```toml
-max_batch_size = 64
-cache_max_entry_count = 0.5
-cache_block_seq_len = 128
-quant_policy = 0
-use_dynamic_ntk = 0
-use_logn_attn = 0
-```
+The same as in TurboMind 1.0
 
-## 调节 batch
+### batch size
 
-`max_batch_size`表示推理时最大的 batch 数量
+The maximum batch size is still set through `max_batch_size`. But its default value has been changed from 32 to 64, and `max_batch_size` is no longer related to `cache_max_entry_count`.
 
-## 调节 k/v cache
+### k/v cache size
 
-k/v cache的内存可通过`cache_block_seq_len`和`cache_max_entry_count`调节。
+k/v cache memory is determined by `cache_block_seq_len` and `cache_max_entry_count`.
 
-TurboMind 2.0 实现了 Paged Attention，按块管理 k/v cache。
+TurboMind 2.0 has implemented Paged Attention, managing the k/v cache in blocks.
 
-`cache_block_seq_len` 表示一块 k/v block 可以存放的 token 序列长度，默认 128。TurboMind 按照以下公式计算 k/v block 的内存大小：
+`cache_block_seq_len` represents the length of the token sequence in a k/v block with a default value 128. TurboMind calculates the memory size of the k/v block according to the following formula:
 
 ```
-cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type))
+cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type)
 ```
 
-对于 llama2-7b 模型来说，以 half 类型存放 k/v 时，一块 k/v block 的内存为：`128 * 32 * 32 * 128 * 2 * sizeof(half) = 64MB`
+For the llama2-7b model, when storing k/v as the `half` type, the memory of a k/v block is: `128 * 32 * 32 * 128 * 2 * sizeof(half) = 64MB`
 
-`cache_max_entry_count` 根据取值不同，表示不同的含义：
+The meaning of `cache_max_entry_count` varies depending on its value:
 
-- 当值为 (0, 1) 之间的小数时，`cache_max_entry_count` 表示 k/v block 使用的内存百分比。比如 A100-80G 显卡内存是80G，当`cache_max_entry_count`为0.5时，表示 k/v block 使用的内存为 80 * 0.5 = 40G
-- 当值为 > 1的整数时，表示 k/v block 数量
+- When it's a decimal between (0, 1), `cache_max_entry_count` represents the percentage of memory used by k/v blocks. For example, if turbomind launches on a A100-80G GPU with `cache_max_entry_count` being `0.5`, the total memory used by the k/v blocks is `80 * 0.5 = 40G`.
+- When it's an integer no less than 1, it represents the number of k/v blocks
 
-## KV-int8 开关
+### kv int8 switch
 
-`quant_policy = 4` 表示打开 KV-int8。使用这个功能时，请先参考 [kv int8](./kv_int8.md) 部署文档导出 KV 量化参数
+The same as in TurboMind 1.0
 
-## 外推能力开关
+### long context switch
 
-`use_dynamic_ntk`和`use_logn_attn`和模型的外推能力相关。
+The same as in TurboMind 1.0

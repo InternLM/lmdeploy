@@ -1,40 +1,40 @@
-# TurboMind Config
+# TurboMind 配置
 
 TurboMind 是 LMDeploy 的推理引擎，在用它推理 LLM 模型时，需要把输入模型转成 TurboMind 模型。在 TurboMind 的模型文件夹中，除模型权重外，TurboMind 模型还包括其他一些文件，其中最重要的是和推理性能息息相关的配置文件`triton_models/weights/config.ini`。
 
-如果你使用的是 LMDeploy 0.0.x 版本，请参考[turbomind 1.0 config](#turbomind-10-config)章节，了解配置中的相关内容。如果使用的是 LMDeploy 0.1.x 版本，请阅读[turbomind 2.0 config](#turbomind-20-config)了解配置细节。
+如果你使用的是 LMDeploy 0.0.x 版本，请参考[turbomind 1.0 配置](#turbomind-10-配置)章节，了解配置中的相关内容。如果使用的是 LMDeploy 0.1.x 版本，请阅读[turbomind 2.0 配置](#turbomind-20-配置)了解配置细节。
 
-## TurboMind 1.0 config
+## TurboMind 1.0 配置
 
 以 `llama-2-7b-chat` 模型为例，在 TurboMind 1.0 中，它的`config.ini`内容如下：
 
 ```toml
 [llama]
 model_name = llama2
+tensor_para_size = 1
 head_num = 32
 kv_head_num = 32
-size_per_head = 128
 vocab_size = 32000
 num_layer = 32
-rotary_embedding = 128
-rope_theta = 10000.0
 inter_size = 11008
 norm_eps = 1e-06
 attn_bias = 0
 start_id = 1
 end_id = 2
+session_len = 4104
 weight_type = fp16
+rotary_embedding = 128
+rope_theta = 10000.0
+size_per_head = 128
 group_size = 0
 max_batch_size = 32
 max_context_token_num = 4
-session_len = 4104
 step_length = 1
 cache_max_entry_count = 48
 cache_chunk_size = 1
 use_context_fmha = 1
 quant_policy = 0
-tensor_para_size = 1
-max_position_embeddings = 0
+max_position_embeddings = 2048
 use_dynamic_ntk = 0
 use_logn_attn = 0
 ```
@@ -45,16 +45,16 @@ use_logn_attn = 0
 model_name = llama2
 head_num = 32
 kv_head_num = 32
-size_per_head = 128
 vocab_size = 32000
 num_layer = 32
-rotary_embedding = 128
-rope_theta = 10000.0
 inter_size = 11008
 norm_eps = 1e-06
 attn_bias = 0
 start_id = 1
 end_id = 2
+rotary_embedding = 128
+rope_theta = 10000.0
+size_per_head = 128
 ```
 
 在接下来的章节中，我们重点介绍推理参数。
@@ -73,13 +73,13 @@ end_id = 2
 
 TurboMind 根据 `session_len`、 `cache_chunk_size` 和 `cache_max_entry_count` 开辟 k/v cache 内存。
 
-`session_len` 表示一个序列的最大长度，即 context window 的大小。
-`cache_chunk_size` 表示当需要开辟新的内存时，每次要开辟多少个序列的 k/v cache
-`cache_max_entry_count` 表示最多缓存多少个对话序列
+- `session_len` 表示一个序列的最大长度，即 context window 的大小。
+- `cache_chunk_size` 表示当新增对话序列时，每次要开辟多少个序列的 k/v cache
+- `cache_max_entry_count` 表示最多缓存多少个对话序列
 
 ### kv int8 开关
 
-当启动 8bit k/v 推理时，需要把 `quant_policy` 和 `use_context_fmha` 分别改成 4、0。在此之前，请务必参考 [kv int8](./kv_int8.md) 部署文档，导出 k/v int8 的量化参数。
+当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](./kv_int8.md) 部署文档。
 
 ### 外推能力开关
 
@@ -92,9 +92,9 @@ TurboMind 根据 `session_len`、 `cache_chunk_size` 和 `cache_max_entry_count`
 
 设置 `use_logn_attn = 1`，可以开启 [LogN attention scaling](https://kexue.fm/archives/8823)。
 
-## TurboMind 2.0 config
+## TurboMind 2.0 配置
 
-TurboMind 升级到 2.0 之后，config中部分字段的含义发生了变化。以 `llama-2-7b-chat` 模型为例，在 TurboMind 2.0 中，它的`config.ini`内容如下：
+TurboMind 2.0 config 中的模型属性部分和 1.0 一致，但推理参数发生了变化。在下文中，我们仍然使用 `llama-2-7b-chat` 模型的 config 为例，重点讲述推理参数的变化。在 TurboMind 2.0 中，`llama-2-7b-chat` 的 `config.ini` 内容如下：
 
 ```toml
 [llama]
@@ -127,8 +127,6 @@ max_position_embeddings = 2048
 use_dynamic_ntk = 0
 use_logn_attn = 0
 ```
-
-其中，模型属性部分和 turbomind 1.0 一致，推理参数发生了变更。
 
 ### 数据类型
 
