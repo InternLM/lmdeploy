@@ -197,6 +197,8 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
 
     // int step = input_tensors->at("step").getVal<int>();
 
+    CheckValues(decoder_input, sess.batch_size * hidden_units_, Concat("decoder_input", 0), stream_);
+
     ////////////////////////////////////////////
     /// RMSNorm
     invokeRootMeanSquareNorm(decoder_output,
@@ -208,7 +210,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
                              stream_);
     sync_check_cuda_error();
 
-    // CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_norm", 0), stream_);
+    CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_norm", 0), stream_);
 
     // CheckBatchConsistency(decoder_output,
     //                       hidden_units_,
@@ -228,7 +230,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
         //                       tensor_para_.rank_,
         //                       stream_);
 
-        // CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_self_attn", layer), stream_);
+        CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_self_attn", layer), stream_);
 
         invokeFusedAddBiasResidualRMSNorm(decoder_input,
                                           decoder_output,
@@ -240,12 +242,12 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
                                           stream_);
         sync_check_cuda_error();
 
-        // CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_norm1", layer), stream_);
+        CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_norm1", layer), stream_);
 
         // decoder_layer_output_ = ffn(decoder_normed_input_)
         forwardFfn(sess, decoder_output, layer);
 
-        // CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_ffn", layer), stream_);
+        CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_ffn", layer), stream_);
 
         auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
                                                      input_tensors->at("output_norm_weight").getPtr<T>();
@@ -259,7 +261,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
                                           stream_);
         sync_check_cuda_error();
 
-        // CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_norm2", layer), stream_);
+        CheckValues(decoder_output, sess.batch_size * hidden_units_, Concat("decode_norm2", layer), stream_);
     }
 
     if (is_free_buffer_after_forward_) {

@@ -507,7 +507,7 @@ bool LlamaBatch<T>::generate()
     // T x = 999999.f;
     // cudaMemcpyAsync(decoder_input_buf_, &x, sizeof(x), cudaMemcpyDefault, stream_);
 
-    // CheckValues(decoder_input_buf_, batch_size_ * llama_->hidden_units_, "embedding_lookup", stream_);
+    CheckValues(decoder_input_buf_, batch_size_ * llama_->hidden_units_, "embedding_lookup", stream_);
 
     // if (compare_mode == kCmpWrite) {
     //     if (rank_ == 0) {

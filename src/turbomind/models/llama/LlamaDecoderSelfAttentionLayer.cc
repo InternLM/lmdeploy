@@ -248,6 +248,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     linear_.forward(qkv_buf_, input_query_data, batch_size, weights->qkv);
     POP_RANGE;
 
+    CheckValues(qkv_buf_, batch_size * weights->qkv.output_dims, "decode_qkv", stream_);
+
     // CheckBatchConsistency(qkv_buf_,
     //                       (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_,
     //                       batch_size,
@@ -302,6 +304,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
         stream_);
     sync_check_cuda_error();
 
+    CheckValues(context_buf_, batch_size * weights->output.input_dims, "decode_context", stream_);
+
     // CheckBatchConsistency((T*)context_buf_,
     //                       local_hidden_units_,
     //                       batch_size,
@@ -310,6 +314,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     //                       stream_);
 
     linear_.forward(hidden_features_data, context_buf_, batch_size, weights->output);
+
+    CheckValues(hidden_features_data, batch_size * weights->output.output_dims, "decode_o", stream_);
 
     // CheckBatchConsistency(hidden_features_data,
     //                       hidden_units_,

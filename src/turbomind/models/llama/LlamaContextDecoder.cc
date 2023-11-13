@@ -234,6 +234,8 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                             stream_);
     sync_check_cuda_error();
 
+    CheckValues(decoder_input_output, sess.token_num * hidden_units_, Concat("prefill_input", 0), stream_);
+
     /////////////////////////////////////////////
     /// RMSNorm
     invokeRootMeanSquareNorm(decoder_output,
@@ -245,14 +247,14 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                              stream_);
     sync_check_cuda_error();
 
-    // CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm", 0), stream_);
+    CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm", 0), stream_);
 
     for (size_t layer = 0; layer < num_layer_; ++layer) {
         /////////////////////////////////////////////
         /// self-attention
         forwardSelfAttn(sess, decoder_output, input_tensors, layer, false);
 
-        // CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_self_attn", layer), stream_);
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_self_attn", layer), stream_);
 
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,
                                           decoder_output,
@@ -264,7 +266,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                           stream_);
         sync_check_cuda_error();
 
-        // CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm1", layer), stream_);
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm1", layer), stream_);
 
         ////////////////////////////////////////////
         /// feed-forward network
@@ -273,7 +275,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             {"ffn_output", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, decoder_output}}};
         silu_ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &decoder_layer_weights->at(layer)->ffn_weights);
 
-        // CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_ffn", layer), stream_);
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_ffn", layer), stream_);
 
         auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
                                                      input_tensors->at("output_norm_weight").getPtr<T>();
@@ -287,7 +289,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                           stream_);
         sync_check_cuda_error();
 
-        // CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm2", layer), stream_);
+        CheckValues(decoder_output, sess.token_num * hidden_units_, Concat("prefill_norm2", layer), stream_);
     }
 
     if (is_free_buffer_after_forward_) {

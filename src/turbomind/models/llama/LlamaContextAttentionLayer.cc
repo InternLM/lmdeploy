@@ -157,6 +157,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
     linear_.forward(qkv_buf_, attention_input, num_token, weights->qkv);
 
+    CheckValues(qkv_buf_, num_token * weights->qkv.output_dims, "prefill_qkv", stream_);
+
     //////////////////////////////////////////////
     /// transpose qkv & apply rotary embedding & rebuild padding
     /// qkv [B, s, H + 2kvH, D] -> (q [B, H, s, D], k [B, kvH, s, D], v [B, kvH, s, D])
@@ -237,9 +239,13 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   weights->past_kv_scale.data());
     }
 
+    CheckValues(qkv_buf_3_, num_token * weights->output.input_dims, "prefill_context", stream_);
+
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
     linear_.forward(attention_out, qkv_buf_3_, num_token, weights->output);
+
+    CheckValues(attention_out, num_token * weights->output.output_dims, "prefill_o", stream_);
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);

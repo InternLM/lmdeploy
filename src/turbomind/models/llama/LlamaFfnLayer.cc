@@ -20,6 +20,7 @@
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 // #include <glog/logging.h>
 
@@ -99,9 +100,13 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
         activation(num_token);
     }
 
+    CheckValues(gating_buf_, num_token * weights->output.input_dims, "ffn13", stream_);
+
     // w2(x)
     linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output);
     POP_RANGE;
+
+    CheckValues(ffn_output_data, num_token * weights->output.output_dims, "ffn2", stream_);
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);
