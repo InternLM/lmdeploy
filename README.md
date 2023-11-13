@@ -69,7 +69,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 |   QWen-7B    |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |   QWen-14B   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan2-7B |       Yes       | Yes  |   No    |  Yes  |  No  |
+| Baichuan2-7B |       Yes       | Yes  |   Yes   |  Yes  |  No  |
 |  Code Llama  |       Yes       | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
