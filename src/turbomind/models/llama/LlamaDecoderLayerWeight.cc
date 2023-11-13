@@ -267,6 +267,7 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
 
     turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_);
     turbomind::mallocWeights(self_attn_weights.output, attn_bias_);
+    self_attn_weights.past_kv_scale = {1.f, 0.f, 1.f, 0.f};
 
     if (weight_type_ == WeightType::kINT4) {
         turbomind::mallocWeights(ffn_weights.fused_gating_intermediate, false);
@@ -335,15 +336,11 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_, 0);
 
     // load kv_cache quant scale
-    // if file not exist, get empty vector
     std::string   scale_path = dir_path + ".past_kv_scale." + rank_spec + ".weight";
     std::ifstream in(scale_path, std::ios::in);
     if (in.is_open()) {
         in.close();
         self_attn_weights.past_kv_scale = loadArrayFromBin({4}, scale_path);
-    }
-    else {
-        self_attn_weights.past_kv_scale = {1.f, 0.f, 1.f, 0.f};
     }
 }
 
@@ -373,6 +370,8 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
         getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
     }
     getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
+    output.insert(concat(prefix, "past_kv_scale", tensor_para_rank_, "weight"),
+                  Tensor{MEMORY_CPU, TYPE_FP32, {4 * sizeof(float)}, self_attn_weights.past_kv_scale.data()});
 
     return output;
 }

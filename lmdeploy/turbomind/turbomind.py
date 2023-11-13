@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import logging
+import os
 import os.path as osp
 import sys
 from configparser import ConfigParser
@@ -156,7 +157,22 @@ class TurboMind:
             logger.warning(f'get {len(tm_params)} model params')
             output_model.set_tm_params(tm_params)
             output_model.export()
+            # load kv qparams
+            self.load_kv_qparams(model_path, tm_params, **kwargs)
             assert len(tm_params) == 0, f'missing {tm_params.keys()}'
+
+    def load_kv_qparams(self, model_path, tm_params, **kwargs):
+        if self.config.quant_policy:
+            logger.error('loading kv_cache quant scale')
+            from lmdeploy.lite.apis.kv_qparams import main as kv_loader
+            kv_sym = kwargs.get('kv_sym', False)
+            kv_bits = kwargs.get('kv_bits', 8)
+            tp = self.config.tensor_para_size
+            kv_loader(model_path, model_path, kv_bits, kv_sym, tp, tm_params)
+        else:
+            for key in list(tm_params.keys()):
+                if 'past_kv_scale' in key:
+                    tm_params.pop(key)
 
     def get_model_params(self):
 
@@ -229,6 +245,7 @@ class TurboMind:
             data_type = 'int4'
             assert group_size > 0, 'group_size should > 0'
 
+        self.config = cfg
         self.model_name = model_name
         self.data_type = data_type
 
@@ -271,6 +288,9 @@ class TurboMind:
                 self.gpu_count = tp_cfg
             self.model_name = parser.get(section_name, 'model_name')
             self.data_type = parser.get(section_name, 'weight_type')
+            cfg = parser._sections[section_name]
+            cfg = TurbomindModelConfig.from_dict(cfg)
+            self.config = cfg
 
         # create model
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
