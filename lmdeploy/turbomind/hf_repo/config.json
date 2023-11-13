@@ -1,0 +1,11 @@
+{
+    "architectures": [
+        "LmdeployForCausalLM"
+    ],
+    "auto_map": {
+        "AutoConfig": "configuration_lmdeploy.LmdeployConfig",
+        "AutoModel": "modeling_lmdeploy.LmdeployForCausalLM",
+        "AutoModelForCausalLM": "modeling_lmdeploy.LmdeployForCausalLM"
+    },
+    "turbomind": {}
+}

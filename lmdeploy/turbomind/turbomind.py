@@ -98,8 +98,8 @@ class TurboMind:
     """
 
     def __init__(self,
-                 model_source: ModelSource,
                  model_path: str,
+                 model_source: ModelSource = ModelSource.WORKSPACE,
                  model_name: Optional[str] = None,
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
@@ -537,6 +537,7 @@ class TurboMindInstance:
         tm_inputs = _np_dict_to_tm_dict(inputs)
 
         # start forward thread
+        self.que = Queue()
         self._forward_thread(tm_inputs)
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
