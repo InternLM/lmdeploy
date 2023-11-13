@@ -446,8 +446,10 @@ void LlamaBatch<T>::initializeGeneration()
     // seq_limit_len_, will be compared to `step` instead of `sequence_length`, so padding len should be accounted for
     for (int i = 0; i < batch_size_; ++i) {
         h_seq_limit_len_[i] = request_seq_len_limit_[i] + (max_context_len_ - h_context_length_buf_[i]);
-        // mask finished sequences
-        h_finished_buf_[i] = max_context_len_ >= h_seq_limit_len_[i];
+        // clear finished flag for new sequences
+        if (requests_[i]->start_flag) {
+            h_finished_buf_[i] = 0;
+        }
     }
     check_cuda_error(
         cudaMemcpyAsync(seq_limit_len_, h_seq_limit_len_, sizeof(uint32_t) * batch_size_, cudaMemcpyDefault, stream_));
