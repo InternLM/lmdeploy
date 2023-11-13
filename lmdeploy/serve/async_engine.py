@@ -69,8 +69,8 @@ class AsyncEngine:
         """Stop a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
-        if hasattr(self.generators[instance_id], 'end'):  # pytorch model
-            self.generators[instance_id].end(session_id)
+        if hasattr(self.generators[instance_id], 'cancel'):  # pytorch model
+            self.generators[instance_id].cancel(session_id)
             return
         for outputs in self.generators[instance_id].stream_infer(
                 session_id,
@@ -86,6 +86,9 @@ class AsyncEngine:
         """Clear a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
+        if hasattr(self.generators[instance_id], 'end'):  # pytorch model
+            self.generators[instance_id].end(session_id)
+            return
         for outputs in self.generators[instance_id].stream_infer(
                 session_id,
                 input_ids,
