@@ -67,10 +67,10 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 |    SOLAR     |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-|   QWen-7B    |   Yes    | Yes  |   Yes   |  No   |  No  |
-|   QWen-14B   |   Yes    | Yes  |   Yes   |  No   |  No  |
+|   QWen-7B    |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|   QWen-14B   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan2-7B |   Yes    | Yes  |   No    |  No   |  No  |
+| Baichuan2-7B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |  Code Llama  |   Yes    | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
