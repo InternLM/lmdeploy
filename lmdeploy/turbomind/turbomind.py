@@ -346,15 +346,15 @@ class TurboMindInstance:
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
             output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0].cpu()
-            # sequence_length = outputs['sequence_length'].long()[:, 0]
+            # sequence_length = outputs['sequence_length'].long()[:, 0].cpu()
+            sequence_length = outputs['sequence_length'].long()[:, 0]
             output_ids = [
                 output_id[s:l] for output_id, s, l in zip(
                     output_ids, seq_start, sequence_length)
             ]
             sequence_length -= seq_start.to(sequence_length.device)
 
-            # outputs = [(1, 1)]
+            outputs = []
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id:
@@ -363,7 +363,6 @@ class TurboMindInstance:
                     outputs.append((output[:-1], len_))
                 else:
                     outputs.append((output, len_))
-
             yield outputs
 
             if finish:
