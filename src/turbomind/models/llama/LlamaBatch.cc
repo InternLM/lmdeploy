@@ -355,7 +355,7 @@ bool LlamaBatch<T>::Initialize()
         });
 
         // all blocks are not enough to hold a single sequence
-        FT_CHECK_WITH_INFO(active_end != idxs.begin(), "No enough blocks.");
+        FT_CHECK_WITH_INFO(sequences.size()==0 || active_end != idxs.begin(), "No enough blocks.");
 
         // move swap-ins to the back
         auto swapin_beg = std::stable_partition(idxs.begin(), active_end, [&](int idx) {
