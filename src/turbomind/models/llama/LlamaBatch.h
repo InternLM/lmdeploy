@@ -246,6 +246,9 @@ private:
     std::condition_variable output_cv_;
     Requests                output_reqs_;
     bool                    output_stop_token_{false};
+    int*   d_output_ids_       = nullptr;
+    int*   d_sequence_lengths_ = nullptr;
+    TensorMap               output_tensors_;
 };
 
 }  // namespace turbomind

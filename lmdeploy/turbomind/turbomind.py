@@ -347,13 +347,14 @@ class TurboMindInstance:
 
             output_ids = outputs['output_ids'][:, 0, :]
             sequence_length = outputs['sequence_length'].long()[:, 0].cpu()
+            # sequence_length = outputs['sequence_length'].long()[:, 0]
             output_ids = [
                 output_id[s:l] for output_id, s, l in zip(
                     output_ids, seq_start, sequence_length)
             ]
             sequence_length -= seq_start.to(sequence_length.device)
 
-            outputs = []
+            # outputs = [(1, 1)]
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id:

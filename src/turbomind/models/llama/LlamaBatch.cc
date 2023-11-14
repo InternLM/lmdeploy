@@ -23,6 +23,8 @@
 #include <sstream>
 #include <unordered_map>
 
+namespace ft = turbomind;
+
 namespace turbomind {
 
 void ClearState(BatchState& s)
@@ -534,6 +536,26 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     rope_theta_ = (float*)allocator_->reMalloc(rope_theta_, sizeof(float) * batch_size, false);
 
     is_allocate_buffer_ = true;
+
+    if (rank_ == 0) {
+        const size_t beam_width = 1;
+        d_output_ids_ = (int*)(allocator_->reMalloc(d_output_ids_, sizeof(int) * 1 * beam_width * session_len, false, true));
+        d_sequence_lengths_ =
+            (int*)(allocator_->reMalloc(d_sequence_lengths_, sizeof(int) * 1 * beam_width, false, true));
+
+
+        output_tensors_ = std::unordered_map<std::string, ft::Tensor>{
+            {"output_ids",
+            ft::Tensor{ft::MEMORY_CPU,
+                        ft::TYPE_UINT32,
+                        std::vector<size_t>{1, beam_width, session_len},
+                        d_output_ids_}},
+            {"sequence_length",
+            ft::Tensor{ft::MEMORY_CPU,
+                        ft::TYPE_UINT32,
+                        std::vector<size_t>{1, beam_width},
+                        d_sequence_lengths_}}};
+    }
 }
 
 template<typename T>
@@ -679,6 +701,7 @@ void LlamaBatch<T>::FreeBuffer()
 
         is_allocate_persistant_buffer_ = false;
     }
+    // TODO: free output_tensor_
 }
 
 template<typename T>
@@ -1219,7 +1242,20 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
             for (int i = 0; i < batch_size; ++i) {
                 FT_CHECK(state_->requests[i] != nullptr);
                 if (state_->requests[i]->stream_cb && rank_ == 0) {
+                    auto& _output_tensor_map = state_->requests[i]->outputs[rank_].get();
+                    auto& _output_ids = _output_tensor_map.at("output_ids");
+                    auto& _sequence_length = _output_tensor_map.at("sequence_length");
+
+                    // Copy(src, size, dst)
+                    // printf("_output_ids: %s\n", _output_ids.toString().c_str());
+                    // printf("_sequence_length: %s\n", _sequence_length.toString().c_str());
+                    // printf("dst_output_ids: %s\n", output_tensors_.get().at("output_ids").toString().c_str());
+                    // printf("dst_seq_len: %s\n", output_tensors_.get().at("sequence_length").toString().c_str());
+                    Copy(_output_ids.getPtr<int>(), _output_ids.size(), output_tensors_.get().at("output_ids").getPtr<int>());
+                    Copy(_sequence_length.getPtr<int>(), _sequence_length.size(), output_tensors_.get()["sequence_length"].getPtr<int>());
+                    check_cuda_error(cudaStreamSynchronize(stream_));
                     state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
+                    // state_->requests[i]->stream_cb(&output_tensors_.get());
                 }
             }
             if (rank_ == 0 && model_->ffi_lock_) {
