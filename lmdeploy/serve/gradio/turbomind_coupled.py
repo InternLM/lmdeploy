@@ -185,3 +185,8 @@ def run_local(model_path: str,
                    server_port=server_port,
                    server_name=server_name,
                )
+
+
+if __name__ == '__main__':
+    import fire
+    fire.Fire(run_local)

@@ -281,8 +281,13 @@ class TurboMindInstance:
 
             return np.full(shape, data, dtype=dtype)
 
-        input_ids = [torch.IntTensor(ids) for ids in input_ids]
-        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
+        if stop:
+            input_ids = [torch.IntTensor([[]]) for _ in input_ids]
+            input_lengths = torch.IntTensor([0] * len(input_ids))
+        else:
+            input_ids = [torch.IntTensor(ids) for ids in input_ids]
+            input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
+
         input_ids = pad_sequence(input_ids,
                                  batch_first=True,
                                  padding_value=self.eos_id)
