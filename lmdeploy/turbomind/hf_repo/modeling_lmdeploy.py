@@ -137,6 +137,7 @@ class LmdeployForCausalLM(PreTrainedModel):
                                             sequence_end=False,
                                             stop=True):
                 pass
+            session._error = 1
         finally:
             self.que.put(generator)
 
