@@ -10,6 +10,7 @@ def export_turbomind_hf_model(model_name: str,
                               model_format: str = 'awq',
                               group_size: int = 128,
                               tp: int = 1):
+    """Export hf lmdeploy model and config.json."""
     import lmdeploy
     from lmdeploy.model import MODELS
     from lmdeploy.turbomind.deploy.converter import get_model_format

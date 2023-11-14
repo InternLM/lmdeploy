@@ -11,6 +11,7 @@ def _export_weight(into: str,
                    kv_qparams: np.array,
                    out_path: str,
                    tm_params: dict = None):
+    """Save kv_qparams to disk or copy to tm_params."""
     if tm_params is None:
         print(into)
         kv_qparams.tofile(out_path)

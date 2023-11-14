@@ -8,6 +8,7 @@ from lmdeploy.version import __version__ as lm_version
 
 
 class LmdeployConfig(PretrainedConfig):
+    """Lmdeploy config."""
 
     def __init__(self, turbomind: dict = None, **kwargs):
         default_tm_cfg = copy.deepcopy(

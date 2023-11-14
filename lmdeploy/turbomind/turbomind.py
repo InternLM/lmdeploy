@@ -93,7 +93,13 @@ class TurboMind:
 
     Args:
         model_path (str): the path of turbomind's model
-        eos_id (int): eos token id
+        model_source (int): model source
+        model_name (str): needed when model_path is a hf model and not
+            managed by lmdeploy
+        model_format (str): needed when model_path is a hf model and not
+            managed by lmdeploy
+        group_size (int): needed when model_path is a hf model and not
+            managed by lmdeploy
         tp (int): tensor parallel
     """
 
@@ -161,6 +167,7 @@ class TurboMind:
             assert len(tm_params) == 0, f'missing {tm_params.keys()}'
 
     def load_kv_qparams(self, model_path, tm_params, **kwargs):
+        """Load kv qparams."""
         if self.config.quant_policy:
             logger.error('loading kv_cache quant scale')
             from lmdeploy.lite.apis.kv_qparams import main as kv_loader
@@ -174,6 +181,7 @@ class TurboMind:
                     tm_params.pop(key)
 
     def get_model_params(self):
+        """Get turbomind model params."""
 
         def _get_params(device_id, que):
             with cuda_ctx(device_id):
@@ -208,6 +216,7 @@ class TurboMind:
                               group_size: Optional[int] = None,
                               tp: Optional[int] = None,
                               **kwargs):
+        """Load model which is in hf format."""
         # get model_name, group_size if is lmdeploy managed.
         if model_source == ModelSource.HF_LMDEPLOY:
             config_file = osp.join(model_path, 'config.json')
@@ -280,6 +289,7 @@ class TurboMind:
         return output_model
 
     def create_common_from_workspace(self, model_path: str):
+        """Load model which is converted by `lmdeploy convert`"""
         ini_path = osp.join(model_path, 'triton_models', 'weights',
                             'config.ini')
         with open(ini_path, 'r') as f:
@@ -335,9 +345,9 @@ class TurboMind:
                       usually a quantized model.
                     - 3) A repo_id or path which is not managed by lmdeploy,
                       like Qwen, Baichuan.
-            model_name (str): needed when pretrained_model_name_or_path is 1)
-            model_format (str): needed when pretrained_model_name_or_path is 2)
-            group_size (str): needed when pretrained_model_name_or_path is 3)
+            model_name (str): needed when pretrained_model_name_or_path is 3)
+            model_format (str): needed when pretrained_model_name_or_path is 3)
+            group_size (int): needed when pretrained_model_name_or_path is 3)
             tp (int): tensor parallel size
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
