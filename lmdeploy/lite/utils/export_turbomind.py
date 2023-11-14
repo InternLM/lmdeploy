@@ -50,5 +50,7 @@ def export_turbomind_hf_model(model_name: str,
     with open(config_file) as f:
         data = json.load(f)
     data['turbomind'] = config
+    from lmdeploy.version import __version__
+    data['lmdeploy_version'] = __version__
     with open(config_file, 'w') as f:
         f.write(json.dumps(data, indent=2) + '\n')

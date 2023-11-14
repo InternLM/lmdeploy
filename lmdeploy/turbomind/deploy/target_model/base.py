@@ -98,6 +98,7 @@ class BaseOutputModel(ABC):
         assert self.cfg.valid
         self.to_file = to_file
         self.out_dir = out_dir
+        self.tm_params = {}
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
@@ -121,9 +122,6 @@ class BaseOutputModel(ABC):
         final_cfg.update(dict(head_num=head_num, vocab_size=_vocab_size))
         return TurbomindModelConfig.from_dict(final_cfg, allow_none=True)
 
-    def set_tm_params(self, tm_params):
-        self.tm_params = tm_params
-
     def export_config(self) -> None:
         """export turbomind config."""
         if self.to_file:
@@ -143,8 +141,8 @@ class BaseOutputModel(ABC):
             tprint(name, param.shape)
             param.contiguous().cpu().numpy().tofile(
                 osp.join(self.out_dir, name))
-        elif hasattr(self, 'tm_params'):
-            tm_params = getattr(self, 'tm_params')
+        elif len(self.tm_params) > 0:
+            tm_params = self.tm_params
             weight_type = self.cfg.weight_type
             assert weight_type in ['fp16', 'fp32', 'int4']
 
@@ -162,6 +160,8 @@ class BaseOutputModel(ABC):
             for tm_tensor in tm_params[name]:
                 tm_tensor.copy_from(th_tensor)
             tm_params.pop(name)
+        else:
+            tprint('skip export', name, param.shape)
 
     def save_split(self,
                    tensor: torch.Tensor,

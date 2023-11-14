@@ -347,7 +347,6 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
 template<typename T>
 TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 {
-    // TODO: support KV Cache INT8
     TensorMap output;
 
     output.insert(concat(prefix, "attention_norm.weight"),

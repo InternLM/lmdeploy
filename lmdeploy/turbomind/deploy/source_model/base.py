@@ -64,6 +64,7 @@ class BaseReader(ABC):
             for key in self.params:
                 layer_id = re.findall(self.attn_layer_patten, key)
                 if len(layer_id) == 0:
+                    # tok, norm, output
                     to_remove.append(key)
                 else:
                     layer_id = int(layer_id[0])

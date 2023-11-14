@@ -156,11 +156,11 @@ class TurboMind:
         for t in threads:
             t.join()
 
-        # convert model to turbomind format if load a hf model
+        # convert model to turbomind format if loading a hf model
         if model_source in [ModelSource.HF_LMDEPLOY, ModelSource.HF_MODEL]:
-            tm_params = self.get_model_params()
+            tm_params = output_model.tm_params
+            self.get_model_params(tm_params)
             logger.warning(f'get {len(tm_params)} model params')
-            output_model.set_tm_params(tm_params)
             output_model.export()
             # load kv qparams
             self.load_kv_qparams(model_path, tm_params, **kwargs)
@@ -169,7 +169,7 @@ class TurboMind:
     def load_kv_qparams(self, model_path, tm_params, **kwargs):
         """Load kv qparams."""
         if self.config.quant_policy:
-            logger.error('loading kv_cache quant scale')
+            logger.warning('loading kv_cache quant scale')
             from lmdeploy.lite.apis.kv_qparams import main as kv_loader
             kv_sym = kwargs.get('kv_sym', False)
             kv_bits = kwargs.get('kv_bits', 8)
@@ -180,7 +180,7 @@ class TurboMind:
                 if 'past_kv_scale' in key:
                     tm_params.pop(key)
 
-    def get_model_params(self):
+    def get_model_params(self, tm_params):
         """Get turbomind model params."""
 
         def _get_params(device_id, que):
@@ -198,15 +198,12 @@ class TurboMind:
         for t in threads:
             t.join()
 
-        tm_params = {}
         for _ in range(self.gpu_count):
             tensor_map = que.get()
             for k, v in tensor_map.items():
                 if k not in tm_params:
                     tm_params[k] = []
                 tm_params[k].append(v)
-
-        return tm_params
 
     def create_common_from_hf(self,
                               model_source: ModelSource,
