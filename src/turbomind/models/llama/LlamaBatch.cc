@@ -1254,8 +1254,8 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
                     Copy(_output_ids.getPtr<int>(), _output_ids.size(), output_tensors_.get().at("output_ids").getPtr<int>());
                     Copy(_sequence_length.getPtr<int>(), _sequence_length.size(), output_tensors_.get()["sequence_length"].getPtr<int>());
                     check_cuda_error(cudaStreamSynchronize(stream_));
-                    state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
-                    // state_->requests[i]->stream_cb(&output_tensors_.get());
+                    // state_->requests[i]->stream_cb(&state_->requests[i]->outputs[rank_].get());
+                    state_->requests[i]->stream_cb(&output_tensors_.get());
                 }
             }
             if (rank_ == 0 && model_->ffi_lock_) {
