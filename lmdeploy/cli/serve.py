@@ -34,6 +34,7 @@ class SubCliServe(object):
             server_port (int): the port of gradio server
             batch_size (int): batch size for running Turbomind directly
             tp (int): tensor parallel for Turbomind
+            kwargs (dict): extra params to init
         """
         from lmdeploy.serve.gradio.app import run
         run(model_path_or_server,
@@ -52,7 +53,8 @@ class SubCliServe(object):
                    allow_origins: List[str] = ['*'],
                    allow_credentials: bool = True,
                    allow_methods: List[str] = ['*'],
-                   allow_headers: List[str] = ['*']):
+                   allow_headers: List[str] = ['*'],
+                   **kwargs):
         """Serve LLMs with restful api using fastapi.
 
         Args:
@@ -65,6 +67,7 @@ class SubCliServe(object):
             allow_credentials (bool): whether to allow credentials for CORS
             allow_methods (List[str]): a list of allowed HTTP methods for CORS
             allow_headers (List[str]): a list of allowed HTTP headers for CORS
+            kwargs (dict) extra params to init api server
         """
         from lmdeploy.serve.openai.api_server import main as run_api_server
 
@@ -76,7 +79,8 @@ class SubCliServe(object):
                        allow_origins=allow_origins,
                        allow_credentials=allow_credentials,
                        allow_methods=allow_methods,
-                       allow_headers=allow_headers)
+                       allow_headers=allow_headers,
+                       **kwargs)
 
     def api_client(self, restful_api_url: str, session_id: int = 0):
         """Interact with restful api server in terminal.
