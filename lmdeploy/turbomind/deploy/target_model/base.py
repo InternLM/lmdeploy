@@ -148,17 +148,15 @@ class BaseOutputModel(ABC):
 
             # currently, the tensor type should in
             # [torch.float, torch.half, torch.int32]
-            th_tensor = param.cuda().contiguous()
-            assert th_tensor.dtype in [
-                torch.int32, torch.float, torch.half, torch.bfloat16
-            ]
-            if th_tensor.dtype != torch.int32:
+            torch_tensor = param.cuda().contiguous()
+            assert torch_tensor.dtype in [torch.int32, torch.float, torch.half]
+            if torch_tensor.dtype != torch.int32:
                 if weight_type in ['fp16', 'int4']:
-                    th_tensor = th_tensor.half()
+                    torch_tensor = torch_tensor.half()
                 else:
-                    th_tensor = th_tensor.float()
+                    torch_tensor = torch_tensor.float()
             for tm_tensor in tm_params[name]:
-                tm_tensor.copy_from(th_tensor)
+                tm_tensor.copy_from(torch_tensor)
             tm_params.pop(name)
         else:
             tprint('skip export', name, param.shape)

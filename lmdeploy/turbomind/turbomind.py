@@ -270,7 +270,7 @@ class TurboMind:
             config = ss.read()
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            '',
+            model_dir='',
             config=config,
             tensor_para_size=self.gpu_count,
             data_type=data_type)
