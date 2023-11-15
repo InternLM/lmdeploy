@@ -4,13 +4,12 @@ from pathlib import Path
 from typing import Union
 
 import torch
-from accelerate import (infer_auto_device_map, init_empty_weights,
-                        load_checkpoint_in_model)
 from torch import nn
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.lite.quantization import CalibrationContext
-from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders
+from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
+                                 load_hf_from_pretrained)
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -109,7 +108,7 @@ def calibrate(model: str,
     given dataset.
 
     Args:
-        model (str): The model to be loaded.
+        model (str): The name or path of the model to be loaded.
         calib_dataset (str, optional): The calibration dataset name.
             Defaults to 'c4'.
         calib_samples (int, optional): The number of samples for calibration.
@@ -132,18 +131,14 @@ def calibrate(model: str,
     hf_config = AutoConfig.from_pretrained(model,
                                            torch_dtype=torch.float16,
                                            trust_remote_code=True)
-    checkpoint = hf_config._name_or_path
 
     # hard code for qwen, other configs do not have the `fp16` attribute.
     hf_config.fp16 = True
 
-    with init_empty_weights():
-        # Load model
-        model = AutoModelForCausalLM.from_pretrained(model,
-                                                     config=hf_config,
-                                                     torch_dtype=torch.float16,
-                                                     trust_remote_code=True)
-        model.config.use_cache = False
+    model = load_hf_from_pretrained(model,
+                                    config=hf_config,
+                                    torch_dtype=torch.float16,
+                                    trust_remote_code=True)
 
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
@@ -163,21 +158,6 @@ def calibrate(model: str,
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
-
-    decoder_layers = collect_target_modules(model, layer_type)
-
-    # Infer device map
-    device_map = infer_auto_device_map(model,
-                                       no_split_module_classes=[layer_type])
-    for name in device_map.keys():
-        if name in decoder_layers or 'lm_head' in name:
-            device_map[name] = 'cpu'
-        else:
-            device_map[name] = 0
-    load_checkpoint_in_model(model,
-                             checkpoint,
-                             device_map,
-                             dtype=torch.float16)
 
     _prepare_for_calibrate(model, layer_type, 'lm_head', device)
 
