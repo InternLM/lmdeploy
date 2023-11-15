@@ -46,7 +46,10 @@ def load_hf_from_pretrained(pretrained_model_name_or_path, **kwargs):
         kwargs.pop('device_map')
     with LoadWoInit():
         model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path, device_map=device_map, **kwargs)
+            pretrained_model_name_or_path,
+            device_map=device_map,
+            config=hf_config,
+            **kwargs)
         model.config.use_cache = False
 
     return model
