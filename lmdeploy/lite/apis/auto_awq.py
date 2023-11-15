@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             quant_weights, smooth_layers)
@@ -37,13 +37,8 @@ def auto_awq(model: str,
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-    hf_config = AutoConfig.from_pretrained(model, trust_remote_code=True)
-
-    # hard code for qwen, other configs do not have the `fp16` attribute.
-    hf_config.fp16 = True
 
     model = load_hf_from_pretrained(model,
-                                    config=hf_config,
                                     torch_dtype=torch.float16,
                                     trust_remote_code=True)
 

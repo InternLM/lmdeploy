@@ -5,7 +5,7 @@ from typing import Union
 
 import torch
 from torch import nn
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 
 from lmdeploy.lite.quantization import CalibrationContext
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
@@ -128,15 +128,8 @@ def calibrate(model: str,
     tokenizer = AutoTokenizer.from_pretrained(model,
                                               use_fast=False,
                                               trust_remote_code=True)
-    hf_config = AutoConfig.from_pretrained(model,
-                                           torch_dtype=torch.float16,
-                                           trust_remote_code=True)
-
-    # hard code for qwen, other configs do not have the `fp16` attribute.
-    hf_config.fp16 = True
 
     model = load_hf_from_pretrained(model,
-                                    config=hf_config,
                                     torch_dtype=torch.float16,
                                     trust_remote_code=True)
 
