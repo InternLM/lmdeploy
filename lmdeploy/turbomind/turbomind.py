@@ -119,55 +119,47 @@ class TurboMind:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
                                             'tokenizer')
             self.tokenizer = Tokenizer(tokenizer_model_path)
-            self.create_common_from_workspace(model_path)
+            self.model_comm = self._from_workspace(model_path)
         else:
             self.tokenizer = Tokenizer(model_path)
-            output_model = self.create_common_from_hf(
-                model_source=model_source,
-                model_path=model_path,
-                model_name=model_name,
-                model_format=model_format,
-                group_size=group_size,
-                tp=tp,
-                **kwargs)
-        # TODO: support mpi
-        self.node_id = 0
-        self.node_num = 1
-        self.world_size = self.node_num * self.gpu_count
-        self.nccl_params = self.model_comm.create_nccl_params(self.node_id)
-        self.eos_id = self.tokenizer.eos_token_id
-        torch.cuda.synchronize()
+            self.model_comm = self._from_hf(model_source=model_source,
+                                            model_path=model_path,
+                                            model_name=model_name,
+                                            model_format=model_format,
+                                            group_size=group_size,
+                                            tp=tp,
+                                            **kwargs)
 
+        self.eos_id = self.tokenizer.eos_token_id
         self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.model.session_len
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
+    def _create_weight(self, model_comm):
+        """Allocate wegiht buffer, load params if from_workspace."""
+
+        # TODO: support mpi
+        self.node_id = 0
+        self.node_num = 1
+        self.nccl_params = model_comm.create_nccl_params(self.node_id)
+        torch.cuda.synchronize()
+
         # create weight
-        def _create_weight(device_id):
+        def _create_weight_func(device_id):
             with cuda_ctx(device_id):
                 rank = self.node_id * self.gpu_count + device_id
-                self.model_comm.create_shared_weights(device_id, rank)
+                model_comm.create_shared_weights(device_id, rank)
 
         threads = []
         for device_id in range(self.gpu_count):
-            t = Thread(target=_create_weight, args=(device_id, ))
+            t = Thread(target=_create_weight_func, args=(device_id, ))
             t.start()
             threads.append(t)
         for t in threads:
             t.join()
 
-        # convert model to turbomind format if loading a hf model
-        if model_source in [ModelSource.HF_LMDEPLOY, ModelSource.HF_MODEL]:
-            tm_params = output_model.tm_params
-            self.get_model_params(tm_params)
-            logger.warning(f'get {len(tm_params)} model params')
-            output_model.export()
-            # load kv qparams
-            self.load_kv_qparams(model_path, tm_params, **kwargs)
-            assert len(tm_params) == 0, f'missing {tm_params.keys()}'
-
-    def load_kv_qparams(self, model_path, tm_params, **kwargs):
-        """Load kv qparams."""
+    def _load_kv_qparams(self, model_path, tm_params, **kwargs):
+        """Load kv qparams when loading from hf."""
         if self.config.quant_policy:
             logger.warning('loading kv_cache quant scale')
             from lmdeploy.lite.apis.kv_qparams import main as kv_loader
@@ -180,13 +172,13 @@ class TurboMind:
                 if 'past_kv_scale' in key:
                     tm_params.pop(key)
 
-    def get_model_params(self, tm_params):
-        """Get turbomind model params."""
+    def _get_model_params(self, model_comm, tm_params):
+        """Get turbomind model params when loading from hf."""
 
         def _get_params(device_id, que):
             with cuda_ctx(device_id):
                 rank = self.node_id * self.gpu_count + device_id
-                out = self.model_comm.get_params(device_id, rank)
+                out = model_comm.get_params(device_id, rank)
                 que.put(out)
 
         que = Queue()
@@ -205,14 +197,14 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def create_common_from_hf(self,
-                              model_source: ModelSource,
-                              model_path: str,
-                              model_name: Optional[str] = None,
-                              model_format: Optional[str] = None,
-                              group_size: Optional[int] = None,
-                              tp: Optional[int] = None,
-                              **kwargs):
+    def _from_hf(self,
+                 model_source: ModelSource,
+                 model_path: str,
+                 model_name: Optional[str] = None,
+                 model_format: Optional[str] = None,
+                 group_size: Optional[int] = None,
+                 tp: Optional[int] = None,
+                 **kwargs):
         """Load model which is in hf format."""
         # get model_name, group_size if is lmdeploy managed.
         if model_source == ModelSource.HF_LMDEPLOY:
@@ -221,15 +213,19 @@ class TurboMind:
                 config = json.load(f)
             tm_config = config['turbomind']
             tm_config.update(kwargs)
-
-            def _get_key(key, value):
-                return value if value is not None else tm_config[key]
-
-            model_name = _get_key('model_name', model_name)
-            group_size = _get_key('group_size', group_size)
+            var_shoud_be_none = dict(model_name=model_name,
+                                     model_format=model_format,
+                                     group_size=group_size)
+            for key, value in var_shoud_be_none.items():
+                assert value is None, f'{key} should be None when model is '\
+                    f'from {model_source}'
+            model_name = tm_config['model_name']
+            group_size = tm_config['group_size']
             if tm_config['weight_type'] == 'int4':
                 model_format = 'awq'
         else:
+            assert model_name is not None, 'please supply model_name when ' \
+                f'model is form {model_source}'
             tm_config = kwargs
 
         assert model_name in MODELS.module_dict.keys(), \
@@ -241,11 +237,8 @@ class TurboMind:
         data_type = 'fp16'
         output_format = 'fp16'
         inferred_model_format = get_model_format(model_name, model_format)
-        cfg = TurbomindModelConfig.from_dict({}, allow_none=True)
-        # update cfg with tm_config
-        for k, v in tm_config.items():
-            if hasattr(cfg, k):
-                setattr(cfg, k, v)
+        cfg = TurbomindModelConfig.from_dict(tm_config, allow_none=True)
+
         # overwrite with input params
         cfg.model_name = model_name
         cfg.tensor_para_size = 1 if tp is None else tp
@@ -281,11 +274,23 @@ class TurboMind:
             config=config,
             tensor_para_size=self.gpu_count,
             data_type=data_type)
-        self.model_comm = model_comm
 
-        return output_model
+        # create empty weight
+        self._create_weight(model_comm)
 
-    def create_common_from_workspace(self, model_path: str):
+        # copy hf model weight to turbomind weight
+        tm_params = output_model.tm_params
+        self._get_model_params(model_comm, tm_params)
+        logger.warning(f'get {len(tm_params)} model params')
+        output_model.export()
+
+        # load kv qparams
+        self._load_kv_qparams(model_path, tm_params, **kwargs)
+        assert len(tm_params) == 0, f'missing {tm_params.keys()}'
+
+        return model_comm
+
+    def _from_workspace(self, model_path: str):
         """Load model which is converted by `lmdeploy convert`"""
         ini_path = osp.join(model_path, 'triton_models', 'weights',
                             'config.ini')
@@ -311,17 +316,10 @@ class TurboMind:
             weight_dir,
             tensor_para_size=self.gpu_count,
             data_type=self.data_type)
-        self.model_comm = model_comm
 
-    def create_instance(self, cuda_stream_id=0):
-        """Create a turbomind instance.
-
-        Args:
-            cuda_stream_id(int): identity of a cuda stream
-        Returns:
-            TurboMindInstance: an instance of turbomind
-        """
-        return TurboMindInstance(self, cuda_stream_id)
+        # create weight and load params
+        self._create_weight(model_comm)
+        return model_comm
 
     @classmethod
     def from_pretrained(cls,
@@ -335,16 +333,21 @@ class TurboMind:
 
         Args:
             pretrained_model_name_or_path (str):
-                Can be either:
-                    - 1) A path to a *directory* containing model which is
-                      converted previously by `lmdeploy convert` command.
-                    - 2) A repo_id or path which is managed by lmdeploy,
-                      usually a quantized model.
-                    - 3) A repo_id or path which is not managed by lmdeploy,
-                      like Qwen, Baichuan.
-            model_name (str): needed when pretrained_model_name_or_path is 3)
-            model_format (str): needed when pretrained_model_name_or_path is 3)
-            group_size (int): needed when pretrained_model_name_or_path is 3)
+                It could be one of the following options:
+                    - a) A local directory path of a turbomind model which is
+                      converted by `lmdeploy convert` command or download from
+                      b) and c)
+                    - b) The model_id of a lmdeploy-quantized model hosted
+                      inside a model repo on huggingface.co, such as
+                      "InternLM/internlm-chat-20b-4bit",
+                      "lmdeploy/llama2-chat-70b-4bit", etc.
+                    - c) The model_id of a model hosted inside a model repo
+                      on huggingface.co, such as "InternLM/internlm-chat-7b",
+                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      and so on.
+            model_name (str): needed when pretrained_model_name_or_path is c)
+            model_format (str): needed when pretrained_model_name_or_path is c)
+            group_size (int): needed when pretrained_model_name_or_path is c)
             tp (int): tensor parallel size
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
@@ -378,11 +381,8 @@ class TurboMind:
             config_file = osp.join(local_path, 'config.json')
             with open(config_file, 'r') as f:
                 config = json.load(f)
-            is_lmdeploy_managed = 'turbomind' in config
-            if not is_lmdeploy_managed:
-                model_source = ModelSource.HF_MODEL
-            else:
-                model_source = ModelSource.HF_LMDEPLOY
+            model_source = ModelSource.HF_LMDEPLOY if 'turbomind' in config \
+                else ModelSource.HF_MODEL
             logger.warning(f'model_source: {model_source}')
 
         return cls(model_source=model_source,
@@ -392,6 +392,16 @@ class TurboMind:
                    group_size=group_size,
                    tp=tp,
                    **kwargs)
+
+    def create_instance(self, cuda_stream_id=0):
+        """Create a turbomind instance.
+
+        Args:
+            cuda_stream_id(int): identity of a cuda stream
+        Returns:
+            TurboMindInstance: an instance of turbomind
+        """
+        return TurboMindInstance(self, cuda_stream_id)
 
 
 class TurboMindInstance:
