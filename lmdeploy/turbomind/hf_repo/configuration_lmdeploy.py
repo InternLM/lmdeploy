@@ -7,7 +7,7 @@ from lmdeploy.turbomind.deploy.target_model.base import TurbomindModelConfig
 from lmdeploy.version import __version__ as lm_version
 
 
-class LmdeployConfig(PretrainedConfig):
+class LMDeployConfig(PretrainedConfig):
     """Lmdeploy config."""
 
     def __init__(self, turbomind: dict = None, **kwargs):

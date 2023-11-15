@@ -15,7 +15,7 @@ from transformers.utils import logging
 from lmdeploy.turbomind import TurboMind
 from lmdeploy.turbomind.utils import get_gen_param
 
-from .configuration_lmdeploy import LmdeployConfig
+from .configuration_lmdeploy import LMDeployConfig
 
 logger = logging.get_logger(__name__)
 
@@ -56,11 +56,11 @@ class Session:
         return self._error
 
 
-class LmdeployForCausalLM(PreTrainedModel):
-    config_class = LmdeployConfig
+class LMDeployForCausalLM(PreTrainedModel):
+    config_class = LMDeployConfig
 
     def __init__(self,
-                 config: LmdeployConfig,
+                 config: LMDeployConfig,
                  *inputs,
                  model_path: str = None,
                  **kwargs):
