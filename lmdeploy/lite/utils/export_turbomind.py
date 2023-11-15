@@ -3,6 +3,8 @@ import json
 import os
 import shutil
 
+from huggingface_hub import snapshot_download
+
 
 def export_turbomind_hf_model(model_name: str,
                               model_path: str,
@@ -21,6 +23,9 @@ def export_turbomind_hf_model(model_name: str,
     assert model_name in MODELS.module_dict.keys(), \
         f"'{model_name}' is not supported. " \
         f'The supported models are: {MODELS.module_dict.keys()}'
+
+    if not os.path.exists(model_path):
+        model_path = snapshot_download(model_path, local_files_only=True)
 
     lmdeploy_dir = os.path.split(lmdeploy.__file__)[0]
     hf_repo = os.path.join(lmdeploy_dir, 'turbomind', 'hf_repo')
