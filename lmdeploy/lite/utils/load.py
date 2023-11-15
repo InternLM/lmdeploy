@@ -10,7 +10,8 @@ from lmdeploy.pytorch.model import LoadWoInit
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
-    'BaiChuanForCausalLM': 'DecoderLayer',
+    'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
+    'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
 }
 
