@@ -14,6 +14,7 @@ from typing import Iterable, List, Optional
 
 import numpy as np
 import torch
+from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 from transformers.utils import ExplicitEnum
 
@@ -25,7 +26,6 @@ from lmdeploy.utils import get_logger
 from .deploy.converter import get_model_format, supported_formats
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .utils import download_hf_repo
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -371,8 +371,8 @@ class TurboMind:
                 for k in download_kwargs.keys():
                     if k in kwargs:
                         download_kwargs[k] = kwargs[k]
-                local_path = download_hf_repo(pretrained_model_name_or_path,
-                                              **download_kwargs)
+                local_path = snapshot_download(pretrained_model_name_or_path,
+                                               **download_kwargs)
             else:
                 local_path = pretrained_model_name_or_path
             config_file = osp.join(local_path, 'config.json')

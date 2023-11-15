@@ -7,12 +7,13 @@ from itertools import count
 from queue import Queue
 from typing import List, Optional, Tuple, Union
 
+from huggingface_hub import snapshot_download
 from transformers import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
 from lmdeploy.turbomind import TurboMind
-from lmdeploy.turbomind.utils import download_hf_repo, get_gen_param
+from lmdeploy.turbomind.utils import get_gen_param
 
 from .configuration_lmdeploy import LmdeployConfig
 
@@ -90,7 +91,7 @@ class LmdeployForCausalLM(PreTrainedModel):
         if os.path.isdir(pretrained_model_name_or_path):
             local_folder = pretrained_model_name_or_path
         else:
-            local_folder = download_hf_repo(
+            local_folder = snapshot_download(
                 pretrained_model_name_or_path,
                 revision=revision,
                 cache_dir=cache_dir,
