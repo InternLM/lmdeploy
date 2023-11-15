@@ -178,8 +178,6 @@ class TurboMindInstance:
         self.session_len = tm_model.session_len
 
         self.nccl_params = tm_model.nccl_params
-        self.instance_comm = tm_model.model_comm.create_instance_comm(
-            self.gpu_count)
 
         # create model instances
         model_insts = [None] * self.gpu_count
@@ -207,16 +205,20 @@ class TurboMindInstance:
         self.que.put((False, result))
 
     def _forward_thread(self, inputs):
+        instance_comm = self.tm_model.model_comm.create_instance_comm(
+            self.gpu_count)
 
         def _func(device_id, enque_output):
             with cuda_ctx(device_id):
                 output = self.model_insts[device_id].forward(
-                    inputs, self.instance_comm)
+                    inputs, instance_comm)
                 if enque_output:
                     self.que.put((True, output))
 
         for device_id in range(self.gpu_count):
-            t = Thread(target=_func, args=(device_id, device_id == 0))
+            t = Thread(target=_func,
+                       args=(device_id, device_id == 0),
+                       daemon=True)
             t.start()
             self.threads[device_id] = t
 
@@ -264,7 +266,7 @@ class TurboMindInstance:
             random_seed (int): seed used by sampling
             stream_output (bool): indicator for stream output
         """
-        if stream_output:
+        if stream_output and not stop:
             self.model_insts[0].register_callback(self._forward_callback)
 
         if len(input_ids) == 0:
@@ -372,7 +374,7 @@ class TurboMindInstance:
                     self.que.get()
                 break
 
-        if stream_output:
+        if stream_output and not stop:
             self.model_insts[0].unregister_callback()
 
     def decode(self, input_ids):
