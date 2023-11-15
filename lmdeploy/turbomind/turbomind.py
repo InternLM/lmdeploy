@@ -226,6 +226,9 @@ class TurboMind:
         else:
             assert model_name is not None, 'please supply model_name when ' \
                 f'model is form {model_source}'
+            if osp.exists(osp.join(model_path, 'outputs_stats.pth')):
+                model_format = 'awq' if model_format is None else model_format
+                group_size = 128 if group_size is None else group_size
             tm_config = kwargs
 
         assert model_name in MODELS.module_dict.keys(), \
@@ -334,20 +337,20 @@ class TurboMind:
         Args:
             pretrained_model_name_or_path (str):
                 It could be one of the following options:
-                    - a) A local directory path of a turbomind model which is
+                    - i) A local directory path of a turbomind model which is
                       converted by `lmdeploy convert` command or download from
-                      b) and c)
-                    - b) The model_id of a lmdeploy-quantized model hosted
+                      ii) and iii)
+                    - ii) The model_id of a lmdeploy-quantized model hosted
                       inside a model repo on huggingface.co, such as
                       "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
-                    - c) The model_id of a model hosted inside a model repo
+                    - iii) The model_id of a model hosted inside a model repo
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
             model_name (str): needed when pretrained_model_name_or_path is c)
-            model_format (str): needed when pretrained_model_name_or_path is c)
-            group_size (int): needed when pretrained_model_name_or_path is c)
+            model_format (str): model format
+            group_size (int): group size
             tp (int): tensor parallel size
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
