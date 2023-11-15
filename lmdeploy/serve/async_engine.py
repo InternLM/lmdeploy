@@ -27,7 +27,9 @@ class AsyncEngine:
 
     def __init__(self, model_path, instance_num=32, tp=1, **kwargs) -> None:
         from lmdeploy import turbomind as tm
-        self.tm_model = tm.TurboMind(model_path, tp=tp, **kwargs)
+        self.tm_model = tm.TurboMind.from_pretrained(model_path,
+                                                     tp=tp,
+                                                     **kwargs)
         self.tokenizer = self.tm_model.tokenizer
         self.generators = [
             self.tm_model.create_instance() for i in range(instance_num)

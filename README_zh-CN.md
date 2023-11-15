@@ -169,7 +169,7 @@ lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${serv
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 lmdeploy serve api_client api_server_url
 ```
 

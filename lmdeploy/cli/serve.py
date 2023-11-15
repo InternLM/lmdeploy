@@ -11,7 +11,7 @@ class SubCliServe(object):
                server_port: int = 6006,
                batch_size: int = 32,
                tp: int = 1,
-               restful_api: bool = False):
+               **kwargs):
         """Serve LLMs with web ui using gradio.
 
         Example 1:
@@ -21,7 +21,6 @@ class SubCliServe(object):
             lmdeploy serve gradio http://0.0.0.0:23333
             --server_name 0.0.0.0
             --server_port 6006
-            --restful_api True
 
         Example 3:
             lmdeploy serve gradio ${triton_server_ip_addresss}:33337
@@ -30,13 +29,11 @@ class SubCliServe(object):
             model_path_or_server (str): the path of the deployed model or the
                 tritonserver URL or restful api URL. The former is for directly
                 running service with gradio. The latter is for running with
-                tritonserver by default. If the input URL is restful api.
-                Please enable another flag `restful_api`.
+                tritonserver by default.
             server_name (str): the ip address of gradio server
             server_port (int): the port of gradio server
             batch_size (int): batch size for running Turbomind directly
             tp (int): tensor parallel for Turbomind
-            restful_api (bool): a flag for model_path_or_server
         """
         from lmdeploy.serve.gradio.app import run
         run(model_path_or_server,
@@ -44,7 +41,7 @@ class SubCliServe(object):
             server_port=server_port,
             batch_size=batch_size,
             tp=tp,
-            restful_api=restful_api)
+            **kwargs)
 
     def api_server(self,
                    model_path: str,

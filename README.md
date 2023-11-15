@@ -170,7 +170,7 @@ lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
 Then, you can communicate with it by command line,
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 lmdeploy serve api_client api_server_url
 ```
 

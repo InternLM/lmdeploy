@@ -118,7 +118,8 @@ def run_local(model_path: str,
               server_name: str = 'localhost',
               server_port: int = 6006,
               batch_size: int = 4,
-              tp: int = 1):
+              tp: int = 1,
+              **kwargs):
     """chat with AI assistant through web ui.
 
     Args:
@@ -130,7 +131,8 @@ def run_local(model_path: str,
     """
     InterFace.async_engine = AsyncEngine(model_path=model_path,
                                          instance_num=batch_size,
-                                         tp=tp)
+                                         tp=tp,
+                                         **kwargs)
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])

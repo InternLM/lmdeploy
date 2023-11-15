@@ -32,7 +32,7 @@ def run(model_path_or_server: str,
     else:
         from lmdeploy.serve.gradio.turbomind_coupled import run_local
         run_local(model_path_or_server, server_name, server_port, batch_size,
-                  tp)
+                  tp, **kwargs)
 
 
 if __name__ == '__main__':
