@@ -8,7 +8,10 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include <cstdint>
+#include <cub/block/block_reduce.cuh>
 #include <type_traits>
 
 namespace turbomind {
@@ -604,6 +607,150 @@ void invokeUpdateOutput(int**        request_output_ids_ptrs,
                                                        request_output_ids_lens,
                                                        max_session_len,
                                                        token_generated);
+}
+
+template<int BLOCK_DIM>
+__global__ void compactOutputIds(
+    int* cu_output_ids, const int* output_ids, const int* sequence_lengths, int session_len, bool token_generated)
+{
+    typedef cub::BlockReduce<int, BLOCK_DIM>   BlockScan;
+    __shared__ typename BlockScan::TempStorage temp_storage;
+
+    const int batch_idx = blockIdx.x;
+
+    int end   = (blockIdx.x + BLOCK_DIM - 1) / BLOCK_DIM * BLOCK_DIM;  // align to BLOCK_DIM boundary
+    int count = 0;
+    for (int i = threadIdx.x; i < end; i += blockDim.x) {
+        int x = threadIdx.x < blockIdx.x ? sequence_lengths[threadIdx.x] : 0;
+        count += BlockScan(temp_storage).Sum(x, BLOCK_DIM);
+    }
+
+    __shared__ int offset;
+
+    if (threadIdx.x == 0) {
+        offset = count;
+    }
+
+    __syncthreads();
+
+    auto dst = cu_output_ids + offset;
+
+    const int seq_len = sequence_lengths[blockIdx.x];
+
+    for (int i = threadIdx.x; i < seq_len; i += blockDim.x) {
+        dst[i] = output_ids[batch_idx * session_len + i];
+    }
+}
+
+void invokeCompactOutputIds(int*         cu_output_ids,
+                            const int*   output_ids,
+                            const int*   sequence_lengths,
+                            int          max_session_len,
+                            bool         token_generated,
+                            int          batch_size,
+                            cudaStream_t stream)
+{
+    constexpr int BLOCK_DIM = 128;
+    compactOutputIds<BLOCK_DIM><<<batch_size, BLOCK_DIM, 0, stream>>>(
+        cu_output_ids, output_ids, sequence_lengths, max_session_len, token_generated);
+}
+
+template<class T, int N>
+__global__ void indexedCopy(
+    Array<void*, N> src_ptr, const int* src_idx, Array<void*, N> dst_ptr, const int* dst_idx, Array<int, N> size)
+{
+    const int batch_idx = blockIdx.x;
+    const int si        = src_idx ? src_idx[batch_idx] : batch_idx;
+    const int di        = dst_idx ? dst_idx[batch_idx] : batch_idx;
+    PRAGMA_UNROLL
+    for (int k = 0; k < N; ++k) {
+        const int stride = size[k] / sizeof(T);
+        for (int i = threadIdx.x; i < stride; i += blockDim.x) {
+            *((T*)dst_ptr[k] + stride * di + i) = *((T*)src_ptr[k] + stride * si + i);
+        }
+    }
+}
+
+template<class T, int N>
+void invokeIndexedCopyImpl(void**       h_src_ptr,
+                           void**       h_dst_ptr,
+                           const int*   h_size,
+                           const int*   h_src_idx,
+                           const int*   h_dst_idx,
+                           int*         h_idx_buf,
+                           int*         d_idx_buf,
+                           int          count,
+                           cudaStream_t st)
+{
+    Array<void*, N> src_ptr;
+    Array<void*, N> dst_ptr;
+    Array<int, N>   size;
+
+    std::copy_n(h_src_ptr, N, &src_ptr[0]);
+    std::copy_n(h_dst_ptr, N, &dst_ptr[0]);
+    std::copy_n(h_size, N, &size[0]);
+
+    // basic alignment check
+    for (int i = 0; i < N; ++i) {
+        FT_CHECK_WITH_INFO(size[i] % sizeof(T) == 0,
+                           "misalignment : " + std::to_string(size[i]) + " vs " + std::to_string(sizeof(T)));
+    }
+
+    int* d_src_idx{};
+    if (h_src_idx) {
+        d_src_idx = d_idx_buf;
+        std::copy_n(h_src_idx, count, h_idx_buf);
+    }
+
+    int* d_dst_idx{};
+    if (h_dst_idx) {
+        d_dst_idx = d_idx_buf + count;
+        std::copy_n(h_dst_idx, count, h_idx_buf + count);
+    }
+
+    if (d_src_idx || d_dst_idx) {
+        cudaMemcpyAsync(d_idx_buf, h_idx_buf, sizeof(int) * count * 2, cudaMemcpyDefault, st);
+    }
+    indexedCopy<T><<<count, 128, 0, st>>>(src_ptr, d_src_idx, dst_ptr, d_dst_idx, size);
+}
+
+void invokeIndexedCopy(void**       h_src_ptr,
+                       void**       h_dst_ptr,
+                       const int*   h_size,
+                       const int*   h_src_idx,
+                       const int*   h_dst_idx,
+                       int*         h_idx_buf,
+                       int*         d_idx_buf,
+                       int          count,
+                       int          n_copys,
+                       cudaStream_t st)
+{
+    auto args = std::tuple{h_src_ptr, h_dst_ptr, h_size, h_src_idx, h_dst_idx, h_idx_buf, d_idx_buf, count, st};
+    switch (n_copys) {
+        case 1:
+            return std::apply(invokeIndexedCopyImpl<uint32_t, 1>, args);
+        case 2:
+            return std::apply(invokeIndexedCopyImpl<uint32_t, 2>, args);
+        case 3:
+            return std::apply(invokeIndexedCopyImpl<uint32_t, 3>, args);
+        case 4:
+            return std::apply(invokeIndexedCopyImpl<uint32_t, 4>, args);
+        default:
+            FT_CHECK(0);
+    }
+}
+
+__global__ void padLastTokenIds(int* token_ids, const int* context_length, int max_context_len, int batch_size)
+{
+    for (int bi = threadIdx.x; bi < batch_size; bi += blockDim.x) {
+        token_ids[(max_context_len - 1) * batch_size + bi] = token_ids[(context_length[bi] - 1) * batch_size + bi];
+    }
+}
+
+void invokePadLastTokenIds(
+    int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream)
+{
+    padLastTokenIds<<<1, 512, 0, stream>>>(token_ids, context_length, max_context_len, batch_size);
 }
 
 #define VERSION_SWITCH(VERSION, CONST_NAME, ...)                                                                       \

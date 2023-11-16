@@ -188,6 +188,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
      *
      * output_tensors:
      *   \param  output_ids [max_seq_len, batch_size]
+     *   \param  curand_state [local_batch_size]
      *   \param  finished [batch_size * beam_width], optional
      *   \param  should_stop [1] on cpu
      *   \param  cum_log_probs [batch_size * beam_width], necessary in beam search
@@ -276,7 +277,8 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
                 {"input_lengths", input_lengths.slice({local_batch_size, beam_width}, local_batch_offset)});
         }
 
-        TensorMap decode_output_tensors({{"output_ids", output_tensors->at("output_ids")}});
+        TensorMap decode_output_tensors({{"output_ids", output_tensors->at("output_ids")},  //
+                                         {"curand_state", output_tensors->at("curand_state")}});
         if (output_tensors->isExist("sequence_length")) {
             Tensor sequence_length = output_tensors->at("sequence_length");
             decode_output_tensors.insert(

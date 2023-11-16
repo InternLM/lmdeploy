@@ -87,11 +87,8 @@ bool SequenceManager::Erase(uint64_t id)
             }
         }
         sequences_.erase(it);
+        return true;
     }
-    else {
-        throw std::out_of_range(std::to_string(id));
-    }
-
     return false;
 }
 

@@ -87,6 +87,28 @@ void invokeUpdateOutput(int**        request_output_ids_ptrs,
                         int          batch_size,
                         cudaStream_t stream);
 
+void invokeCompactOutputIds(int*         cu_output_ids,
+                            const int*   output_ids,
+                            const int*   sequence_lengths,
+                            int          max_session_len,
+                            bool         token_generated,
+                            int          batch_size,
+                            cudaStream_t stream);
+
+void invokeIndexedCopy(void**       h_src_ptr,
+                       void**       h_dst_ptr,
+                       const int*   h_size,
+                       const int*   h_src_idx,
+                       const int*   h_dst_idx,
+                       int*         h_idx_buf,
+                       int*         d_idx_buf,
+                       int          count,
+                       int          n_copys,
+                       cudaStream_t st);
+
+void invokePadLastTokenIds(
+    int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream);
+
 void invokeMyCopyInt(int* dst, const int* src, size_t count, cudaStream_t st);
 
 template<typename T>

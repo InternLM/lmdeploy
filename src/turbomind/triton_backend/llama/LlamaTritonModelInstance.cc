@@ -64,59 +64,41 @@ std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert
     h_total_output_lengths_ =
         (uint32_t*)std::realloc((void*)h_total_output_lengths_, request_batch_size * sizeof(uint32_t));
 
-    std::unordered_map<std::string, ft::Tensor> ft_input_tensors = std::unordered_map<std::string, ft::Tensor>{
-        {"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
-        // {"input_lengths", as_GPU_tensor(input_tensors->at("input_lengths"), d_input_lengths_)},
-    };
+    std::unordered_map<std::string, ft::Tensor> ft_input_tensors{};
 
-    if (input_tensors->find("bad_words_list") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("bad_words_list"), d_input_bad_words_, &allocator_);
-        ft_input_tensors.insert(
-            {"bad_words_list", as_GPU_tensor(input_tensors->at("bad_words_list"), d_input_bad_words_)});
-    }
+    if constexpr (0) {
+        if (input_tensors->count("request_prompt_embedding") && input_tensors->count("request_prompt_lengths")
+            && input_tensors->count("request_prompt_type")) {
 
-    if (input_tensors->find("stop_words_list") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("stop_words_list"), d_input_stop_words_, &allocator_);
-        ft_input_tensors.insert(
-            {"stop_words_list", as_GPU_tensor(input_tensors->at("stop_words_list"), d_input_stop_words_)});
-    }
+            move_tensor_H2D(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_, &allocator_);
+            ft_input_tensors.insert(
+                {"request_prompt_lengths",
+                 as_GPU_tensor(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_)});
 
-    if (input_tensors->count("request_prompt_embedding") && input_tensors->count("request_prompt_lengths")
-        && input_tensors->count("request_prompt_type")) {
+            move_tensor_H2D(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_, &allocator_);
+            ft_input_tensors.insert(
+                {"request_prompt_embedding",
+                 as_GPU_tensor(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_)});
+        }
 
-        move_tensor_H2D(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_, &allocator_);
-        ft_input_tensors.insert(
-            {"request_prompt_lengths",
-             as_GPU_tensor(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_)});
-
-        move_tensor_H2D(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_, &allocator_);
-        ft_input_tensors.insert(
-            {"request_prompt_embedding",
-             as_GPU_tensor(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_)});
-    }
-
-    if (input_tensors->find("top_p_decay") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("top_p_decay"), d_top_p_decay_, &allocator_);
-        ft_input_tensors.insert({"top_p_decay", as_GPU_tensor(input_tensors->at("top_p_decay"), d_top_p_decay_)});
-    }
-    if (input_tensors->find("top_p_min") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("top_p_min"), d_top_p_min_, &allocator_);
-        ft_input_tensors.insert({"top_p_min", as_GPU_tensor(input_tensors->at("top_p_min"), d_top_p_min_)});
-    }
-    if (input_tensors->find("top_p_reset_ids") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_, &allocator_);
-        ft_input_tensors.insert(
-            {"top_p_reset_ids", as_GPU_tensor(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_)});
+        if (input_tensors->find("top_p_decay") != input_tensors->end()) {
+            move_tensor_H2D(input_tensors->at("top_p_decay"), d_top_p_decay_, &allocator_);
+            ft_input_tensors.insert({"top_p_decay", as_GPU_tensor(input_tensors->at("top_p_decay"), d_top_p_decay_)});
+        }
+        if (input_tensors->find("top_p_min") != input_tensors->end()) {
+            move_tensor_H2D(input_tensors->at("top_p_min"), d_top_p_min_, &allocator_);
+            ft_input_tensors.insert({"top_p_min", as_GPU_tensor(input_tensors->at("top_p_min"), d_top_p_min_)});
+        }
+        if (input_tensors->find("top_p_reset_ids") != input_tensors->end()) {
+            move_tensor_H2D(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_, &allocator_);
+            ft_input_tensors.insert(
+                {"top_p_reset_ids", as_GPU_tensor(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_)});
+        }
     }
 
     for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
-        if (t->first.find("input_ids") == std::string::npos  // && t->first.find("input_lengths") == std::string::npos
-            && t->first.find("output_seq_len") == std::string::npos
-            && t->first.find("prefix_soft_prompt_embedding") == std::string::npos
-            && t->first.find("prefix_soft_prompt_lengths") == std::string::npos) {
-            if (ft_input_tensors.count(t->first) == 0) {
-                ft_input_tensors.insert({t->first, t->second.convertTritonTensorToFt()});
-            }
+        if (ft_input_tensors.count(t->first) == 0) {
+            ft_input_tensors.insert({t->first, t->second.convertTritonTensorToFt()});
         }
     }
 
@@ -204,12 +186,12 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
 
     std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
         {"output_ids",
-         ft::Tensor{ft::MEMORY_GPU,
+         ft::Tensor{ft::MEMORY_CPU,
                     ft::TYPE_UINT32,
                     std::vector<size_t>{request_batch_size, beam_width, (size_t)instance_->session_len},
                     d_output_ids_}},
         {"sequence_length",
-         ft::Tensor{ft::MEMORY_GPU,
+         ft::Tensor{ft::MEMORY_CPU,
                     ft::TYPE_UINT32,
                     std::vector<size_t>{request_batch_size, beam_width},
                     d_sequence_lengths_}}};
@@ -267,10 +249,9 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
                                                  const size_t session_len,
                                                  const bool   is_return_logits)
 {
-    d_output_ids_ =
-        (int*)(allocator_->reMalloc(d_output_ids_, sizeof(int) * request_batch_size * beam_width * session_len, false));
-    d_sequence_lengths_ =
-        (int*)(allocator_->reMalloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width, false));
+    d_output_ids_ = (int*)std::realloc(d_output_ids_, sizeof(int) * request_batch_size * beam_width * session_len);
+    d_sequence_lengths_ = (int*)std::realloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width);
+
     d_output_log_probs_ = (float*)(allocator_->reMalloc(
         d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * session_len, false));
     d_cum_log_probs_ =
@@ -284,8 +265,8 @@ void LlamaTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size
 template<typename T>
 void LlamaTritonModelInstance<T>::freeBuffer()
 {
-    allocator_->free((void**)(&d_output_ids_));
-    allocator_->free((void**)(&d_sequence_lengths_));
+    std::free(d_output_ids_);
+    std::free(d_sequence_lengths_);
     allocator_->free((void**)(&d_output_log_probs_));
     allocator_->free((void**)(&d_cum_log_probs_));
     std::free(h_total_output_lengths_);
