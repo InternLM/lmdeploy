@@ -6,12 +6,12 @@ import shutil
 from huggingface_hub import snapshot_download
 
 
-def export_turbomind_hf_model(model_name: str,
-                              model_path: str,
-                              work_dir: str,
-                              model_format: str = 'awq',
-                              group_size: int = 128,
-                              tp: int = 1):
+def export_turbomind_config(model_name: str,
+                            model_path: str,
+                            work_dir: str,
+                            model_format: str = 'awq',
+                            group_size: int = 128,
+                            tp: int = 1):
     """Export hf lmdeploy model and config.json."""
     import lmdeploy
     from lmdeploy.model import MODELS
