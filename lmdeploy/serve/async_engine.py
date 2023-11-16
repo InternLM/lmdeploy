@@ -239,7 +239,7 @@ class AsyncEngine:
                     # utf-8 char at the end means it's a potential unfinished
                     # byte sequence, continue to concate it with the next
                     # sequence and decode them together
-                    if response.endswith('�'):
+                    if '�' in response:
                         continue
                     # response, history token len,
                     # input token len, gen token len
