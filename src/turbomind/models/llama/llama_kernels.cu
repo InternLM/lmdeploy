@@ -613,16 +613,18 @@ template<int BLOCK_DIM>
 __global__ void compactOutputIds(
     int* cu_output_ids, const int* output_ids, const int* sequence_lengths, int session_len, bool token_generated)
 {
-    typedef cub::BlockReduce<int, BLOCK_DIM>   BlockScan;
-    __shared__ typename BlockScan::TempStorage temp_storage;
+    typedef cub::BlockReduce<int, BLOCK_DIM>     BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
 
     const int batch_idx = blockIdx.x;
 
-    int end   = (blockIdx.x + BLOCK_DIM - 1) / BLOCK_DIM * BLOCK_DIM;  // align to BLOCK_DIM boundary
+    int end   = (batch_idx + BLOCK_DIM - 1) / BLOCK_DIM * BLOCK_DIM;  // align to BLOCK_DIM boundary
     int count = 0;
     for (int i = threadIdx.x; i < end; i += blockDim.x) {
-        int x = threadIdx.x < blockIdx.x ? sequence_lengths[threadIdx.x] : 0;
-        count += BlockScan(temp_storage).Sum(x, BLOCK_DIM);
+        int x = threadIdx.x < batch_idx ? sequence_lengths[threadIdx.x] : 0;
+        count += BlockReduce(temp_storage).Sum(x);
+        // https://nvlabs.github.io/cub/classcub_1_1_block_reduce.html
+        __syncthreads();
     }
 
     __shared__ int offset;
@@ -635,7 +637,7 @@ __global__ void compactOutputIds(
 
     auto dst = cu_output_ids + offset;
 
-    const int seq_len = sequence_lengths[blockIdx.x];
+    const int seq_len = sequence_lengths[batch_idx];
 
     for (int i = threadIdx.x; i < seq_len; i += blockDim.x) {
         dst[i] = output_ids[batch_idx * session_len + i];
@@ -656,17 +658,22 @@ void invokeCompactOutputIds(int*         cu_output_ids,
 }
 
 template<class T, int N>
-__global__ void indexedCopy(
-    Array<void*, N> src_ptr, const int* src_idx, Array<void*, N> dst_ptr, const int* dst_idx, Array<int, N> size)
+__global__ void indexedCopy(Array<void*, N> src_ptr,
+                            Array<void*, N> dst_ptr,
+                            Array<int, N>   stride,
+                            const int*      src_idx,
+                            const int*      dst_idx,
+                            int             max_stride)
 {
     const int batch_idx = blockIdx.x;
     const int si        = src_idx ? src_idx[batch_idx] : batch_idx;
     const int di        = dst_idx ? dst_idx[batch_idx] : batch_idx;
-    PRAGMA_UNROLL
-    for (int k = 0; k < N; ++k) {
-        const int stride = size[k] / sizeof(T);
-        for (int i = threadIdx.x; i < stride; i += blockDim.x) {
-            *((T*)dst_ptr[k] + stride * di + i) = *((T*)src_ptr[k] + stride * si + i);
+    for (int i = threadIdx.x; i < max_stride; i += blockDim.x) {
+        PRAGMA_UNROLL
+        for (int k = 0; k < N; ++k) {
+            if (i < stride[k]) {
+                *((T*)dst_ptr[k] + stride[k] * di + i) = *((const T*)src_ptr[k] + stride[k] * si + i);
+            }
         }
     }
 }
@@ -674,7 +681,7 @@ __global__ void indexedCopy(
 template<class T, int N>
 void invokeIndexedCopyImpl(void**       h_src_ptr,
                            void**       h_dst_ptr,
-                           const int*   h_size,
+                           const int*   h_elem_sz,
                            const int*   h_src_idx,
                            const int*   h_dst_idx,
                            int*         h_idx_buf,
@@ -684,39 +691,41 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
 {
     Array<void*, N> src_ptr;
     Array<void*, N> dst_ptr;
-    Array<int, N>   size;
+    Array<int, N>   stride;
 
-    std::copy_n(h_src_ptr, N, &src_ptr[0]);
-    std::copy_n(h_dst_ptr, N, &dst_ptr[0]);
-    std::copy_n(h_size, N, &size[0]);
+    std::copy_n(h_src_ptr, N, src_ptr.data());
+    std::copy_n(h_dst_ptr, N, dst_ptr.data());
+    std::transform(h_elem_sz, h_elem_sz + N, stride.data(), [](int size) {
+        // Basic alignment check
+        FT_CHECK_WITH_INFO(size % sizeof(T) == 0,
+                           "misalignment : " + std::to_string(size) + " vs " + std::to_string(sizeof(T)));
+        return size / sizeof(T);
+    });
 
-    // basic alignment check
-    for (int i = 0; i < N; ++i) {
-        FT_CHECK_WITH_INFO(size[i] % sizeof(T) == 0,
-                           "misalignment : " + std::to_string(size[i]) + " vs " + std::to_string(sizeof(T)));
-    }
+    auto max_stride = *std::max_element(stride.begin(), stride.end());
 
     int* d_src_idx{};
     if (h_src_idx) {
-        d_src_idx = d_idx_buf;
         std::copy_n(h_src_idx, count, h_idx_buf);
+        d_src_idx = d_idx_buf;
     }
 
     int* d_dst_idx{};
     if (h_dst_idx) {
-        d_dst_idx = d_idx_buf + count;
         std::copy_n(h_dst_idx, count, h_idx_buf + count);
+        d_dst_idx = d_idx_buf + count;
     }
 
     if (d_src_idx || d_dst_idx) {
         cudaMemcpyAsync(d_idx_buf, h_idx_buf, sizeof(int) * count * 2, cudaMemcpyDefault, st);
     }
-    indexedCopy<T><<<count, 128, 0, st>>>(src_ptr, d_src_idx, dst_ptr, d_dst_idx, size);
+
+    indexedCopy<T><<<count, 128, 0, st>>>(src_ptr, dst_ptr, stride, d_src_idx, d_dst_idx, max_stride);
 }
 
 void invokeIndexedCopy(void**       h_src_ptr,
                        void**       h_dst_ptr,
-                       const int*   h_size,
+                       const int*   h_elem_sz,
                        const int*   h_src_idx,
                        const int*   h_dst_idx,
                        int*         h_idx_buf,
@@ -725,7 +734,7 @@ void invokeIndexedCopy(void**       h_src_ptr,
                        int          n_copys,
                        cudaStream_t st)
 {
-    auto args = std::tuple{h_src_ptr, h_dst_ptr, h_size, h_src_idx, h_dst_idx, h_idx_buf, d_idx_buf, count, st};
+    auto args = std::tuple{h_src_ptr, h_dst_ptr, h_elem_sz, h_src_idx, h_dst_idx, h_idx_buf, d_idx_buf, count, st};
     switch (n_copys) {
         case 1:
             return std::apply(invokeIndexedCopyImpl<uint32_t, 1>, args);

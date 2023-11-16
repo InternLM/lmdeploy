@@ -69,7 +69,8 @@ public:
         int max_seq_len;
     };
 
-    void            InitializeSampling();
+    void InitializeSampling();
+
     GenerationState InitializeGeneration();
 
     [[nodiscard]] bool Generate(GenerationState& g);
@@ -77,8 +78,6 @@ public:
     [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
-
-    void SetOutputTensors(const GenerationState& g);
 
     void
     OutputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
@@ -115,11 +114,7 @@ private:
 
     void OutputThreadEntry();
 
-    void UpdateSequenceStates(BatchState& state, int index);
-
-    void CopyState(const std::pair<BatchState*, int> _src, const std::pair<BatchState*, int>& _dst);
-
-    void CopyState2(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
+    void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
 
     void SendSignals(std::vector<Signal> signals);
 
@@ -148,10 +143,10 @@ private:
         static_assert((!std::is_same_v<Ts, void> && ...));
         std::array<void*, N> src_ptr{std::get<0>(cpys)...};
         std::array<void*, N> dst_ptr{std::get<1>(cpys)...};
-        std::array<int, N>   size{int(sizeof(Ts) * std::get<2>(cpys))...};
+        std::array<int, N>   elem_sz{int(sizeof(Ts) * std::get<2>(cpys))...};
         invokeIndexedCopy(src_ptr.data(),  //
                           dst_ptr.data(),
-                          size.data(),
+                          elem_sz.data(),
                           src_idx,
                           dst_idx,
                           h_idx_buf_,
@@ -298,8 +293,7 @@ private:
     std::vector<Signal>     output_signals_;
     bool                    output_stop_token_{false};
 
-    int* d_cu_output_ids_ = nullptr;
-    int* h_cu_output_ids_ = nullptr;
+    int* h_output_ids_{};
 
     // indexed copy utils
     int* h_idx_buf_{};
