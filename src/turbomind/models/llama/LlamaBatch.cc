@@ -1480,7 +1480,7 @@ void LlamaBatch<T>::SendSignals(std::vector<Signal> signals)
 template<typename T>
 void LlamaBatch<T>::Start()
 {
-    TM_LOG_ERROR("LlamaBatch<T>::Start()");
+    TM_LOG_INFO("LlamaBatch<T>::Start()");
     int device_id = -1;
     check_cuda_error(cudaGetDevice(&device_id));
     internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this, device_id);

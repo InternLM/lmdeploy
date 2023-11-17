@@ -102,10 +102,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
         elem_bits = sizeof(int8_t) * 8;
-        if (use_context_fmha) {
-            TM_LOG_ERROR("use_context_fmha not support int8");
-            assert(0);
-        }
     }
     else {
         elem_bits = sizeof(T) * 8;

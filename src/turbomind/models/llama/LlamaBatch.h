@@ -90,7 +90,7 @@ public:
 
     ~LlamaBatch()
     {
-        TM_LOG_ERROR("~LlamaBatch()");
+        TM_LOG_INFO("~LlamaBatch()");
         model_->shared_state_->request_queue.close();
 
         internal_thread_.join();
