@@ -225,9 +225,10 @@ private:
 
     // used by dynamic decoder
     int*      token_ids_buf_{};  // all token IDs in [S, B], indexed using `step`
-    int*      end_ids_buf_{};
     bool*     finished_buf_{};
     uint32_t* seq_limit_len_{};
+    int*      h_end_ids_buf_{};
+    int*      d_end_ids_buf_{};
 
     int** request_output_ids_ptrs_{};
     int*  request_output_ids_lens_{};

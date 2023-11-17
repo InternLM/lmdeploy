@@ -574,7 +574,6 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
 
     token_ids_buf_ = (int*)allocator_->reMalloc(token_ids_buf_, sizeof(int) * batchxbeam * session_len * 2, true);
 
-    end_ids_buf_   = (int*)allocator_->reMalloc(end_ids_buf_, sizeof(int) * batch_size, false);
     finished_buf_  = (bool*)allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false);
     seq_limit_len_ = (uint32_t*)allocator_->reMalloc(seq_limit_len_, sizeof(uint32_t) * batch_size, false);
 
@@ -612,6 +611,9 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
         (curandState_t*)allocator_->reMalloc(h_curand_state_, sizeof(curandState_t) * max_batch_size, true, true);
     d_curand_state_ =
         (curandState_t*)allocator_->reMalloc(d_curand_state_, sizeof(curandState_t) * max_batch_size, true, false);
+
+    d_end_ids_buf_ = (int*)allocator_->reMalloc(d_end_ids_buf_, sizeof(int) * max_batch_size, false);
+    h_end_ids_buf_ = (int*)allocator_->reMalloc(h_end_ids_buf_, sizeof(int) * max_batch_size, false, true);
 
     sampling_params_ = {
         {"stop_words_list", (std::byte*)h_stop_words_, (std::byte*)d_stop_words_},
@@ -714,7 +716,9 @@ void LlamaBatch<T>::FreeBuffer()
 
         allocator_->free((void**)&token_ids_buf_);
 
-        allocator_->free((void**)&end_ids_buf_);
+        allocator_->free((void**)&d_end_ids_buf_);
+        allocator_->free((void**)&h_end_ids_buf_, true);
+
         allocator_->free((void**)&finished_buf_);
         allocator_->free((void**)&seq_limit_len_);
 
@@ -841,6 +845,11 @@ void LlamaBatch<T>::InitializeSampling()
             }
         }
     }
+
+    // init for eos
+    std::fill_n(h_end_ids_buf_, batch_size, model_->end_id_);
+    Copy(h_end_ids_buf_, batch_size, d_end_ids_buf_);
+    inputs.insert({"end_id", {MEMORY_GPU, TYPE_INT32, {(size_t)batch_size}, d_end_ids_buf_}});
 
     inputs_ = std::move(inputs);
 
@@ -993,7 +1002,7 @@ bool LlamaBatch<T>::Generate(GenerationState& g)
                           logits_buf_,
                           seq_limit_len_,
                           context_length_buf_,
-                          end_ids_buf_,
+                          d_end_ids_buf_,
                           g.step,
                           0,
                           g.max_init_ctx_len,
