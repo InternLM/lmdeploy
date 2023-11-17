@@ -16,7 +16,6 @@ import numpy as np
 import torch
 from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
-from transformers.utils import ExplicitEnum
 
 import lmdeploy
 from lmdeploy.model import MODELS, BaseModel
@@ -26,6 +25,8 @@ from lmdeploy.utils import get_logger
 from .deploy.converter import get_model_format, supported_formats
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .utils import (ModelSource, check_tm_model_input, create_hf_download_args,
+                    get_hf_config_content, get_model_source)
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -33,13 +34,6 @@ sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-
-class ModelSource(ExplicitEnum):
-    """Turbomind model source."""
-    WORKSPACE = 'workspace'
-    HF_MODEL = 'hf_model'
-    HF_LMDEPLOY = 'hf_lmdeploy'
 
 
 def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
@@ -208,9 +202,7 @@ class TurboMind:
         """Load model which is in hf format."""
         # get model_name, group_size if is lmdeploy managed.
         if model_source == ModelSource.HF_LMDEPLOY:
-            config_file = osp.join(model_path, 'config.json')
-            with open(config_file, 'r') as f:
-                config = json.load(f)
+            config = get_hf_config_content(model_path, local_files_only=True)
             tm_config = config['turbomind']
             tm_config.update(kwargs)
             var_shoud_be_none = dict(model_name=model_name,
@@ -355,39 +347,21 @@ class TurboMind:
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
         """
-        triton_model_path = osp.join(pretrained_model_name_or_path,
-                                     'triton_models')
-        is_workspace = osp.exists(triton_model_path)
-        is_local_hf = osp.exists(pretrained_model_name_or_path)
-        if is_workspace:
-            model_source = ModelSource.WORKSPACE
+        model_source = get_model_source(pretrained_model_name_or_path)
+        if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
-            if not is_local_hf:
-                # download hf repo first if is not local
-                download_kwargs = {
-                    'revision': None,
-                    'cache_dir': None,
-                    'proxies': None,
-                    'resume_download': True,
-                    'force_download': False,
-                    'token': None,
-                    'local_files_only': False
-                }
-                for k in download_kwargs.keys():
-                    if k in kwargs:
-                        download_kwargs[k] = kwargs[k]
+            check_tm_model_input(pretrained_model_name_or_path,
+                                 model_name=model_name,
+                                 **kwargs)
+            if not osp.exists(pretrained_model_name_or_path):
+                download_kwargs = create_hf_download_args(**kwargs)
                 local_path = snapshot_download(pretrained_model_name_or_path,
                                                **download_kwargs)
             else:
                 local_path = pretrained_model_name_or_path
-            config_file = osp.join(local_path, 'config.json')
-            with open(config_file, 'r') as f:
-                config = json.load(f)
-            model_source = ModelSource.HF_LMDEPLOY if 'turbomind' in config \
-                else ModelSource.HF_MODEL
-            logger.warning(f'model_source: {model_source}')
 
+        logger.warning(f'model_source: {model_source}')
         return cls(model_source=model_source,
                    model_path=local_path,
                    model_name=model_name,
