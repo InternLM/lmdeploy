@@ -114,29 +114,17 @@ pip install lmdeploy
 
 ### Deploy InternLM
 
-#### Get InternLM model
+To use TurboMind inference engine, you need to first convert the model into TurboMind format. Currently, we support online conversion and offline conversion. With online conversion, TurboMind can load the Huggingface model directly. While with offline conversion, you should save the converted model first before using it.
 
-```shell
-# 1. Download InternLM model
-
-# Make sure you have git-lfs installed (https://git-lfs.com)
-git lfs install
-git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internlm-chat-7b
-
-# if you want to clone without large files – just their pointers
-# prepend your git clone with the following env var:
-GIT_LFS_SKIP_SMUDGE=1
-
-# 2. Convert InternLM model to turbomind's format, which will be in "./workspace" by default
-lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
-
-```
+The following use [internlm/internlm-chat-7b-v1_1](https://huggingface.co/internlm/internlm-chat-7b-v1_1) as a example to show how to use turbomind with online conversion. You can refer to [load_hf.md](docs/en/load_hf.md) for other methods.
 
 #### Inference by TurboMind
 
 ```shell
-lmdeploy chat turbomind ./workspace
+lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
 ```
+
+> **Note**<br /> The internlm/internlm-chat-7b-v1_1 model will be downloaded under `.cache` folder. You can also use a local path here.
 
 > **Note**<br />
 > When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. <br />
@@ -152,7 +140,7 @@ lmdeploy chat turbomind ./workspace
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve gradio ./workspace
+lmdeploy serve gradio internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -165,7 +153,7 @@ Launch inference server by:
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
@@ -185,29 +173,6 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 ```
 
 Refer to [restful_api.md](docs/en/restful_api.md) for more details.
-
-#### Serving with Triton Inference Server
-
-Launch inference server by:
-
-```shell
-bash workspace/service_docker_up.sh
-```
-
-Then, you can communicate with the inference server by command line,
-
-```shell
-python3 -m pip install tritonclient[grpc]
-lmdeploy serve triton_client {server_ip_addresss}:33337
-```
-
-or webui,
-
-```shell
-lmdeploy serve gradio {server_ip_addresss}:33337
-```
-
-For the deployment of other supported models, such as LLaMA, LLaMA-2, vicuna and so on, you can find the guide from [here](docs/en/serving.md)
 
 ### Inference with PyTorch
 

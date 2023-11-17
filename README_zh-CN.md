@@ -114,29 +114,17 @@ pip install lmdeploy
 
 ### 部署 InternLM
 
-#### 获取 InternLM 模型
+使用 TurboMind 推理模型需要先将模型转化为 TurboMind 的格式，目前支持在线转换和离线转换两种形式。在线转换可以直接加载 Huggingface 模型，离线转换需需要先保存模型再加载。
 
-```shell
-# 1. 下载 InternLM 模型
-
-# Make sure you have git-lfs installed (https://git-lfs.com)
-git lfs install
-git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internlm-chat-7b
-
-# if you want to clone without large files – just their pointers
-# prepend your git clone with the following env var:
-GIT_LFS_SKIP_SMUDGE=1
-
-# 2. 转换为 trubomind 要求的格式。默认存放路径为 ./workspace
-lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
-
-```
+下面以 [internlm/internlm-chat-7b-v1_1](https://huggingface.co/internlm/internlm-chat-7b-v1_1) 为例，展示在线转换的使用方式。其他方式可参考[load_hf.md](docs/zh_cn/load_hf.md)
 
 #### 使用 turbomind 推理
 
 ```shell
-lmdeploy chat turbomind ./workspace
+lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
 ```
+
+> **Note**<br /> internlm/internlm-chat-7b-v1_1 会自动下载到 `.cache` 文件夹，这里也可以传下载好的路径。
 
 > **Note**<br />
 > turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。<br />
@@ -151,7 +139,7 @@ lmdeploy chat turbomind ./workspace
 # 安装lmdeploy额外依赖
 pip install lmdeploy[serve]
 
-lmdeploy serve gradio ./workspace
+lmdeploy serve gradio internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -164,7 +152,7 @@ lmdeploy serve gradio ./workspace
 # 安装lmdeploy额外依赖
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
 你可以通过命令行方式与推理服务进行对话：
@@ -184,29 +172,6 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 ```
 
 更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。
-
-#### 通过容器部署推理服务
-
-使用下面的命令启动推理服务：
-
-```shell
-bash workspace/service_docker_up.sh
-```
-
-你可以通过命令行方式与推理服务进行对话：
-
-```shell
-python3 -m pip install tritonclient[grpc]
-lmdeploy serve triton_client {server_ip_addresss}:33337
-```
-
-也可以通过 WebUI 方式来对话：
-
-```shell
-lmdeploy serve gradio {server_ip_addresss}:33337
-```
-
-其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
 
 ### 基于 PyTorch 的推理
 

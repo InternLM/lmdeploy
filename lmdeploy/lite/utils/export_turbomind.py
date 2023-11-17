@@ -5,6 +5,8 @@ import shutil
 
 from huggingface_hub import snapshot_download
 
+from lmdeploy.turbomind.utils import get_hf_config_content
+
 
 def export_turbomind_config(model_name: str,
                             model_path: str,
@@ -50,10 +52,17 @@ def export_turbomind_config(model_name: str,
                                                     cfg=cfg,
                                                     to_file=False,
                                                     out_dir='')
+
+    old_data = get_hf_config_content(model_path)
     config = output_model.cfg.__dict__
     config_file = os.path.join(work_dir, 'config.json')
     with open(config_file) as f:
         data = json.load(f)
+    for k, v in old_data.items():
+        if k in data:
+            data[f'__{k}'] = v
+        else:
+            data[k] = v
     data['turbomind'] = config
     from lmdeploy.version import __version__
     data['lmdeploy_version'] = __version__
