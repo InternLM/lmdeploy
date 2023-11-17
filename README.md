@@ -20,12 +20,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
-- \[2023/11\] Turbomind has been upgraded to version 2.0, including the following features:
-  - Paged Attention
-  - Faster attention kernels with no limitation on max sequence length
-  - Faster KV8 kernels (like 2x faster)
-  - Split-K decoding (Flash Decoding)
-  - W4A16 inference for sm_75
+- \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
 - \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide

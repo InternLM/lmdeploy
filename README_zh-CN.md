@@ -20,12 +20,7 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
-- \[2023/11\] Turbomind 重磅升级:
-  - Paged Attention
-  - 更快的 attention kernel，不再受序列最大长度限制
-  - 更快的 KV8 kernels (提升2倍多)
-  - Split-K decoding (Flash Decoding)
-  - W4A16 支持 sm_75 架构
+- \[2023/11\] TurboMind 重磅升级。包括：Paged Attention、更快的且不受序列最大长度限制的 attention kernel、2+倍快的 KV8 kernels、Split-K decoding (Flash Decoding) 和 支持 sm_75 架构的 W4A16
 - \[2023/09\] TurboMind 支持 Qwen-14B
 - \[2023/09\] TurboMind 支持 InternLM-20B 模型
 - \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
