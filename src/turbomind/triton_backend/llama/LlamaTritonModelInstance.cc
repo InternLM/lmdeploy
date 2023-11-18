@@ -66,36 +66,6 @@ std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors{};
 
-    if constexpr (0) {
-        if (input_tensors->count("request_prompt_embedding") && input_tensors->count("request_prompt_lengths")
-            && input_tensors->count("request_prompt_type")) {
-
-            move_tensor_H2D(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_, &allocator_);
-            ft_input_tensors.insert(
-                {"request_prompt_lengths",
-                 as_GPU_tensor(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_)});
-
-            move_tensor_H2D(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_, &allocator_);
-            ft_input_tensors.insert(
-                {"request_prompt_embedding",
-                 as_GPU_tensor(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_)});
-        }
-
-        if (input_tensors->find("top_p_decay") != input_tensors->end()) {
-            move_tensor_H2D(input_tensors->at("top_p_decay"), d_top_p_decay_, &allocator_);
-            ft_input_tensors.insert({"top_p_decay", as_GPU_tensor(input_tensors->at("top_p_decay"), d_top_p_decay_)});
-        }
-        if (input_tensors->find("top_p_min") != input_tensors->end()) {
-            move_tensor_H2D(input_tensors->at("top_p_min"), d_top_p_min_, &allocator_);
-            ft_input_tensors.insert({"top_p_min", as_GPU_tensor(input_tensors->at("top_p_min"), d_top_p_min_)});
-        }
-        if (input_tensors->find("top_p_reset_ids") != input_tensors->end()) {
-            move_tensor_H2D(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_, &allocator_);
-            ft_input_tensors.insert(
-                {"top_p_reset_ids", as_GPU_tensor(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_)});
-        }
-    }
-
     for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
         if (ft_input_tensors.count(t->first) == 0) {
             ft_input_tensors.insert({t->first, t->second.convertTritonTensorToFt()});
