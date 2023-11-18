@@ -10,6 +10,7 @@
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include <algorithm>
 #include <cstdint>
 #include <cub/block/block_reduce.cuh>
 #include <type_traits>
@@ -657,22 +658,28 @@ void invokeCompactOutputIds(int*         cu_output_ids,
         cu_output_ids, output_ids, sequence_lengths, max_session_len, token_generated);
 }
 
-template<class T, int N>
-__global__ void indexedCopy(Array<void*, N> src_ptr,
-                            Array<void*, N> dst_ptr,
-                            Array<int, N>   stride,
-                            const int*      src_idx,
-                            const int*      dst_idx,
-                            int             max_stride)
+template<int N, int C>
+struct IndexedCopyParam {
+    Array<void*, N> src_ptr;
+    Array<void*, N> dst_ptr;
+    Array<int, N>   stride;
+    Array<int, C>   src_idx;
+    Array<int, C>   dst_idx;
+    int             max_stride;
+};
+
+template<class T, int N, int C>
+__global__ void indexedCopy(IndexedCopyParam<N, C> param)
 {
-    const int batch_idx = blockIdx.x;
-    const int si        = src_idx ? src_idx[batch_idx] : batch_idx;
-    const int di        = dst_idx ? dst_idx[batch_idx] : batch_idx;
-    for (int i = threadIdx.x; i < max_stride; i += blockDim.x) {
+    const int bi = blockIdx.x;
+    const int si = param.src_idx[bi];
+    const int di = param.dst_idx[bi];
+    for (int i = threadIdx.x; i < param.max_stride; i += blockDim.x) {
         PRAGMA_UNROLL
         for (int k = 0; k < N; ++k) {
-            if (i < stride[k]) {
-                *((T*)dst_ptr[k] + stride[k] * di + i) = *((const T*)src_ptr[k] + stride[k] * si + i);
+            if (i < param.stride[k]) {
+                *((T*)param.dst_ptr[k] + param.stride[k] * di + i) =
+                    *((const T*)param.src_ptr[k] + param.stride[k] * si + i);
             }
         }
     }
@@ -684,43 +691,53 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
                            const int*   h_elem_sz,
                            const int*   h_src_idx,
                            const int*   h_dst_idx,
-                           int*         h_idx_buf,
-                           int*         d_idx_buf,
                            int          count,
                            cudaStream_t st)
 {
-    Array<void*, N> src_ptr;
-    Array<void*, N> dst_ptr;
-    Array<int, N>   stride;
-
-    std::copy_n(h_src_ptr, N, src_ptr.data());
-    std::copy_n(h_dst_ptr, N, dst_ptr.data());
-    std::transform(h_elem_sz, h_elem_sz + N, stride.data(), [](int size) {
-        // Basic alignment check
-        FT_CHECK_WITH_INFO(size % sizeof(T) == 0,
-                           "misalignment : " + std::to_string(size) + " vs " + std::to_string(sizeof(T)));
-        return size / sizeof(T);
-    });
-
-    auto max_stride = *std::max_element(stride.begin(), stride.end());
-
-    int* d_src_idx{};
-    if (h_src_idx) {
-        std::copy_n(h_src_idx, count, h_idx_buf);
-        d_src_idx = d_idx_buf;
+    auto invoke = [&](auto max_count) {
+        constexpr int C = decltype(max_count)::value;
+        // maximum parameter size: sm<70: 4kB, sm>=70: 32kB
+        static_assert(sizeof(IndexedCopyParam<N, C>) <= 4096);
+        IndexedCopyParam<N, C> param{};
+        std::copy_n(h_src_ptr, N, param.src_ptr.data());
+        std::copy_n(h_dst_ptr, N, param.dst_ptr.data());
+        std::transform(h_elem_sz, h_elem_sz + N, param.stride.data(), [](int size) {
+            // Basic alignment check
+            FT_CHECK_WITH_INFO(size % sizeof(T) == 0, fmtstr("misalignment: %d %% %d", size, (int)sizeof(T)));
+            return size / sizeof(T);
+        });
+        param.max_stride = *std::max_element(param.stride.begin(), param.stride.end());
+        auto copy_idx    = [](const int* src, int offset, int n, auto dst) {
+            return src ? (void)std::copy_n(src + offset, n, dst) : std::iota(dst, dst + n, offset);
+        };
+        for (int c = 0; c < count; c += C) {
+            int batch_size = std::min(count - c, C);
+            copy_idx(h_src_idx, c, batch_size, param.src_idx.data());
+            copy_idx(h_dst_idx, c, batch_size, param.dst_idx.data());
+            indexedCopy<T><<<batch_size, 128, 0, st>>>(param);
+        }
+    };
+    if (count < 4) {
+        invoke(std::integral_constant<int, 4>{});
     }
-
-    int* d_dst_idx{};
-    if (h_dst_idx) {
-        std::copy_n(h_dst_idx, count, h_idx_buf + count);
-        d_dst_idx = d_idx_buf + count;
+    if (count < 8) {
+        invoke(std::integral_constant<int, 8>{});
     }
-
-    if (d_src_idx || d_dst_idx) {
-        cudaMemcpyAsync(d_idx_buf, h_idx_buf, sizeof(int) * count * 2, cudaMemcpyDefault, st);
+    else if (count < 16) {
+        invoke(std::integral_constant<int, 16>{});
     }
-
-    indexedCopy<T><<<count, 128, 0, st>>>(src_ptr, dst_ptr, stride, d_src_idx, d_dst_idx, max_stride);
+    else if (count < 32) {
+        invoke(std::integral_constant<int, 32>{});
+    }
+    else if (count < 64) {
+        invoke(std::integral_constant<int, 64>{});
+    }
+    else if (count < 128) {
+        invoke(std::integral_constant<int, 128>{});
+    }
+    else {
+        invoke(std::integral_constant<int, 256>{});
+    }
 }
 
 void invokeIndexedCopy(void**       h_src_ptr,
@@ -728,13 +745,11 @@ void invokeIndexedCopy(void**       h_src_ptr,
                        const int*   h_elem_sz,
                        const int*   h_src_idx,
                        const int*   h_dst_idx,
-                       int*         h_idx_buf,
-                       int*         d_idx_buf,
                        int          count,
                        int          n_copys,
                        cudaStream_t st)
 {
-    auto args = std::tuple{h_src_ptr, h_dst_ptr, h_elem_sz, h_src_idx, h_dst_idx, h_idx_buf, d_idx_buf, count, st};
+    auto args = std::tuple{h_src_ptr, h_dst_ptr, h_elem_sz, h_src_idx, h_dst_idx, count, st};
     switch (n_copys) {
         case 1:
             return std::apply(invokeIndexedCopyImpl<uint32_t, 1>, args);

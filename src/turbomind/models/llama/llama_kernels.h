@@ -101,8 +101,6 @@ void invokeIndexedCopy(void**       h_src_ptr,
                        const int*   h_elem_sz,
                        const int*   h_src_idx,
                        const int*   h_dst_idx,
-                       int*         h_idx_buf,
-                       int*         d_idx_buf,
                        int          count,
                        int          n_copys,
                        cudaStream_t st);

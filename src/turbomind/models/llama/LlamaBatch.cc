@@ -502,14 +502,14 @@ void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchSta
             continue;
         }
 
+        auto [s, d] = get_signature(beg);
+
         std::vector<int> s_idx;
         std::vector<int> d_idx;
         for (int i = beg; i < end; ++i) {
             s_idx.push_back(std::get<2>(desc[idxs[i]]));
             d_idx.push_back(std::get<3>(desc[idxs[i]]));
         }
-
-        auto [s, d] = get_signature(beg);
 
         IndexedCopy(s_idx,
                     d_idx,
@@ -668,11 +668,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
 
         h_output_ids_ =
             (int*)allocator_->reMalloc(h_output_ids_, sizeof(int) * max_batch_size * session_len_, false, true);
-
-        h_idx_buf_ = (int*)allocator_->reMalloc(h_idx_buf_, sizeof(int) * 2 * max_batch_size, false, true);
     }
-
-    d_idx_buf_ = (int*)allocator_->reMalloc(d_idx_buf_, sizeof(int) * 2 * max_batch_size, false, false);
 
     is_allocate_persistant_buffer_ = true;
 }
@@ -763,9 +759,6 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&h_request_seqlen_ptrs_, true);
 
         allocator_->free((void**)&h_output_ids_, true);
-        allocator_->free((void**)&h_idx_buf_, true);
-
-        allocator_->free((void**)&d_idx_buf_);
 
         is_allocate_persistant_buffer_ = false;
     }
@@ -1271,10 +1264,12 @@ auto LlamaBatch<T>::Finish(GenerationState& g, int& finished_count) -> std::vect
     {  // set output tokens ids and sequence length
         int* output_ptr = h_output_ids_;
         for (int i = 0; i < batch_size; ++i) {
-            const int count = state_->h_context_length[i] - 1 + int(g.step != g.max_init_ctx_len);
-            // TODO: sync history output tokens at when receiving the request and copy only the last token here
-            std::copy(output_ptr, output_ptr + count, h_request_output_ids_ptrs_[i]);
-            *h_request_seqlen_ptrs_[i] = count;
+            if (state_->requests[i] && (state_->requests[i]->stream_cb || state_->h_finished[i])) {
+                const int count = state_->h_context_length[i] - 1 + int(g.step != g.max_init_ctx_len);
+                // TODO: sync history output tokens at when receiving the request and copy only the last token here
+                std::copy(output_ptr, output_ptr + count, h_request_output_ids_ptrs_[i]);
+                *h_request_seqlen_ptrs_[i] = count;
+            }
             output_ptr += session_len_;
         }
     }
