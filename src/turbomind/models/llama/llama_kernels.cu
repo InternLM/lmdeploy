@@ -717,22 +717,22 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
             indexedCopy<T><<<batch_size, 128, 0, st>>>(param);
         }
     };
-    if (count < 4) {
+    if (count <= 4) {
         invoke(std::integral_constant<int, 4>{});
     }
-    if (count < 8) {
+    if (count <= 8) {
         invoke(std::integral_constant<int, 8>{});
     }
-    else if (count < 16) {
+    else if (count <= 16) {
         invoke(std::integral_constant<int, 16>{});
     }
-    else if (count < 32) {
+    else if (count <= 32) {
         invoke(std::integral_constant<int, 32>{});
     }
-    else if (count < 64) {
+    else if (count <= 64) {
         invoke(std::integral_constant<int, 64>{});
     }
-    else if (count < 128) {
+    else if (count <= 128) {
         invoke(std::integral_constant<int, 128>{});
     }
     else {
