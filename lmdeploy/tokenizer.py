@@ -53,7 +53,7 @@ class SentencePieceTokenizer:
         else:
             return decoded
 
-    def encode(self, s: str):
+    def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -61,15 +61,7 @@ class SentencePieceTokenizer:
         Returns:
             list[int]: token ids
         """
-        add_bos = False
-        add_eos = False
-        if s.find('<BOS>') != -1:
-            s = s.replace('<BOS>', '')
-            add_bos = True
-        if s == '<EOS>':
-            s = ''
-            add_eos = True
-        return self.model.Encode(s, add_bos=add_bos, add_eos=add_eos)
+        return self.model.Encode(s, add_bos=add_bos, **kwargs)
 
     def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.
@@ -175,7 +167,7 @@ class HuggingFaceTokenizer:
         else:
             return decoded
 
-    def encode(self, s: str):
+    def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -183,14 +175,12 @@ class HuggingFaceTokenizer:
         Returns:
             list[int]: token ids
         """
-        add_special_tokens = False
-        if s.find('<BOS>') != -1:
-            s = s.replace('<BOS>', '<s>')
-        if s == '<EOS>':
-            s = '</s>'
-        if len(s) == 0:
-            add_special_tokens = True
-        return self.model.encode(s, add_special_tokens=add_special_tokens)
+        encoded = self.model.encode(s, **kwargs)
+        if not add_bos:
+            # in the middle of a session
+            if len(encoded) and encoded[0] == self.bos_token_id:
+                encoded = encoded[1:]
+        return encoded
 
     def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.
@@ -261,7 +251,7 @@ class Tokenizer:
         """end of the sentence token id."""
         return self.model.eos_token_id
 
-    def encode(self, s: str):
+    def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -269,7 +259,7 @@ class Tokenizer:
         Returns:
             list[int]: token ids
         """
-        return self.model.encode(s)
+        return self.model.encode(s, add_bos, **kwargs)
 
     def decode(self, t: Sequence[int], offset: Optional[int] = None):
         """De-tokenize.

@@ -459,6 +459,10 @@ class Chatbot:
             session.sequence_length = 0
 
         input_ids, input_lengths = self.preprocess(prompt)
+        # got input_ids with default add_bos == True
+        if not sequence_start and input_ids[0][0] == self.bos_id:
+            input_ids = input_ids[:, 1:]
+            input_lengths = input_lengths - 1
         # will crash if last_token_id == eos_id and send empty input_ids
         if sequence_end and request_output_len == 0:
             input_ids = np.array([[self.bos_id]], dtype=np.uint32)
