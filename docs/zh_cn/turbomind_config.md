@@ -92,6 +92,12 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 - 当值为 (0, 1) 之间的小数时，`cache_max_entry_count` 表示 k/v block 使用的内存百分比。比如 A100-80G 显卡内存是80G，当`cache_max_entry_count`为0.5时，表示 k/v block 使用的内存总量为 80 * 0.5 = 40G
 - 当值为 > 1的整数时，表示 k/v block 数量
 
+`cache_chunk_size` 表示在每次需要新的 k/v cache 块时，开辟 k/v cache 块的大小。不同的取值，表示不同的含义：
+
+- 当为 > 0 的整数时，开辟 `cache_chunk_size` 个 k/v cache 块
+- 当值为 -1 时，开辟 `cache_max_entry_count` 个 k/v cache 块
+- 当值为 0 时，时，开辟 `sqrt(cache_max_entry_count)` 个 k/v cache 块
+
 ### kv int8 开关
 
 `quant_policy`是 KV-int8 推理开关。具体使用方法，请参考 [kv int8](./kv_int8.md) 部署文档
