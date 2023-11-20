@@ -3,14 +3,18 @@
 #pragma once
 
 // #include "src/turbomind/models/llama/LlamaCacheManager.h"
+#include "src/turbomind/layers/sampling_layers/BaseSamplingLayer.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <condition_variable>
 #include <mutex>
+#include <type_traits>
 
 namespace turbomind {
 
@@ -18,9 +22,8 @@ struct BatchState {
     int*  h_context_length;
     bool* h_finished;
 
-    void* top_k_curand_state;
-    void* top_p_curand_state;
-    int*  output_ids;  // output ids in [B, S]
+    curandState_t* curand_state;
+    int*           output_ids;  // output ids in [B, S]
 
     float* h_rope_theta;
 
@@ -66,16 +69,15 @@ public:
         int max_seq_len;
     };
 
-    void            InitializeSampling();
+    void InitializeSampling();
+
     GenerationState InitializeGeneration();
 
     [[nodiscard]] bool Generate(GenerationState& g);
 
-    [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
+    [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
 
-    void CompleteRequest(int index, bool is_stop_request, bool is_force_end);
-
-    void SetOutputTensors(const GenerationState& g);
+    [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
     void
     OutputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
@@ -88,7 +90,7 @@ public:
 
     ~LlamaBatch()
     {
-        TM_LOG_ERROR("~LlamaBatch()");
+        TM_LOG_INFO("~LlamaBatch()");
         model_->shared_state_->request_queue.close();
 
         internal_thread_.join();
@@ -112,15 +114,9 @@ private:
 
     void OutputThreadEntry();
 
-    void UpdateSequenceStates(BatchState& state, int index);
+    void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
 
-    void CopyState(const std::pair<BatchState*, int> _src, const std::pair<BatchState*, int>& _dst);
-
-    void SaveRandomState(BatchState& state, int idx);
-
-    void LoadRandomState(BatchState& state, int idx);
-
-    void BarrierSignalRequests(Barrier& barrier, const std::vector<Signal>& signals);
+    void SendSignals(std::vector<Signal> signals);
 
     // analogs to `std::copy_n`
     template<typename U>
@@ -135,6 +131,47 @@ private:
     {
         check_cuda_error(cudaMemsetAsync(data, 0, sizeof(U) * count, stream_));
         return data += count;
+    }
+
+    template<class... Ts>
+    void IndexedCopyImpl(const int* src_idx, const int* dst_idx, int count, const std::tuple<Ts*, Ts*, int>&... cpys)
+    {
+        if (!count) {
+            return;
+        }
+        constexpr int N = sizeof...(Ts);
+        static_assert((!std::is_same_v<Ts, void> && ...));
+        std::array<void*, N> src_ptr{std::get<0>(cpys)...};
+        std::array<void*, N> dst_ptr{std::get<1>(cpys)...};
+        std::array<int, N>   elem_sz{int(sizeof(Ts) * std::get<2>(cpys))...};
+        invokeIndexedCopy(src_ptr.data(),  //
+                          dst_ptr.data(),
+                          elem_sz.data(),
+                          src_idx,
+                          dst_idx,
+                          count,
+                          N,
+                          stream_);
+        sync_check_cuda_error();
+    }
+
+    template<class... Ts>
+    void IndexedCopy(const std::vector<int>& src_idx,
+                     const std::vector<int>& dst_idx,
+                     const std::tuple<Ts*, Ts*, int>&... cpys)
+    {
+        // has the same size, or one is empty
+        FT_CHECK(src_idx.size() == dst_idx.size() || (src_idx.empty() ^ dst_idx.empty()));
+        IndexedCopyImpl(src_idx.empty() ? nullptr : src_idx.data(),
+                        dst_idx.empty() ? nullptr : dst_idx.data(),
+                        std::max(src_idx.size(), dst_idx.size()),
+                        cpys...);
+    }
+
+    template<class... Ts>
+    void IndexedCopy(int count, const std::tuple<Ts*, Ts*, int>&... cpys)
+    {
+        IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
 private:
@@ -186,9 +223,10 @@ private:
 
     // used by dynamic decoder
     int*      token_ids_buf_{};  // all token IDs in [S, B], indexed using `step`
-    int*      end_ids_buf_{};
     bool*     finished_buf_{};
     uint32_t* seq_limit_len_{};
+    int*      h_end_ids_buf_{};
+    int*      d_end_ids_buf_{};
 
     int** request_output_ids_ptrs_{};
     int*  request_output_ids_lens_{};
@@ -205,13 +243,20 @@ private:
     uintptr_t* h_k_block_ptrs_{};
     uintptr_t* h_v_block_ptrs_{};
 
-    int*      stop_words_buf_{};  // [batch_size, 2, kMaxStopWordsLen]
-    int*      bad_words_buf_{};
-    int*      h_runtime_top_k_{};
-    float*    h_runtime_top_p_{};
-    float*    h_temperature_{};
-    float*    h_repetition_penalty_{};
-    uint64_t* h_random_seed_{};
+    int*   h_runtime_top_k_{};
+    float* h_runtime_top_p_{};
+    float* h_temperature_{};
+    float* h_repetition_penalty_{};
+    int*   h_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
+    int*   h_bad_words_{};
+    int*   d_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
+    int*   d_bad_words_{};
+
+    unsigned long long* h_random_seed_{};
+    unsigned long long* d_random_seed_{};
+
+    curandState_t* h_curand_state_{};
+    curandState_t* d_curand_state_{};
 
     std::array<BatchState, 3> states_{};
 
@@ -232,7 +277,7 @@ private:
     TensorMap inputs_;
     TensorMap outputs_;
 
-    std::unordered_map<std::string, void*> sampling_params_;
+    std::vector<std::tuple<std::string, std::byte*, std::byte*>> sampling_params_;
 
     cudaStream_t     stream_{};
     cublasMMWrapper* cublas_wrapper_{};
@@ -244,8 +289,10 @@ private:
     std::thread             output_thread_;
     std::mutex              output_mutex_;
     std::condition_variable output_cv_;
-    Requests                output_reqs_;
+    std::vector<Signal>     output_signals_;
     bool                    output_stop_token_{false};
+
+    int* h_output_ids_{};
 };
 
 }  // namespace turbomind

@@ -102,10 +102,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
         elem_bits = sizeof(int8_t) * 8;
-        if (use_context_fmha) {
-            TM_LOG_ERROR("use_context_fmha not support int8");
-            assert(0);
-        }
     }
     else {
         elem_bits = sizeof(T) * 8;
@@ -406,6 +402,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
                                bool*           finished,
                                int*            sequence_length,
                                bool*           should_stop,
+                               curandState_t*  curand_state,
                                TensorMap*      inputs,
                                TensorMap*      outputs,
                                const float*    logits,
@@ -450,7 +447,8 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
         {"output_ids", {MEMORY_GPU, TYPE_INT32, {token_ids_len, batch_size, 1U}, token_ids}},
         {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
         {"sequence_length", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
-        {"should_stop", {MEMORY_CPU, TYPE_BOOL, {1}, should_stop}}};
+        {"should_stop", {MEMORY_CPU, TYPE_BOOL, {1}, should_stop}},
+        {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, curand_state}}};
 
     const std::vector<std::string> optional_outputs{"cum_log_probs", "output_log_probs"};
     for (const auto& key : optional_outputs) {
@@ -562,7 +560,7 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
             if (ec) {
                 has_error = true;
             }
-            TM_LOG_INFO("[forward] Request complete for %ld, ec = %d", (long)ids[i], (int)ec);
+            TM_LOG_INFO("[forward] Request complete for %ld, code %d", (long)ids[i], (int)ec);
         }
     }
 

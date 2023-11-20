@@ -151,6 +151,7 @@ private:
                        bool*           finished,
                        int*            sequence_length,
                        bool*           should_stop,
+                       curandState_t*  curand_state,
                        TensorMap*      inputs,
                        TensorMap*      outputs,
                        const float*    logits,
@@ -162,16 +163,6 @@ private:
                        size_t          max_context_len,
                        size_t          token_ids_len,
                        size_t          batch_size);
-
-    curandState_t* GetTopKState(int index)
-    {
-        return dynamic_decode_layer_->topk_curandstate_buf() + index;
-    }
-
-    curandState_t* GetTopPState(int index)
-    {
-        return dynamic_decode_layer_->topp_curandstate_buf() + index;
-    }
 
 private:
     friend class LlamaBatch<T>;

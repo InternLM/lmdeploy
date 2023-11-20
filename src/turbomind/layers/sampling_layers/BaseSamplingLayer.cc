@@ -30,10 +30,6 @@ template<typename T>
 void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    curandstate_buf_ = reinterpret_cast<curandState_t*>(
-        allocator_->reMalloc(curandstate_buf_, sizeof(curandState_t) * batch_size, false));
-    random_seeds_buf_ = reinterpret_cast<unsigned long long*>(
-        allocator_->reMalloc(random_seeds_buf_, sizeof(unsigned long long) * batch_size, false));
     temperature_buf_ =
         reinterpret_cast<float*>(allocator_->reMalloc(temperature_buf_, sizeof(float) * batch_size, false));
     repetition_penalty_buf_ =
@@ -58,8 +54,6 @@ void BaseSamplingLayer<T>::freeBuffer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free((void**)(&curandstate_buf_));
-        allocator_->free((void**)(&random_seeds_buf_));
         allocator_->free((void**)(&temperature_buf_));
         allocator_->free((void**)(&repetition_penalty_buf_));
         allocator_->free((void**)(&min_lengths_buf_));
@@ -127,32 +121,6 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
     Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
     allocateBuffer(batch_size, runtime_top_k, runtime_top_p);
-
-    // If runtime argument has single random seed, using this random seed to initialize the random table of all
-    // sentences. If the argument has [batch_size] random seeds, initializing the random table by different random seeds
-    // respectively. If no random seed, initialize the random table of all sentences by 0 directly.
-    if (runtime_args->isExist("random_seed")) {
-        Tensor random_seeds = runtime_args->at("random_seed");
-        FT_CHECK_WITH_INFO(random_seeds.shape.size() == 1
-                               && (random_seeds.size() == 1 || random_seeds.size() == batch_size),
-                           fmtstr("random_seeds must be of shape [1] or [batch_size(%ld)], got random_seeds.shape=%s",
-                                  batch_size,
-                                  vec2str(random_seeds.shape).c_str()));
-        if (random_seeds.size() == 1) {
-            invokeCurandInitialize(curandstate_buf_, batch_size, random_seeds.getVal<unsigned long long>(), stream_);
-            sync_check_cuda_error();
-        }
-        else {
-            unsigned long long* random_seed_ptr = random_seeds.getPtr<unsigned long long>();
-            cudaAutoCpy(random_seeds_buf_, random_seed_ptr, batch_size, stream_);
-            invokeCurandBatchInitialize(curandstate_buf_, batch_size, random_seeds_buf_, stream_);
-            sync_check_cuda_error();
-        }
-    }
-    else {
-        // Initialize curand states using the default seed 0.
-        invokeCurandInitialize(curandstate_buf_, batch_size, 0, stream_);
-    }
 
     // Setup penalties.
     const float default_temperature = 1.0f;

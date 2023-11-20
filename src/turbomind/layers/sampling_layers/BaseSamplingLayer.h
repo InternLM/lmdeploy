@@ -33,10 +33,8 @@ protected:
     size_t vocab_size_;
     size_t vocab_size_padded_;
 
-    size_t              sampling_workspace_size_;
-    void*               sampling_workspace_ = nullptr;
-    curandState_t*      curandstate_buf_    = nullptr;
-    unsigned long long* random_seeds_buf_   = nullptr;
+    size_t sampling_workspace_size_;
+    void*  sampling_workspace_ = nullptr;
 
     float* temperature_buf_        = nullptr;
     float* repetition_penalty_buf_ = nullptr;
@@ -59,11 +57,6 @@ protected:
     virtual void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p);
 
 public:
-    curandState_t* curandstate_buf()
-    {
-        return curandstate_buf_;
-    }
-
     BaseSamplingLayer(size_t             max_batch_size,
                       size_t             vocab_size,
                       size_t             vocab_size_padded,

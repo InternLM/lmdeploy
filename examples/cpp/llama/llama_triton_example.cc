@@ -448,8 +448,8 @@ int main(int argc, char* argv[])
 
             std::vector<int> hBuf(outCount);
 
-            ft::cudaD2Hcpy(hBuf.data(), d_output_ids, outCount);
-            ft::cudaD2Hcpy(seq_lens.data(), d_seq_lens, batch_size);
+            ft::cudaAutoCpy(hBuf.data(), d_output_ids, outCount);
+            ft::cudaAutoCpy(seq_lens.data(), d_seq_lens, batch_size);
 
             std::cout << "sequence length: ";
             for (int i = 0; i < batch_size; ++i) {
