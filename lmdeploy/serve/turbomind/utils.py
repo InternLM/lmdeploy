@@ -48,11 +48,7 @@ class Preprocessor:
                       f'{type(prompts)}'
 
         input0_data = np.array(input0).astype(object)
-        output0_len = np.ones_like(input0).astype(np.uint32)
-        inputs = [
-            prepare_tensor('QUERY', input0_data),
-            prepare_tensor('REQUEST_OUTPUT_LEN', output0_len)
-        ]
+        inputs = [prepare_tensor('QUERY', input0_data)]
 
         with grpcclient.InferenceServerClient(self.tritonserver_addr) as \
                 client:

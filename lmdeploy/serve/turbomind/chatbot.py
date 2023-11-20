@@ -465,7 +465,7 @@ class Chatbot:
             input_lengths = input_lengths - 1
         # will crash if last_token_id == eos_id and send empty input_ids
         if sequence_end and request_output_len == 0:
-            input_ids = np.array([[self.bos_id]], dtype=np.uint32)
+            input_ids = np.array([[1]], dtype=np.uint32)
             input_lengths = np.array([[1]], dtype=np.uint32)
         input_tokens = input_lengths.squeeze()
         if self.profile_generation:
