@@ -58,13 +58,13 @@ public:
     SequenceManager(const SequenceManager&)     = delete;
     SequenceManager(SequenceManager&&) noexcept = default;
 
-    const Sequence* Create(uint64_t id);
+    [[nodiscard]] const Sequence* Create(uint64_t id);
 
-    const Sequence* Get(uint64_t id);
+    [[nodiscard]] const Sequence* Get(uint64_t id);
 
-    bool Contains(uint64_t id);
+    [[nodiscard]] bool Contains(uint64_t id);
 
-    bool Erase(uint64_t id);
+    [[nodiscard]] bool Erase(uint64_t id);
 
     void UpdateAndSetUnlock(const Sequence& seq);
 
@@ -74,10 +74,10 @@ public:
         int swap_out;
     };
 
-    Outcome Materialize(Sequences                    sequences,
-                        std::vector<int>             context_lengths,
-                        const std::vector<uint64_t>& priorities,
-                        int                          step_length);
+    [[nodiscard]] Outcome Materialize(Sequences                    sequences,
+                                      std::vector<int>             context_lengths,
+                                      const std::vector<uint64_t>& priorities,
+                                      int                          step_length);
 
     void* OffsetKey(void* block_ptr)
     {

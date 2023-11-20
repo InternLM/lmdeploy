@@ -45,7 +45,7 @@ void LlamaDecoderSelfAttentionLayer<T>::allocateBuffer(size_t batch_size)
         reinterpret_cast<T*>(allocator_->reMalloc(context_buf_, sizeof(T) * batch_size * local_hidden_units_, false));
 
     workspace_ = (float*)allocator_->reMalloc(
-        workspace_, sizeof(float) * batch_size * local_head_num_ * kMaxSplitK * (size_per_head_ + 2));
+        workspace_, sizeof(float) * batch_size * local_head_num_ * kMaxSplitK * (size_per_head_ + 2), false);
 
     is_allocate_buffer_ = true;
 }

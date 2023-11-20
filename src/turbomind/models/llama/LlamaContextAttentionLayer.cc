@@ -45,37 +45,37 @@ void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     // no padding
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_, true);
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_, false);
 
     // padding is rebuilt for q/k/v_buf_2_
     // [qH + 2kvH, B, S, D]
     q_buf_2_ = (T*)allocator_->reMalloc(
-        q_buf_2_, sizeof(T) * local_q_kv_head_num * batch_size * max_q_len * size_per_head_, true);
+        q_buf_2_, sizeof(T) * local_q_kv_head_num * batch_size * max_q_len * size_per_head_, false);
     k_buf_2_ = q_buf_2_ + local_head_num_ * batch_size * max_q_len * size_per_head_;
     v_buf_2_ = k_buf_2_ + local_kv_head_num_ * batch_size * max_q_len * size_per_head_;
 
     if (use_fmha_) {
         FlashAttentionOp<T> flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
         if (flash_attention.get_workspace_size() > 0) {
-            qk_buf_float_ = (float*)allocator_->reMalloc(qk_buf_float_, flash_attention.get_workspace_size(), true);
+            qk_buf_float_ = (float*)allocator_->reMalloc(qk_buf_float_, flash_attention.get_workspace_size(), false);
         }
     }
     else {
         // kv heads are repeated for unfused attention
         k_cache_buf_ = (T*)allocator_->reMalloc(
-            k_cache_buf_, 2 * sizeof(T) * batch_size * local_head_num_ * max_k_len * size_per_head_, true);
+            k_cache_buf_, 2 * sizeof(T) * batch_size * local_head_num_ * max_k_len * size_per_head_, false);
         v_cache_buf_ = k_cache_buf_ + batch_size * local_head_num_ * max_k_len * size_per_head_;
 
         qk_buf_ =
-            (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * max_q_len * max_k_len, true);
+            (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * max_q_len * max_k_len, false);
 
         // qkv_buf_2_ has padding
         qkv_buf_2_ = (T*)allocator_->reMalloc(
-            qkv_buf_2_, sizeof(T) * batch_size * max_q_len * local_head_num_ * size_per_head_, true);
+            qkv_buf_2_, sizeof(T) * batch_size * max_q_len * local_head_num_ * size_per_head_, false);
     }
 
     // qkv_buf_3_ padding is removed
-    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * num_token * local_head_num_ * size_per_head_, true);
+    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * num_token * local_head_num_ * size_per_head_, false);
 
     is_allocate_buffer_ = true;
 }

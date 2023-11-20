@@ -16,6 +16,7 @@
  */
 
 #include <float.h>
+#include <sstream>
 
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
@@ -199,6 +200,7 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
+    //      curand_state [local_batch_size]
     //      finished [local_batch_size], optional
     //      sequence_length [local_batch_size], optional
     //      cum_log_probs [batch_size], must be float*, optional
@@ -255,7 +257,7 @@ void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         output_tensors->at("finished", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<bool>(),
         cum_log_probs,
         output_log_probs,
-        curandstate_buf_ + ite * local_batch_size,
+        output_tensors->at("curand_state").getPtr<curandState_t>() + ite * local_batch_size,
         (int)runtime_max_top_k_,  // useless because runtime_top_k_buf_ is never nullptr. Keep for legacy.
         (int*)(runtime_top_k_buf_ + ite * local_batch_size),
         1.0f,  // useless because runtime_top_p_buf_ is never nullptr. Keep for legacy.
