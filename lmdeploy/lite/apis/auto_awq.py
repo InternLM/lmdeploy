@@ -28,8 +28,7 @@ NORM_TYPE_MAP = {
 }
 
 
-def auto_awq(model_name: str,
-             model: str,
+def auto_awq(model: str,
              work_dir: str,
              w_bits: int = 4,
              w_sym: bool = False,
