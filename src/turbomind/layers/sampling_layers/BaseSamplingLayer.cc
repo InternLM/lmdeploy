@@ -114,7 +114,8 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     //     temperature [1] or [batch_size] on cpu, optional
     //     repetition_penalty [1] or [batch_size] on cpu, optional
     //     presence_penalty [1] or [batch_size] on cpu, optional,
-    //         repetition_penalty and presence_penalty are mutually exclusive.
+    //     frequency_penalty [1] or [batch_size] on cpu, optional,
+    //         repetition_penalty and presence_penalty and frequency_penalty are mutually exclusive.
     //     min_length [1] or [batch_size] on cpu, optional
 
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -137,16 +138,26 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         std::copy_n(temperature.getPtr<float>(), batch_size, temperature_);
     }
 
-    if (runtime_args->isExist("repetition_penalty") || runtime_args->isExist("presence_penalty")) {
+    if (runtime_args->isExist("repetition_penalty") || runtime_args->isExist("presence_penalty") || runtime_args->isExist("frequency_penalty")) {
         FT_CHECK_WITH_INFO(
-            !(runtime_args->isExist("repetition_penalty") && runtime_args->isExist("presence_penalty")),
-            "Found ambiguous parameters repetition_penalty and presence_penalty which are mutually exclusive. "
-            "Please provide one of repetition_penalty or presence_penalty.");
-        repetition_penalty_type_ = runtime_args->isExist("repetition_penalty") ? RepetitionPenaltyType::Multiplicative :
-                                                                                 RepetitionPenaltyType::Additive;
-        Tensor repetition_penalty = repetition_penalty_type_ == RepetitionPenaltyType::Multiplicative ?
-                                        runtime_args->at("repetition_penalty") :
-                                        runtime_args->at("presence_penalty");
+            !(runtime_args->isExist("repetition_penalty") && runtime_args->isExist("presence_penalty")) &&
+            !(runtime_args->isExist("repetition_penalty") && runtime_args->isExist("frequency_penalty")) &&
+            !(runtime_args->isExist("presence_penalty") && runtime_args->isExist("frequency_penalty")),
+            "Found ambiguous parameters repetition_penalty and presence_penalty and frequency_penalty which are mutually exclusive. "
+            "Please provide one of repetition_penalty or presence_penalty or frequency_penalty.");
+        Tensor repetition_penalty;
+        if (runtime_args->isExist("repetition_penalty")) {
+            repetition_penalty_type_ = RepetitionPenaltyType::Multiplicative;
+            repetition_penalty = runtime_args->at("repetition_penalty");
+        }
+        else if (runtime_args->isExist("presence_penalty")) {
+            repetition_penalty_type_ = RepetitionPenaltyType::Additive;
+            repetition_penalty = runtime_args->at("presence_penalty");
+        }
+        else {
+            repetition_penalty_type_ = RepetitionPenaltyType::MultiAdditive;
+            repetition_penalty = runtime_args->at("frequency_penalty");
+        }
         if (repetition_penalty.size() == 1) {
             float rp = repetition_penalty.getVal<float>();
             deviceFill(repetition_penalty_buf_, batch_size, rp, stream_);
@@ -284,18 +295,33 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
         float default_value = getDefaultPenaltyValue(repetition_penalty_type_);
         if (!ALL_OF(repetition_penalty_ + ite * local_batch_size, local_batch_size, float, default_value)) {
-            invokeBatchApplyRepetitionPenalty(
-                logits,
-                repetition_penalty_buf_ + ite * local_batch_size,
-                output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
-                batch_size,
-                local_batch_size,
-                vocab_size_padded_,
-                input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
-                max_input_length,
-                step,
-                repetition_penalty_type_,
-                stream_);
+            if (repetition_penalty_type_ != RepetitionPenaltyType::MultiAdditive) {
+                invokeBatchApplyRepetitionPenalty(
+                    logits,
+                    repetition_penalty_buf_ + ite * local_batch_size,
+                    output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
+                    batch_size,
+                    local_batch_size,
+                    vocab_size_padded_,
+                    input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
+                    max_input_length,
+                    step,
+                    repetition_penalty_type_,
+                    stream_);
+            }
+            else {
+                invokeBatchApplyFrequencyPenalty(
+                    logits,
+                    repetition_penalty_buf_ + ite * local_batch_size,
+                    output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
+                    batch_size,
+                    local_batch_size,
+                    vocab_size_padded_,
+                    input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
+                    max_input_length,
+                    step,
+                    stream_);
+            }
             sync_check_cuda_error();
         }
     }

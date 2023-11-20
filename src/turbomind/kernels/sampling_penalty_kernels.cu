@@ -483,6 +483,80 @@ template void invokeBatchApplyRepetitionPenalty(half*                 logits,
                                                 cudaStream_t          stream);
 
 template<typename T>
+__global__ void batchApplyFrequencyPenalty(T*           logits,
+                                           const float* penalties,
+                                           const int*   output_ids,
+                                           const int    batch_size,
+                                           const int    vocab_size,
+                                           const int*   input_lengths,
+                                           const int    max_input_length,
+                                           const int    step)
+{
+    const int   batch_idx    = threadIdx.x + blockIdx.x * blockDim.x;
+    const float penalty      = penalties[batch_idx];
+    const int   input_length = input_lengths != nullptr ? input_lengths[batch_idx] : max_input_length;
+
+    logits += batch_idx * vocab_size;
+
+    for (int index = 0; index < step; index++) {
+        // Skip the padding tokens in input sequences.
+        if (index >= input_length && index < max_input_length) {
+            continue;
+        }
+        // output_ids shape: (input_len + output_len, batch_size)
+        int penalty_index = output_ids[index * batch_size + batch_idx];
+        assert(penalty_index < vocab_size);
+        logits[penalty_index] -= penalty;
+    }
+}
+
+template<typename T>
+void invokeBatchApplyFrequencyPenalty(T*                          logits,
+                                      const float*                penalties,
+                                      const int*                  output_ids,
+                                      const int                   batch_size,
+                                      const int                   local_batch_size,
+                                      const int                   vocab_size,
+                                      const int*                  input_lengths,
+                                      const int                   max_input_length,
+                                      const int                   step,
+                                      cudaStream_t                stream)
+{
+    // Inputs
+    //   logits [local_batch_size, vocab_size] : logit values.
+    //   penalties [local_batch_size] : repetition penalty factors.
+    //   output_ids [step, batch_size] : output token ids (with offset ite * local_batch_size).
+    //   input_lengths [local_batch_size], input lengths (optional).
+    //      Padding tokens at [input_length, max_input_length) of input will not be penalized.
+    const int block_size = min(local_batch_size, 1024);
+    const int grid_size  = (local_batch_size + block_size - 1) / block_size;
+    batchApplyFrequencyPenalty<T><<<grid_size, block_size, 0, stream>>>(
+            logits, penalties, output_ids, batch_size, vocab_size, input_lengths, max_input_length, step);
+}
+
+template void invokeBatchApplyFrequencyPenalty(float*                logits,
+                                               const float*          penalties,
+                                               const int*            output_ids,
+                                               const int             batch_size,
+                                               const int             local_batch_size,
+                                               const int             vocab_size,
+                                               const int*            input_lengths,
+                                               const int             max_input_length,
+                                               const int             step,
+                                               cudaStream_t          stream);
+
+template void invokeBatchApplyFrequencyPenalty(half*                logits,
+                                               const float*          penalties,
+                                               const int*            output_ids,
+                                               const int             batch_size,
+                                               const int             local_batch_size,
+                                               const int             vocab_size,
+                                               const int*            input_lengths,
+                                               const int             max_input_length,
+                                               const int             step,
+                                               cudaStream_t          stream);
+
+template<typename T>
 __global__ void batchApplyMinLengthPenalty(T*         logits,
                                            const int* min_lengths,
                                            const int* end_ids,

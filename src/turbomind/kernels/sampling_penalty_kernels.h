@@ -51,6 +51,18 @@ void invokeBatchApplyRepetitionPenalty(T*                          logits,
                                        cudaStream_t                stream);
 
 template<typename T>
+void invokeBatchApplyFrequencyPenalty(T*                          logits,
+                                      const float*                penalties,
+                                      const int*                  output_ids,
+                                      const int                   batch_size,
+                                      const int                   local_batch_size,
+                                      const int                   vocab_size,
+                                      const int*                  input_lengths,
+                                      const int                   max_input_length,
+                                      const int                   step,
+                                      cudaStream_t                stream);
+
+template<typename T>
 void invokeApplyTemperaturePenalty(T*           logits,
                                    const T*     bias,
                                    const float  temperature,

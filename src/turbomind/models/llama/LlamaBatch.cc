@@ -624,6 +624,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
         {"runtime_top_p", (std::byte*)h_runtime_top_p_, nullptr},
         {"temperature", (std::byte*)h_temperature_, nullptr},
         {"repetition_penalty", (std::byte*)h_repetition_penalty_, nullptr},
+        {"presence_penalty", (std::byte*)h_repetition_penalty_, nullptr},
+        {"frequency_penalty", (std::byte*)h_repetition_penalty_, nullptr},
     };
 
     for (auto& s : states_) {
