@@ -123,6 +123,10 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         TM_LOG_ERROR("[ERROR] config and model_dir are all set");
         ft::FT_CHECK(false);
     }
+    else if (config.empty() && model_dir.empty()) {
+        TM_LOG_ERROR("[ERROR] Neither config nor model_dir is set");
+        ft::FT_CHECK(false);
+    }
 
     if (!config.empty()) {
         std::FILE* tmpf = std::tmpfile();
