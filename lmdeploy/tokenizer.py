@@ -127,9 +127,9 @@ class HuggingFaceTokenizer:
             if osp.exists(generation_config_file):
                 with open(generation_config_file, 'r') as f:
                     cfg = json.load(f)
-                    self.model.eos_token_id = cfg['eos_token_id']
+                    self.eos_token_id_ = self.model.eos_token_id = cfg['eos_token_id']
             elif hasattr(self.model, 'eod_id'):  # Qwen remote
-                self.model.eos_token_id = self.model.eod_id
+                self.eos_token_id_ = self.model.eos_token_id = self.model.eod_id
 
     @property
     def vocab_size(self):
@@ -144,7 +144,10 @@ class HuggingFaceTokenizer:
     @property
     def eos_token_id(self):
         """end of the sentence token id."""
-        return self.model.eos_token_id
+        if self.model.eos_token_id is not None:
+            return self.model.eos_token_id
+        else:
+            return self.eos_token_id_
 
     @property
     def prefix_space_tokens(self):
