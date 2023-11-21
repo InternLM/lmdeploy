@@ -1,5 +1,5 @@
 fire
-mmengine
+mmengine-lite
 numpy
 safetensors
 sentencepiece
