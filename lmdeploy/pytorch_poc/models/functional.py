@@ -234,29 +234,83 @@ def attention_forward_with_paged_attention(
     return attn_output
 
 
+def quant_kv(key: torch.Tensor, value: torch.Tensor, out_type: torch.dtype):
+    assert out_type is torch.int8
+    # quantize key and value
+    _min = torch.min(key, axis=-1).values
+    _max = torch.max(key, axis=-1).values
+    key_zp = (_min + _max) / 2
+    key_scale = (_max - key_zp) / 127
+    key_int8 = torch.round(
+        (key - key_zp[:, :, None]) / key_scale[:, :, None]).to(out_type)
+
+    _min = torch.min(value, axis=-1).values
+    _max = torch.max(value, axis=-1).values
+    value_zp = (_min + _max) / 2
+    value_scale = (_max - value_zp) / 127
+    value_int8 = torch.round(
+        (value - value_zp[:, :, None]) / value_scale[:, :, None]).to(out_type)
+
+    # wrap zp and scale to qparams
+    qparams = {
+        'key_zp': key_zp,
+        'key_scale': key_scale,
+        'value_zp': value_zp,
+        'value_scale': value_scale,
+    }
+    return key_int8, value_int8, qparams
+
+
+def dequant_kv(context: Any, layer_id: str, key_int8: torch.Tensor,
+               value_int8: torch.Tensor, out_type: torch.dtype):
+    qparams = context.get_output(layer_id)
+
+    key_scale = qparams['key_scale']
+    key_zp = qparams['key_zp']
+    key_float = (key_int8 * key_scale[:, :, None] +
+                 key_zp[:, :, None]).to(out_type)
+
+    value_scale = qparams['value_scale']
+    value_zp = qparams['value_zp']
+    value_float = (value_int8 * value_scale[:, :, None] +
+                   value_zp[:, :, None]).to(out_type)
+    return key_float, value_float
+
+
+def sync_qparam_to_context(context: Any, layer_id: str, qparams: dict):
+    if context.inputs.meta is not None:
+        last_qparam = context.inputs.meta[layer_id]
+        for _k in last_qparam.keys():
+            _v = torch.concat([last_qparam[_k], qparams[_k]], axis=0)
+            last_qparam[_k] = _v
+        context.set_output(layer_id, last_qparam)
+    else:
+        context.set_output(layer_id, qparams)
+
+
 @torch.no_grad()
 def attention_forward_with_rerope(
-    hidden_states: Tensor,
-    history_lengths: Sequence,
-    block_offsets: Tensor,
-    num_heads: int,
-    num_kv_heads: int,
-    head_dim: int,
-    position_ids: torch.LongTensor,
-    past_key_value: Tuple[Tensor],
-    attention_mask: Tensor,
-    context: Any = None,
-    q_proj: Optional[Callable] = None,
-    k_proj: Optional[Callable] = None,
-    v_proj: Optional[Callable] = None,
-    qkv_proj: Optional[Callable] = None,
-    o_proj: Optional[Callable] = None,
-    rotary_emb_context_fn: Optional[Callable] = None,
-    rotary_emb_generate_fn: Optional[Callable] = None,
-    bias_type: str = 'default',
-    training_length=4096,
-    window=512,
-) -> Tensor:
+        hidden_states: Tensor,
+        history_lengths: Sequence,
+        block_offsets: Tensor,
+        num_heads: int,
+        num_kv_heads: int,
+        head_dim: int,
+        position_ids: torch.LongTensor,
+        past_key_value: Tuple[Tensor],
+        attention_mask: Tensor,
+        context: Any = None,
+        q_proj: Optional[Callable] = None,
+        k_proj: Optional[Callable] = None,
+        v_proj: Optional[Callable] = None,
+        qkv_proj: Optional[Callable] = None,
+        o_proj: Optional[Callable] = None,
+        rotary_emb_context_fn: Optional[Callable] = None,
+        rotary_emb_generate_fn: Optional[Callable] = None,
+        bias_type: str = 'default',
+        training_length=4096,
+        window=512,
+        layer_id: str = None) -> Tensor:
     """Attention module forward with ReRoPE.
 
     Args:
@@ -314,24 +368,54 @@ def attention_forward_with_rerope(
         q_start_loc = q_seq_length.cumsum(0)
         q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
 
-    fill_kv_cache(key_states,
-                  value_states,
-                  past_key_value[0],
-                  past_key_value[1],
-                  q_start_loc,
-                  q_seq_length,
-                  block_offsets=block_offsets,
-                  history_lengths=history_lengths,
-                  context=context)
+    if past_key_value[0].dtype != hidden_states.dtype:
+        # dynamic quantize hidden_states to kv_cache and save
+        quant = True
+        qkey, qvalue, qparams = quant_kv(key_states, value_states,
+                                         past_key_value[0].dtype)
+        sync_qparam_to_context(context=context,
+                               layer_id=layer_id,
+                               qparams=qparams)
+
+        fill_kv_cache(qkey,
+                      qvalue,
+                      past_key_value[0],
+                      past_key_value[1],
+                      q_start_loc,
+                      q_seq_length,
+                      block_offsets=block_offsets,
+                      history_lengths=history_lengths,
+                      context=context)
+
+    else:
+        fill_kv_cache(key_states,
+                      value_states,
+                      past_key_value[0],
+                      past_key_value[1],
+                      q_start_loc,
+                      q_seq_length,
+                      block_offsets=block_offsets,
+                      history_lengths=history_lengths,
+                      context=context)
 
     bsz, q_len, _ = hidden_states.size()
     if bias_type.lower() == 'default':
 
         if q_len == 1:
+
             key_states = past_key_value[0][block_offsets].view(
                 -1, num_heads, head_dim)[0:history_lengths[-1] + 1]
             value_states = past_key_value[1][block_offsets].view(
                 -1, num_heads, head_dim)[0:history_lengths[-1] + 1]
+
+            if quant:
+                # dequant int8 tensor to hidden_states.dtype
+                key_states, value_states = dequant_kv(
+                    context=context,
+                    layer_id=layer_id,
+                    key_int8=key_states,
+                    value_int8=value_states,
+                    out_type=hidden_states.dtype)
 
             full_position_ids = torch.arange(
                 position_ids.item() + 1,
@@ -354,7 +438,6 @@ def attention_forward_with_rerope(
                                        value_states.transpose(0, 1))
 
         else:
-
             query_states1, query_states2, key_states1, key_states2, value_states = rotary_emb_context_fn(  # noqa: E501
                 query_states, key_states, value_states, position_ids, window)
 

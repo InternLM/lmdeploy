@@ -56,7 +56,7 @@ class LlamaAttention(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: bool = False,
         attention_mask: Optional[torch.Tensor] = None,
-        world_size: int = 1,
+        world_size: int = 1
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """rerope rewrite."""
@@ -148,7 +148,7 @@ class LlamaAttention(nn.Module):
             o_proj=self.o_proj,
             rotary_emb_context_fn=_rotary_emb_context_rerope_fn,
             rotary_emb_generate_fn=_rotary_emb_generate_rerope_fn,
-        )
+            layer_id=id(self))
         return attn_output, None, past_key_value
 
     def _contiguous_batching_forward_default_impl(

@@ -72,6 +72,7 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
+    meta: Any
 
 
 class StepContext:
@@ -150,7 +151,9 @@ class StepContext:
         self._outputs[key] = value
 
     def get_output(self, key):
-        return self._outputs[key]
+        if key in self._outputs:
+            return self._outputs[key]
+        return None
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
@@ -232,7 +235,8 @@ class BaseModelAgent:
 
         _update_cache_config(model_config, cache_config)
 
-        self.cache_engine = CacheEngine(cache_config, model_config)
+        self.cache_engine = CacheEngine(cache_config, model_config,
+                                        json_config)
         self.stream = torch.cuda.Stream()
 
     def _build_model(self,
@@ -340,6 +344,7 @@ def _tp_build_model(
         _update_cache_config(model_config, cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
+                                   config,
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:

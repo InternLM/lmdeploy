@@ -327,6 +327,8 @@ class Engine:
 
         token_ids = [msg.token_ids for msg in messages]
 
+        meta = messages[0].meta
+
         if isinstance(token_ids[0], int):
             token_ids = [token_ids]
 
@@ -376,7 +378,8 @@ class Engine:
                            position_ids=position_ids,
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
-                           is_decoding=is_decoding)
+                           is_decoding=is_decoding,
+                           meta=meta)
 
     def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
         """Check if the message should stop.
@@ -468,9 +471,10 @@ class Engine:
         return next_token_ids, split_logits
 
     def update_running(self, running: List[SchedulerSequence],
-                       next_token_ids: torch.Tensor):
+                       next_token_ids: torch.Tensor, meta: Any):
         """update scheduler."""
         for token, msg in zip(next_token_ids, running):
+            msg.meta = meta
             msg.update_token_ids(token)
             msg.remain_output_len -= 1
             if self._stoping_criteria(msg, token):
@@ -501,14 +505,14 @@ class Engine:
         output = self.model_agent.forward(inputs,
                                           swap_in_map=swap_in_map,
                                           swap_out_map=swap_out_map)
-
+        custom_outputs = output['custom_outputs']
         logits = output['logits']
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
         next_token_ids, split_logits = self.sampling_logits(
             logits, running, inputs)
 
-        self.update_running(running, next_token_ids)
+        self.update_running(running, next_token_ids, custom_outputs)
         self.scheduler.update()
 
         # generate output

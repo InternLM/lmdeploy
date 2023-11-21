@@ -18,7 +18,7 @@ class LLM(object):
                  model_path: str,
                  model_name: str,
                  tp: int = 1,
-                 max_session_len=16384) -> None:
+                 max_session_len=40000) -> None:
         self.tokenizer = Tokenizer(model_path, trust_remote_code=True)
 
         self.scheduler_config = SchedulerConfig(
@@ -49,7 +49,7 @@ class LLM(object):
         _, token_ids, __ = self.generator.infer(
             session_id=self.session_id,
             prompt_token_ids=input_ids,
-            request_output_len=8,
+            request_output_len=32,
             sampling_param=self.sampling_param)
         response = self.tokenizer.decode(token_ids)
         self.generator.end(self.session_id)
@@ -84,17 +84,16 @@ def parse_config():
                         help='LLM type name, use llama2 by default')
     parser.add_argument('--max_tokens',
                         type=int,
-                        default=20000,
+                        default=50000,
                         help='maximum token length for evaluation')
     parser.add_argument('--interval',
                         type=int,
-                        default=1000,
+                        default=1024,
                         help='interval for evaluation')
     parser.add_argument('--num_tests',
                         type=int,
                         default=30,
                         help='number of repeat testing for each length')
-
     args = parser.parse_args()
     return args
 
@@ -135,14 +134,14 @@ def main(args):
 
     all_accuries = {}
     # This is a rough ratio to control the number of texts and tokens
-    for val in range(1000, args.max_tokens, args.interval):
+    for val in range(4096, args.max_tokens, args.interval):
         n_garbage = int(3.75 * val // 1024 * 1024)
         passed_tests = 0
         total_tokens = 0
 
         for j in range(args.num_tests):
             question, pass_key = generate_prompt_landmark(n_garbage=n_garbage,
-                                                          seed=j)
+                                                          seed=(val + j))
             response = llm.say(question)
 
             print(response)
