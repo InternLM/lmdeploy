@@ -154,7 +154,7 @@ Launch inference server by:
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,

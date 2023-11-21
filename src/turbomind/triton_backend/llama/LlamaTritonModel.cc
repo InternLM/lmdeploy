@@ -119,9 +119,12 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     INIReader reader;
-    bool      init_with_config = false;
+    if (!config.empty() && !model_dir.empty()) {
+        TM_LOG_ERROR("[ERROR] config and model_dir are all set");
+        ft::FT_CHECK(false);
+    }
 
-    if (!init_with_config && !config.empty()) {
+    if (!config.empty()) {
         std::FILE* tmpf = std::tmpfile();
         std::fputs(config.c_str(), tmpf);
         std::rewind(tmpf);
@@ -130,10 +133,9 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
             TM_LOG_ERROR("[ERROR] Can't init with config %s", config.c_str());
             ft::FT_CHECK(false);
         }
-        init_with_config = true;
     }
 
-    if (!init_with_config && !model_dir.empty()) {
+    if (!model_dir.empty()) {
         model_dir_ = model_dir;
         const std::string inifile{model_dir + "/config.ini"};
         reader = INIReader(inifile);
