@@ -301,6 +301,8 @@ struct AbstractTransformerModelInstance {
     void*              stream_ctx_ = nullptr;
 };
 
+using TensorMap = std::unordered_map<std::string, triton::Tensor>;
+
 struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createLlamaModel(std::string model_dir);
 
@@ -323,6 +325,8 @@ struct AbstractTransformerModel {
                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr) = 0;
 
     virtual void createSharedWeights(int deviceId, int rank) = 0;
+
+    virtual TensorMap getParams(int deviceId, int rank) = 0;
 
     virtual std::string toString()            = 0;
     virtual int         getTensorParaSize()   = 0;

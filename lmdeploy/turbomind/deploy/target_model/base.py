@@ -18,6 +18,9 @@ OUTPUT_MODELS = Registry(
 
 
 def tprint(*args, **kwargs):
+    to_file = kwargs.pop('to_file', False)
+    if not to_file:
+        return
     from io import StringIO
     s = StringIO()
     print(*args, **kwargs, file=s, end='')
@@ -90,10 +93,13 @@ class BaseOutputModel(ABC):
                  out_dir: str = ''):
         super().__init__()
         self.input_model = input_model
-        self.cfg = self.get_config(cfg)
+        self.cfg = cfg
+        if not cfg.valid:
+            self.cfg = self.get_config(cfg)
         assert self.cfg.valid
         self.to_file = to_file
         self.out_dir = out_dir
+        self.tm_params = {}
 
     @abstractmethod
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
@@ -136,6 +142,27 @@ class BaseOutputModel(ABC):
             tprint(name, param.shape)
             param.contiguous().cpu().numpy().tofile(
                 osp.join(self.out_dir, name))
+        elif len(self.tm_params) > 0:
+            tm_params = self.tm_params
+            weight_type = self.cfg.weight_type
+            assert weight_type in ['fp16', 'fp32', 'int4']
+
+            # currently, the tensor type should in
+            # [torch.float, torch.half, torch.int32]
+            torch_tensor = param.cuda().contiguous()
+            assert torch_tensor.dtype in [
+                torch.int32, torch.float, torch.half, torch.bfloat16
+            ]
+            if torch_tensor.dtype != torch.int32:
+                if weight_type in ['fp16', 'int4']:
+                    torch_tensor = torch_tensor.half()
+                else:
+                    torch_tensor = torch_tensor.float()
+            for tm_tensor in tm_params[name]:
+                tm_tensor.copy_from(torch_tensor)
+            tm_params.pop(name)
+        else:
+            tprint('skip export', name, param.shape)
 
     def save_split(self,
                    tensor: torch.Tensor,
@@ -145,8 +172,10 @@ class BaseOutputModel(ABC):
         """save split."""
         tp = self.cfg.tensor_para_size
         if split_dim is not None:
-            tprint(f'*** splitting {name}, shape={tensor.shape}, '
-                   f'split_dim={split_dim}, tp={tp}')
+            tprint(
+                f'*** splitting {name}, shape={tensor.shape}, '
+                f'split_dim={split_dim}, tp={tp}',
+                to_file=self.to_file)
             assert tensor.shape[split_dim] % tp == 0
             split_size = tensor.shape[split_dim] // tp
             splits = torch.split(tensor, split_size, dim=split_dim)
@@ -154,7 +183,8 @@ class BaseOutputModel(ABC):
                 prefix, ext = osp.splitext(name)
                 self.export_weight(split, f'{prefix}.{i}{ext}')
         elif copy:
-            tprint(f'### copying {name}, shape={tensor.shape}')
+            tprint(f'### copying {name}, shape={tensor.shape}',
+                   to_file=self.to_file)
             copies = [tensor] * tp
             for i, copy in enumerate(copies):
                 prefix, ext = osp.splitext(name)
@@ -166,7 +196,9 @@ class BaseOutputModel(ABC):
         """Export to turbomind model format."""
         num_layer = self.cfg.num_layer
         from tqdm import tqdm
-        pbar = tqdm(total=num_layer, desc='Convert to turbomind format')
+        pbar = tqdm(total=num_layer,
+                    desc='Convert to turbomind format',
+                    leave=self.to_file)
         self.export_config()
         for bin in self.input_model.bins():
             self.export_misc(bin)

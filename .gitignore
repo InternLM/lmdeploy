@@ -58,6 +58,7 @@ work_dir*/
 *.bin
 *config.json
 *generate_config.json
+!lmdeploy/turbomind/hf_repo/config.json
 
 # Pytorch
 *.pth
