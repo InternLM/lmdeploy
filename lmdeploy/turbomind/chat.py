@@ -3,7 +3,7 @@ import dataclasses
 import os
 import random
 
-from .utils import get_gen_param
+from lmdeploy.turbomind.utils import get_gen_param
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
