@@ -123,7 +123,9 @@ def main(tritonserver_addr: str,
          dataset_path: str,
          concurrency: int = 1,
          session_len: int = 2048,
-         samples: int = 1000):
+         samples: int = 1000,
+         seed: int = 0):
+    random.seed(seed)
     warmup(tritonserver_addr, concurrency, session_len - 1)
     req_que = mp.Queue()
     res_que = mp.Queue()

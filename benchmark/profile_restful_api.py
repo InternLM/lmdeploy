@@ -127,7 +127,9 @@ def main(server_addr: str,
          concurrency: int = 1,
          session_len: int = 2048,
          samples: int = 1000,
-         stream_output: bool = False):
+         stream_output: bool = False,
+         seed: int = 0):
+    random.seed(seed)
     api_url = server_addr + '/v1/chat/interactive'
     warmup(api_url, concurrency, session_len - 1, 4, stream_output)
     req_queue, n_req = read_dataset(tokenizer_path, dataset_path, samples,

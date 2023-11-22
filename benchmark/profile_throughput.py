@@ -179,14 +179,16 @@ class Engine:
 def main(dataset: str,
          model_path: str,
          concurrency: int = 1,
-         num_prompts: int = 1000,
+         samples: int = 1000,
          tp: int = 1,
-         stream_output: bool = True):
+         stream_output: bool = True,
+         seed: int = 0):
+    random.seed(seed)
 
     engine = Engine(model_path, tp=tp)
     tokenizer = engine.tokenizer
 
-    requests = sample_requests(dataset, num_prompts, tokenizer)
+    requests = sample_requests(dataset, samples, tokenizer)
 
     engine.process_request(requests, concurrency, stream_output)
 
