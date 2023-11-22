@@ -119,7 +119,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     INIReader reader;
-    ft::FT_CHECK_WITH_INFO((config.empty() ^ model_dir.empty()), "invalid init options");
+    FT_CHECK_WITH_INFO((config.empty() ^ model_dir.empty()), "invalid init options");
 
     if (!config.empty()) {
         std::FILE* tmpf = std::tmpfile();
