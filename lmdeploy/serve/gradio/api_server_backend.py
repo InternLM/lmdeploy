@@ -18,7 +18,8 @@ class InterFace:
 
 def chat_stream_restful(instruction: str, state_chatbot: Sequence,
                         cancel_btn: gr.Button, reset_btn: gr.Button,
-                        session_id: int):
+                        session_id: int, top_p: float, temperature: float,
+                        request_output_len: int):
     """Chat with AI assistant.
 
     Args:
@@ -34,8 +35,10 @@ def chat_stream_restful(instruction: str, state_chatbot: Sequence,
             instruction,
             f'{InterFace.api_server_url}/v1/chat/interactive',
             session_id=session_id,
-            request_output_len=512,
-            interactive_mode=True):
+            request_output_len=request_output_len,
+            interactive_mode=True,
+            top_p=top_p,
+            temperature=temperature):
         if finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
                        ' Please restart the session by reset button.')
@@ -147,10 +150,22 @@ def run_api_server(api_server_url: str,
             with gr.Row():
                 cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
+            with gr.Row():
+                request_output_len = gr.Slider(1,
+                                               2048,
+                                               value=512,
+                                               step=1,
+                                               label='Maximum new tokens')
+                top_p = gr.Slider(0.01, 1, value=0.8, step=0.01, label='Top_p')
+                temperature = gr.Slider(0.01,
+                                        1.5,
+                                        value=0.7,
+                                        step=0.01,
+                                        label='Temperature')
 
         send_event = instruction_txtbox.submit(chat_stream_restful, [
             instruction_txtbox, state_chatbot, cancel_btn, reset_btn,
-            state_session_id
+            state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),
