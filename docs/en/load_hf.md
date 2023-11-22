@@ -1,41 +1,40 @@
 # Load huggingface model directly
 
-Before v0.0.14, if you want to serving or inference by TurboMind, you should first convert the model to TurboMind format. Through offline conversion, the model can be loaded faster, but it isn't user-friendly. Therefore, LMDeploy adds the ability of online conversion and support loading huggingface model directly.
+Starting from v0.1.0, Turbomind adds the ability to pre-process the model parameters on-the-fly while loading them from huggingface style models.
 
 ## Supported model type
 
 Currently, Turbomind support loading three types of model:
 
 1. A lmdeploy-quantized model hosted on huggingface.co, such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit), etc.
-2. Other hot LM models on huggingface.co like Qwen/Qwen-7B-Chat
-3. A model converted by `lmdeploy convert`, old format
+2. Other LM models on huggingface.co like Qwen/Qwen-7B-Chat
+3. A model converted by `lmdeploy convert`, legacy format
 
 ## Usage
 
-### 1) A quantized model managed by lmdeploy / internlm
+### 1) A lmdeploy-quantized model
 
-For quantized models managed by lmdeploy or internlm, the parameters required for online conversion are already exist in config.json, so you only need to pass the repo_id or local path when using it.
-
-> If config.json has not been updated in time, you need to pass the `--model-name` parameter, please refer to 2)
+For models quantized by `lmdeploy.lite` such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit), etc.
 
 ```
-repo_id=lmdeploy/qwen-chat-7b-4bit
+repo_id=internlm/internlm-chat-20b-4bit
+model_name=internlm-chat-20b
 # or
-# repo_id=/path/to/managed_model
+# repo_id=/path/to/downloaded_model
 
 # Inference by TurboMind
-lmdeploy chat turbomind $repo_id
+lmdeploy chat turbomind $repo_id --model-name $model_name
 
 # Serving with gradio
-lmdeploy serve gradio $repo_id
+lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
-lmdeploy serve api_server $repo_id --instance_num 32 --tp 1
+lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --tp 1
 ```
 
-### 2) Other hot LM models
+### 2) Other LM models
 
-For other popular models such as Qwen/Qwen-7B-Chat or baichuan-inc/Baichuan2-7B-Chat, the name of the model needs to be passed in. LMDeploy supported models can be viewed through `lmdeploy list`.
+For other LM models such as Qwen/Qwen-7B-Chat or baichuan-inc/Baichuan2-7B-Chat. LMDeploy supported models can be viewed through `lmdeploy list`.
 
 ```
 repo_id=Qwen/Qwen-7B-Chat

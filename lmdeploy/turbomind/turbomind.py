@@ -132,7 +132,7 @@ class TurboMind:
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
     def _create_weight(self, model_comm):
-        """Allocate wegiht buffer, load params if from_workspace."""
+        """Allocate weight buffer, load params if from_workspace."""
 
         # TODO: support mpi
         self.node_id = 0

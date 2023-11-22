@@ -1,6 +1,6 @@
 # 直接读取 huggingface 模型
 
-在 V0.0.14 版本之前，若想使用 LMDeploy 进行推理或者部署，需要先使用命令 `lmdeploy convert` 将模型离线转换为 TurboMind 推理引擎支持的格式，转换后的模型可以更快地进行加载，但对用户使用来说并不友好，因此，LDMdeploy 决定增加在线转换的功能，支持直接读取 Huggingface 的模型。
+从 v0.1.0 开始，Turbomid 添加了直接读取 Huggingface 格式权重的能力。
 
 ## 支持的类型
 
@@ -12,30 +12,30 @@
 
 ## 使用方式
 
-### 1) lmdeploy / internlm 所管理的量化模型
+### 1) 通过 lmdeploy 量化的模型
 
-lmdeploy / internlm 所管理的模型，config.json 中已经有在线转换需要的参数，所以使用时只需要传入 repo_id 或者本地路径即可。
-
-> 如果 config.json 还未及时更新，还需要传入`--model-name` 参数，可参考 2)
+对于通过 `lmdeploy.lite` 量化的模型，TurboMind 可以直接加载，比如 [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit).
 
 ```
-repo_id=lmdeploy/qwen-chat-7b-4bit
+repo_id=internlm/internlm-chat-20b-4bit
+model_name=internlm-chat-20b
+
 # or
-# repo_id=/path/to/managed_model
+# repo_id=/path/to/downloaded_model
 
 # Inference by TurboMind
-lmdeploy chat turbomind $repo_id
+lmdeploy chat turbomind $repo_id --model-name $model_name
 
 # Serving with gradio
-lmdeploy serve gradio $repo_id
+lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
-lmdeploy serve api_server $repo_id --instance_num 32 --tp 1
+lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --tp 1
 ```
 
 ### 2) 其他的 LM 模型
 
-其他的比较热门的模型比如 Qwen/Qwen-7B-Chat, baichuan-inc/Baichuan2-7B-Chat，需要传入模型的名字。LMDeploy 模型支持情况可通过 `lmdeploy list` 查看。
+其他 LM 模型比如 Qwen/Qwen-7B-Chat, baichuan-inc/Baichuan2-7B-Chat。LMDeploy 模型支持情况可通过 `lmdeploy list` 查看。
 
 ```
 repo_id=Qwen/Qwen-7B-Chat
