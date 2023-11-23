@@ -475,6 +475,10 @@ bool LlamaBatch<T>::Initialize()
 template<typename T>
 void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc)
 {
+    if (desc.empty()) {
+        return;
+    }
+
     std::vector<int> idxs(desc.size());
     std::iota(idxs.begin(), idxs.end(), 0);
 
@@ -1430,18 +1434,21 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
         // finished sequences is handled by `Initialize()`
         finished_count = 0;
 
-        ContextDecode();
-
         if (state_->active_size) {
+
+            ContextDecode();
+
             if (modified) {
                 g = InitializeGeneration();
                 InitializeSampling();
             }
+
             for (int i = 0; i < step_length_; ++i) {
                 if (!Generate(g)) {
                     break;
                 }
             }
+
             if (auto signals = Finish(g, finished_count); !signals.empty()) {
                 if (finished_count) {
                     // Finished requests and corresponding output tensors will be released when notified
