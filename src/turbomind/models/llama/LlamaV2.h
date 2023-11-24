@@ -30,6 +30,7 @@
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/instance_comm.h"
@@ -113,37 +114,29 @@ private:
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void contextDecode(T*           deocder_output,
-                       uintptr_t*   k_block_ptrs,
-                       uintptr_t*   v_block_ptrs,
-                       void**       k_tmp_ptrs,
-                       void**       v_tmp_ptrs,
-                       T*           context_decoder_input_buf,
-                       T*           context_decoder_output_buf,
-                       const int*   input_ids,
-                       const int*   input_length,
-                       const int*   context_length,
-                       const int*   cu_block_counts,
-                       const float* rope_theta,
-                       size_t       token_num,
-                       size_t       max_input_len,
-                       size_t       max_context_len,
-                       size_t       session_len,
-                       size_t       batch_size);
-
-    void decoderForward(T*           decoder_output,
-                        uintptr_t*   k_cache_ptr,
-                        uintptr_t*   v_cache_ptr,
+    void forwardUnified(T*           out,
+                        T*           decoder_output,
                         T*           decoder_input,
-                        const int*   sequence_length,
-                        const bool*  finished,
-                        const int*   cu_block_counts,
+                        void**       k_block_ptrs,
+                        void**       v_block_ptrs,
+                        const int*   input_ids,
+                        const int*   cu_block_cnts,
                         const float* rope_theta,
-                        int          step,
-                        int          ite,
-                        int          sum_seq_len,
-                        int          max_seq_len,
-                        size_t       batch_size);
+                        const int*   dc_sequence_length,
+                        const bool*  dc_finished,
+                        const int*   pf_input_length,
+                        const int*   pf_context_length,
+                        T**          pf_tmp_k_ptrs,
+                        T**          pf_tmp_v_ptrs,
+                        size_t       token_num,
+                        int          dc_batch_size,
+                        int          dc_step,
+                        int          dc_sum_seq_len,
+                        int          dc_max_seq_len,
+                        int          pf_batch_size,
+                        int          pf_max_input_len,
+                        int          pf_max_context_len,
+                        int          pf_session_len);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 
@@ -195,10 +188,12 @@ private:
 
     const bool debug_{false};
 
-    LlamaWeight<T>*            weights_{};
-    LlamaDecoder<T>*           decoder_{};
-    LlamaContextDecoder<T>*    context_decoder_{};
-    DynamicDecodeLayer<float>* dynamic_decode_layer_{};
+    LlamaWeight<T>*         weights_{};
+    LlamaDecoder<T>*        decoder_{};
+    LlamaContextDecoder<T>* context_decoder_{};
+
+    std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
+    DynamicDecodeLayer<float>*         dynamic_decode_layer_{};
 
     const int                      step_length_;
     std::shared_ptr<SharedState>   shared_state_;

@@ -8,6 +8,7 @@
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/copy.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
@@ -29,6 +30,28 @@
 
 namespace turbomind {
 
+void PrintDecodeTokens(
+    const int* token_ids, int max_seq_len, int batch_sizse, cudaStream_t stream, const std::string& msg)
+{
+    // tokens in [S, B] layout
+    std::vector<int> tokens(max_seq_len * batch_sizse);
+    check_cuda_error(cudaMemcpyAsync(tokens.data(), token_ids, sizeof(int) * tokens.size(), cudaMemcpyDefault, stream));
+    check_cuda_error(cudaStreamSynchronize(stream));
+
+    printf("[%s] ", msg.c_str());
+    for (int j = 0; j < max_seq_len; ++j) {
+        printf("%5d ", j);
+    }
+    printf("\n");
+    for (int i = 0; i < batch_sizse; ++i) {
+        printf("[%s] ", msg.c_str());
+        for (int j = 0; j < max_seq_len; ++j) {
+            // std::cout << sb_tokens[j * batch_size + i] << " ";
+            printf("%5d ", tokens[j * batch_sizse + i]);
+        }
+        printf("\n");
+    }
+}
 void ClearState(BatchState& s)
 {
     std::fill_n(s.requests.begin(), s.size, nullptr);
@@ -564,9 +587,10 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     decoder_input_buf_  = (T*)allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units, false);
     decoder_output_buf_ = (T*)allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units, false);
 
-    input_ids_buf_      = (int*)allocator_->reMalloc(input_ids_buf_, sizeof(int) * batchxbeam * session_len, true);
-    input_length_buf_   = (int*)allocator_->reMalloc(input_length_buf_, sizeof(int) * batchxbeam);
-    context_length_buf_ = (int*)allocator_->reMalloc(context_length_buf_, sizeof(int) * batchxbeam);
+    input_ids_buf_       = (int*)allocator_->reMalloc(input_ids_buf_, sizeof(int) * batchxbeam * session_len, true);
+    input_length_buf_    = (int*)allocator_->reMalloc(input_length_buf_, sizeof(int) * batchxbeam);
+    context_length_buf_  = (int*)allocator_->reMalloc(context_length_buf_, sizeof(int) * batchxbeam);
+    init_context_length_ = (int*)allocator_->reMalloc(init_context_length_, sizeof(int) * batchxbeam);
 
     sequence_lengths_ = (int*)allocator_->reMalloc(sequence_lengths_, sizeof(int) * batchxbeam, false);
 
@@ -698,6 +722,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&input_ids_buf_);
         allocator_->free((void**)&input_length_buf_);
         allocator_->free((void**)&context_length_buf_);
+        allocator_->free((void**)&init_context_length_);
 
         allocator_->free((void**)&sequence_lengths_);
 
@@ -828,6 +853,7 @@ void LlamaBatch<T>::InitializeSampling()
             const int size_in_bytes = ref.sizeBytes();
             memset(h_ptr, 0, size_in_bytes * batch_size);
             for (int i = 0; i < batch_size; ++i) {
+                FT_CHECK(state_->requests[i] != nullptr);
                 if (state_->requests[i]->inputs[rank_].isExist(name)) {
                     Tensor& src = state_->requests[i]->inputs[rank_].at(name);
                     FT_CHECK(ref.shape == src.shape);
@@ -861,7 +887,12 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     const int batch_size      = state_->active_size;
     const int max_context_len = *std::max_element(state_->h_context_length, state_->h_context_length + batch_size);
 
-    Copy(state_->h_context_length, batch_size, context_length_buf_);  // also referenced in `SetOutputTensors`
+    // Context length at initialization, will stay constant until re-initialziation
+    Copy(state_->h_context_length, batch_size, init_context_length_);
+
+    // Real-time context length that will change during generation
+    Copy(init_context_length_, batch_size, context_length_buf_);  // also referenced in `SetOutputTensors`
+
     Copy(context_length_buf_, batch_size, sequence_lengths_);
     // `sequence_lengths_` will be increased by dynamic decode
     // note that in decoder and in output "sequence length" has different semantic
@@ -880,7 +911,7 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     // ABCDEFGHi    ->  ABCDEFGHi i
     // ABCDEFGh         ABCDEFGh  h
     // ABCd             ABCd      d
-    invokePadLastTokenIds(token_ids_buf_, context_length_buf_, max_context_len, batch_size, stream_);
+    invokePadLastTokenIds(token_ids_buf_, init_context_length_, max_context_len, batch_size, stream_);
     sync_check_cuda_error();
 
     // used for dispatching split-k decoding kernels
@@ -921,9 +952,7 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     const int start_step = max_context_len;
 
     if (rank_ == 0) {
-        TM_LOG_INFO("[initGen] batch_size = %d", (int)batch_size);
-        TM_LOG_INFO("[initGen] max_context_len = %d", (int)max_context_len);
-
+        TM_LOG_INFO("[initGen] batch_size = %d, max_ctx_len = %d", (int)batch_size, (int)max_context_len);
         if (debug_) {
             TM_LOG_INFO("[initGen] slot  sequence_id  context_len  seq_limit_len  finished");
             for (int i = 0; i < batch_size; ++i) {
@@ -938,257 +967,6 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     }
 
     return GenerationState{max_context_len, start_step, sum_seq_len, max_seq_len};
-}
-
-template<typename T>
-bool LlamaBatch<T>::Generate(GenerationState& g)
-{
-    NvtxScope scope("Generate");
-    const int batch_size = state_->active_size;
-
-    constexpr int kLogInterval = 10;
-    if (rank_ == 0 && (g.step - 1) % kLogInterval == 0) {
-        TM_LOG_INFO("------------------------- step = %d -------------------------", g.step - 1);
-    }
-
-    const bool is_first_step = (g.step == g.max_init_ctx_len);
-
-    std::vector<int> prev;
-    if (debug_ && rank_ == 0 && is_first_step) {
-        prev.resize(batch_size);
-        Copy(token_ids_buf_ + (g.step - 1) * batch_size, batch_size, prev.data());
-    }
-
-    // embeddingLookup(step_ - 1);
-    model_->embeddingLookup(decoder_input_buf_,  //
-                            token_ids_buf_,
-                            batch_size,
-                            g.step - 1);
-
-    model_->decoderForward(decoder_output_buf_,
-                           k_block_ptrs_,
-                           v_block_ptrs_,
-                           decoder_input_buf_,
-                           sequence_lengths_,
-                           finished_buf_,
-                           cu_block_counts_,
-                           rope_theta_,
-                           g.step,
-                           0,
-                           g.sum_seq_len,
-                           g.max_seq_len,
-                           batch_size);
-
-    model_->postDecodeEmbedding(logits_buf_,  //
-                                local_logits_buf_,
-                                decoder_output_buf_,
-                                batch_size);
-
-    /// sync for better NVTX visualization, THIS IS NOT NEEDED
-    // check_cuda_error(cudaStreamSynchronize(stream_));
-
-    // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
-    // not supported yet.
-    bool should_stop{};
-    model_->dynamicDecode(token_ids_buf_,
-                          finished_buf_,
-                          sequence_lengths_,
-                          &should_stop,
-                          state_->curand_state,
-                          &inputs_,
-                          &outputs_,
-                          logits_buf_,
-                          seq_limit_len_,
-                          context_length_buf_,
-                          d_end_ids_buf_,
-                          g.step,
-                          0,
-                          g.max_init_ctx_len,
-                          session_len_ * 2,
-                          batch_size);
-
-    if (debug_ && rank_ == 0) {
-        std::vector<int> curr(batch_size);
-
-        Copy(token_ids_buf_ + g.step * batch_size, batch_size, curr.data());
-        cudaStreamSynchronize(stream_);
-
-        if (is_first_step) {
-            std::stringstream sprev;
-            for (int k = 0; k < prev.size(); ++k) {
-                sprev << std::setw(6) << prev[k];
-            }
-            TM_LOG_INFO("[ lookup ] step = %d, [%s]", g.step - 1, sprev.str().c_str());
-        }
-
-        std::stringstream scurr;
-        for (int k = 0; k < curr.size(); ++k) {
-            scurr << std::setw(6) << curr[k];
-        }
-        TM_LOG_INFO("[generate] step = %d, [%s]", g.step - 1, scurr.str().c_str());
-    }
-
-    ////////////////////////////////////////////////
-    /// ! increase the counters
-    g.step += 1;
-    g.max_seq_len += 1;
-    g.sum_seq_len += batch_size;
-
-    return !should_stop;
-}
-
-template<typename T>
-void LlamaBatch<T>::ContextDecode()
-{
-    NvtxScope  _("prefill");
-    const auto batch_size = state_->active_size;
-
-    int base = -1;
-    for (int i = 0; i < batch_size; ++i) {
-        if (state_->is_swap_in[i]) {
-            const auto& seq = *state_->sequences[i];
-            dbg(std::tuple(i, state_->h_context_length[i], seq.cache_len));
-            if (const int missing = state_->h_context_length[i] - seq.cache_len; missing > 1) {
-                base = base < 0 ? i : base;
-                dbg(seq.tokens, seq.cache_len);
-                Copy(state_->output_ids + i * session_len_ + seq.cache_len, missing, input_ids_buf_ + i * session_len_);
-                // subtract input/context len by 1 to skip last input token (will process with decoder later)
-                h_input_length_buf_[i] = missing - 1;
-            }
-        }
-    }
-    if (base < 0) {
-        // TM_LOG_INFO("[decodeContext] Context decoding is not needed.");
-        return;
-    }
-
-    const int context_decode_count = batch_size - base;
-
-    Copy(state_->h_context_length, batch_size, context_length_buf_);
-    Copy(state_->h_rope_theta, batch_size, rope_theta_);
-    Copy(h_input_length_buf_, batch_size, input_length_buf_);
-
-    // check_cuda_error(cudaStreamSynchronize(stream_));
-    // const auto tick = std::chrono::high_resolution_clock::now();
-
-    if (rank_ == 0) {
-        TM_LOG_INFO("[decodeContext] base = %d, count = %d", base, context_decode_count);
-    }
-    // subtract input/context len by 1 to skip last input token (will process with decoder later)
-    invokePlusScalar(context_length_buf_ + base, -1, context_decode_count, stream_);
-
-    // find sub-batch offsets
-    std::vector<int> offsets{base};
-    std::vector<int> max_context_cnts;
-    int              accum_size        = 0;
-    int              accum_input_count = 0;
-    int              max_context_count = 0;
-    for (int i = base; i < batch_size; ++i) {
-        int size          = accum_size + 1;
-        int input_count   = accum_input_count + h_input_length_buf_[i];
-        int context_count = std::max(max_context_count, state_->h_context_length[i] - 1);
-        // we have `cu_seqlens` on q so no padding for input is needed
-        // kernels are expecting uniform k/v cache length -> `max_context_count * size <= max_context_token_num_`
-        if (input_count <= max_context_token_num_ && context_count * size <= max_context_token_num_) {
-            accum_size        = size;
-            accum_input_count = input_count;
-            max_context_count = context_count;
-        }
-        else {
-            offsets.push_back(i);
-            max_context_cnts.push_back(max_context_count);
-            accum_size        = 1;
-            accum_input_count = h_input_length_buf_[i];
-            max_context_count = state_->h_context_length[i] - 1;
-        }
-    }
-    offsets.push_back(batch_size);
-    max_context_cnts.push_back(max_context_count);
-
-    dbg(offsets, max_context_cnts);
-
-    // context decode on sub-batches
-    for (int k = 0; k < offsets.size() - 1; ++k) {
-        int              first          = offsets[k];
-        int              last           = offsets[k + 1];
-        int              sub_batch_size = last - first;
-        T*               k_ptr          = tmp_k_cache_buf_;
-        T*               v_ptr          = tmp_v_cache_buf_;
-        std::vector<int> decode_indices{};
-        std::vector<int> decode_lengths{};
-        int              max_input_len{};
-        auto             input_ids = context_decoder_ids_buf_;
-        TM_LOG_INFO("first = %d, last = %d", first, last);
-        for (int i = first; i < last; ++i) {
-            // TM_LOG_INFO("session_len = %d, input_length = %d", session_len_, h_input_length_buf_[i]);
-            input_ids = Copy(input_ids_buf_ + i * session_len_, h_input_length_buf_[i], input_ids);
-            dbg(i, h_input_length_buf_[i]);
-            h_tmp_k_ptrs_[i] = k_ptr;
-            h_tmp_v_ptrs_[i] = v_ptr;
-            k_ptr += model_->local_kv_head_num_ * max_context_cnts[k] * model_->size_per_head_;
-            v_ptr += model_->local_kv_head_num_ * max_context_cnts[k] * model_->size_per_head_;
-            decode_indices.push_back(i);
-            decode_lengths.push_back(h_input_length_buf_[i]);
-            max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
-        }
-        int token_count = input_ids - context_decoder_ids_buf_;
-        dbg(token_count, max_input_len, max_context_cnts[k]);
-
-        Copy(h_tmp_k_ptrs_ + first, sub_batch_size, tmp_k_ptrs_ + first);
-        Copy(h_tmp_v_ptrs_ + first, sub_batch_size, tmp_v_ptrs_ + first);
-
-        if (rank_ == 0) {
-            TM_LOG_INFO(
-                "[decodeContext] offset = %d, batch_size = %d, token_num = %d, max_input_len = %d, max_context_len = %d",
-                base,
-                sub_batch_size,
-                token_count,
-                max_input_len,
-                max_context_cnts[k]);
-        }
-
-        dbg(first, last);
-        dbg(k_block_ptrs_, v_block_ptrs_);
-
-        model_->contextDecode(nullptr,
-                              k_block_ptrs_,
-                              v_block_ptrs_,
-                              tmp_k_ptrs_ + first,
-                              tmp_v_ptrs_ + first,
-                              context_decoder_input_buf_,
-                              context_decoder_output_buf_,
-                              context_decoder_ids_buf_,
-                              input_length_buf_ + first,
-                              context_length_buf_ + first,
-                              cu_block_counts_ + first,
-                              rope_theta_ + first,
-                              token_count,
-                              max_input_len,
-                              max_context_cnts[k],
-                              max_context_cnts[k],
-                              sub_batch_size);
-
-        // compute logits of inputs if requested
-        OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
-    }
-
-    invokePlusScalar(context_length_buf_ + base, 1, context_decode_count, stream_);
-
-    std::fill(h_input_length_buf_ + base, h_input_length_buf_ + batch_size, 0);
-
-    // `SequenceManager` needs real-time value of cache length
-    for (int i = base; i < batch_size; ++i) {
-        if (state_->requests[i]) {
-            FT_CHECK(state_->sequences[i]);
-            state_->sequences[i]->cache_len = state_->h_context_length[i] - 1;  // -1 since we skip last token
-        }
-    }
-
-    // check_cuda_error(cudaStreamSynchronize(stream_));
-    // const auto tock = std::chrono::high_resolution_clock::now();
-    // if (rank_ == 0) {
-    //     TM_LOG_INFO("[decodeContext] %.2f ms", std::chrono::duration<float, std::milli>(tock - tick).count());
-    // }
 }
 
 template<typename T>
@@ -1247,7 +1025,7 @@ auto LlamaBatch<T>::Finish(GenerationState& g, int& finished_count) -> std::vect
     // [s,b] -> [b,s] and skip padding in [context_len, max_context_len)
     invokeGatherOutput(state_->output_ids,
                        token_ids_buf_,
-                       context_length_buf_,
+                       init_context_length_,
                        g.max_init_ctx_len,
                        g.step,
                        session_len_,
@@ -1260,15 +1038,6 @@ auto LlamaBatch<T>::Finish(GenerationState& g, int& finished_count) -> std::vect
     Copy(sequence_lengths_, batch_size, state_->h_context_length);
 
     check_cuda_error(cudaStreamSynchronize(stream_));
-
-    // `SequenceManager` needs real-time value of cache length
-    // ! Must be done before incrementing `h_context_length` because the generated token is NOT kv-cached yet
-    for (int i = 0; i < batch_size; ++i) {
-        if (state_->requests[i]) {
-            FT_CHECK(state_->sequences[i]);
-            state_->sequences[i]->cache_len = state_->h_context_length[i];
-        }
-    }
 
     // invariant: context_length = sequence_length + 1, so that h_context_length include all (including the one just
     // generated) tokens
@@ -1290,11 +1059,18 @@ auto LlamaBatch<T>::Finish(GenerationState& g, int& finished_count) -> std::vect
     }
 
     if (debug_ && rank_ == 0) {
-        std::stringstream ss;
+
         for (int i = 0; i < batch_size; ++i) {
-            ss << (i ? ", " : "") << "(" << state_->h_context_length[i] << "," << state_->h_finished[i] << ")";
+            // ss << (i ? ", " : "") << "(" << state_->h_context_length[i] << "," << state_->h_finished[i] << ")";
+            std::vector<int> tokens(state_->h_context_length[i]);
+            Copy(state_->output_ids + i * session_len_, tokens.size(), tokens.data());
+            cudaStreamSynchronize(stream_);
+            std::stringstream ss;
+            for (const auto& t : tokens) {
+                ss << " " << t;
+            }
+            TM_LOG_INFO("[Finish] slot %d, tokens [%s]", i, ss.str().c_str());
         }
-        TM_LOG_INFO("[finish] [%s]", ss.str().c_str());
     }
 
     std::vector<Signal> signals;
@@ -1436,27 +1212,25 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
 
         if (state_->active_size) {
 
-            ContextDecode();
-
             if (modified) {
                 g = InitializeGeneration();
                 InitializeSampling();
             }
 
             for (int i = 0; i < step_length_; ++i) {
-                if (!Generate(g)) {
+                auto cont = Forward(g, i);
+                if (auto signals = Finish(g, finished_count); !signals.empty()) {
+                    if (finished_count) {
+                        // Finished requests and corresponding output tensors will be released when notified
+                        // wait for all ranks to ensure no rank (except for output thread) will access related
+                        // resources
+                        shared_state->barrier->wait();
+                    }
+                    SendSignals(std::move(signals));
+                }
+                if (!cont) {
                     break;
                 }
-            }
-
-            if (auto signals = Finish(g, finished_count); !signals.empty()) {
-                if (finished_count) {
-                    // Finished requests and corresponding output tensors will be released when notified
-                    // wait for all ranks to ensure no rank (except for output thread) will access related
-                    // resources
-                    shared_state->barrier->wait();
-                }
-                SendSignals(std::move(signals));
             }
         }
 
@@ -1519,6 +1293,225 @@ void LlamaBatch<T>::OutputThreadEntry()
             model_->ffi_lock_(0);
         }
     }
+}
+
+template<typename T>
+bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
+{
+    NvtxScope _("Forward");
+
+    FT_CHECK(max_context_token_num_ >= max_batch_size_);
+
+    const int active_size = state_->active_size;
+
+    constexpr int kLogInterval = 10;
+    if (rank_ == 0 && (g.step - 1) % kLogInterval == 0) {
+        TM_LOG_INFO("------------------------- step = %d -------------------------", g.step - 1);
+    }
+
+    int               pf_offset = 0;
+    std::vector<int*> input_d_ptrs(active_size);
+
+    if (iter == 0) {  // The first iter may have pre-fill tokens
+        for (int i = 0; i < active_size; ++i) {
+            const auto& seq        = *state_->sequences[i];
+            const int   missing    = state_->h_context_length[i] - seq.cache_len;
+            h_input_length_buf_[i] = missing;
+            input_d_ptrs[i]        = state_->output_ids + i * session_len_ + seq.cache_len;
+            if (missing == 1) {
+                ++pf_offset;
+            }
+        }
+    }
+    else {
+        for (int i = 0; i < active_size; ++i) {
+            h_input_length_buf_[i] = 1;
+            input_d_ptrs[i]        = state_->output_ids + i * session_len_ + state_->h_context_length[i] - 1;
+        }
+        pf_offset = active_size;
+    }
+
+    // These buffers are only accessed when there are prefill workloads
+    if (pf_offset != active_size) {
+        Copy(state_->h_context_length, active_size, context_length_buf_);
+        Copy(h_input_length_buf_, active_size, input_length_buf_);
+    }
+
+    // Find mini-batch offsets: input length > 1 ? prefill() : decode()
+    // Constraints on mini-batches
+    // - `context_decoder_input` and `context_decoder_output` can hold `max_context_token_num_` tokens w/o padding
+    // - prefill() use `tmp_k_cache_buf_` and `tmp_k_cache_buf_`, they can hold `max_context_token_num_` tokens
+    //     but each sequence is padded to the maximum context length in the batch
+    std::vector<int> offsets{0};
+    std::vector<int> max_context_cnts;
+    // initialize first mini-batch with decode tokens
+    int accum_size        = pf_offset;
+    int accum_token_count = pf_offset;
+    int max_context_count = 0;
+    for (int i = pf_offset; i < active_size; ++i) {
+        FT_CHECK(iter == 0);
+        int size          = accum_size + 1;
+        int input_count   = accum_token_count + h_input_length_buf_[i];
+        int context_count = std::max(max_context_count, state_->h_context_length[i]);
+        // correct pre-fill batch size for the first batch
+        int pf_size = offsets.size() == 1 ? size - pf_offset : size;
+        // we have `cu_seqlens` on q so no padding for input is needed
+        // prefill kernels are expecting uniform k/v cache length -> `max_context_count * size <=
+        // max_context_token_num_`
+        if (input_count <= max_context_token_num_ && context_count * pf_size <= max_context_token_num_) {
+            accum_size        = size;
+            accum_token_count = input_count;
+            max_context_count = context_count;
+        }
+        else {
+            offsets.push_back(i);
+            max_context_cnts.push_back(max_context_count);
+            accum_size        = 1;
+            accum_token_count = h_input_length_buf_[i];
+            max_context_count = state_->h_context_length[i];
+        }
+    }
+    offsets.push_back(active_size);
+    max_context_cnts.push_back(max_context_count);
+
+    // forward on mini-batches
+    for (int p = 0; p < (int)offsets.size() - 1; ++p) {
+        int  first           = offsets[p];
+        int  last            = offsets[p + 1];
+        int  mini_batch_size = last - first;
+        T*   k_ptr           = tmp_k_cache_buf_;
+        T*   v_ptr           = tmp_v_cache_buf_;
+        int  max_input_len{};
+        auto input_ids = context_decoder_ids_buf_;
+        //
+        std::vector<int> decode_indices{};
+        std::vector<int> decode_lengths{};
+
+        BatchedCopy batched_copy;
+        for (int i = first; i < last; ++i) {
+            input_ids = batched_copy.Add(input_d_ptrs[i], h_input_length_buf_[i], input_ids);
+            dbg(i, h_input_length_buf_[i]);
+            // allocate tmp k/v buffer for pre-fill sequences
+            if (i < pf_offset) {
+                h_tmp_k_ptrs_[i] = h_tmp_v_ptrs_[i] = nullptr;
+            }
+            else {
+                h_tmp_k_ptrs_[i] = k_ptr;
+                h_tmp_v_ptrs_[i] = v_ptr;
+                k_ptr += model_->local_kv_head_num_ * max_context_cnts[p] * model_->size_per_head_;
+                v_ptr += model_->local_kv_head_num_ * max_context_cnts[p] * model_->size_per_head_;
+            }
+            decode_indices.push_back(i);
+            decode_lengths.push_back(h_input_length_buf_[i]);
+            max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
+        }
+        int token_count = input_ids - context_decoder_ids_buf_;
+
+        batched_copy.Submit(stream_);
+
+        Copy(h_tmp_k_ptrs_ + first, mini_batch_size, tmp_k_ptrs_ + first);
+        Copy(h_tmp_v_ptrs_ + first, mini_batch_size, tmp_v_ptrs_ + first);
+
+        const int dc_batch_size = p ? 0 : pf_offset;
+        const int pf_batch_size = mini_batch_size - dc_batch_size;
+
+        if (rank_ == 0) {
+            if (pf_batch_size) {
+                TM_LOG_INFO("[Forward] [%d, %d), dc_bsz = %d, pf_bsz = %d, n_tok = %d, max_q = %d, max_k = %d",
+                            first,
+                            last,
+                            dc_batch_size,
+                            pf_batch_size,
+                            token_count,
+                            max_input_len,
+                            max_context_cnts[p]);
+            }
+        }
+
+        model_->forwardUnified(decoder_output_buf_ + first * model_->hidden_units_,
+                               context_decoder_output_buf_,  // temp
+                               context_decoder_input_buf_,   // temp
+                               (void**)k_block_ptrs_,
+                               (void**)v_block_ptrs_,
+                               context_decoder_ids_buf_,  // temp
+                               cu_block_counts_ + first,
+                               rope_theta_ + first,
+                               sequence_lengths_ + first,
+                               finished_buf_ + first,
+                               input_length_buf_ + first,
+                               context_length_buf_ + first,
+                               (T**)tmp_k_ptrs_ + first,
+                               (T**)tmp_v_ptrs_ + first,
+                               token_count,
+                               dc_batch_size,
+                               g.step,
+                               g.sum_seq_len,
+                               g.max_seq_len,
+                               pf_batch_size,
+                               max_input_len,
+                               max_context_cnts[p],
+                               max_context_cnts[p]);
+
+        if (iter == 0) {
+            // compute logits of inputs if requested
+            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+        }
+    }
+
+    std::fill(h_input_length_buf_, h_input_length_buf_ + active_size, 0);
+
+    // `SequenceManager` needs real-time value of cache length
+    for (int i = 0; i < active_size; ++i) {
+        if (state_->requests[i]) {
+            FT_CHECK(state_->sequences[i]);
+            state_->sequences[i]->cache_len = state_->h_context_length[i];
+        }
+    }
+
+    model_->postDecodeEmbedding(logits_buf_, local_logits_buf_, decoder_output_buf_, active_size);
+
+    // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
+    // not supported yet.
+    bool should_stop{};
+    model_->dynamicDecode(token_ids_buf_,
+                          finished_buf_,
+                          sequence_lengths_,
+                          &should_stop,
+                          state_->curand_state,
+                          &inputs_,
+                          &outputs_,
+                          logits_buf_,
+                          seq_limit_len_,
+                          init_context_length_,
+                          d_end_ids_buf_,
+                          g.step,
+                          0,
+                          g.max_init_ctx_len,
+                          session_len_ * 2,
+                          active_size);
+
+    if (debug_ && rank_ == 0) {
+        std::vector<int> curr(active_size);
+        Copy(token_ids_buf_ + g.step * active_size, active_size, curr.data());
+        cudaStreamSynchronize(stream_);
+        std::stringstream scurr;
+        for (int k = 0; k < curr.size(); ++k) {
+            scurr << std::setw(6) << curr[k];
+        }
+        TM_LOG_INFO("[Forward] step = %d, [%s]", g.step - 1, scurr.str().c_str());
+    }
+
+    // check_cuda_error(cudaStreamSynchronize(stream_));
+
+    ////////////////////////////////////////////////
+    /// ! increase the counters
+    g.step += 1;
+    g.max_seq_len += 1;
+    g.sum_seq_len += state_->active_size;
+
+    // PrintDecodeTokens(token_ids_buf_, g.step, active_size, stream_, "Forward");
+
+    return !should_stop;
 }
 
 template class LlamaBatch<half>;

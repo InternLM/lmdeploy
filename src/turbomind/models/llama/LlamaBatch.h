@@ -60,8 +60,6 @@ public:
 
     [[nodiscard]] bool Initialize();
 
-    void ContextDecode();
-
     struct GenerationState {
         int max_init_ctx_len;
         int step;
@@ -73,7 +71,7 @@ public:
 
     GenerationState InitializeGeneration();
 
-    [[nodiscard]] bool Generate(GenerationState& g);
+    [[nodiscard]] bool Forward(GenerationState& g, int iter);
 
     [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
 
@@ -201,6 +199,7 @@ private:
     // lengths
     int* input_length_buf_{};    // input + cache missed length
     int* context_length_buf_{};  // history length + input_length
+    int* init_context_length_{};
     // temp buffers used for block->linear kv-cache conversion
     T*     tmp_k_cache_buf_{};
     T*     tmp_v_cache_buf_{};

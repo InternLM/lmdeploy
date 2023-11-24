@@ -19,6 +19,8 @@ add_library(Llama STATIC
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
+        unified_decoder.cc
+        unified_attention_layer.cc
         llama_kernels.cu
         llama_decoder_kernels.cu
         llama_utils.cu)
