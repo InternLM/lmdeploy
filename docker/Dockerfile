@@ -5,7 +5,7 @@ RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-RUN python3 -m pip install --no-cache-dir cmake
+RUN python3 -m pip install --no-cache-dir cmake packaging
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
