@@ -1,5 +1,5 @@
 import json
-import os.path as osp
+import os
 import random
 import time
 from queue import Queue
@@ -56,25 +56,27 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int = 1):
-        tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                        'tokenizer')
-        tokenizer = Tokenizer(tokenizer_model_path)
-        tm_model = TurboMind(model_path=model_path, tp=tp)
+    def __init__(self, model_path: str, tp: int = 1, **kwargs):
+        # avoid turbomind checking chat template name by setting
+        # `model_name='llama'`
+        tm_model = TurboMind(model_path=model_path,
+                             model_name='llama',
+                             tp=tp,
+                             **kwargs)
         self.tm_model = tm_model
-        self.tokenizer = tokenizer
+        self.tokenizer = tm_model.tokenizer
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
                    stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
-        timestamps = []
-        tokens = []
-        timestamps.append(time.perf_counter())
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
-            input_ids = self.tokenizer.encode(prompt)
+            input_ids = self.tokenizer(prompt).input_ids
             offset = 0
+            timestamps = []
+            tokens = []
+            timestamps.append(time.perf_counter())
             for outputs in model_inst.stream_infer(
                     session_id,
                     input_ids=input_ids,
@@ -93,6 +95,7 @@ class Engine:
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
             token_latency = np.round(timestamps[-1] - timestamps[0], 3)
             completion_tokens = tokens[-1]
+            assert output_seqlen <= completion_tokens <= output_seqlen + 1
             total_tokens = tokens[-1] + len(input_ids)
             stats.append([
                 first_token_latency, completion_tokens, output_seqlen,
@@ -136,8 +139,8 @@ class Engine:
         stats = []
         while not res_queue.empty():
             session_id, _stats = res_queue.get()
-            print(f'\n{"-" * 50}\n'
-                  f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
+            # print(f'\n{"-" * 50}\n'
+            #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
             stats.append(np.array(_stats))
 
         stats = np.concatenate(stats).reshape(-1, 5)
@@ -179,16 +182,44 @@ class Engine:
 def main(dataset: str,
          model_path: str,
          concurrency: int = 1,
-         samples: int = 1000,
+         num_prompts: int = 1000,
          tp: int = 1,
+         top_k: int = 1,
+         top_p: float = 1.0,
+         temperature: float = 0.8,
          stream_output: bool = True,
+         log_level: str = 'ERROR',
          seed: int = 0):
+    """Benchmark the request throughput of lmdeploy in localhost.
+
+    Args:
+        dataset (str): Path to the dataset
+        model_path (str): Path to a model in localhost or a model_repo_id in huggingface.co
+        concurrency (int, optional): Number of working threads to process the sampled prompts.
+            Defaults to 1.
+        num_prompts (int, optional): Number of prompts to process. Defaults to 1000.
+        tp (int, optional): Number of GPUs for tensor parallel. Defaults to 1.
+        top_k (int, optional): The number of highest probability vocabulary tokens
+            to keep for top-k-filtering. Defaults to 1.
+        top_p (float, optional): the set of most probable tokens with
+            probabilities that add up to top_p or higher
+            are kept for generation. Defaults to 1.0.
+        temperature (float, optional): The value used to modulate the next token probabilities.
+            Defaults to 0.8.
+        stream_output (bool, optional): Indicator for streaming output. Defaults to True.
+        log_level(str, optional): The log level. Defaults to INFO
+        seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
+    """    # noqa
     random.seed(seed)
+    os.environ['TM_LOG_LEVEL'] = log_level
 
-    engine = Engine(model_path, tp=tp)
-    tokenizer = engine.tokenizer
+    engine = Engine(model_path,
+                    tp=tp,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature)
 
-    requests = sample_requests(dataset, samples, tokenizer)
+    requests = sample_requests(dataset, num_prompts, engine.tokenizer)
 
     engine.process_request(requests, concurrency, stream_output)
 
