@@ -18,7 +18,7 @@ __global__ void flash_fwd_kernel(Flash_fwd_params params)
 #if __CUDA_ARCH__ >= 800
     flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_even_N, Is_even_K, Return_softmax>(params);
 #else
-// TODO: support flash attention2 on sm<80
+    // TODO: support flash attention2 on sm<80
     assert(false);
 #endif
 }
