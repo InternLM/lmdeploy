@@ -113,8 +113,10 @@ def profile_throughput(model_path: str,
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     assert input_seqlen > 0, 'input_seqlen should > 0'
     prompt = 'hi'
-    input_ids = tokenizer.encode(prompt)
+    input_ids = tokenizer.encode(prompt, add_bos=False)
     input_ids = input_ids * input_seqlen
+    assert len(input_ids) == input_seqlen, \
+        '#input_token {input_seqlen} but #dummy_input_token {len(input_ids)}'
 
     warmup(tm_model, concurrency, input_ids, output_seqlen)
 
@@ -294,7 +296,7 @@ def parse_args():
                         type=int,
                         help='how many tokens to be generated. One-to-one'
                         'correspondence with prompt-tokens',
-                        default=[128, 2048, 128, 2048])
+                        default=[128, 128, 2048, 128, 2048])
     parser.add_argument('--tp', type=int, help='Tensor parallel', default=1)
     parser.add_argument('--top_k',
                         type=int,
