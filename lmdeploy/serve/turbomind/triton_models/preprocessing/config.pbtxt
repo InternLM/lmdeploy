@@ -12,7 +12,7 @@ input [
 output [
     {
         name: "INPUT_ID"
-        data_type: TYPE_INT32
+        data_type: TYPE_UINT32
         dims: [ -1 ]
     },
     {
