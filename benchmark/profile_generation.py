@@ -104,10 +104,11 @@ def profile_throughput(model_path: str,
                        input_seqlen: int = 1,
                        output_seqlen: int = 512,
                        test_round: int = 10,
-                       tp: int = 1):
+                       tp: int = 1,
+                       **kwargs):
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = TurboMind(model_path=model_path, tp=tp)
+    tm_model = TurboMind(model_path=model_path, tp=tp, **kwargs)
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     assert input_seqlen > 0, 'input_seqlen should > 0'
@@ -280,21 +281,37 @@ def parse_args():
                         nargs='+',
                         type=int,
                         help='how many requests launched concurrently',
-                        default=[1, 8, 16, 32])
+                        default=[1, 32, 64, 128])
     parser.add_argument(
         '--prompt-tokens',
         nargs='+',
         type=int,
         help='how many requests launched concurrently. One-to-one'
         'correspondence with completion-tokens',
-        default=[1, 512, 512, 1024])
+        default=[1, 128, 128, 2048, 2048])
     parser.add_argument('--completion-tokens',
                         nargs='+',
                         type=int,
                         help='how many tokens to be generated. One-to-one'
                         'correspondence with prompt-tokens',
-                        default=[512, 512, 1024, 1024])
+                        default=[128, 2048, 128, 2048])
     parser.add_argument('--tp', type=int, help='Tensor parallel', default=1)
+    parser.add_argument('--top_k',
+                        type=int,
+                        help='The number of highest probability vocabulary '
+                        'tokens to keep for top-k-filtering',
+                        default=1)
+    parser.add_argument('--top_p',
+                        type=float,
+                        help='the set of most probable tokens with '
+                        'probabilities that add up to top_p or higher '
+                        'are kept for generation',
+                        default=1.0)
+    parser.add_argument('--temperature',
+                        type=float,
+                        help='The value used to modulate the next token '
+                        'probabilities',
+                        default=0.8)
     parser.add_argument('--csv',
                         type=str,
                         help='Where to save the result.',
@@ -326,6 +343,9 @@ def main():
                                      input_seqlen=prompt_tokens,
                                      output_seqlen=completion_tokens,
                                      tp=args.tp,
+                                     top_k=args.top_k,
+                                     top_p=args.top_p,
+                                     temperature=args.temperature,
                                      test_round=args.test_round)
             output = Pool(1).map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
