@@ -97,6 +97,7 @@ class Chatbot:
         if ignore_eos:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
+            self.eos_id = -1
         self.cfg = mmengine.Config(
             dict(session_len=self.model.session_len,
                  top_p=self.model.top_p,
@@ -681,7 +682,10 @@ class Chatbot:
                 logger.error(f'catch exception: {e}')
                 logger.error(
                     f'session {session.session_id}: prompt: {session.prompt}')
-
+        # `n_token` might be not updated since `if text.endswith('�')`
+        if n_token != output_ids.shape[-1]:
+            n_token = output_ids.shape[-1]
+            session.response += text
         # put session back to queue so that `_stream_infer` can update it in
         # `self.sessions`
         while not res_queue.empty():
