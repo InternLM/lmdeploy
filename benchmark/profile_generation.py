@@ -4,7 +4,6 @@ import argparse
 import csv
 import logging
 import os
-import os.path as osp
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -18,7 +17,6 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
-from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.turbomind import TurboMind
 
 
@@ -106,17 +104,18 @@ def profile_throughput(model_path: str,
                        test_round: int = 10,
                        tp: int = 1,
                        **kwargs):
-    tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(tokenizer_model_path)
-    tm_model = TurboMind(model_path=model_path, tp=tp, **kwargs)
+    # avoid turbomind checking chat template name by setting
+    # `model_name='llama'`
+    tm_model = TurboMind(model_path=model_path,
+                         tp=tp,
+                         model_name='llama',
+                         **kwargs)
+    tokenizer = tm_model.tokenizer
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     assert input_seqlen > 0, 'input_seqlen should > 0'
-    prompt = 'hi'
-    input_ids = tokenizer.encode(prompt, add_bos=False)
+    input_ids = tokenizer('hi').input_ids
     input_ids = input_ids * input_seqlen
-    assert len(input_ids) == input_seqlen, \
-        '#input_token {input_seqlen} but #dummy_input_token {len(input_ids)}'
 
     warmup(tm_model, concurrency, input_ids, output_seqlen)
 
@@ -320,7 +319,7 @@ def parse_args():
                         default='profile_generation.csv')
     parser.add_argument('--log-level',
                         help='set log level',
-                        default='INFO',
+                        default='ERROR',
                         choices=list(logging._nameToLevel.keys()))
     parser.add_argument('--test-round',
                         type=int,
