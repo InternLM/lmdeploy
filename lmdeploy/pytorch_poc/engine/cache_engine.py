@@ -29,7 +29,6 @@ class CacheEngine:
         self,
         cache_config: CacheConfig,
         model_config: ModelConfig,
-        json_config: dict,
         rank: int = 0,
         world_size: int = 1,
         device_mesh: DeviceMesh = None,
@@ -51,8 +50,9 @@ class CacheEngine:
         self.num_layers = model_config.num_layers
         self.num_heads = model_config.num_heads
 
-        if 'kv_cache_dtype' in json_config:
-            self.kv_cache_dtype = eval(json_config['kv_cache_dtype'])
+        if 'kv_cache_dtype' in model_config.json_config:
+            self.kv_cache_dtype = eval(
+                model_config.json_config['kv_cache_dtype'])
         else:
             self.kv_cache_dtype = model_config.dtype
 

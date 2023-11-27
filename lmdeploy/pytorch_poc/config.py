@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -32,6 +32,7 @@ class ModelConfig:
     eos_token_id: int
     dtype: str
     multi_query_attention: bool = False
+    json_config: dict = field(default_factory=dict)
 
     def get_head_size(self):
         return self.hidden_size // self.num_heads

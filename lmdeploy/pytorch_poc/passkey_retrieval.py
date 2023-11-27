@@ -92,7 +92,7 @@ def parse_config():
                         help='interval for evaluation')
     parser.add_argument('--num_tests',
                         type=int,
-                        default=30,
+                        default=1,
                         help='number of repeat testing for each length')
     args = parser.parse_args()
     return args
@@ -136,6 +136,7 @@ def main(args):
     # This is a rough ratio to control the number of texts and tokens
     for val in range(4096, args.max_tokens, args.interval):
         n_garbage = int(3.75 * val // 1024 * 1024)
+        assert n_garbage > 0
         passed_tests = 0
         total_tokens = 0
 

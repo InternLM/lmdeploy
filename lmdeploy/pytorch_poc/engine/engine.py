@@ -84,26 +84,26 @@ def _build_model_config(model_path: str, hf_config: Any):
                                    bos_token_id=hf_config.bos_token_id,
                                    eos_token_id=hf_config.eos_token_id,
                                    dtype=torch_dtype,
-                                   multi_query_attention=hf_config.multi_query)
+                                   multi_query_attention=hf_config.multi_query,
+                                   json_config=hf_config.to_dict())
     elif 'chatglm' in model_path:
-        model_config = ModelConfig(
-            hf_config.hidden_size // hf_config.num_attention_heads *
-            hf_config.multi_query_group_num,
-            hf_config.num_layers,
-            hf_config.multi_query_group_num,
-            bos_token_id=hf_config.bos_token_id,
-            eos_token_id=hf_config.eos_token_id,
-            dtype=torch_dtype,
-        )
+        model_config = ModelConfig(hf_config.hidden_size //
+                                   hf_config.num_attention_heads *
+                                   hf_config.multi_query_group_num,
+                                   hf_config.num_layers,
+                                   hf_config.multi_query_group_num,
+                                   bos_token_id=hf_config.bos_token_id,
+                                   eos_token_id=hf_config.eos_token_id,
+                                   dtype=torch_dtype,
+                                   json_config=hf_config.to_dict())
     else:
-        model_config = ModelConfig(
-            hf_config.hidden_size,
-            hf_config.num_hidden_layers,
-            hf_config.num_attention_heads,
-            bos_token_id=hf_config.bos_token_id,
-            eos_token_id=hf_config.eos_token_id,
-            dtype=torch_dtype,
-        )
+        model_config = ModelConfig(hf_config.hidden_size,
+                                   hf_config.num_hidden_layers,
+                                   hf_config.num_attention_heads,
+                                   bos_token_id=hf_config.bos_token_id,
+                                   eos_token_id=hf_config.eos_token_id,
+                                   dtype=torch_dtype,
+                                   json_config=hf_config.to_dict())
 
     return model_config
 
@@ -111,7 +111,6 @@ def _build_model_config(model_path: str, hf_config: Any):
 def _build_model_agent(model_path: str,
                        model_config: ModelConfig,
                        cache_config: CacheConfig,
-                       json_config: dict,
                        trust_remote_code: bool,
                        tp: int = 1):
     """create model agent."""
@@ -119,13 +118,11 @@ def _build_model_agent(model_path: str,
         model_agent = BaseModelAgent(model_path,
                                      model_config=model_config,
                                      cache_config=cache_config,
-                                     json_config=json_config,
                                      trust_remote_code=trust_remote_code)
     else:
         model_agent = TPModelAgent(model_path,
                                    model_config=model_config,
                                    cache_config=cache_config,
-                                   json_config=json_config,
                                    world_size=tp,
                                    trust_remote_code=trust_remote_code)
     return model_agent
@@ -163,15 +160,12 @@ class Engine:
         torch_dtype = _get_torch_dtype(hf_config)
         self.torch_dtype = torch_dtype
 
-        self.json_config = hf_config.to_dict()
-
         model_config = _build_model_config(model_path, hf_config)
 
         self.model_agent = _build_model_agent(
             model_path,
             model_config=model_config,
             cache_config=cache_config,
-            json_config=self.json_config,
             trust_remote_code=trust_remote_code,
             tp=tp)
 

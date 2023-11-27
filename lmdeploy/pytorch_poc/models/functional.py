@@ -235,6 +235,13 @@ def attention_forward_with_paged_attention(
 
 
 def quant_kv(key: torch.Tensor, value: torch.Tensor, out_type: torch.dtype):
+    """Quantize key and value of attention to `out_type`.
+
+    Args:
+        key (torch.Tensor): Attention key.
+        value (torch.Tensor): Attention value.
+        out_type (torch.dtype): Output data type.
+    """
     assert out_type is torch.int8
     # quantize key and value
     _min = torch.min(key, axis=-1).values
@@ -263,6 +270,15 @@ def quant_kv(key: torch.Tensor, value: torch.Tensor, out_type: torch.dtype):
 
 def dequant_kv(context: Any, layer_id: str, key_int8: torch.Tensor,
                value_int8: torch.Tensor, out_type: torch.dtype):
+    """Dequantize key and value of attention to `out_type`.
+
+    Args:
+        context (Any): StepContext during inference.
+        layer_id (str): Layer object id.
+        key (torch.Tensor): Quantized attention key.
+        value (torch.Tensor): Quantized attention value.
+        out_type (torch.dtype): output data type.
+    """
     qparams = context.get_output(layer_id)
 
     key_scale = qparams['key_scale']
@@ -278,6 +294,13 @@ def dequant_kv(context: Any, layer_id: str, key_int8: torch.Tensor,
 
 
 def sync_qparam_to_context(context: Any, layer_id: str, qparams: dict):
+    """Merge quantization param to context.
+
+    Args:
+        context (Any): StepContext during inference.
+        layer_id (str): Layer object id.
+        qparams (dict): Quantization param of current step.
+    """
     if context.inputs.meta is not None:
         last_qparam = context.inputs.meta[layer_id]
         for _k in last_qparam.keys():
