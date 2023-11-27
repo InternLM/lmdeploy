@@ -13,9 +13,9 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
-from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
-from lmdeploy.pytorch_poc.models import patch
-from lmdeploy.pytorch_poc.utils import get_gpu_memory
+from ..config import CacheConfig, ModelConfig
+from ..models import patch
+from ..utils import get_gpu_memory
 from lmdeploy.utils import get_logger
 
 from .cache_engine import CacheEngine
@@ -341,7 +341,6 @@ def _tp_build_model(
         _update_cache_config(model_config, cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
-                                   config,
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:

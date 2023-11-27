@@ -11,10 +11,10 @@ from addict import Addict
 from torch.distributed._tensor import DeviceMesh
 from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
-from lmdeploy.pytorch_poc.dist_utils import partition_module, replicate_module
+from ..dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
 
-LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch_poc.models'
+LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
 # llama
 MODULE_MAP = {
@@ -37,24 +37,24 @@ MODULE_MAP = {
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
     'modeling_falcon.FalconAttention':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconAttention',
     'modeling_falcon.FalconModel':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconModel',
     'modeling_falcon.FalconRotaryEmbedding':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconRotaryEmbedding',
     'modeling_falcon.FalconMLP':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconMLP',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconMLP',
     'modeling_falcon.FalconForCausalLM':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconForCausalLM',
     # for old implementations on hub
     'modelling_RW.Attention':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconAttention',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconAttention',
     'modelling_RW.MLP':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconMLP',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconMLP',
     'modelling_RW.RWModel':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconModel',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconModel',
     'modelling_RW.RotaryEmbedding':
-    'lmdeploy.pytorch_poc.models.falcon.PatchedFalconRotaryEmbedding',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconRotaryEmbedding',
 })
 
 # baichuan

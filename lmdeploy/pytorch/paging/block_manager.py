@@ -2,8 +2,8 @@
 # modify from: https://github.com/vllm-project/vllm
 from typing import Dict, List
 
-from lmdeploy.pytorch_poc.block import PhysicalTokenBlock
-from lmdeploy.pytorch_poc.messages import SchedulerSequence
+from ..block import PhysicalTokenBlock
+from ..messages import SchedulerSequence
 
 
 class BlockAllocator:

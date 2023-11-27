@@ -2,7 +2,7 @@
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
-from lmdeploy.pytorch_poc.messages import SamplingParam
+from ..messages import SamplingParam
 
 
 class FusedLogitsProcessor(LogitsWarper):

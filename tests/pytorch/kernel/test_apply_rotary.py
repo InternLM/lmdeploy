@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch_poc.kernels import apply_rotary_pos_emb
+from lmdeploy.pytorch.kernels import apply_rotary_pos_emb
 
 
 def _rotate_half(x):

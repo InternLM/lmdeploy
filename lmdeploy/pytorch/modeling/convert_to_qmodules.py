@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch.nn as nn
 
-from lmdeploy.pytorch_poc.models import QLinear, QRMSNorm
+from ..models import QLinear, QRMSNorm
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',

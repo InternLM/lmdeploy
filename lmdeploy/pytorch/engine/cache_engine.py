@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple
 import torch
 from torch.distributed._tensor import DeviceMesh
 
-from lmdeploy.pytorch_poc.config import CacheConfig, ModelConfig
+from ..config import CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]

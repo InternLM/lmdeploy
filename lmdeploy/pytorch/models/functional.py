@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 from torch import distributed as dist
 
-from lmdeploy.pytorch_poc.kernels import (alibi_paged_attention_fwd,
+from ..kernels import (alibi_paged_attention_fwd,
                                           apply_rotary_pos_emb, fill_kv_cache,
                                           paged_attention_fwd,
                                           rerope_attention_fwd)

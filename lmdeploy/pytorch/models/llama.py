@@ -7,7 +7,7 @@ from torch import nn
 from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from lmdeploy.pytorch_poc.dist_utils import (colwise_parallelize_linear_fn,
+from ..dist_utils import (colwise_parallelize_linear_fn,
                                              rowwise_parallelize_linear_fn)
 
 from .functional import (apply_rotary_pos_emb,
@@ -21,7 +21,7 @@ class LlamaRMSNorm(nn.Module):
     def forward(self, hidden_states):
         # torch.nn.functional.normalize based implementation might leads
         # to wrong output
-        from lmdeploy.pytorch_poc.kernels import rms_norm
+        from ..kernels import rms_norm
         ret = rms_norm(hidden_states, self.weight, self.variance_epsilon)
 
         return ret

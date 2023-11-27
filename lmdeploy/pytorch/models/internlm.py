@@ -6,7 +6,7 @@ import torch.distributed as dist
 from torch import nn
 from torch.distributed._tensor import DeviceMesh
 
-from lmdeploy.pytorch_poc.dist_utils import (colwise_parallelize_linear_fn,
+from ..dist_utils import (colwise_parallelize_linear_fn,
                                              rowwise_parallelize_linear_fn)
 
 from .functional import (apply_rotary_pos_emb,

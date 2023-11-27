@@ -8,13 +8,13 @@ from typing import Any, Dict, List
 import torch
 from transformers import AutoConfig
 
-from lmdeploy.pytorch_poc.config import (CacheConfig, ModelConfig,
+from ..config import (CacheConfig, ModelConfig,
                                          SchedulerConfig)
-from lmdeploy.pytorch_poc.engine.model_agent import (BaseModelAgent,
+from .model_agent import (BaseModelAgent,
                                                      ModelInputs, TPModelAgent)
-from lmdeploy.pytorch_poc.messages import (MessageStatus, SamplingParam,
+from ..messages import (MessageStatus, SamplingParam,
                                            SchedulerSequence, SchedulerSession)
-from lmdeploy.pytorch_poc.paging import Scheduler
+from ..paging import Scheduler
 from lmdeploy.utils import get_logger
 
 from .logits_process import FusedLogitsProcessor

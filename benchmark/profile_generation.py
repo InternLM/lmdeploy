@@ -110,8 +110,8 @@ def profile_throughput(model_path: str,
                        test_round: int = 10,
                        tp: int = 1,
                        sampling_param=None):
-    from lmdeploy.pytorch_poc.engine import Engine
-    from lmdeploy.pytorch_poc.messages import SamplingParam
+    from lmdeploy.pytorch.engine import Engine
+    from lmdeploy.pytorch.messages import SamplingParam
     from lmdeploy.tokenizer import Tokenizer
     tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
     if os.path.exists(tokenizer_model_path):

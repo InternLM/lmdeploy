@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Sequence
 import torch
 from torch import Tensor
 
-from lmdeploy.pytorch_poc.block import LogicalTokenBlock
+from .block import LogicalTokenBlock
 
 
 class SamplingParam:

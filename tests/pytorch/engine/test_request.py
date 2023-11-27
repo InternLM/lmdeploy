@@ -1,7 +1,7 @@
 import pytest
 
-from lmdeploy.pytorch_poc.engine.request import (RequestManager, RequestType,
-                                                 ResponseType)
+from lmdeploy.pytorch.engine.request import (RequestManager, RequestType,
+                                             ResponseType)
 
 
 class TestRequestHander:

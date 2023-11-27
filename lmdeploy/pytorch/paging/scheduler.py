@@ -4,11 +4,11 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
-from lmdeploy.pytorch_poc.block import PhysicalTokenBlock
-from lmdeploy.pytorch_poc.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch_poc.messages import (MessageStatus, SchedulerSequence,
+from ..block import PhysicalTokenBlock
+from ..config import CacheConfig, SchedulerConfig
+from ..messages import (MessageStatus, SchedulerSequence,
                                            SchedulerSession)
-from lmdeploy.pytorch_poc.paging.block_manager import BlockManager
+from .block_manager import BlockManager
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')

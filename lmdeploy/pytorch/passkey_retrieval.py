@@ -4,9 +4,9 @@ import os
 import random
 
 from lmdeploy.model import MODELS
-from lmdeploy.pytorch_poc import engine as tm
-from lmdeploy.pytorch_poc.config import SchedulerConfig
-from lmdeploy.pytorch_poc.messages import SamplingParam
+from . import engine as tm
+from .config import SchedulerConfig
+from .messages import SamplingParam
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'

@@ -5,8 +5,8 @@ from transformers.generation.logits_process import (LogitsProcessorList,
                                                     TopKLogitsWarper,
                                                     TopPLogitsWarper)
 
-from lmdeploy.pytorch_poc.engine.logits_process import FusedLogitsProcessor
-from lmdeploy.pytorch_poc.messages import SamplingParam
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor
+from lmdeploy.pytorch.messages import SamplingParam
 
 
 class TestFusedLogitsProcessor:

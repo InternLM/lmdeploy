@@ -29,7 +29,7 @@ from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            CausalLMOutputWithPast)
 from transformers.utils import logging
 
-from lmdeploy.pytorch_poc.modeling.convert_to_qmodules import \
+from lmdeploy.pytorch.modeling.convert_to_qmodules import \
     convert_to_qmodules
 
 from .configuration_baichuan import BaiChuanConfig
