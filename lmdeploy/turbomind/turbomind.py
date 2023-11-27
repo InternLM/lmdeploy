@@ -586,7 +586,8 @@ class TurboMindInstance:
             outputs = []
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id:
+                if len(output) > 0 and output[-1].item(
+                ) == self.eos_id and not ignore_eos:
                     outputs.append((output[:-1], len_ - 1))
                 elif len(output) > 0 and output[-1].item() in self.stop_tokens:
                     outputs.append((output[:-1], len_))

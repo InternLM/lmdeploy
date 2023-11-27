@@ -1,5 +1,4 @@
 import json
-import os
 import random
 import time
 from queue import Queue
@@ -8,8 +7,8 @@ from typing import List, Tuple
 
 import fire
 import numpy as np
+import requests
 
-from lmdeploy.serve.openai.api_client import get_streaming_response
 from lmdeploy.tokenizer import Tokenizer
 
 
@@ -60,15 +59,10 @@ class Engine:
                  server_addr: str,
                  tokenzier_path: str,
                  temperature: float = 0.8,
-                 top_k: int = 1,
                  top_p: float = 1.0):
         self.tokenizer = Tokenizer(tokenzier_path)
-        # We choose `v1/compeletions` API to profile the performance since
-        # it won't decorate prompt according to the served model's
-        # chat template
-        self.api_url = server_addr + '/v1/completions'
+        self.api_url = server_addr + '/v1/chat/completions'
         self.temperature = temperature
-        self.top_k = top_k
         self.top_p = top_p
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
@@ -80,15 +74,31 @@ class Engine:
             timestamps = []
             tokens = []
             timestamps.append(time.perf_counter())
-            for _, n_token, _ in get_streaming_response(
-                    prompt,
-                    self.api_url,
-                    session_id,
-                    request_output_len=output_seqlen,
-                    ignore_eos=True,
-                    stream=stream_output):
+            headers = {'content-type': 'application/json'}
+            pload = {
+                'model': 'llama',
+                'messages': prompt,
+                'temperature': self.temperature,
+                'top_p': self.top_p,
+                'n': 1,
+                'max_tokens': output_seqlen,
+                'stream': stream_output,
+                'session_id': session_id,
+                'ignore_eos': True,
+            }
+            response = requests.post(self.api_url,
+                                     headers=headers,
+                                     json=pload,
+                                     stream=stream_output)
+            for chunk in response.iter_lines(chunk_size=8192,
+                                             decode_unicode=False,
+                                             delimiter=b'\n'):
                 timestamps.append(time.perf_counter())
-                tokens.append(n_token)
+                if chunk:
+                    data = json.loads(chunk.decode('utf-8'))
+                    n_token = data.pop('tokens', 0)
+                    tokens.append(n_token)
+
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
             token_latency = np.round(timestamps[-1] - timestamps[0], 3)
             completion_tokens = tokens[-1]
@@ -184,11 +194,9 @@ def main(server_addr: str,
          dataset: str,
          concurrency: int = 1,
          num_prompts: int = 1000,
-         top_k: int = 1,
          top_p: float = 1.0,
          temperature: float = 0.8,
          stream_output: bool = False,
-         log_level: str = 'INFO',
          seed: int = 0):
     """Benchmark the request througput of api server.
 
@@ -199,28 +207,23 @@ def main(server_addr: str,
         concurrency (int, optional): Number of working threads to process the sampled prompts.
             Defaults to 1.
         num_prompts (int, optional): Number of prompts to process. Defaults to 1000.
-        top_k (int, optional): The number of highest probability vocabulary tokens
-            to keep for top-k-filtering. Defaults to 1.
         top_p (float, optional): the set of most probable tokens with
             probabilities that add up to top_p or higher
             are kept for generation. Defaults to 1.0.
         temperature (float, optional): The value used to modulate the next token probabilities.
             Defaults to 0.8.
         stream_output (bool, optional): Indicator for streaming output. Defaults to True.
-        log_level(str, optional): The log level. Defaults to INFO
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
     if not server_addr.startswith('http://'):
         print(f'[WARNING] server_addr of the api_server should '
-              f'start with http://, but got {server_addr}')
-        server_addr = 'http://' + server_addr
+              f'start with "http://", but got "{server_addr}"')
+        server_addr = 'http://' + server_addr.strip()
 
     random.seed(seed)
-    os.environ['TM_LOG_LEVEL'] = log_level
 
     engine = Engine(server_addr,
                     tokenizer_path,
-                    top_k=top_k,
                     top_p=top_p,
                     temperature=temperature)
 

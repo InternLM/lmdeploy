@@ -29,7 +29,7 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         prev = time.perf_counter()
         n_pre_token = 0
         """
-        The iterator provided by `chatbot.stream_infer` denotes the number of generated tokens so far,
+        The iterator provided by `stream_infer` denotes the number of generated tokens so far,
         which is represented by the variable `n_token`.
         Please note that `n_token` is not a continuous value. In other words, during the iteration,
         its value might be 5, 7, 8, 16, and so on, rather than 1, 2, 3, 4, etc.
@@ -275,14 +275,15 @@ class ProfileResult:
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Regression Test')
-    parser.add_argument('--model-path',
+    parser.add_argument('model_path',
                         type=str,
-                        help='benchmark test model path')
+                        help='the path of the model in localhost or '
+                        'the repo_id of the model in huggingface.co')
     parser.add_argument('--concurrency',
                         nargs='+',
                         type=int,
                         help='how many requests launched concurrently',
-                        default=[1, 32, 64, 128])
+                        default=[1, 16, 32, 64])
     parser.add_argument(
         '--prompt-tokens',
         nargs='+',

@@ -21,8 +21,6 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     EmbeddingsRequest, ErrorResponse, GenerateRequest, GenerateResponse,
     ModelCard, ModelList, ModelPermission, UsageInfo)
 
-os.environ['TM_LOG_LEVEL'] = 'ERROR'
-
 
 class VariableInterface:
     """A IO interface maintaining variables."""
@@ -476,12 +474,13 @@ async def chat_interactive_v1(request: GenerateRequest,
 def main(model_path: str,
          server_name: str = '0.0.0.0',
          server_port: int = 23333,
-         instance_num: int = 32,
+         instance_num: int = 64,
          tp: int = 1,
          allow_origins: List[str] = ['*'],
          allow_credentials: bool = True,
          allow_methods: List[str] = ['*'],
          allow_headers: List[str] = ['*'],
+         log_level: str = 'INFO',
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -496,7 +495,10 @@ def main(model_path: str,
         allow_credentials (bool): whether to allow credentials for CORS
         allow_methods (List[str]): a list of allowed HTTP methods for CORS
         allow_headers (List[str]): a list of allowed HTTP headers for CORS
-    """
+        log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+    """ # noqa E501
+    os.environ['TM_LOG_LEVEL'] = log_level
+
     if allow_origins:
         app.add_middleware(
             CORSMiddleware,

@@ -241,6 +241,11 @@ class AsyncEngine:
                                  len(input_ids), tokens, finish_reason)
                     response_size = tokens
 
+                # `response_size` might be note updated since
+                # ` if response.endswith('�')`
+                if response_size != tokens:
+                    yield GenOut(response, self.steps[str(session_id)],
+                                 len(input_ids), tokens, finish_reason)
                 # update step
                 self.steps[str(session_id)] += len(input_ids) + tokens
                 if sequence_end or stop:
