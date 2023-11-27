@@ -106,6 +106,7 @@ private:
     bool                            attn_bias_;
     int                             quant_policy_;
     int                             group_size_;
+    size_t                          image_dim_;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::LlamaWeight<T>>> shared_weights_;

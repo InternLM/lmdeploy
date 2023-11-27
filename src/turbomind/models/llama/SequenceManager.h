@@ -30,6 +30,9 @@ struct Sequence {
 
     mutable float rope_theta;
 
+    mutable std::vector<std::vector<std::byte>> image_embs{};
+    mutable std::vector<int>                    image_offsets{};
+
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
 };
 

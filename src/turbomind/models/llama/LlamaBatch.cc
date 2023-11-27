@@ -234,6 +234,21 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             output_ids = Copy(input_ids, input_length, output_ids);
         }
 
+        // copy image embeddings
+        if (model_->image_dim_ > 0 && r->inputs[rank_].isExist("image_embs")) {
+            T*         image_embs      = r->inputs[rank_].getPtr<T>("image_embs");
+            const int* h_image_offsets = r->inputs[rank_].getPtr<int>("image_offsets");
+            const auto n_offsets       = r->inputs[rank_].at("image_offsets").shape.back();
+            const int  count           = model_->image_dim_ * model_->hidden_units_;
+            for (size_t i = 0; i < n_offsets && h_image_offsets[i] > 0; i++) {
+                seq.image_offsets.push_back(seq.tokens.size() + h_image_offsets[i]);
+                auto& emb = seq.image_embs.emplace_back();
+                emb.resize(count * sizeof(T));
+                std::memcpy(emb.data(), image_embs, count * sizeof(T));
+                image_embs += count;
+            }
+        }
+
         // total context length (history + input)
         state.h_context_length[idx] = output_ids - output_ids_base;
         state.h_finished[idx]       = false;
@@ -1043,6 +1058,8 @@ void LlamaBatch<T>::ContextDecode()
     NvtxScope  _("prefill");
     const auto batch_size = state_->active_size;
 
+    std::vector<const Sequence*> sequences;
+
     int base = -1;
     for (int i = 0; i < batch_size; ++i) {
         if (state_->is_swap_in[i]) {
@@ -1054,6 +1071,7 @@ void LlamaBatch<T>::ContextDecode()
                 Copy(state_->output_ids + i * session_len_ + seq.cache_len, missing, input_ids_buf_ + i * session_len_);
                 // subtract input/context len by 1 to skip last input token (will process with decoder later)
                 h_input_length_buf_[i] = missing - 1;
+                sequences.push_back(&seq);
             }
         }
     }
@@ -1166,7 +1184,9 @@ void LlamaBatch<T>::ContextDecode()
                               max_input_len,
                               max_context_cnts[k],
                               max_context_cnts[k],
-                              sub_batch_size);
+                              sub_batch_size,
+                              decode_lengths.data(),
+                              sequences.data() + first);
 
         // compute logits of inputs if requested
         OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);

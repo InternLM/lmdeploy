@@ -60,6 +60,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     int                          cache_chunk_size,
                     int                          quant_policy,
                     bool                         use_context_fmha,
+                    size_t                       image_dim,
                     std::shared_ptr<SharedState> shared_state,
                     LlamaWeight<T>*              weights,
                     NcclParam                    tensor_para,
@@ -81,6 +82,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     hidden_units_(head_num * size_per_head),
     local_head_num_(head_num / tensor_para.world_size_),
     local_kv_head_num_(head_num / tensor_para.world_size_),
+    image_dim_(image_dim),
     weights_(weights),
     tensor_para_(tensor_para),
     stream_(stream),
@@ -218,23 +220,26 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::contextDecode(T*           decoder_output,
-                               uintptr_t*   k_cache_ptr,
-                               uintptr_t*   v_cache_ptr,
-                               void**       tmp_k_ptrs,
-                               void**       tmp_v_ptrs,
-                               T*           context_decoder_input_buf,
-                               T*           context_decoder_output_buf,
-                               const int*   input_ids,
-                               const int*   input_length,
-                               const int*   context_length,
-                               const int*   cu_block_counts,
-                               const float* rope_theta,
-                               size_t       token_num,
-                               size_t       max_input_len,
-                               size_t       max_context_len,
-                               size_t       session_len,
-                               size_t       batch_size)
+void LlamaV2<T>::contextDecode(T*               decoder_output,
+                               uintptr_t*       k_cache_ptr,
+                               uintptr_t*       v_cache_ptr,
+                               void**           tmp_k_ptrs,
+                               void**           tmp_v_ptrs,
+                               T*               context_decoder_input_buf,
+                               T*               context_decoder_output_buf,
+                               const int*       input_ids,
+                               const int*       input_length,
+                               const int*       context_length,
+                               const int*       cu_block_counts,
+                               const float*     rope_theta,
+                               size_t           token_num,
+                               size_t           max_input_len,
+                               size_t           max_context_len,
+                               size_t           session_len,
+                               size_t           batch_size,
+                               const int*       decode_lengths,
+                               const Sequence** sequences)
+
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -254,6 +259,26 @@ void LlamaV2<T>::contextDecode(T*           decoder_output,
                                              1,
                                              hidden_units_,
                                              stream_);
+    {
+        for (size_t i = 0; i < batch_size; i++) {
+            const auto& seq = *sequences[i];
+            if (seq.image_offsets.size() == 0) {
+                continue;
+            }
+            T* dst_base = context_decoder_input_buf + ((i > 0) ? decode_lengths[i - 1] : 0);
+            for (int j = 0; j < seq.image_offsets.size(); j++) {
+                if (seq.image_offsets[j] + image_dim_ <= seq.cache_len) {
+                    continue;
+                }
+                int        off_dst = std::max(0, seq.image_offsets[j] - seq.cache_len);
+                int        off_src = std::max(0, seq.cache_len - seq.image_offsets[j]);
+                T*         dst_ptr = dst_base + off_dst * hidden_units_;
+                std::byte* src_ptr = seq.image_embs[j].data() + off_src * hidden_units_;
+                size_t     count   = (image_dim_ - off_src) * hidden_units_ * sizeof(T);
+                cudaMemcpyAsync(dst_ptr, src_ptr, count, cudaMemcpyDefault, stream_);
+            }
+        }
+    }
     sync_check_cuda_error();
 
     const auto dtype = getTensorType<T>();
