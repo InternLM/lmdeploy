@@ -35,8 +35,7 @@ from transformers.utils import (add_start_docstrings,
                                 add_start_docstrings_to_model_forward, logging,
                                 replace_return_docstrings)
 
-from lmdeploy.pytorch.modeling.convert_to_qmodules import \
-    convert_to_qmodules
+from lmdeploy.pytorch.modeling.convert_to_qmodules import convert_to_qmodules
 
 logger = logging.get_logger(__name__)
 

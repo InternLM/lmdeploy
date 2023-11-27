@@ -4,12 +4,12 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
+from lmdeploy.utils import get_logger
+
 from ..block import PhysicalTokenBlock
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import (MessageStatus, SchedulerSequence,
-                                           SchedulerSession)
+from ..messages import MessageStatus, SchedulerSequence, SchedulerSession
 from .block_manager import BlockManager
-from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 

@@ -7,9 +7,7 @@ from torch import nn
 from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (rowwise_parallelize_linear_fn,
-                                             try_to_local)
-
+from ..dist_utils import rowwise_parallelize_linear_fn, try_to_local
 from .functional import attention_forward_with_paged_attention
 from .llama import apply_rotary_pos_emb
 

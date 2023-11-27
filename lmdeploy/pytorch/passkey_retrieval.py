@@ -4,10 +4,11 @@ import os
 import random
 
 from lmdeploy.model import MODELS
+from lmdeploy.tokenizer import Tokenizer
+
 from . import engine as tm
 from .config import SchedulerConfig
 from .messages import SamplingParam
-from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 

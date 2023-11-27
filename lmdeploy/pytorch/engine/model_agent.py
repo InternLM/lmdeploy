@@ -13,11 +13,11 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
+from lmdeploy.utils import get_logger
+
 from ..config import CacheConfig, ModelConfig
 from ..models import patch
 from ..utils import get_gpu_memory
-from lmdeploy.utils import get_logger
-
 from .cache_engine import CacheEngine
 
 logger = get_logger('lmdeploy')

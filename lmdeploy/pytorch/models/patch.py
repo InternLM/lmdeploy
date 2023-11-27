@@ -11,8 +11,9 @@ from addict import Addict
 from torch.distributed._tensor import DeviceMesh
 from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
-from ..dist_utils import partition_module, replicate_module
 from lmdeploy.utils import get_logger
+
+from ..dist_utils import partition_module, replicate_module
 
 LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 

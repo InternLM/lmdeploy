@@ -8,8 +8,7 @@ from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
-                                             rowwise_parallelize_linear_fn)
-
+                          rowwise_parallelize_linear_fn)
 from .functional import (apply_rotary_pos_emb,
                          attention_forward_with_paged_attention,
                          attention_forward_with_rerope, repeat_kv, rotate_half)

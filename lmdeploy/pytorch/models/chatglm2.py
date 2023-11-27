@@ -10,10 +10,8 @@ import torch.utils.checkpoint
 from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import (rowwise_parallelize_linear_fn,
-                                             try_to_local)
+from ..dist_utils import rowwise_parallelize_linear_fn, try_to_local
 from ..kernels import paged_attention_fwd
-
 from .functional import fill_kv_cache
 
 

@@ -16,9 +16,9 @@ from transformers.modeling_outputs import \
 from transformers.models.falcon.modeling_falcon import build_alibi_tensor
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
-                                             rowwise_parallelize_linear_fn)
-from ..kernels import (alibi_paged_attention_fwd,
-                                          fill_kv_cache, paged_attention_fwd)
+                          rowwise_parallelize_linear_fn)
+from ..kernels import (alibi_paged_attention_fwd, fill_kv_cache,
+                       paged_attention_fwd)
 
 logger = logging.getLogger()
 

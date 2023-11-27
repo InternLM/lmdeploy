@@ -8,16 +8,14 @@ from typing import Any, Dict, List
 import torch
 from transformers import AutoConfig
 
-from ..config import (CacheConfig, ModelConfig,
-                                         SchedulerConfig)
-from .model_agent import (BaseModelAgent,
-                                                     ModelInputs, TPModelAgent)
-from ..messages import (MessageStatus, SamplingParam,
-                                           SchedulerSequence, SchedulerSession)
-from ..paging import Scheduler
 from lmdeploy.utils import get_logger
 
+from ..config import CacheConfig, ModelConfig, SchedulerConfig
+from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
+                        SchedulerSession)
+from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor
+from .model_agent import BaseModelAgent, ModelInputs, TPModelAgent
 from .request import (Request, RequestManager, RequestType, Response,
                       ResponseType)
 
