@@ -65,6 +65,7 @@ if __name__ == '__main__':
     import time
 
     def torch_forward(hidden_states, weight, variance_epsilon=1e-6):
+        """pytorch forward."""
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
@@ -73,6 +74,7 @@ if __name__ == '__main__':
         return weight * hidden_states.to(input_dtype)
 
     def test_rms_norm(bsz, ctx_len, feat_len, dtype):
+        """test rms norm."""
         input = torch.empty((bsz, ctx_len, feat_len),
                             dtype=dtype,
                             device='cuda').normal_(mean=0.,

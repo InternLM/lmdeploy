@@ -52,6 +52,7 @@ class PatchedInternLMAttention(nn.Module):
         history_lengths = context.history_lengths
 
         def _rotary_emb_fn(query_states, key_states, value_states):
+            """rotary embedding func."""
             max_seq_len = position_ids.size(-1)
             kv_seq_len = max_seq_len + max(history_lengths)
             cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
@@ -88,6 +89,7 @@ class PatchedInternLMAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """forward."""
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()

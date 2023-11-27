@@ -6,6 +6,7 @@ import triton.language as tl
 
 
 def per_channel_quant2(x, n_bits, eps, dtype):
+    """per channel quant2."""
     assert x.ndim == 2
     # x = x.to(torch.float32)
     x_absmax = x.view(x.shape[0], -1).abs().max(dim=1)[0]
@@ -17,6 +18,7 @@ def per_channel_quant2(x, n_bits, eps, dtype):
 
 
 def per_channel_quant(x, n_bits, eps, dtype):
+    """per channel quant."""
     assert x.ndim == 2
     x = x.to(torch.float32)
     x_absmax = x.view(x.shape[0], -1).abs().max(dim=1, keepdim=True)[0]
@@ -99,6 +101,7 @@ def _linear(
     rms_scale_ptr,
     linear_scale_ptr,
 ):
+    """linear triton kernel."""
 
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -209,6 +212,7 @@ def _linear_add(
     rms_scale_ptr,
     linear_scale_ptr,
 ):
+    """linear add triton kernel."""
 
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -258,6 +262,7 @@ def linear_dynamic_quant_triton_op_fast(x,
                                         residual=None,
                                         bias=None,
                                         output_dtype=torch.float16):
+    """linear dynamic quant triton op."""
     assert x.shape[-1] == b.shape[-1]
     assert b.is_contiguous()
     a = x  # (M, K)
@@ -323,6 +328,7 @@ def _per_token_quant_int8(
     eps,  # epsilon to avoid division by zero
     BLOCK: tl.constexpr,
 ):
+    """per token quant int8 triton kernel."""
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
     y_ptr += row * y_stride
@@ -344,6 +350,7 @@ def _per_token_quant_int8(
 
 
 def per_token_quant_int8_tri(x, eps):
+    """per token quant int8 tri."""
     M, N = x.shape
     x_q = torch.empty((M, N), device=x.device, dtype=torch.int8)
     x_q_arg = x_q.reshape(-1, x_q.shape[-1])
@@ -374,6 +381,7 @@ def _rms_norm_fwd_fused_dynamic_symmetric(
     eps,  # epsilon to avoid division by zero
     BLOCK_SIZE: tl.constexpr,
 ):
+    """rms norm fwd fused dynamic symmetric triton kernel."""
     row = tl.program_id(0)
     Y += row * stride
     X += row * stride
@@ -403,6 +411,7 @@ def _rms_norm_fwd_fused_dynamic_symmetric(
 
 
 def rms_norm_dynamic_quant(x, w, eps):
+    """rms norm dynamic quant."""
     x_arg = x.reshape(-1, x.shape[-1])
     # y = torch.empty_like(x, dtype=torch.float16)
     y = torch.empty_like(x, dtype=torch.int8)
@@ -429,6 +438,7 @@ def rms_norm_dynamic_quant(x, w, eps):
 
 
 def quantize_int8(weight, axis=0):
+    """quantize int8."""
     # Weight shape: [H1, H2]
     # Scale shape: [H2]
     scale = weight.abs().amax(axis, keepdim=True) / 127.
@@ -441,6 +451,7 @@ def quantize_int8(weight, axis=0):
 
 
 def test_rms_and_linear(M, N, K, dtype=torch.float16, eps=1e-5, device='cuda'):
+    """test rms and linear."""
 
     def rms_norm_torch(x, w, eps):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
@@ -505,6 +516,7 @@ def test_rms_and_linear(M, N, K, dtype=torch.float16, eps=1e-5, device='cuda'):
             'dtype': torch.float16,
         }))
 def bench_rms_and_linear(M, dtype, provider, eps=1e-5, device='cuda'):
+    """benchmark rms and linear."""
 
     def rms_norm_torch(x, w, eps):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)

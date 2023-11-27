@@ -199,6 +199,7 @@ class Engine:
         self.loop_threads = loop_threads
 
     def _on_add_session(self, reqs: Request, **kwargs):
+        """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp_type = ResponseType.SESSION_REPEAT
@@ -211,6 +212,7 @@ class Engine:
                          req_id=req.req_id))
 
     def _on_stop_session(self, reqs: Request, **kwargs):
+        """on stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp_type = ResponseType.SESSION_NOT_EXIST
@@ -224,6 +226,7 @@ class Engine:
                          req_id=req.req_id))
 
     def _on_end_session(self, reqs: Request, **kwargs):
+        """on end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp_type = ResponseType.SESSION_NOT_EXIST
@@ -237,6 +240,7 @@ class Engine:
                          req_id=req.req_id))
 
     def _on_add_message(self, reqs: Request, **kwargs):
+        """on add message callback."""
         for req in reqs:
             session_id = req.data['session_id']
             if session_id not in self.scheduler.sessions:

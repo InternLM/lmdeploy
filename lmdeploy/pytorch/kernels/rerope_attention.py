@@ -43,6 +43,7 @@ def _rerope_fwd_kernel(
     IS_CAUSAL: tl.constexpr,
     WINDOW: tl.constexpr,
 ):
+    """rerope attention triton kernel."""
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     q_offset = off_hz * stride_qh
@@ -164,6 +165,7 @@ def rerope_attention_fwd(q1,
                          sm_scale,
                          window,
                          BLOCK_M=64):
+    """rerope attention forward."""
     # shape constraints
     Lq, Lk, Lv = q1.shape[-1], k1.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv

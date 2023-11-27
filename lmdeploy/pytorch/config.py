@@ -35,4 +35,5 @@ class ModelConfig:
     json_config: dict = field(default_factory=dict)
 
     def get_head_size(self):
+        """get head size."""
         return self.hidden_size // self.num_heads

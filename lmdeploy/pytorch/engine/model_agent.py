@@ -148,9 +148,11 @@ class StepContext:
         return self.block_offsets
 
     def set_output(self, key, value):
+        """set output."""
         self._outputs[key] = value
 
     def get_output(self, key):
+        """get output."""
         if key in self._outputs:
             return self._outputs[key]
         return None

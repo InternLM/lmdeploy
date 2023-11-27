@@ -18,6 +18,7 @@ NORM_TYPE_MAP = {
 
 
 def convert_decoder_layer(module, norm_type):
+    """convert decoder layer."""
     for name, child in module.named_children():
         if isinstance(child, nn.Linear):
             new_child = QLinear.from_float(child)
@@ -30,6 +31,7 @@ def convert_decoder_layer(module, norm_type):
 
 
 def convert(module, layer_type, norm_type):
+    """convert module."""
     for name, child in module.named_children():
         if type(child).__name__ == layer_type:
             convert_decoder_layer(child, norm_type)
@@ -38,6 +40,7 @@ def convert(module, layer_type, norm_type):
 
 
 def convert_to_qmodules(model):
+    """convert to qmodules."""
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
     convert(model, layer_type, norm_type)

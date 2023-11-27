@@ -18,6 +18,7 @@ class LlamaRMSNorm(nn.Module):
     """Rewrite RMSNorm."""
 
     def forward(self, hidden_states):
+        """forward."""
         # torch.nn.functional.normalize based implementation might leads
         # to wrong output
         from ..kernels import rms_norm

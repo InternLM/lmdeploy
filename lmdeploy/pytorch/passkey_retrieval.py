@@ -14,6 +14,7 @@ os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
 class LLM(object):
+    """LLM."""
 
     def __init__(self,
                  model_path: str,
@@ -44,6 +45,7 @@ class LLM(object):
         self.session_id = 1
 
     def say(self, question: str):
+        """say."""
         prompt = self.model.get_prompt(question, True)
         input_ids = self.tokenizer.encode(prompt)
         input_ids = self.model.update_input_ids(input_ids)
@@ -58,6 +60,7 @@ class LLM(object):
         return response
 
     def tokenize(self, question: str):
+        """tokenize."""
         prompt = self.model.get_prompt(question, True)
         return self.tokenizer.encode(prompt)
 
@@ -73,6 +76,7 @@ def valid_str(string, coding='utf-8'):
 
 
 def parse_config():
+    """parse arguments."""
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument(
         '--model_path',
@@ -130,6 +134,7 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
 
 
 def main(args):
+    """main."""
     # Load model and tokenizer
     llm = LLM(model_path=args.model_path, model_name=args.model_name)
 

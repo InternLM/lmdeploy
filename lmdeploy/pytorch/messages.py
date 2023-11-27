@@ -145,12 +145,14 @@ class SchedulerSequence:
         return self.session.session_id
 
     def num_logical_tokens(self) -> int:
+        """num logitcal tokens."""
         if len(self.logical_blocks) == 0:
             return 0
         else:
             return sum(block.num_tokens for block in self.logical_blocks)
 
     def num_required_tokens(self) -> int:
+        """num required tokens."""
         num_all_tokens = len(self.token_ids) + self.history_len
         num_logical_tokens = self.num_logical_tokens()
         return num_all_tokens - num_logical_tokens
