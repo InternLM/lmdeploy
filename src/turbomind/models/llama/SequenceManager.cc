@@ -36,7 +36,7 @@ SequenceManager::SequenceManager(size_t      layer_num,
 
 const Sequence* SequenceManager::Create(uint64_t id)
 {
-    Sequence sequence{id, {}, {}, {}, {}, {}, {}, 0.f};
+    Sequence sequence{id};
 
     auto it = sequences_.find(id);
     if (it != sequences_.end()) {
@@ -152,18 +152,23 @@ struct Schedule {
 
     int last;
 
+    int input_count1;
+    int input_count2;
+
     Sequences        active;
     std::vector<int> block_counts;
     Sequences        inactive;
     Sequences        victims;
 
-    Schedule(Snapshot snapshot, int size):
+    Schedule(Snapshot snapshot, int size, int _input_count1, int _input_count2):
         free(snapshot.free),
         cached(snapshot.cached),
         last(size),
         use_count_(std::move(snapshot.use_count)),
         unlocked_(size),
-        it_(size)
+        it_(size),
+        input_count1(_input_count1),
+        input_count2(_input_count2)
     {
     }
 
@@ -208,6 +213,7 @@ std::ostream& operator<<(std::ostream& os, const Schedule& s)
 struct Transaction {
     int index_;
     int block_count_;
+    int input_count_;
 
     int allocate_{};
     int evict_{};
@@ -218,44 +224,45 @@ struct Transaction {
     const Sequences& sequences_;
     Schedule&        schedule_;
 
-    explicit Transaction(const Sequences& sequences, int index, int block_count, Schedule& sched):
-        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count)
+    explicit Transaction(const Sequences& sequences, int index, int block_count, int input_count, Schedule& sched):
+        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count)
     {
     }
 
     void Process()
     {
-        int count = block_count_;
+        if (schedule_.input_count1 > 0) {
+            int count = block_count_;
 
-        int tmp = std::min(schedule_.free, count);
-        count -= tmp;
-        allocate_ += tmp;
+            int tmp = std::min(schedule_.free, count);
+            count -= tmp;
+            allocate_ += tmp;
 
-        tmp = std::min(schedule_.cached, count);
-        count -= tmp;
-        evict_ += tmp;
+            tmp = std::min(schedule_.cached, count);
+            count -= tmp;
+            evict_ += tmp;
 
-        for (int vidx = schedule_.last - 1; count && vidx > index_; --vidx) {
-            if (sequences_[vidx]->status == Sequence::kCached) {
-                continue;
+            for (int vidx = schedule_.last - 1; count && vidx > index_; --vidx) {
+                if (sequences_[vidx]->status == Sequence::kCached) {
+                    continue;
+                }
+                victims_.push_back(sequences_[vidx]);
+                preempt_ += schedule_.Unlock(sequences_, vidx);
+
+                if (count <= preempt_) {
+                    evict_ += count;
+                    count -= count;
+                    schedule_.last = vidx;  // ! modifiying `sched_.last` is part of commit
+                    break;
+                }
             }
-            victims_.push_back(sequences_[vidx]);
-            preempt_ += schedule_.Unlock(sequences_, vidx);
-
-            if (count <= preempt_) {
-                evict_ += count;
-                count -= count;
-                schedule_.last = vidx;  // ! modifiying `sched_.last` is part of commit
-                break;
+            if (count == 0) {
+                return Commit();
             }
         }
 
-        if (count == 0) {
-            Commit();
-        }
-        else {
-            schedule_.inactive.push_back(sequences_[index_]);
-        }
+        const_cast<Sequence*>(sequences_[index_])->input_length = 0;
+        schedule_.inactive.push_back(sequences_[index_]);
     }
 
     void Commit()
@@ -276,6 +283,13 @@ struct Transaction {
         // update active sequences
         schedule_.active.push_back(sequences_[index_]);
         schedule_.block_counts.push_back(block_count_);
+
+        if (input_count_ > schedule_.input_count2) {
+            input_count_ = schedule_.input_count1;
+        }
+        schedule_.input_count1 -= input_count_;
+        schedule_.input_count2 -= input_count_;
+        const_cast<Sequence*>(sequences_[index_])->input_length = input_count_;
     }
 };
 
@@ -307,6 +321,25 @@ void SequenceManager::SortByPriority(Sequences&                   sequences,
     sequences.swap(tmp_sequences);
     context_lengths.swap(tmp_lengths);
 }
+
+// template<class P, class... Ts>
+// void SortByPriority(const std::vector<P>& priorities, Ts&... ranges)
+// {
+//     // sort according to priority
+//     std::vector<int> idxs(priorities.size());
+//     std::iota(idxs.begin(), idxs.end(), 0);
+//     std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
+//         return priorities[i] < priorities[j];  //
+//     });
+//     auto reorder = [&](auto& src) {
+//         auto dst = src;
+//         for (size_t i = 0; i < idxs.size(); ++i) {
+//             dst[i] = src[idxs[i]];
+//         }
+//         src.swap(dst);
+//     };
+//     (reorder(ranges), ...);
+// }
 
 std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        sequences,
                                                       const std::vector<int>& context_lengths,
@@ -344,7 +377,9 @@ void SequenceManager::AssignAndActivate(const Sequences&                 sequenc
 auto SequenceManager::Materialize(Sequences                    sequences,
                                   std::vector<int>             context_lengths,
                                   const std::vector<uint64_t>& priorities,
-                                  int                          step_length) -> Outcome
+                                  int                          step_length,
+                                  int                          input_count1,
+                                  int                          input_count2) -> Outcome
 {
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule the assignment of blocks to sequences
@@ -354,6 +389,8 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     SortByPriority(sequences, context_lengths, priorities);
 
+    // SortByPriority(priorities, sequences, context_lengths);
+
     // Verify and lock cache sequences to avoid their blocks being evicted unnoticed
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
@@ -361,11 +398,12 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     std::vector<int> required = CountRequiredBlocks(sequences, context_lengths, step_length);
     // dbg(required);
 
-    Schedule schedule(block_manager_->TakeSnapshot(), sequences.size());
+    Schedule schedule(block_manager_->TakeSnapshot(), sequences.size(), input_count1, input_count2);
 
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {
-        Transaction{sequences, i, required[i], schedule}.Process();
+        const int input_length = context_lengths[i] - sequences[i]->cache_len;
+        Transaction{sequences, i, required[i], input_length, schedule}.Process();
     }
 
     // mark remaining sequences invalid

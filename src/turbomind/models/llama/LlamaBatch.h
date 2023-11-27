@@ -28,7 +28,6 @@ struct BatchState {
     float* h_rope_theta;
 
     std::vector<int> seq_len_limit;
-    std::vector<int> is_swap_in;
 
     std::vector<const Sequence*>          sequences;
     std::vector<std::shared_ptr<Request>> requests;
@@ -41,6 +40,21 @@ struct BatchState {
 
 template<typename T>
 class LlamaV2;
+
+struct GenerationState {
+    int max_init_ctx_len;
+    int step;
+
+    int sum_seq_len;
+    int max_seq_len;
+
+    int partial;
+    int partial_context_legnth;
+
+    std::vector<uint64_t> unique_ids;
+
+    int finished_count;
+};
 
 template<typename T>
 class LlamaBatch {
@@ -58,22 +72,13 @@ public:
 
     void ProcessInferRequests(const Requests& requests);
 
-    [[nodiscard]] bool Initialize();
+    void Initialize(GenerationState& g);
 
-    struct GenerationState {
-        int max_init_ctx_len;
-        int step;
-        int sum_seq_len;
-        int max_seq_len;
-    };
-
-    void InitializeSampling();
-
-    GenerationState InitializeGeneration();
+    void InitializeSampling(const GenerationState& g);
 
     [[nodiscard]] bool Forward(GenerationState& g, int iter);
 
-    [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
+    [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
@@ -226,13 +231,6 @@ private:
     uint32_t* seq_limit_len_{};
     int*      h_end_ids_buf_{};
     int*      d_end_ids_buf_{};
-
-    int** request_output_ids_ptrs_{};
-    int*  request_output_ids_lens_{};
-    int** request_seqlen_ptrs_{};
-    int** h_request_output_ids_ptrs_{};
-    int*  h_request_output_ids_lens_{};
-    int** h_request_seqlen_ptrs_{};
 
     // pinned buffers
     int*       h_input_ids_buf_{};

@@ -42,7 +42,7 @@ public:
                         size_t pf_max_q_len,
                         size_t pf_max_k_len,
                         size_t dc_batch_size,
-                        size_t dc_max_split_kn);
+                        size_t dc_max_split_k);
 
     UnifiedAttentionLayer(size_t               head_num,
                           size_t               kv_head_num,
