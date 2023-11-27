@@ -72,6 +72,7 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
+    meta: Any
 
 
 class StepContext:
@@ -150,7 +151,9 @@ class StepContext:
         self._outputs[key] = value
 
     def get_output(self, key):
-        return self._outputs[key]
+        if key in self._outputs:
+            return self._outputs[key]
+        return None
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
@@ -218,11 +221,9 @@ class BaseModelAgent:
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
-                 json_config: dict,
                  trust_remote_code: bool = True):
         self.model_config = model_config
         self.cache_config = cache_config
-        self.json_config = json_config
         torch_dtype = model_config.dtype
 
         self.patched_model = self._build_model(
@@ -267,7 +268,7 @@ class BaseModelAgent:
             self.patched_model,
             inputs,
             self.cache_engine,
-            self.json_config,
+            self.model_config.json_config,
             world_size=1,
             stream=self.stream,
         )
@@ -340,6 +341,7 @@ def _tp_build_model(
         _update_cache_config(model_config, cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
+                                   config,
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:
@@ -411,7 +413,6 @@ def _tp_model_loop(
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
-    json_config: dict,
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
@@ -447,7 +448,7 @@ def _tp_model_loop(
             patched_model,
             inputs,
             cache_engine,
-            json_config,
+            model_config.json_config,
             world_size=world_size,
             stream=stream,
         )
@@ -503,29 +504,26 @@ class TPModelAgent:
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
-                 json_config: dict,
                  world_size: int,
                  trust_remote_code: bool = True) -> None:
         mp.set_start_method('spawn')
         self.world_size = world_size
         self.model_config = model_config
         self.cache_config = cache_config
-        self.json_config = json_config
         self.tp_model_in_que = mp.Queue(10)
         self.tp_model_out_que = mp.Queue(10)
 
         self.patch_model_tp(model_path,
                             model_config=model_config,
                             cache_config=cache_config,
-                            json_config=json_config,
                             in_que=self.tp_model_in_que,
                             out_que=self.tp_model_out_que,
                             world_size=world_size,
                             trust_remote_code=trust_remote_code)
 
     def patch_model_tp(self, model_path: str, model_config: ModelConfig,
-                       cache_config: CacheConfig, json_config: dict,
-                       in_que: mp.Queue, out_que: mp.Queue, world_size: int,
+                       cache_config: CacheConfig, in_que: mp.Queue,
+                       out_que: mp.Queue, world_size: int,
                        trust_remote_code: bool):
         """Start tensor parallel sub process.
 
@@ -548,7 +546,6 @@ class TPModelAgent:
                 (model_path, ),
                 dict(model_config=model_config,
                      cache_config=cache_config,
-                     json_config=json_config,
                      in_que=in_que,
                      out_que=out_que,
                      world_size=world_size,

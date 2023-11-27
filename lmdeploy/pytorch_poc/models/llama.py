@@ -56,7 +56,7 @@ class LlamaAttention(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: bool = False,
         attention_mask: Optional[torch.Tensor] = None,
-        world_size: int = 1,
+        world_size: int = 1
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """rerope rewrite."""
@@ -66,11 +66,12 @@ class LlamaAttention(nn.Module):
         def apply_rotary_pos_emb_rerope(q, k, cos, sin, position_ids):
             assert 1 == position_ids.shape[0]
 
-            _, __, seq_len, dim = cos.shape
+            _, seq_len = position_ids.shape
+            _, dim = cos.shape
 
-            cos = cos[0, 0][position_ids].reshape(
+            cos = cos[position_ids].reshape(
                 seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
-            sin = sin[0, 0][position_ids].reshape(
+            sin = sin[position_ids].reshape(
                 seq_len, 1, dim)  # [bs, seq_len, dim] to [seq_len, 1, dim]
 
             q_embed = ((q * cos[-q.shape[0]:]) +
@@ -148,7 +149,7 @@ class LlamaAttention(nn.Module):
             o_proj=self.o_proj,
             rotary_emb_context_fn=_rotary_emb_context_rerope_fn,
             rotary_emb_generate_fn=_rotary_emb_generate_rerope_fn,
-        )
+            layer_id=id(self))
         return attn_output, None, past_key_value
 
     def _contiguous_batching_forward_default_impl(
@@ -219,6 +220,7 @@ class LlamaAttention(nn.Module):
         support.
         """
         assert not output_attentions
+
         json_config = self.context.context.json_config
         use_rerope = 'rerope' in json_config and json_config['rerope']
         if use_rerope:

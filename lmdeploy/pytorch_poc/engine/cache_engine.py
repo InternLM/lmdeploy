@@ -49,7 +49,12 @@ class CacheEngine:
         self.head_size = model_config.get_head_size()
         self.num_layers = model_config.num_layers
         self.num_heads = model_config.num_heads
-        self.dtype = model_config.dtype
+
+        if 'kv_cache_dtype' in model_config.json_config:
+            self.kv_cache_dtype = eval(
+                model_config.json_config['kv_cache_dtype'])
+        else:
+            self.kv_cache_dtype = model_config.dtype
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -106,12 +111,12 @@ class CacheEngine:
         for _ in range(self.num_layers):
             key_blocks = torch.empty(
                 size=(self.num_gpu_blocks, *key_block_shape),
-                dtype=self.dtype,
+                dtype=self.kv_cache_dtype,
                 device='cuda',
             )
             value_blocks = torch.empty(
                 size=(self.num_gpu_blocks, *value_block_shape),
-                dtype=self.dtype,
+                dtype=self.kv_cache_dtype,
                 device='cuda',
             )
             gpu_cache.append((key_blocks, value_blocks))
@@ -130,12 +135,12 @@ class CacheEngine:
         for _ in range(self.num_layers):
             key_blocks = torch.empty(
                 size=(self.num_cpu_blocks, *key_block_shape),
-                dtype=self.dtype,
+                dtype=self.kv_cache_dtype,
                 pin_memory=pin_memory,
             )
             value_blocks = torch.empty(
                 size=(self.num_cpu_blocks, *value_block_shape),
-                dtype=self.dtype,
+                dtype=self.kv_cache_dtype,
                 pin_memory=pin_memory,
             )
             cpu_cache.append((key_blocks, value_blocks))
