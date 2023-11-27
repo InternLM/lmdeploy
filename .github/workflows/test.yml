@@ -82,12 +82,15 @@ jobs:
               -DCMAKE_CUDA_ARCHITECTURES=80 \
               -DBUILD_TEST=OFF
           make -j$(nproc) && make install
-      - name: Install lmdeploy from source
+      - name: Install lmdeploy
         run: |
           python3 -m pip install packaging protobuf transformers_stream_generator
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
-          # lmdeploy check_env
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
       - name: Test lmdeploy
         run: |
           echo "TODO: awaiting PR of adding autotest"
@@ -194,7 +197,7 @@ jobs:
             --grpc-port=${GRPC_PORT} \
             --log-verbose=0 \
             --allow-metrics=1
-          # wait for triton server to start up
+          # wait for triton server to fully start up
           sleep 180s
       - name: Test triton server
         run: |
