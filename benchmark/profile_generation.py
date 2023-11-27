@@ -123,7 +123,6 @@ def profile_throughput(model_path: str,
     procs = []
     _start = time.perf_counter()
 
-    # TODO: update to the multithread version
     for i in range(concurrency):
         proc = Thread(target=infer,
                       args=(tm_model, i + 1, input_ids, output_seqlen,
