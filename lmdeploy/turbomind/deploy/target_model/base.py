@@ -48,7 +48,7 @@ class TurbomindModelConfig:
     size_per_head: int = 128
     group_size: int = 0
     max_batch_size: int = 64
-    max_context_token_num: int = 4
+    max_context_token_num: int = 1
     step_length: int = 1
     cache_max_entry_count: float = 0.5
     cache_block_seq_len: int = 128
