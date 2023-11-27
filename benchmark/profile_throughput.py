@@ -8,6 +8,7 @@ from typing import List, Tuple
 
 import fire
 import numpy as np
+from tqdm import tqdm
 
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.turbomind import TurboMind
@@ -65,6 +66,7 @@ class Engine:
                              **kwargs)
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
+        self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
                    stream_output: bool):
@@ -95,16 +97,16 @@ class Engine:
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
             token_latency = np.round(timestamps[-1] - timestamps[0], 3)
             completion_tokens = tokens[-1]
-            assert output_seqlen <= completion_tokens <= output_seqlen + 1
-            total_tokens = tokens[-1] + len(input_ids)
+            assert output_seqlen <= completion_tokens <= output_seqlen + 1, \
+                f'Error. session_id({session_id}) request {output_seqlen} ' \
+                f'tokens, but generate {completion_tokens} tokens.\n' \
+                f'prompt: {prompt}'
+            total_tokens = tokens[-1] + input_seqlen
             stats.append([
                 first_token_latency, completion_tokens, output_seqlen,
                 total_tokens, token_latency
             ])
-            print(
-                f'session {session_id}: '
-                f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}, '
-                f'completion_tokens {completion_tokens}')
+            self.pbar.update(1)
         res_queue.put((session_id, stats))
 
     def process_request(self,
@@ -114,6 +116,8 @@ class Engine:
         res_queue = Queue()
         req_queue = Queue()
         threads = []
+
+        self.pbar = tqdm(total=len(requests))
 
         # feed request to q
         for req in requests:

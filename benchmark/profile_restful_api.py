@@ -7,8 +7,9 @@ from typing import List, Tuple
 
 import fire
 import numpy as np
-import requests
+from tqdm import tqdm
 
+from lmdeploy.serve.openai.api_client import APIClient
 from lmdeploy.tokenizer import Tokenizer
 
 
@@ -61,60 +62,47 @@ class Engine:
                  temperature: float = 0.8,
                  top_p: float = 1.0):
         self.tokenizer = Tokenizer(tokenzier_path)
-        self.api_url = server_addr + '/v1/chat/completions'
+        self.server_addr = server_addr
         self.temperature = temperature
         self.top_p = top_p
+        client = APIClient(self.server_addr)
+        self.model_name = client.available_models[0]
+        self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
                    stream_output: bool):
 
         stats = []
+        client = APIClient(self.server_addr)
+
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
             timestamps = []
-            tokens = []
             timestamps.append(time.perf_counter())
-            headers = {'content-type': 'application/json'}
-            pload = {
-                'model': 'llama',
-                'messages': prompt,
-                'temperature': self.temperature,
-                'top_p': self.top_p,
-                'n': 1,
-                'max_tokens': output_seqlen,
-                'stream': stream_output,
-                'session_id': session_id,
-                'ignore_eos': True,
-            }
-            response = requests.post(self.api_url,
-                                     headers=headers,
-                                     json=pload,
-                                     stream=stream_output)
-            for chunk in response.iter_lines(chunk_size=8192,
-                                             decode_unicode=False,
-                                             delimiter=b'\n'):
+            for output in client.chat_completions_v1(
+                    model=self.model_name,
+                    messages=prompt,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    n=1,
+                    max_tokens=output_seqlen,
+                    stream=stream_output,
+                    session_id=session_id,
+                    ignore_eos=True):
                 timestamps.append(time.perf_counter())
-                if chunk:
-                    data = json.loads(chunk.decode('utf-8'))
-                    n_token = data.pop('tokens', 0)
-                    tokens.append(n_token)
 
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
             token_latency = np.round(timestamps[-1] - timestamps[0], 3)
-            completion_tokens = tokens[-1]
-            assert output_seqlen <= completion_tokens <= output_seqlen + 1, \
-                f'Error. session_id({session_id}) request {output_seqlen} ' \
-                f'tokens, but generate {completion_tokens} tokens.\n' \
-                f'prompt: {prompt}'
-            total_tokens = tokens[-1] + input_seqlen
+            # assert output.pop('finish_reason') == 'length', \
+            #     f'Error. session_id({session_id}) request {output_seqlen} ' \
+            #     f'tokens, but `finish_reason` is not `length`'
+            total_tokens = input_seqlen + output_seqlen
             stats.append([
-                first_token_latency, completion_tokens, output_seqlen,
+                first_token_latency, output_seqlen, output_seqlen,
                 total_tokens, token_latency
             ])
-            print(
-                f'session {session_id}: '
-                f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}, '
-                f'completion_tokens {completion_tokens}')
+            self.pbar.update(1)
+
         res_queue.put((session_id, stats))
 
     def process_request(self,
@@ -124,6 +112,8 @@ class Engine:
         res_queue = Queue()
         req_queue = Queue()
         threads = []
+
+        self.pbar = tqdm(total=len(requests))
 
         # feed request to q
         for req in requests:

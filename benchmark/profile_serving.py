@@ -7,6 +7,7 @@ from typing import List, Tuple
 
 import fire
 import numpy as np
+from tqdm import tqdm
 
 from lmdeploy.serve.turbomind.chatbot import Chatbot
 from lmdeploy.tokenizer import Tokenizer
@@ -68,6 +69,7 @@ class Engine:
         self.top_k = top_k
         self.top_p = top_p
         self.log_level = log_level
+        self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
                    stream_output: bool):
@@ -105,10 +107,7 @@ class Engine:
                 first_token_latency, completion_tokens, output_seqlen,
                 total_tokens, token_latency
             ])
-            print(
-                f'session {session_id}: '
-                f'input_seqlen {input_seqlen}, output_seqlen {output_seqlen}, '
-                f'completion_tokens {completion_tokens}')
+            self.pbar.update(1)
         res_queue.put((session_id, stats))
 
     def process_request(self,
@@ -118,6 +117,8 @@ class Engine:
         res_queue = Queue()
         req_queue = Queue()
         threads = []
+
+        self.pbar = tqdm(total=len(requests))
 
         # feed request to q
         for req in requests:

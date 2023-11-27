@@ -480,7 +480,7 @@ def main(model_path: str,
          allow_credentials: bool = True,
          allow_methods: List[str] = ['*'],
          allow_headers: List[str] = ['*'],
-         log_level: str = 'INFO',
+         log_level: str = 'ERROR',
          **kwargs):
     """An example to perform model inference through the command line
     interface.
