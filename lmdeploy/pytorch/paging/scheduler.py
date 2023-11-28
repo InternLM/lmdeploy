@@ -13,19 +13,19 @@ from .block_manager import BlockManager
 
 logger = get_logger('lmdeploy')
 
-
-def _find_seq_with_session_id(group: List[SchedulerSequence], session_id: int):
-    return [seq for seq in group if seq.session_id == session_id]
-
-
+SeqList = List[SchedulerSequence]
 BlockTable = List[PhysicalTokenBlock]
+
+
+def _find_seq_with_session_id(group: SeqList, session_id: int):
+    return [seq for seq in group if seq.session_id == session_id]
 
 
 @dataclass
 class SchedulerOutput:
     """Output of schedule."""
 
-    running: List[SchedulerSequence]
+    running: SeqList
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
     copy_map: Dict[int, int]
@@ -45,10 +45,10 @@ class Scheduler:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
-        self.waiting: List[SchedulerSequence] = []
-        self.running: List[SchedulerSequence] = []
-        self.hanging: List[SchedulerSequence] = []
-        self.aborted: List[SchedulerSequence] = []
+        self.waiting: SeqList = []
+        self.running: SeqList = []
+        self.hanging: SeqList = []
+        self.aborted: SeqList = []
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = BlockManager(
@@ -56,6 +56,20 @@ class Scheduler:
             cache_config.num_gpu_blocks,
             cache_config.num_cpu_blocks,
         )
+
+        self.eviction_helper = self.build_eviction_helper(
+            self.scheduler_config.eviction_type, self.block_manager)
+
+    def build_eviction_helper(ctx, eviction_type: str,
+                              block_manager: BlockManager):
+        if eviction_type == 'copy':
+            from .eviction_helper import CopyEvictionHelper
+            return CopyEvictionHelper(block_manager)
+        elif eviction_type == 'recompute':
+            from .eviction_helper import RecomputeEvictionHelper
+            return RecomputeEvictionHelper(block_manager)
+        else:
+            raise TypeError(f'Unknown eviction type: {eviction_type}')
 
     def _set_message_status(self, message: SchedulerSequence,
                             status: MessageStatus):
@@ -107,48 +121,25 @@ class Scheduler:
             to waiting.
         2. Check if sequence in the waiting list can be moved to running
         """
-        running: List[SchedulerSequence] = []
+        running: SeqList = []
         swap_out_map: Dict[int, int] = {}
         swap_in_map: Dict[int, int] = {}
         copy_map: Dict[int, int] = {}
         block_manager = self.block_manager
+        eviction_helper = self.eviction_helper
 
         def _to_running(seq: SchedulerSequence):
             self._set_message_status(seq, MessageStatus.RUNNING)
             running.append(seq)
 
-        def _can_swap_out(seq: SchedulerSequence):
-            block_table = block_manager.get_block_table(seq)
-            if block_table is None or len(block_table) == 0:
-                return False
-            first_block = block_table[0]
-            device = first_block.device
-            return device == 'gpu'
-
-        def _need_swap_in(seq: SchedulerSequence):
-            block_table = block_manager.get_block_table(seq)
-            if block_table is None or len(block_table) == 0:
-                return False
-            first_block = block_table[0]
-            device = first_block.device
-            return device == 'cpu'
-
-        def _try_swap_out_seqs(seqs: List[SchedulerSequence]):
-            for seq in seqs:
-                if not _can_swap_out(seq):
-                    continue
-                if not block_manager.can_swap_out(seq):
-                    continue
-                swap_out_map.update(block_manager.swap_out(seq))
-                return True
-
-            return False
-
-        def _try_swap_out():
-            if _try_swap_out_seqs(self.hanging):
+        def _try_append_slot(seq):
+            """try append slot."""
+            if self.block_manager.can_append_slot(seq):
+                self.block_manager.append_slot(seq)
+                _to_running(seq)
                 return True
             else:
-                return _try_swap_out_seqs(self.waiting)
+                return False
 
         block_size = self.cache_config.block_size
 
@@ -167,18 +158,12 @@ class Scheduler:
                 self.block_manager.free(seq)
                 self.aborted.append(seq)
 
-            if self.block_manager.can_append_slot(seq):
-                # append slot
-                self.block_manager.append_slot(seq)
-                _to_running(seq)
-            else:
+            if not _try_append_slot(seq):
                 # try free unused cache from hanging and waiting
                 do_running = False
-                while _try_swap_out():
-                    if self.block_manager.can_append_slot(seq):
-                        # append slot
-                        self.block_manager.append_slot(seq)
-                        _to_running(seq)
+                while eviction_helper.try_swap_out(self.hanging, self.waiting,
+                                                   swap_out_map):
+                    if _try_append_slot(seq):
                         do_running = True
                         break
                 if not do_running:
@@ -199,15 +184,16 @@ class Scheduler:
             if block_table is not None:
                 if not block_manager.can_append_slot(seq):
                     can_append = False
-                    while _try_swap_out_seqs(self.hanging):
+                    while eviction_helper.try_swap_out_seqs(
+                            self.hanging, swap_out_map):
                         if block_manager.can_append_slot(seq):
                             can_append = True
                             break
                     if not can_append:
                         break
-                if _need_swap_in(seq):
-                    if block_manager.can_swap_in(seq):
-                        swap_in_map.update(block_manager.swap_in(seq))
+                if eviction_helper.need_swap_in(seq):
+                    if eviction_helper.can_swap_in(seq):
+                        eviction_helper.swap_in(seq, swap_in_map)
                     else:
                         break
                 block_manager.append_slot(seq)
@@ -216,7 +202,8 @@ class Scheduler:
             else:
                 if not block_manager.can_allocate(seq):
                     can_alloc = False
-                    while _try_swap_out_seqs(self.hanging):
+                    while eviction_helper.try_swap_out_seqs(
+                            self.hanging, swap_out_map):
                         if block_manager.can_allocate(seq):
                             can_alloc = True
                             break
@@ -312,8 +299,7 @@ class Scheduler:
         seq_to_remove = []
         session_id_to_remove = set()
 
-        def _update_queue(group: List[SchedulerSequence],
-                          expect_status: MessageStatus):
+        def _update_queue(group: SeqList, expect_status: MessageStatus):
             for seq in group:
                 if seq.status == expect_status:
                     continue
@@ -346,6 +332,6 @@ class Scheduler:
         for session_id in session_id_to_remove:
             self.sessions.pop(session_id)
 
-    def get_block_tables(self, seqs: List[SchedulerSequence]):
+    def get_block_tables(self, seqs: SeqList):
         """get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]

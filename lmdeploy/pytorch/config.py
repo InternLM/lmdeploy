@@ -9,7 +9,7 @@ class SchedulerConfig:
     max_batches: int
     max_session_len: int
     max_request_output_len: int
-    recompute: bool = False
+    eviction_type: str = 'copy'
 
 
 @dataclass

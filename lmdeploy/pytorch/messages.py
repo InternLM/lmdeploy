@@ -192,3 +192,12 @@ class SchedulerSequence:
             token_ids = token_ids.unsqueeze(0)
         self.token_ids = token_ids
         self.arrive_time = time.time()
+
+    def set_step(self, step: int):
+        """set step."""
+        assert step < self.history_len
+        history_token_ids = torch.cat(self.history_token_ids)
+        new_history_ids = [history_token_ids[:step]]
+        new_token_ids = torch.cat([history_token_ids[step:], self.token_ids])
+        self.history_token_ids = new_history_ids
+        self.token_ids = new_token_ids
