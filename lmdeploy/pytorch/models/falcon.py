@@ -77,14 +77,9 @@ class PatchedFalconRotaryEmbedding(nn.Module):
         )
 
     def forward(self, query, key, position_ids_or_past_key_values_length=0):
-        use_origin = False
-
-        if use_origin:
-            return self.origin_mod(query, key,
-                                   position_ids_or_past_key_values_length)
-        else:
-            return self._contiguous_batching_forward(
-                query, key, position_ids_or_past_key_values_length)
+        """forward."""
+        return self._contiguous_batching_forward(
+            query, key, position_ids_or_past_key_values_length)
 
 
 class PatchedFalconAttention(nn.Module):
@@ -327,17 +322,11 @@ class PatchedFalconAttention(nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ):
-
-        use_origin = False
-        if use_origin:
-            return self.origin_mod(hidden_states, alibi, attention_mask,
-                                   layer_past, head_mask, use_cache,
-                                   output_attentions)
-        else:
-            position_ids = self.context.context.position_ids
-            return self._contiguous_batching_forward(
-                hidden_states, position_ids, alibi, attention_mask, layer_past,
-                head_mask, use_cache, output_attentions)
+        position_ids = self.context.context.position_ids
+        return self._contiguous_batching_forward(hidden_states, position_ids,
+                                                 alibi, attention_mask,
+                                                 layer_past, head_mask,
+                                                 use_cache, output_attentions)
 
 
 class PatchedFalconMLP(nn.Module):
@@ -482,26 +471,13 @@ class PatchedFalconModel(nn.Module):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor, ...],
                BaseModelOutputWithPastAndCrossAttentions]:
-
-        use_origin = False
-        if use_origin:
-            return self.origin_mod(input_ids=input_ids,
-                                   past_key_values=past_key_values,
-                                   attention_mask=attention_mask,
-                                   head_mask=head_mask,
-                                   inputs_embeds=inputs_embeds,
-                                   use_cache=use_cache,
-                                   output_attentions=output_attentions,
-                                   output_hidden_states=output_hidden_states,
-                                   return_dict=return_dict)
-        else:
-            return self._contiguous_batching_forward(
-                input_ids=input_ids,
-                past_key_values=past_key_values,
-                attention_mask=attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict)
+        return self._contiguous_batching_forward(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict)
 
 
 class PatchedFalconForCausalLM(nn.Module):

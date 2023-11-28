@@ -243,24 +243,13 @@ class PatchedSelfAttention(nn.Module):
         use_cache=True,
         output_attentions=False,
     ):
-
-        use_origin = False
-        if use_origin:
-            return self.origin_mod(
-                hidden_states,
-                attention_mask,
-                rotary_pos_emb,
-                kv_cache,
-                use_cache,
-            )
-        else:
-            return self._contiguous_batching_forward(
-                hidden_states,
-                attention_mask,
-                rotary_pos_emb,
-                kv_cache,
-                use_cache,
-            )
+        return self._contiguous_batching_forward(
+            hidden_states,
+            attention_mask,
+            rotary_pos_emb,
+            kv_cache,
+            use_cache,
+        )
 
 
 class MLP(nn.Module):
@@ -370,26 +359,13 @@ class PatchedChatGLMModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ):
-
-        use_origin = False
-        if use_origin:
-            return self.origin_mod(input_ids=input_ids,
-                                   position_ids=position_ids,
-                                   attention_mask=attention_mask,
-                                   full_attention_mask=full_attention_mask,
-                                   past_key_values=past_key_values,
-                                   inputs_embeds=inputs_embeds,
-                                   use_cache=use_cache,
-                                   output_hidden_states=output_hidden_states,
-                                   return_dict=return_dict)
-        else:
-            return self._contiguous_batching_forward(
-                input_ids=input_ids,
-                position_ids=position_ids,
-                attention_mask=attention_mask,
-                full_attention_mask=full_attention_mask,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict)
+        return self._contiguous_batching_forward(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            full_attention_mask=full_attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict)

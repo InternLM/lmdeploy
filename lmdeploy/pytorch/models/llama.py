@@ -251,28 +251,17 @@ class LlamaAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """Rewrite of LlamaAttention.forward."""
-        if self.context.use_origin:
-            return self.origin_mod(
-                hidden_states,
-                attention_mask,
-                position_ids,
-                past_key_value,
-                output_attentions,
-                use_cache,
-            )
-        else:
-            assert use_cache
-            world_size = 1
-            if dist.is_initialized():
-                world_size = dist.get_world_size()
-            return self._contiguous_batching_forward_impl(
-                hidden_states,
-                position_ids,
-                past_key_value,
-                output_attentions,
-                attention_mask=attention_mask,
-                world_size=world_size,
-            )
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+        return self._contiguous_batching_forward_impl(
+            hidden_states,
+            position_ids,
+            past_key_value,
+            output_attentions,
+            attention_mask=attention_mask,
+            world_size=world_size,
+        )
 
 
 class LlamaMLP(nn.Module):
@@ -398,29 +387,14 @@ class LlamaModel(nn.Module):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite of LlamaModel.forward."""
-        use_origin = self.context.use_origin
-        if use_origin:
-            # use origin model
-            return self.origin_mod(
-                input_ids,
-                attention_mask,
-                position_ids,
-                past_key_values,
-                inputs_embeds,
-                use_cache,
-                output_attentions,
-                output_hidden_states,
-                return_dict,
-            )
-        else:
-            return self._continuous_batching_forward(
-                input_ids,
-                attention_mask,
-                position_ids,
-                past_key_values,
-                inputs_embeds,
-                use_cache,
-                output_attentions,
-                output_hidden_states,
-                return_dict,
-            )
+        return self._continuous_batching_forward(
+            input_ids,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            use_cache,
+            output_attentions,
+            output_hidden_states,
+            return_dict,
+        )
