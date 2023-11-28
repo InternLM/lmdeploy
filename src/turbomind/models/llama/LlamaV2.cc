@@ -218,7 +218,7 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::contextDecode(T*           deocder_output,
+void LlamaV2<T>::contextDecode(T*           decoder_output,
                                uintptr_t*   k_cache_ptr,
                                uintptr_t*   v_cache_ptr,
                                void**       tmp_k_ptrs,
@@ -280,7 +280,7 @@ void LlamaV2<T>::contextDecode(T*           deocder_output,
         {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
         {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_k_ptrs}},
         {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_v_ptrs}},
-        {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
+        {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, decoder_output}}};
 
     context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
 
