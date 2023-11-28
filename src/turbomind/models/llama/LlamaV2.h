@@ -113,7 +113,7 @@ private:
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void contextDecode(T*           deocder_output,
+    void contextDecode(T*           decoder_output,
                        uintptr_t*   k_block_ptrs,
                        uintptr_t*   v_block_ptrs,
                        void**       k_tmp_ptrs,
