@@ -22,6 +22,8 @@ class QTensor:
     zero_point: torch.Tensor = None
 
     def __getattr__(self, name: str):
+        """Allows attribute access to be forwarded to the wrapped tensor when
+        the attribute doesn't exist in QTensor."""
         try:
             return super().__getattr__(name)
         except AttributeError:
@@ -39,6 +41,8 @@ class QRMSNorm(nn.Module):
 
     @classmethod
     def from_float(cls, mod):
+        """Class method to create a QRMSNorm instance from a floating-point
+        module."""
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
         q_mod = cls(hidden_size, eps)
@@ -90,6 +94,8 @@ class QLinear(nn.Module):
 
     @classmethod
     def from_float(cls, mod):
+        """Class method to create a QLinear instance from a floating-point
+        module."""
         q_mod = cls(mod.in_features,
                     mod.out_features,
                     mod.bias is not None,

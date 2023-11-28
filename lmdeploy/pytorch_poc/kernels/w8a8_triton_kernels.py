@@ -91,6 +91,13 @@ def _linear(
     rms_scale_ptr,
     linear_scale_ptr,
 ):
+    """Triton-accelerated function used to perform linear operations (dot
+    product) on input tensors `A` and `B`, and store the result in output
+    tensor `C`.
+
+    The function applies auto-tuning for optimal performance and uses Just-in-
+    Time compilation.
+    """
 
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -190,6 +197,12 @@ def _linear_add(
     rms_scale_ptr,
     linear_scale_ptr,
 ):
+    """Triton-accelerated function used to perform a linear operation (dot
+    product) on input tensors `A` and `B`, with addition of residual.
+
+    The result is stored in tensor `C`. The function applies auto-tuning for
+    optimal performance and uses Just-in-Time compilation.
+    """
 
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -239,6 +252,12 @@ def matmul_kernel_dynamic_quant(a,
                                 residual=None,
                                 bias=None,
                                 output_dtype=torch.float16):
+    """This function performs matrix multiplication with dynamic quantization.
+
+    It takes two input tensors `a` and `b`, scales them with `rms_scale` and
+    `linear_scale`, and optionally adds a `residual` tensor and a `bias`. The
+    output is returned in the specified `output_dtype`.
+    """
     assert a.shape[-1] == b.shape[-1]
     assert b.ndim == 2 and b.is_contiguous()
     b = b.t()  # (K, N)
@@ -303,6 +322,11 @@ def _per_token_quant_int8(
     eps,  # epsilon to avoid division by zero
     BLOCK: tl.constexpr,
 ):
+    """A Triton-accelerated function to perform per-token quantization on a
+    tensor.
+
+    This function converts the tensor values into signed 8-bit integers.
+    """
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
     y_ptr += row * y_stride
@@ -323,6 +347,11 @@ def _per_token_quant_int8(
 
 
 def per_token_quant_int8(x, eps):
+    """Function to perform per-token quantization on an input tensor `x`.
+
+    It converts the tensor values into signed 8-bit integers and returns the
+    quantized tensor along with the scaling factor used for quantization.
+    """
     x_q = torch.empty_like(x, device=x.device, dtype=torch.int8)
     M = x.numel() // x.shape[-1]
     N = x.shape[-1]
@@ -355,6 +384,8 @@ def _rms_norm_fwd_fused_dynamic_symmetric(
     eps,  # epsilon to avoid division by zero
     BLOCK_SIZE: tl.constexpr,
 ):
+    """A Triton kernel that calculates Root Mean Square (RMS) normalization
+    with fused dynamic symmetric quantization."""
     row = tl.program_id(0)
     Y += row * stride
     X += row * stride
@@ -383,6 +414,12 @@ def _rms_norm_fwd_fused_dynamic_symmetric(
 
 
 def rms_norm_dynamic_quant(x, w, eps):
+    """Performs RMS normalization with dynamic quantization.
+
+    The function reshapes the input tensor `x`, creates an empty tensor `y`
+    with the same shape as `x`, and calculates RMS normalization on the
+    reshaped `x` using a Triton kernel `_rms_norm_fwd_fused_dynamic_symmetric`.
+    """
     x_arg = x.reshape(-1, x.shape[-1])
     y = torch.empty_like(x, dtype=torch.int8)
     M, K = x_arg.shape
@@ -414,6 +451,7 @@ def test_rms_and_linear(x,
                         linear_weight,
                         dtype=torch.float16,
                         eps=1e-5):
+    """Test quantized rms norm and quantized linear layer."""
 
     def rms_norm_torch(x, w, eps):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
@@ -447,6 +485,7 @@ def test_rms_and_linear(x,
 
 
 def test_per_token_quant(x, eps):
+    """Test per-token quantization."""
 
     def per_token_quant_int8_torch(x, eps):
         _absmax = torch.clamp(x.abs().max(dim=-1, keepdim=True)[0], min=eps)

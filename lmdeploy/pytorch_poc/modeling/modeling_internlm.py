@@ -111,6 +111,23 @@ class InternLMRMSNorm(nn.Module):
 
 
 class InternLMRotaryEmbedding(torch.nn.Module):
+    """RotaryEmbedding for InternLM Model.
+
+    This module generates sine and cosine positional encodings based on
+    the paper "RoFormer: Enhanced Transformer with Rotary Position Embedding".
+    The purpose of this class is to provide positional embeddings to the
+    input tensors. It utilizes a cache mechanism to store precomputed
+    sine and cosine values for speedup.
+
+    Args:
+        dim (int): The dimensionality of the embeddings.
+        max_position_embeddings (int, optional): The maximum number of
+            position embeddings. Default is 2048.
+        base (int, optional): The base value for the inverse frequency
+            calculation. Default is 10000.
+        device (str, optional): The device to run operations on.
+            If None, defaults to the device of the model.
+    """
 
     def __init__(self,
                  dim,
@@ -139,6 +156,10 @@ class InternLMRotaryEmbedding(torch.nn.Module):
                              persistent=False)
 
     def forward(self, x, seq_len=None):
+        """Forward propagation method for the embedding layer.
+
+        Generates positional embeddings for the given input tensor.
+        """
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in
         # `__init__`. Keep the logic here just in case.
@@ -171,6 +192,12 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
+    """Apply rotary positional embeddings to query and key tensors.
+
+    This function applies the cosine and sine positional embeddings on the
+    input query (q) and key (k) tensors using element-wise multiplication and
+    addition.
+    """
     # The first two dimensions of cos and sin are always 1, so we can
     # `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
@@ -183,6 +210,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
 
 
 class InternLMMLP(nn.Module):
+    """MLP for InternLM Model."""
 
     def __init__(
         self,
@@ -245,6 +273,7 @@ class InternLMAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """Forward propagation method for the attention layer."""
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states).view(
@@ -313,6 +342,7 @@ class InternLMAttention(nn.Module):
 
 
 class InternLMDecoderLayer(nn.Module):
+    """Decoder layer for InternLM Model."""
 
     def __init__(self, config: InternLMConfig):
         super().__init__()
@@ -698,6 +728,13 @@ class InternLMModel(InternLMPreTrainedModel):
 
 
 class InternLMForCausalLM(InternLMPreTrainedModel):
+    """This class extends the `InternLMPreTrainedModel` to enable causal
+    language modeling.
+
+    It wraps the basic InternLM model (`InternLMModel`) and includes a linear
+    layer as a language model head (`lm_head`). The purpose is to predict token
+    probabilities, given the previous tokens in the sequence.
+    """
     _auto_class = 'AutoModelForCausalLM'
 
     def __init__(self, config):
@@ -713,21 +750,27 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
         convert_to_qmodules(self)
 
     def get_input_embeddings(self):
+        """Get the token embedding layer."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
+        """Set the token embedding layer."""
         self.model.embed_tokens = value
 
     def get_output_embeddings(self):
+        """Get the output embedding layer."""
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
+        """Set the output embedding layer."""
         self.lm_head = new_embeddings
 
     def set_decoder(self, decoder):
+        """Set the decoder model."""
         self.model = decoder
 
     def get_decoder(self):
+        """Get the decoder model."""
         return self.model
 
     @add_start_docstrings_to_model_forward(INTERNLM_INPUTS_DOCSTRING)
@@ -827,6 +870,20 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                                       attention_mask=None,
                                       inputs_embeds=None,
                                       **kwargs):
+        """Prepare inputs for generating sequences using the model.
+
+        Args:
+            input_ids (torch.Tensor): Input token ids.
+            past_key_values (list[torch.Tensor], optional): List of past key
+                and value states.
+            attention_mask (torch.Tensor, optional): Mask indicating which
+                tokens should be attended to.
+            inputs_embeds (torch.FloatTensor, optional): Optionally,
+                the input embeddings instead of token ids.
+
+        Returns:
+            dict: Dictionary containing prepared inputs for model generation.
+        """
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
@@ -855,6 +912,12 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
 
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
+        """Reorder cached past key-values during generation using beam search.
+
+        This function reorders the cached past key-values according to the
+        given indices. It's useful in beam search where the order of hypotheses
+        can change from one time-step to another.
+        """
         reordered_past = ()
         for layer_past in past_key_values:
             reordered_past += (tuple(
@@ -866,6 +929,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                      tokenizer,
                      query: str,
                      history: List[Tuple[str, str]] = []):
+        """Builds the input for the model."""
         prompt = ''
         for record in history:
             prompt += f"""<|User|>:{record[0]}<eoh>\n<|Bot|>:{record[1]}<eoa>\n"""  # noqa: E501
@@ -883,6 +947,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
              temperature: float = 0.8,
              top_p: float = 0.8,
              **kwargs):
+        """Provides a chatting functionality for the model."""
         inputs = self.build_inputs(tokenizer, query, history)
         inputs = {
             k: v.to(self.device)
