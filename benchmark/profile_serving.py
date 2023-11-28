@@ -214,7 +214,6 @@ def main(server_addr: str,
          temperature: float = 1.0,
          stream_output: bool = True,
          csv: str = './profile_tis.csv',
-         log_level: str = 'ERROR',
          seed: int = 0):
     """Benchmark the request througput of the triton inference server.
 
@@ -233,7 +232,6 @@ def main(server_addr: str,
         temperature (float, optional): The value used to modulate the next token probabilities.
             Defaults to 1.0.
         stream_output (bool, optional): Indicator for streaming output. Defaults to True.
-        log_level(str, optional): The log level. Defaults to INFO
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
 
@@ -244,7 +242,7 @@ def main(server_addr: str,
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
-                    log_level=log_level,
+                    log_level='ERROR',
                     csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
