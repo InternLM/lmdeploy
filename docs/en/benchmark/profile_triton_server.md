@@ -1,8 +1,8 @@
-# API Server Performance Test Method
+# Triton Inference Server Performance Test Method
 
-The way to profiling api_server performance is similar to the method for [profiling throughput](./profile_throughput.md). The difference is api_server should be launched successfully before testing.
+Triton Inference Server (TIS) is another serving method supported by LMDeploy besides from api_server. Its performance testing methods and metrics are similar to those of [api_server](./profile_api_server.md).
 
-The evaluation script is `profile_restful_api.py`. Before running it, please install the lmdeploy precompiled package, download the evaluation script and the test dataset:
+The evaluation script is `profile_serving.py`. Before running it, please install the lmdeploy precompiled package, download the evaluation script and the test dataset:
 
 ```shell
 pip install lmdeploy
@@ -44,7 +44,7 @@ The required parameters are:
 
 - `server_addr`
 
-  The address of api_server with format `http://{server_ip}:{server_port}`
+  The address of api_server with format `{server_ip}:{server_port}`
 
 - `tokenizer_path`
 
@@ -58,8 +58,11 @@ Optional arguments are listed as below:
 
 - `--concurrency`
 
-  It represents the number of request threads with default value 32. Requests of concurrent threads will be batched by the inference engine. Its value should not exceed the number of inference instances in the api_server.
+  It represents the number of request threads with default value 32. Requests of concurrent threads will be batched by the inference engine.
+  It is recommended that `concurrency` does not exceed the `max_batch_size` in `config.ini`, nor should it exceed the number of inference instances in `triton_models`.
   Otherwise, the excess requests will wait in the inference queue.
+
+  The configuration item for the number of inference instances is `instance_group`, which is located in the file `{model_path}/triton_models/interactive/config.pbtxt`, and the default is 48.
 
 - `--num-prompts`
 
@@ -75,11 +78,11 @@ Optional arguments are listed as below:
 
 - `--stream_output`
 
-  Indicator for streaming output. The default is `False`.
+  Indicator for streaming output. The default is `True`.
 
 - `--csv`
 
-  The path of a csv file to save the result with default value `../profile_api_server.csv`
+  The path of a csv file to save the result with default value `../profile_tis.csv`
 
 - `--seed`
 

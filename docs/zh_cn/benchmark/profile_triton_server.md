@@ -1,8 +1,12 @@
-# api_server 性能测试
+# Triton Inference Server 性能测试方法
 
-api_server 的测试方式与[求吞吐量测试方法](./profile_throughput.md)类似。不同的是，在测试前，需要先启动 api_server，然后再通过测试脚本发送请求进行测试。
+Triton Inference Server(TIS) 是 LMDeploy 支持的除了 api_server 之外的另一种 serving 方式。它的性能测试方式和测试指标和 [api_server](./profile_api_server.md) 的测试方式类似。
 
-测试脚本是 `profile_restful_api.py`。测试之前，请安装 lmdeploy 预编译包，并下载评测脚本和测试数据集。
+```{note}
+LMDeploy 尚未实现 Triton Inference Server 的 ensemble 推理模式，所以推理性能要比 api_server 弱。对于追求性能的用户，我们推荐使用 api_server 部署服务。
+```
+
+TIS 性能测试脚本是 `profile_serving.py`。测试之前，请安装 lmdeploy 预编译包，并下载评测脚本和测试数据集。
 
 ```shell
 pip install lmdeploy
@@ -36,7 +40,7 @@ $$
 
 ## 测试方法
 
-请参考[这里](../restful_api.md) 启动推理服务。启动时的参数 `--instance-num` 表示推理服务中的推理实例数量。当同一时刻到达 api_server 的请求数超过它时，请求会在推理队列中等待。
+启动服务
 
 ```shell
 python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optional arguments>
@@ -46,7 +50,7 @@ python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optiona
 
 - `server_addr`
 
-  api_server 的地址，格式是 `http://{server_ip}:{server_port}`
+  api_server 的地址，格式是 `{server_ip}:{server_port}`
 
 - `tokenizer_path`
 
@@ -60,11 +64,12 @@ python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optiona
 
 - `--concurrency`
 
-  客户端请求线程的数量，并发请求会被推理引擎拼成 batch，默认为 32。并发请求会被推理引擎拼成 batch。并发数不能超过api_server的`--instance-num`。否则，超出部分的请求会在推理队列中等待。
+  客户端请求线程的数量，并发请求会被推理引擎拼成 batch，默认为 32。并发请求会被推理引擎拼成 batch。建议 concurrency 的值不要超过推理引擎的 `max_batch_size`，也不要超过 triton_models 中的推理实例的数量。
+  推理实例数量的配置项是 `instance_group`，在文件 `{model_path}/triton_models/interactive/config.pbtxt` 里，默认是 48。
 
 - `--num-prompts`
 
-  从数据集中采样的prompt数量，默认是 1000。当 `concurrency >= 64` 是，推荐使用 2000
+  从数据集中采样的prompt数量，默认是 1000
 
 - `--tp`
 
@@ -80,7 +85,7 @@ python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optiona
 
 - `--csv`
 
-  一个 csv 文件路径，用来存放测试结果。默认是 `./profile_api_server.csv`
+  一个 csv 文件路径，用来存放测试结果。默认是 `./profile_tis.csv`
 
 - `--seed`
 
