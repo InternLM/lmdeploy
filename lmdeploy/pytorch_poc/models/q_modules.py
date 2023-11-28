@@ -105,42 +105,21 @@ class QLinear(nn.Module):
         return q_mod
 
     def forward(self, input):
-        # shape = input.shape
 
         if isinstance(input, torch.Tensor):
             input_quant, input_scale = per_token_quant_int8(input, 1e-7)
         else:
             assert isinstance(input, QTensor)
             input_quant, input_scale = input.tensor, input.scale
-            # input_quant = input_quant.view(-1, shape[-1])
+
         out = matmul_kernel_dynamic_quant(input_quant,
                                           self.weight,
                                           input_scale,
                                           self.scale,
                                           output_dtype=torch.float16,
                                           bias=self.bias)
-        return out  #.view(*shape[:-1], -1)
+        return out
 
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}'.format(
             self.in_features, self.out_features, self.bias is not None)
-
-
-@torch.no_grad()
-def group_wise_fake_quant(w: torch.Tensor, n_bits: int):
-    """Calculate quantization parameters for each group using min and max
-    values."""
-
-    w_min = w.min(dim=-1, keepdim=True)[0]
-    w_max = w.max(dim=-1, keepdim=True)[0]
-
-    q_max = 2**n_bits - 1
-    scales = (w_max - w_min)
-
-    scales = scales.div_(q_max)
-    zero_points = (-w_min / scales).round()
-
-    int_w = ((w - w_min) / scales).round()
-    fp_w = (int_w - zero_points) * scales
-
-    return fp_w

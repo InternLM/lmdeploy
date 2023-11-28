@@ -293,68 +293,6 @@ def matmul_kernel_dynamic_quant(a,
     return c
 
 
-# def matmul_kernel_dynamic_quant(x,
-#                                         b,
-#                                         rms_scale,
-#                                         linear_scale,
-#                                         residual=None,
-#                                         bias=None,
-#                                         output_dtype=torch.float16):
-#     assert x.shape[-1] == b.shape[-1]
-#     assert b.is_contiguous()
-#     a = x  # (M, K)
-#     b = b.t()  # (K, N)
-#     assert b.stride(0) == 1
-#     M, K = a.shape
-#     K, N = b.shape
-#     if residual is not None:
-#         assert residual.shape == (M, N)
-#         assert residual.is_contiguous()
-#     c = torch.empty((M, N), device=a.device, dtype=output_dtype)
-
-#     def grid(META):
-#         return (triton.cdiv(M, META['BLOCK_M']) *
-#                 triton.cdiv(N, META['BLOCK_N']), )
-
-#     if residual is not None:
-#         _linear_add[grid](a,
-#                           b,
-#                           c,
-#                           residual,
-#                           M,
-#                           N,
-#                           K,
-#                           a.stride(0),
-#                           a.stride(1),
-#                           b.stride(0),
-#                           b.stride(1),
-#                           c.stride(0),
-#                           c.stride(1),
-#                           GROUP_SIZE_M=8,
-#                           rms_scale_ptr=rms_scale,
-#                           linear_scale_ptr=linear_scale)
-#     else:
-#         _linear[grid](a,
-#                       b,
-#                       c,
-#                       M,
-#                       N,
-#                       K,
-#                       a.stride(0),
-#                       a.stride(1),
-#                       b.stride(0),
-#                       b.stride(1),
-#                       c.stride(0),
-#                       c.stride(1),
-#                       GROUP_SIZE_M=8,
-#                       rms_scale_ptr=rms_scale,
-#                       linear_scale_ptr=linear_scale)
-#     if bias is not None:
-#         c += bias
-
-#     return c
-
-
 @triton.jit
 def _per_token_quant_int8(
     y_ptr,
@@ -398,32 +336,12 @@ def per_token_quant_int8(x, eps):
     _per_token_quant_int8[(M, )](x,
                                  x_q,
                                  x_s,
-                                 M,
+                                 x.stride(-2),
                                  N,
                                  eps,
                                  BLOCK=BLOCK,
                                  num_warps=num_warps)
     return x_q, x_s
-
-
-# def per_token_quant_int8(x, eps):
-#     M, N = x.shape
-#     x_q = torch.empty((M, N), device=x.device, dtype=torch.int8)
-#     x_q_arg = x_q.reshape(-1, x_q.shape[-1])
-#     x_s = torch.empty(M, device=x.device, dtype=torch.float32)
-#     BLOCK = triton.next_power_of_2(N)
-#     # heuristics for number of warps
-#     num_warps = min(max(BLOCK // 256, 1), 8)
-#     # enqueue kernel
-#     _per_token_quant_int8[(M, )](x,
-#                                  x_q,
-#                                  x_s,
-#                                  x_q_arg.stride(0),
-#                                  N,
-#                                  eps,
-#                                  BLOCK=BLOCK,
-#                                  num_warps=num_warps)
-#     return x_q, x_s
 
 
 @triton.jit
@@ -550,51 +468,6 @@ def test_per_token_quant(x, eps):
             x_s_torch.flatten().to(torch.float32)))
 
 
-# def test_rms_and_linear(M, N, K, dtype=torch.float16, eps=1e-5, device='cuda'):
-
-#     def rms_norm_torch(x, w, eps):
-#         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
-#         x = x * torch.rsqrt(variance + eps)
-#         # print(w * x)
-#         return w * x
-
-#     def linear_torch(x, b):
-#         return F.linear(x, b)
-
-#     torch.manual_seed(0)
-#     x_shape = (M, K)
-#     rms_w_shape = (x_shape[-1], )
-#     rms_weight = torch.randn(rms_w_shape,
-#                              dtype=dtype,
-#                              device='cuda',
-#                              requires_grad=True)
-#     x = torch.randn(x_shape, dtype=dtype, device='cuda')
-#     linear_weight = torch.randn((N, K),
-#                                 dtype=dtype,
-#                                 device='cuda',
-#                                 requires_grad=True)
-
-#     linear_weight_quant, linear_scale = per_channel_quant(
-#         linear_weight, 8, torch.int8)
-#     rms_out, rms_scale = rms_norm_dynamic_quant(x, rms_weight, eps)
-#     linear_out = matmul_kernel_dynamic_quant(rms_out,
-#                                                      linear_weight_quant,
-#                                                      rms_scale,
-#                                                      linear_scale,
-#                                                      output_dtype=dtype)
-
-#     rms_out_torch = rms_norm_torch(x, rms_weight, eps).half()
-#     linear_out_torch = linear_torch(rms_out_torch, linear_weight)
-#     print(f'linear_out.abs().mean() = {linear_out.abs().mean()}')
-#     print(f'linear_out_torch.abs().mean() = {linear_out_torch.abs().mean()}')
-#     print('perchannel error: ', (linear_out - linear_out_torch).abs().mean())
-#     cos = torch.nn.CosineSimilarity(0)
-#     print(
-#         'Output cos',
-#         cos(linear_out.flatten().to(torch.float32),
-#             linear_out_torch.flatten().to(torch.float32)))
-
-
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M'],
@@ -691,7 +564,7 @@ if __name__ == '__main__':
     test_rms_and_linear(x, rms_weight, linear_weight)
 
     # test per-token quant
-    x = torch.randn((2, 2048, 4096), dtype=dtype, device='cuda')
+    x = torch.randn((4, 2048, 4096), dtype=dtype, device='cuda')
     eps = 1e-7
     test_per_token_quant(x, eps)
 
