@@ -67,6 +67,7 @@ wheel 文件存放在目录 `builder/manywheel/cuda11.8_dist` 下。
   ```
 - lmdeploy 编译安装:
   ```shell
+  apt install ninja-build lld # 安装更快的 Ninja 和 lld 链接器
   cd lmdeploy # lmdeploy 源码的根目录
   mkdir build && cd build
   sh ../generate.sh

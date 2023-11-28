@@ -1,6 +1,6 @@
 #!/bin/sh
 
-cmake .. \
+cmake -G Ninja .. \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
     -DCMAKE_INSTALL_PREFIX=./install \
