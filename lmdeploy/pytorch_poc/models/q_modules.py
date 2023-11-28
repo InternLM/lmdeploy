@@ -4,14 +4,19 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from ..kernels.w8a8_triton_kernels import (linear_dynamic_quant_triton_op_fast,
+from ..kernels.w8a8_triton_kernels import (matmul_kernel_dynamic_quant,
                                            per_channel_quant,
-                                           per_token_quant_int8_tri,
+                                           per_token_quant_int8,
                                            rms_norm_dynamic_quant)
 
 
 @dataclass
 class QTensor:
+    """A data class representing a Quantized Tensor.
+
+    This class wraps around a regular Pytorch tensor and adds quantization-
+    specific parameters.
+    """
     tensor: torch.Tensor
     scale: torch.Tensor
     zero_point: torch.Tensor = None
@@ -24,6 +29,8 @@ class QTensor:
 
 
 class QRMSNorm(nn.Module):
+    """It performs traditional RMS normalization and then quantizes the output
+    to 8-bit integers."""
 
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
@@ -45,7 +52,17 @@ class QRMSNorm(nn.Module):
         return QTensor(hidden_states_quant, rms_scale)
 
 
-class QLinear(nn.Linear):
+class QLinear(nn.Module):
+    """A Linear layer that operates on quantized inputs and weights.
+
+    It performs matrix multiplication in 8-bit precision and dequantize the
+    results back to float.
+    """
+
+    __constants__ = ['in_features', 'out_features']
+    in_features: int
+    out_features: int
+    weight: torch.Tensor
 
     def __init__(self,
                  in_features: int,
@@ -54,7 +71,7 @@ class QLinear(nn.Linear):
                  device=None,
                  dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
-        nn.Module.__init__(self)
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.register_buffer(
@@ -78,7 +95,7 @@ class QLinear(nn.Linear):
                     mod.bias is not None,
                     device=mod.weight.device,
                     dtype=mod.weight.dtype)
-        weight_quant, scale = per_channel_quant(mod.weight.detach(), 8, 1e-5,
+        weight_quant, scale = per_channel_quant(mod.weight.detach(), 8,
                                                 torch.int8)
         q_mod.weight = weight_quant
         q_mod.scale = scale
@@ -88,25 +105,25 @@ class QLinear(nn.Linear):
         return q_mod
 
     def forward(self, input):
-        shape = input.shape
+        # shape = input.shape
 
         if isinstance(input, torch.Tensor):
-            # return F.linear(input, self.fp_weight.to(input.device))
-            shape = input.shape
-            input_quant, input_scale = per_token_quant_int8_tri(
-                input.view(-1, shape[-1]), 1e-7)
+            input_quant, input_scale = per_token_quant_int8(input, 1e-7)
         else:
             assert isinstance(input, QTensor)
-            shape = input.tensor.shape
             input_quant, input_scale = input.tensor, input.scale
-            input_quant = input_quant.view(-1, shape[-1])
-        out = linear_dynamic_quant_triton_op_fast(input_quant,
-                                                  self.weight,
-                                                  input_scale,
-                                                  self.scale,
-                                                  output_dtype=torch.float16,
-                                                  bias=self.bias)
-        return out.view(*shape[:-1], -1)
+            # input_quant = input_quant.view(-1, shape[-1])
+        out = matmul_kernel_dynamic_quant(input_quant,
+                                          self.weight,
+                                          input_scale,
+                                          self.scale,
+                                          output_dtype=torch.float16,
+                                          bias=self.bias)
+        return out  #.view(*shape[:-1], -1)
+
+    def extra_repr(self) -> str:
+        return 'in_features={}, out_features={}, bias={}'.format(
+            self.in_features, self.out_features, self.bias is not None)
 
 
 @torch.no_grad()
