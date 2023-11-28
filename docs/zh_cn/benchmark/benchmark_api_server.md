@@ -1,8 +1,7 @@
-# 请求吞吐量测试方法
+# api_server 性能测试
 
-在真实应用中，用户输入的 prompt 长度以及模型回复的 token 数量是动态变化的。而静态推理能力不足以反映推理引擎对动态输入输出的处理能力。
-
-所以需要使用真实对话数据，评测推理引擎的动态推理能力。本文将介绍如何在 localhost 上测试 LMDeploy 的动态推理性能。
+api_server 的测试方式与[求吞吐量测试方法](./benchmark_throughput.md)类似。不同的是，在测试时，需要先启动 api_server，然后在通过测试脚本发送请求进行测试。
+它衡量的是推理服务的性能。
 
 测试脚本是 `profile_restful_api.py`。测试之前，请安装 lmdeploy 预编译包，并下载评测脚本和测试数据集。
 
@@ -23,37 +22,50 @@ LMDeploy 统计首token延时（first_token_latency）、token吞吐量（tokens
 
 `first_token_latency` 只有在流式推理的情况下才会输出。
 
-token吞吐量的计算公式为：$吞吐量 = 生成的token数量 / 总时间$
+token吞吐量的计算公式为：
 
-请求吞吐量的计算公式为：$吞吐量 = 请求数量 / 总时间$
+$$
+吞吐量 = 生成的token数量 / 总时间
+$$
+
+请求吞吐量的计算公式为：
+$$
+吞吐量 = 请求数量 / 总时间
+$$
 
 总时间包括 prefill 时间
 
 ## 测试方法
 
+请参考[这里](../restful_api.md) 启动推理服务。启动时的参数 `--instance-num` 表示推理服务中的推理实例数量。当同一时刻到达 api_server 的请求数超过它时，请求会在推理队列中等待。
+
 ```shell
-python3 profile_throughput.py <dataset> <model_path> <optional arguments>
+python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optional arguments>
 ```
 
 其中，必填参数是：
 
+- `server_addr`
+
+  api_server 的地址，格式是 `http://{server_ip}:{server_port}`
+
+- `tokenizer_path`
+
+  tokenizer model 的路径。作用是对测试数据集预先 encode，获取对话数据的 token 长度
+
 - `dataset`
 
-  测试数据集的路径
-
-- `model_path`
-
-  turbomind格式的模型在 localhost 上的路径
+  下载的测试数据集的路径
 
 可选测试参数如下：
 
 - `--concurrency`
 
-  代表请求线程的数量，并发请求会被推理引擎拼成 batch，默认为 64。并发请求会被推理引擎拼成 batch。并发数不能超过`config.ini`中的`max_batch_size`。否则，超出部分的请求会在推理队列中等待。
+  客户端请求线程的数量，并发请求会被推理引擎拼成 batch，默认为 32。并发请求会被推理引擎拼成 batch。并发数不能超过api_server的`--instance-num`。否则，超出部分的请求会在推理队列中等待。
 
 - `--num-prompts`
 
-  从数据集中采样的prompt数量。默认是 2000
+  从数据集中采样的prompt数量，默认是 1000。当 `concurrency >= 64` 是，推荐使用 2000
 
 - `--tp`
 
@@ -65,15 +77,11 @@ python3 profile_throughput.py <dataset> <model_path> <optional arguments>
 
 - `--stream_output`
 
-  流式推理的开关。默认值为 `True`
+  流式推理的开关。默认值为 `False`
 
 - `--csv`
 
-  一个 csv 文件路径，用来存放测试结果。默认是 `./profile_throughput.csv`
-
-- `--log-level`
-
-  日志级别。默认是 `ERROR`
+  一个 csv 文件路径，用来存放测试结果。默认是 `./profile_api_server.csv`
 
 - `--seed`
 
