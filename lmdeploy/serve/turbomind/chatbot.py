@@ -67,7 +67,6 @@ class Chatbot:
         model_name (str): name of the to-be-deployed mode
         log_level (int): the level of the log
         display (bool): display the generated text on consolo or not
-        profile_generation (bool): profile token generation or not
     """
 
     def __init__(self,
@@ -76,8 +75,6 @@ class Chatbot:
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
-                 profile_generation: bool = False,
-                 profile_serving: bool = False,
                  **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
@@ -108,8 +105,6 @@ class Chatbot:
                  bad_words=bad_words))
         self.log_level = log_level
         self.display = display
-        self.profile_generation = profile_generation
-        self.profile_serving = profile_serving
 
     def stream_infer(self,
                      session_id: int,
@@ -417,8 +412,6 @@ class Chatbot:
     def _get_prompt(self, prompt: str, sequence_start: bool):
         """return the concatenated prompt according to the model's chat
         template."""
-        if self.profile_generation or self.profile_serving:
-            return prompt
         return self.model.get_prompt(prompt, sequence_start)
 
     def _stream_infer(self,
@@ -469,9 +462,7 @@ class Chatbot:
             input_ids = np.array([[1]], dtype=np.uint32)
             input_lengths = np.array([[1]], dtype=np.uint32)
         input_tokens = input_lengths.squeeze()
-        if self.profile_generation:
-            yield StatusCode.TRITON_STREAM_ING, \
-                  'ignore preprocessing during profiling generation', 0
+
         if request_output_len is None:
             request_output_len = max(
                 128,
@@ -507,8 +498,7 @@ class Chatbot:
         producer.start()
         for status, res, n_token in self.stream_consumer(
                 self.postprocess, que, session, input_tokens, preseq_length,
-                cancel, logger, self.display, self.profile_generation,
-                self.eos_id):
+                cancel, logger, self.display, self.eos_id):
             yield status, res, n_token
 
         producer.join()
@@ -601,8 +591,7 @@ class Chatbot:
 
     @staticmethod
     def stream_consumer(postprocess, res_queue, session, n_input_token,
-                        preseq_length, cancel, logger, display,
-                        profile_generation, eos_id):
+                        preseq_length, cancel, logger, display, eos_id):
         """Consume the response from the triton inference server.
 
         Args:
@@ -615,7 +604,6 @@ class Chatbot:
             cancel (bool): indicator for cancelling the session
             logger (util.Logger):
             display (bool): display the text in the consolo interface or not
-            profile_generation (bool): indicator for profiling token generation
             eos_id (int): eos token id
 
         Yields:
@@ -659,11 +647,6 @@ class Chatbot:
                     session.sequence_length = session.sequence_length - 1
                     output_ids = output_ids[:, :, :-1]
 
-                if profile_generation:
-                    yield (StatusCode.TRITON_STREAM_ING,
-                           'postprocessing is ignored during profiling '
-                           'token generation', output_ids.shape[-1])
-                    continue
                 output_str = postprocess(
                     output_ids, np.array([[n_token]], dtype=np.uint32))
                 text = output_str[0].decode()
