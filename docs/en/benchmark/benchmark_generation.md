@@ -16,13 +16,13 @@ In the following sections, we assume the model is in turbomind format.
 
 ## Metrics
 
-LMDeploy records test results like first token latency, throughput (tokens/s), percentile data of each token's latency (P50, P75, P95, P99), GPU mem, etc.
+LMDeploy records test results like first token latency, token throughput (tokens/s), percentile data of each token's latency (P50, P75, P95, P99), GPU mem, etc.
 
 `first_token_latency` is only reported in the case of streaming inference.
 
 The formula for calculating `throughput` is:
 $$
-Throughput=Number\\ of\\ generated\\ tokens/TotalTime
+TokenThroughput=Number\\ of\\ generated\\ tokens/TotalTime
 $$
 Total time includes prefill time.
 

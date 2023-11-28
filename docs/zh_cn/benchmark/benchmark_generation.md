@@ -16,11 +16,17 @@ git clone --depth=1 https://github.com/InternLM/lmdeploy
 
 ## 测量指标
 
-LMDeploy 统计首token延时（first_token_latency）、吞吐量（tokens/s），每个token延时的百分位数据（P50，P75，P95，P99）、GPU mem 等测试结果。
+LMDeploy 统计首token延时（first_token_latency）、token 吞吐量（tokens/s），每个token延时的百分位数据（P50，P75，P95，P99）、GPU mem 等测试结果。
 
 `first_token_latency` 只有在流式推理的情况下才会输出。
 
-吞吐量的计算公式为：$吞吐量 = 生成的token数量 / 总时间$。总时间包括 prefill 时间。
+吞吐量的计算公式为：
+
+$$
+token吞吐量 = 生成的token数量 / 总时间
+$$
+
+总时间包括 prefill 时间。
 
 测试过程中，节点上所有的显卡不要运行其他任何程序，否则 GPU mem 的统计会不准确。
 
@@ -56,7 +62,7 @@ python3 profile_generation.py <model_path> <optional arguments>
 
 - `--log-level`
 
-  日志级别。默认是 'ERROR'
+  日志级别。默认是 `ERROR`
 
 - `--test-round`
 
