@@ -51,6 +51,12 @@ class QRMSNorm(nn.Module):
         return q_mod
 
     def forward(self, hidden_states):
+        """Defines the computation performed at every call.
+
+        Performs RMS normalization followed by dynamic quantization on
+        hidden_states. Returns a QTensor which wraps the quantized tensor along
+        with its scale factor.
+        """
         hidden_states_quant, rms_scale = rms_norm_dynamic_quant(
             hidden_states, self.weight, self.variance_epsilon)
         return QTensor(hidden_states_quant, rms_scale)
@@ -111,6 +117,14 @@ class QLinear(nn.Module):
         return q_mod
 
     def forward(self, input):
+        """Defines the computation performed at every call.
+
+        Performs quantization if the input is a tensor, otherwise it assumes
+        the input is already quantized (instance of QTensor). Then, it performs
+        linear transformation using dynamic quantization method, resulting in
+        an 8-bit integer output. Finally, it dequantizes the result back to a
+        floating point tensor.
+        """
 
         if isinstance(input, torch.Tensor):
             input_quant, input_scale = per_token_quant_int8(input, 1e-7)

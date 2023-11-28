@@ -18,6 +18,11 @@ NORM_TYPE_MAP = {
 
 
 def convert_decoder_layer(module, norm_type):
+    """Converts a given module's child layers from regular Linear or RMSNorm to
+    their Quantized versions (QLinear, QRMSNorm).
+
+    The conversion is done in place.
+    """
     for name, child in module.named_children():
         if isinstance(child, nn.Linear):
             new_child = QLinear.from_float(child)
@@ -30,6 +35,12 @@ def convert_decoder_layer(module, norm_type):
 
 
 def convert(module, layer_type, norm_type):
+    """Recursively traverses through given PyTorch module and identifies child
+    layers that match the specified layer_type and norm_type for conversion to
+    their Quantized counterparts.
+
+    The conversion is done using the `convert_decoder_layer` function.
+    """
     for child in module.children():
         if type(child).__name__ == layer_type:
             convert_decoder_layer(child, norm_type)
