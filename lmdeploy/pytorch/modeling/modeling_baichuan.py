@@ -80,6 +80,7 @@ def _expand_mask(mask: torch.Tensor,
 
 
 class RMSNorm(nn.Module):
+    """RMSNorm."""
 
     def __init__(self, hidden_size, eps=1e-6):
         """RMSNorm is equivalent to T5LayerNorm."""
@@ -88,6 +89,7 @@ class RMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
+        """forward."""
         variance = hidden_states.to(torch.float32).pow(2).mean(-1,
                                                                keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance +
@@ -101,6 +103,7 @@ class RMSNorm(nn.Module):
 
 
 class RotaryEmbedding(torch.nn.Module):
+    """Rotary Embedding."""
 
     def __init__(self,
                  dim,
@@ -129,6 +132,7 @@ class RotaryEmbedding(torch.nn.Module):
                              persistent=False)
 
     def forward(self, x, seq_len=None):
+        """forward."""
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in
         # `__init__`. Keep the logic here just in case.
@@ -161,6 +165,7 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
+    """Apply rotary pos embedding."""
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
@@ -173,6 +178,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
 
 
 class MLP(nn.Module):
+    """MLP."""
 
     def __init__(
         self,
@@ -187,6 +193,7 @@ class MLP(nn.Module):
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
+        """forward."""
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 
@@ -216,6 +223,7 @@ class Attention(nn.Module):
             max_position_embeddings=self.max_position_embeddings)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+        """reshape tensor."""
         return tensor.view(bsz, seq_len, self.num_heads,
                            self.head_dim).transpose(1, 2).contiguous()
 
@@ -229,6 +237,7 @@ class Attention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """forward."""
         bsz, q_len, _ = hidden_states.size()
 
         proj = self.W_pack(hidden_states)
@@ -305,6 +314,7 @@ class Attention(nn.Module):
 
 
 class DecoderLayer(nn.Module):
+    """Decoder Layer."""
 
     def __init__(self, config: BaiChuanConfig):
         super().__init__()
@@ -377,6 +387,7 @@ class DecoderLayer(nn.Module):
 
 
 class PreTrainedModel(PreTrainedModel):
+    """PreTrainedModel."""
     config_class = BaiChuanConfig
     base_model_prefix = 'model'
     supports_gradient_checkpointing = True
@@ -384,6 +395,7 @@ class PreTrainedModel(PreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r'decoder\.version']
 
     def _init_weights(self, module):
+        """init weight."""
         std = self.config.initializer_range
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=std)
@@ -395,6 +407,7 @@ class PreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
     def _set_gradient_checkpointing(self, module, value=False):
+        """set gradient checkpoint."""
         if isinstance(module, Model):
             module.gradient_checkpointing = value
 
@@ -423,15 +436,18 @@ class Model(PreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
+        """get input embeddings."""
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
+        """set input embeddings."""
         self.embed_tokens = value
 
     # Copied from transformers.models.bart.modeling_bart.BartDecoder.
     # prepare_decoder_attention_mask
     def _prepare_decoder_attention_mask(self, attention_mask, input_shape,
                                         inputs_embeds, past_key_values_length):
+        """prepare decoder attention mask."""
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
@@ -468,6 +484,7 @@ class Model(PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        """forward."""
         output_attentions = (output_attentions if output_attentions is not None
                              else self.config.output_attentions)
         output_hidden_states = (output_hidden_states
@@ -599,6 +616,7 @@ class Model(PreTrainedModel):
 
 
 class BaiChuanForCausalLM(PreTrainedModel):
+    """BaiChuanForCausalLM."""
 
     def __init__(self, config):
         super().__init__(config)
@@ -613,21 +631,27 @@ class BaiChuanForCausalLM(PreTrainedModel):
         convert_to_qmodules(self)
 
     def get_input_embeddings(self):
+        """get input embeddings."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
+        """set input embeddings."""
         self.model.embed_tokens = value
 
     def get_output_embeddings(self):
+        """get output embeddings."""
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
+        """set output embeddings."""
         self.lm_head = new_embeddings
 
     def set_decoder(self, decoder):
+        """set decoder."""
         self.model = decoder
 
     def get_decoder(self):
+        """get decoder."""
         return self.model
 
     def forward(
@@ -725,6 +749,7 @@ class BaiChuanForCausalLM(PreTrainedModel):
                                       attention_mask=None,
                                       inputs_embeds=None,
                                       **kwargs):
+        """prepare inputs for generation."""
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
@@ -753,6 +778,7 @@ class BaiChuanForCausalLM(PreTrainedModel):
 
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
+        """reorder cache."""
         reordered_past = ()
         for layer_past in past_key_values:
             reordered_past += (tuple(

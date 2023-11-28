@@ -89,6 +89,7 @@ def _expand_mask(mask: torch.Tensor,
 
 
 class InternLMRMSNorm(nn.Module):
+    """InternLMRMSNorm."""
 
     def __init__(self, hidden_size, eps=1e-6):
         """InternLMRMSNorm is equivalent to T5LayerNorm."""
@@ -97,6 +98,7 @@ class InternLMRMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
+        """forward."""
         variance = hidden_states.to(torch.float32).pow(2).mean(-1,
                                                                keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance +
@@ -110,6 +112,7 @@ class InternLMRMSNorm(nn.Module):
 
 
 class InternLMRotaryEmbedding(torch.nn.Module):
+    """InternLMRotaryEmbedding."""
 
     def __init__(self,
                  dim,
@@ -138,6 +141,7 @@ class InternLMRotaryEmbedding(torch.nn.Module):
                              persistent=False)
 
     def forward(self, x, seq_len=None):
+        """forward."""
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in
         # `__init__`. Keep the logic here just in case.
@@ -170,6 +174,7 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
+    """apply rotary pos embedding."""
     # The first two dimensions of cos and sin are always 1, so we can
     # `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
@@ -182,6 +187,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
 
 
 class InternLMMLP(nn.Module):
+    """InternLMMLP."""
 
     def __init__(
         self,
@@ -196,6 +202,7 @@ class InternLMMLP(nn.Module):
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
+        """forward."""
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 
@@ -231,6 +238,7 @@ class InternLMAttention(nn.Module):
             max_position_embeddings=self.max_position_embeddings)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+        """reshape tensor."""
         return tensor.view(bsz, seq_len, self.num_heads,
                            self.head_dim).transpose(1, 2).contiguous()
 
@@ -244,6 +252,7 @@ class InternLMAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """forward."""
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states).view(
@@ -312,6 +321,7 @@ class InternLMAttention(nn.Module):
 
 
 class InternLMDecoderLayer(nn.Module):
+    """InternLM Decoder Layer."""
 
     def __init__(self, config: InternLMConfig):
         super().__init__()
@@ -405,6 +415,7 @@ INTERNLM_START_DOCSTRING = r""" # noqa: E501
     INTERNLM_START_DOCSTRING,
 )
 class InternLMPreTrainedModel(PreTrainedModel):
+    """InternLMPreTrainedModel."""
     config_class = InternLMConfig
     base_model_prefix = 'model'
     supports_gradient_checkpointing = True
@@ -412,6 +423,7 @@ class InternLMPreTrainedModel(PreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r'decoder\.version']
 
     def _init_weights(self, module):
+        """initialize weights."""
         std = self.config.initializer_range
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=std)
@@ -423,6 +435,7 @@ class InternLMPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
     def _set_gradient_checkpointing(self, module, value=False):
+        """set gradient checkpointing."""
         if isinstance(module, InternLMModel):
             module.gradient_checkpointing = value
 
@@ -523,15 +536,18 @@ class InternLMModel(InternLMPreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
+        """get input embeddings."""
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
+        """set input embeddings."""
         self.embed_tokens = value
 
     # Copied from transformers.models.bart.modeling_bart.BartDecoder.
     # prepare_decoder_attention_mask
     def _prepare_decoder_attention_mask(self, attention_mask, input_shape,
                                         inputs_embeds, past_key_values_length):
+        """prepare decoder attention mask."""
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
@@ -569,6 +585,7 @@ class InternLMModel(InternLMPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        """forward."""
         output_attentions = output_attentions or self.config.output_attentions
         output_hidden_states = (output_hidden_states
                                 or self.config.output_hidden_states)
@@ -643,6 +660,7 @@ class InternLMModel(InternLMPreTrainedModel):
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
+                    """create custom forward."""
 
                     def custom_forward(*inputs):
                         # None for past_key_value
@@ -697,6 +715,7 @@ class InternLMModel(InternLMPreTrainedModel):
 
 
 class InternLMForCausalLM(InternLMPreTrainedModel):
+    """InternLMForCausalLM."""
     _auto_class = 'AutoModelForCausalLM'
 
     def __init__(self, config):
@@ -712,21 +731,27 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
         convert_to_qmodules(self)
 
     def get_input_embeddings(self):
+        """get input embeddings."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
+        """set input embeddings."""
         self.model.embed_tokens = value
 
     def get_output_embeddings(self):
+        """get output embeddings."""
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
+        """set output embeddings."""
         self.lm_head = new_embeddings
 
     def set_decoder(self, decoder):
+        """set decoder."""
         self.model = decoder
 
     def get_decoder(self):
+        """get decoder."""
         return self.model
 
     @add_start_docstrings_to_model_forward(INTERNLM_INPUTS_DOCSTRING)
@@ -826,6 +851,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                                       attention_mask=None,
                                       inputs_embeds=None,
                                       **kwargs):
+        """prepare inputs for generation."""
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
@@ -854,6 +880,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
 
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
+        """reorder cache."""
         reordered_past = ()
         for layer_past in past_key_values:
             reordered_past += (tuple(
@@ -865,6 +892,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                      tokenizer,
                      query: str,
                      history: List[Tuple[str, str]] = []):
+        """build inputs."""
         prompt = ''
         for record in history:
             prompt += f"""<|User|>:{record[0]}<eoh>\n<|Bot|>:{record[1]}<eoa>\n"""  # noqa: E501
@@ -882,6 +910,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
              temperature: float = 0.8,
              top_p: float = 0.8,
              **kwargs):
+        """chat."""
         inputs = self.build_inputs(tokenizer, query, history)
         inputs = {
             k: v.to(self.device)
@@ -919,6 +948,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
         response_queue = queue.Queue(maxsize=20)
 
         class ChatStreamer(BaseStreamer):
+            """Chat Streamer."""
 
             def __init__(self, tokenizer) -> None:
                 super().__init__()
@@ -932,6 +962,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                     (self.response, history + [(self.query, self.response)]))
 
             def put(self, value):
+                """put."""
                 if len(value.shape) > 1 and value.shape[0] > 1:
                     raise ValueError('ChatStreamer only supports batch size 1')
                 elif len(value.shape) > 1:
@@ -950,9 +981,11 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                     self.queue.put((self.response, history))
 
             def end(self):
+                """end."""
                 self.queue.put(None)
 
         def stream_producer():
+            """stream producer."""
             return self.chat(tokenizer=tokenizer,
                              query=query,
                              streamer=ChatStreamer(tokenizer=tokenizer),
@@ -964,6 +997,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
                              **kwargs)
 
         def consumer():
+            """consumer."""
             producer = threading.Thread(target=stream_producer)
             producer.start()
             while True:
@@ -991,6 +1025,7 @@ class InternLMForCausalLM(InternLMPreTrainedModel):
     INTERNLM_START_DOCSTRING,
 )
 class InternLMForSequenceClassification(InternLMPreTrainedModel):
+    """InternLMForSequenceClassification."""
     _keys_to_ignore_on_load_missing = [r'lm_head.weight']
 
     def __init__(self, config):
@@ -1003,9 +1038,11 @@ class InternLMForSequenceClassification(InternLMPreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
+        """get input embeddings."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
+        """set input embeddings."""
         self.model.embed_tokens = value
 
     @add_start_docstrings_to_model_forward(INTERNLM_INPUTS_DOCSTRING)
