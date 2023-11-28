@@ -1,3 +1,5 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import csv
 import json
 import os
 import random
@@ -57,7 +59,7 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int = 1, **kwargs):
+    def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
         # avoid turbomind checking chat template name by setting
         # `model_name='llama'`
         tm_model = TurboMind(model_path=model_path,
@@ -66,6 +68,7 @@ class Engine:
                              **kwargs)
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
+        self.csv = csv
         self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
@@ -153,18 +156,12 @@ class Engine:
         first_token_latency_max = np.max(stats[:, 0], axis=0)
         first_token_latency_ave = np.mean(stats[:, 0], axis=0)
         completion_tokens = np.sum(stats[:, 1], axis=0)
-        request_output_tokens = np.sum(stats[:, 2], axis=0)
         total_tokens = np.sum(stats[:, 3], axis=0)
         prompt_tokens = total_tokens - completion_tokens
         completion_token_throughput = completion_tokens / elapsed_time
         total_token_throughput = total_tokens / elapsed_time
         rqs = len(requests) / elapsed_time
         rqm = rqs * 60
-
-        if (np.abs(stats[:, 1] - stats[:, 2]) <= 1).min() is False:
-            print(f'Did not generate requested number of tokens. '
-                  f'Request {request_output_tokens:.0f}, '
-                  f'but got {completion_tokens:.0f}')
 
         print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
               f'elapsed_time: {elapsed_time:.3f}s\n')
@@ -182,16 +179,34 @@ class Engine:
             f'RPM (request per minute): {rqm:.3f} req/min\n'
             f'{"-" * 50}\n')
 
+        with open(self.csv, 'w') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([
+                'batch', 'prompt_tokens', 'completion_tokens',
+                '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
+                '1st_token_latency(ave)(s)', 'output token thr(tokens/s',
+                'total token thr(token/s)', 'RPM'
+            ])
+            writer.writerow([
+                concurrency, prompt_tokens, completion_tokens,
+                f'{first_token_latency_min:.3f}',
+                f'{first_token_latency_max:.3f}',
+                f'{first_token_latency_ave:.3f}',
+                f'{completion_token_throughput:.3f}',
+                f'{total_token_throughput:.3f}', f'{rqm:.3f}'
+            ])
+
 
 def main(dataset: str,
          model_path: str,
-         concurrency: int = 1,
-         num_prompts: int = 1000,
+         concurrency: int = 64,
+         num_prompts: int = 2000,
          tp: int = 1,
          top_k: int = 1,
          top_p: float = 1.0,
-         temperature: float = 0.8,
+         temperature: float = 1.0,
          stream_output: bool = True,
+         csv: str = './profile_throughput.csv',
          log_level: str = 'ERROR',
          seed: int = 0):
     """Benchmark the request throughput of lmdeploy in localhost.
@@ -200,8 +215,8 @@ def main(dataset: str,
         dataset (str): Path to the dataset
         model_path (str): Path to a model in localhost or a model_repo_id in huggingface.co
         concurrency (int, optional): Number of working threads to process the sampled prompts.
-            Defaults to 1.
-        num_prompts (int, optional): Number of prompts to process. Defaults to 1000.
+            Defaults to 64.
+        num_prompts (int, optional): Number of prompts to process. Defaults to 2000.
         tp (int, optional): Number of GPUs for tensor parallel. Defaults to 1.
         top_k (int, optional): The number of highest probability vocabulary tokens
             to keep for top-k-filtering. Defaults to 1.
@@ -209,8 +224,9 @@ def main(dataset: str,
             probabilities that add up to top_p or higher
             are kept for generation. Defaults to 1.0.
         temperature (float, optional): The value used to modulate the next token probabilities.
-            Defaults to 0.8.
+            Defaults to 1.0.
         stream_output (bool, optional): Indicator for streaming output. Defaults to True.
+        csv (str, optional): The path to save the result.
         log_level(str, optional): The log level. Defaults to INFO
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
@@ -221,7 +237,8 @@ def main(dataset: str,
                     tp=tp,
                     top_k=top_k,
                     top_p=top_p,
-                    temperature=temperature)
+                    temperature=temperature,
+                    csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
 

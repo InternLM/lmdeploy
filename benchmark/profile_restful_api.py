@@ -1,3 +1,4 @@
+import csv
 import json
 import random
 import time
@@ -60,11 +61,14 @@ class Engine:
                  server_addr: str,
                  tokenzier_path: str,
                  temperature: float = 0.8,
-                 top_p: float = 1.0):
+                 top_p: float = 1.0,
+                 csv: str = '',
+                 **kwargs):
         self.tokenizer = Tokenizer(tokenzier_path)
         self.server_addr = server_addr
         self.temperature = temperature
         self.top_p = top_p
+        self.csv = csv
         client = APIClient(self.server_addr)
         self.model_name = client.available_models[0]
         self.pbar = None
@@ -178,15 +182,33 @@ class Engine:
             f'RPM (request per minute): {rqm:.3f} req/min\n'
             f'{"-" * 50}\n')
 
+        with open(self.csv, 'w') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([
+                'batch', 'prompt_tokens', 'completion_tokens',
+                '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
+                '1st_token_latency(ave)(s)', 'output token thr(tokens/s',
+                'total token thr(token/s)', 'RPM'
+            ])
+            writer.writerow([
+                concurrency, prompt_tokens, completion_tokens,
+                f'{first_token_latency_min:.3f}',
+                f'{first_token_latency_max:.3f}',
+                f'{first_token_latency_ave:.3f}',
+                f'{completion_token_throughput:.3f}',
+                f'{total_token_throughput:.3f}', f'{rqm:.3f}'
+            ])
+
 
 def main(server_addr: str,
          tokenizer_path: str,
          dataset: str,
-         concurrency: int = 1,
+         concurrency: int = 32,
          num_prompts: int = 1000,
          top_p: float = 1.0,
-         temperature: float = 0.8,
+         temperature: float = 1.0,
          stream_output: bool = False,
+         csv: str = './profile_api_server.csv',
          seed: int = 0):
     """Benchmark the request througput of api server.
 
@@ -195,14 +217,15 @@ def main(server_addr: str,
         tokenizer_path (str): Path to the tokenizer model in localhost
         dataset (str): Path to the dataset
         concurrency (int, optional): Number of working threads to process the sampled prompts.
-            Defaults to 1.
+            Defaults to 32.
         num_prompts (int, optional): Number of prompts to process. Defaults to 1000.
         top_p (float, optional): the set of most probable tokens with
             probabilities that add up to top_p or higher
             are kept for generation. Defaults to 1.0.
         temperature (float, optional): The value used to modulate the next token probabilities.
-            Defaults to 0.8.
-        stream_output (bool, optional): Indicator for streaming output. Defaults to True.
+            Defaults to 1.0.
+        stream_output (bool, optional): Indicator for streaming output. Defaults to False.
+        csv (str, optional): The path to save the result.
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
     if not server_addr.startswith('http://'):
@@ -215,7 +238,8 @@ def main(server_addr: str,
     engine = Engine(server_addr,
                     tokenizer_path,
                     top_p=top_p,
-                    temperature=temperature)
+                    temperature=temperature,
+                    csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
 

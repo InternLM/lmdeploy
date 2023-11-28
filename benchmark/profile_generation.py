@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# import multiprocessing as mp
 import argparse
 import csv
 import logging
@@ -312,7 +311,7 @@ def parse_args():
                         type=float,
                         help='The value used to modulate the next token '
                         'probabilities',
-                        default=0.8)
+                        default=1.0)
     parser.add_argument('--csv',
                         type=str,
                         help='Where to save the result.',
@@ -331,6 +330,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    assert len(args.prompt_tokens) == len(args.completion_tokens), \
+        f'mismatched size between `prompt-tokens` and `completion-tokenes`' \
+        f', {len(args.prompt_tokens)} vs {len(args.completion_tokens)}'
+
     os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
     for batch in tqdm(args.concurrency):

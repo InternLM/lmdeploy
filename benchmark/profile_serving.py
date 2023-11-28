@@ -1,3 +1,4 @@
+import csv
 import json
 import random
 import time
@@ -62,12 +63,15 @@ class Engine:
                  temperature: float = 0.8,
                  top_k: int = 1,
                  top_p: float = 1.0,
-                 log_level: str = 'ERROR'):
+                 csv: str = '',
+                 log_level: str = 'ERROR',
+                 **kwargs):
         self.server_addr = server_addr
         self.tokenizer = Tokenizer(tokenzier_path)
         self.temperature = temperature
         self.top_k = top_k
         self.top_p = top_p
+        self.csv = csv
         self.log_level = log_level
         self.pbar = None
 
@@ -182,17 +186,34 @@ class Engine:
             f'RPS (request per second): {rqs:.3f} req/s\n'
             f'RPM (request per minute): {rqm:.3f} req/min\n'
             f'{"-" * 50}\n')
+        with open(self.csv, 'w') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([
+                'batch', 'prompt_tokens', 'completion_tokens',
+                '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
+                '1st_token_latency(ave)(s)', 'output token thr(tokens/s',
+                'total token thr(token/s)', 'RPM'
+            ])
+            writer.writerow([
+                concurrency, prompt_tokens, completion_tokens,
+                f'{first_token_latency_min:.3f}',
+                f'{first_token_latency_max:.3f}',
+                f'{first_token_latency_ave:.3f}',
+                f'{completion_token_throughput:.3f}',
+                f'{total_token_throughput:.3f}', f'{rqm:.3f}'
+            ])
 
 
 def main(server_addr: str,
          tokenizer_path: str,
          dataset: str,
-         concurrency: int = 1,
+         concurrency: int = 32,
          num_prompts: int = 1000,
          top_k: int = 1,
          top_p: float = 1.0,
-         temperature: float = 0.8,
-         stream_output: bool = False,
+         temperature: float = 1.0,
+         stream_output: bool = True,
+         csv: str = './profile_tis.csv',
          log_level: str = 'ERROR',
          seed: int = 0):
     """Benchmark the request througput of the triton inference server.
@@ -202,7 +223,7 @@ def main(server_addr: str,
         tokenizer_path (str): Path to the tokenizer model in localhost
         dataset (str): Path to the dataset
         concurrency (int, optional): Number of working threads to process the sampled prompts.
-            Defaults to 1.
+            Defaults to 32.
         num_prompts (int, optional): Number of prompts to process. Defaults to 1000.
         top_k (int, optional): The number of highest probability vocabulary tokens
             to keep for top-k-filtering. Defaults to 1.
@@ -210,8 +231,9 @@ def main(server_addr: str,
             probabilities that add up to top_p or higher
             are kept for generation. Defaults to 1.0.
         temperature (float, optional): The value used to modulate the next token probabilities.
-            Defaults to 0.8.
+            Defaults to 1.0.
         stream_output (bool, optional): Indicator for streaming output. Defaults to True.
+        log_level(str, optional): The log level. Defaults to INFO
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
     """    # noqa
 
@@ -222,7 +244,8 @@ def main(server_addr: str,
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
-                    log_level=log_level)
+                    log_level=log_level,
+                    csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
 
