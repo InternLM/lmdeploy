@@ -216,7 +216,7 @@ def main(server_addr: str,
     """Benchmark the request througput of api server.
 
     Args:
-        server_addr (str): Address of the triton inference server with format http://0.0.0.0:0
+        server_addr (str): http url of api_server with format http://0.0.0.0:0
         tokenizer_path (str): Path to the tokenizer model in localhost
         dataset (str): Path to the dataset
         concurrency (int, optional): Number of working threads to process the sampled prompts.
