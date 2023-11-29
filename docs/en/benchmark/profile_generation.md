@@ -23,7 +23,7 @@ LMDeploy records test results like first token latency, token throughput (tokens
 The formula for calculating `throughput` is:
 
 $$
-TokenThroughput=Number\\ of\\ generated\\ tokens/TotalTime
+TokenThroughput = Number\\ of\\ generated\\ tokens/TotalTime
 $$
 
 Total time includes prefill time.

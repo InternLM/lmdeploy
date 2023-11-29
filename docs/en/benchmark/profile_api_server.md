@@ -24,13 +24,13 @@ LMDeploy records the performance metrics like first token latency, token through
 The formula for calculating `token throughput` is:
 
 $$
-TokenThroughput=Number\\ of\\ generated\\ tokens/TotalTime
+TokenThroughput = Number\\ of\\ generated\\ tokens/TotalTime
 $$
 
 And the formula for calculating `request throughput` is:
 
 $$
-RPM(request per minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
+RPM(request\\ per\\ minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
 $$
 
 Total time includes prefill time.

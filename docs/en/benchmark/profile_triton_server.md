@@ -30,7 +30,7 @@ $$
 And the formula for calculating `request throughput` is:
 
 $$
-RPM(request per minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
+RPM(request\\ per\\ minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
 $$
 
 Total time includes prefill time.
