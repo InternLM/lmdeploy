@@ -1,6 +1,12 @@
 #!/bin/sh
 
-cmake -G Ninja .. \
+builder="-G Ninja"
+
+if [ "$1" == "make" ]; then
+    builder=""
+fi
+
+cmake ${builder} .. \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
     -DCMAKE_INSTALL_PREFIX=./install \

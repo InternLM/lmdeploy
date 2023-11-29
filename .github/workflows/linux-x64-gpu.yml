@@ -51,7 +51,6 @@ jobs:
             cd /work
             source /opt/conda/bin/activate
             conda activate py38
-            apt install -y ninja-build lld
             mkdir build && cd build
-            bash ../generate.sh
-            ninja -j$(nproc) && ninja install
+            bash ../generate.sh make
+            make -j$(nproc) && make install
