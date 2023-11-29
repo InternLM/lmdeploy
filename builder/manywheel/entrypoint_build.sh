@@ -12,7 +12,7 @@ conda activate $PYTHON_VERSION
 
 cd lmdeploy
 mkdir -p build && cd build && rm -rf *
-bash ../generate.sh
+bash ../generate.sh make
 make -j$(nproc) && make install
 if [ $? != 0 ]; then
     echo "build failed"
