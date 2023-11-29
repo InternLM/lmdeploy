@@ -103,9 +103,9 @@ if(USE_TRITONSERVER_DATATYPE)
 endif()
 
 set(CXX_STD "17" CACHE STRING "C++ standard")
-# enable lld linker time optimization for binary and .so
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=lld -flto=auto")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=lld -flto=auto")
+# enable gold linker for binary and .so
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=gold")
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
 set(TF_PATH "" CACHE STRING "TensorFlow path")

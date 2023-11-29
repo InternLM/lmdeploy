@@ -57,6 +57,7 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream)
     });
 }
 
+#if 0
 template<typename T>
 void run_mha_fwd_hdim32(Flash_fwd_params& params, cudaStream_t stream)
 {
@@ -94,6 +95,7 @@ void run_mha_fwd_hdim64(Flash_fwd_params& params, cudaStream_t stream)
         }
     });
 }
+#endif
 
 template<typename T>
 void run_mha_fwd_hdim128(Flash_fwd_params& params, cudaStream_t stream)
@@ -139,6 +141,7 @@ void run_mha_fwd_hdim128(Flash_fwd_params& params, cudaStream_t stream)
     });
 }
 
+#if 0
 template<typename T>
 void run_mha_fwd_hdim256(Flash_fwd_params& params, cudaStream_t stream)
 {
@@ -168,3 +171,4 @@ void run_mha_fwd_hdim256(Flash_fwd_params& params, cudaStream_t stream)
         // Is_causal>(params, stream);
     });
 }
+#endif

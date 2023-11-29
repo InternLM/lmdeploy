@@ -71,7 +71,7 @@ Then, follow the steps below to set up the compilation environment:
   cd lmdeploy # the home folder of lmdeploy
   mkdir build && cd build
   sh ../generate.sh
-  make -j$(nproc) && make install
+  ninja -j$(nproc) && ninja install
   ```
 - install lmdeploy python package:
   ```shell
