@@ -12,7 +12,6 @@ from ..kernels.w8a8_triton_kernels import (linear_dynamic_quant_triton_op_fast,
 
 @dataclass
 class QTensor:
-    """QTensor."""
     tensor: torch.Tensor
     scale: torch.Tensor
     zero_point: torch.Tensor = None
@@ -25,7 +24,6 @@ class QTensor:
 
 
 class QRMSNorm(nn.Module):
-    """Quantized RMSNorm."""
 
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
@@ -34,7 +32,6 @@ class QRMSNorm(nn.Module):
 
     @classmethod
     def from_float(cls, mod):
-        """convert from float module."""
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
         q_mod = cls(hidden_size, eps)
@@ -43,14 +40,12 @@ class QRMSNorm(nn.Module):
         return q_mod
 
     def forward(self, hidden_states):
-        """forward."""
         hidden_states_quant, rms_scale = rms_norm_dynamic_quant(
             hidden_states, self.weight, self.variance_epsilon)
         return QTensor(hidden_states_quant, rms_scale)
 
 
 class QLinear(nn.Linear):
-    """Quantized Linear."""
 
     def __init__(self,
                  in_features: int,
@@ -78,7 +73,6 @@ class QLinear(nn.Linear):
 
     @classmethod
     def from_float(cls, mod):
-        """convert from float module."""
         q_mod = cls(mod.in_features,
                     mod.out_features,
                     mod.bias is not None,
@@ -94,7 +88,6 @@ class QLinear(nn.Linear):
         return q_mod
 
     def forward(self, input):
-        """forward."""
         shape = input.shape
 
         if isinstance(input, torch.Tensor):

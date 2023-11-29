@@ -86,7 +86,6 @@ def _expand_mask(mask: torch.Tensor,
 
 
 class LlamaRMSNorm(nn.Module):
-    """LlamaRMSNorm."""
 
     def __init__(self, hidden_size, eps=1e-6):
         """LlamaRMSNorm is equivalent to T5LayerNorm."""
@@ -104,7 +103,6 @@ class LlamaRMSNorm(nn.Module):
 
 
 class LlamaRotaryEmbedding(torch.nn.Module):
-    """LlamaRotaryEmbedding."""
 
     def __init__(self,
                  dim,
@@ -126,7 +124,6 @@ class LlamaRotaryEmbedding(torch.nn.Module):
                                 dtype=torch.get_default_dtype())
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
-        """set cos sin cache."""
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached,
                          device=device,
@@ -144,7 +141,6 @@ class LlamaRotaryEmbedding(torch.nn.Module):
                              persistent=False)
 
     def forward(self, x, seq_len=None):
-        """forward."""
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len,
@@ -173,7 +169,6 @@ class LlamaLinearScalingRotaryEmbedding(LlamaRotaryEmbedding):
         super().__init__(dim, max_position_embeddings, base, device)
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
-        """set cos sin cache."""
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached,
                          device=device,
@@ -208,7 +203,6 @@ class LlamaDynamicNTKScalingRotaryEmbedding(LlamaRotaryEmbedding):
         super().__init__(dim, max_position_embeddings, base, device)
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
-        """set cos sin cache."""
         self.max_seq_len_cached = seq_len
 
         if seq_len > self.max_position_embeddings:
@@ -244,7 +238,6 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    """apply rotary pos embedding."""
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
@@ -257,7 +250,6 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
 
 
 class LlamaMLP(nn.Module):
-    """LlamaMLP."""
 
     def __init__(self, config):
         super().__init__()
@@ -276,7 +268,6 @@ class LlamaMLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        """forward."""
         if self.config.pretraining_tp > 1:
             slice = self.intermediate_size // self.config.pretraining_tp
             gate_proj_slices = self.gate_proj.weight.split(slice, dim=0)
@@ -359,7 +350,6 @@ class LlamaAttention(nn.Module):
         self._init_rope()
 
     def _init_rope(self):
-        """init rope."""
         if self.config.rope_scaling is None:
             self.rotary_emb = LlamaRotaryEmbedding(
                 self.head_dim,
@@ -387,7 +377,6 @@ class LlamaAttention(nn.Module):
                 raise ValueError(f'Unknown RoPE scaling type {scaling_type}')
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        """reshape tensor."""
         return tensor.view(bsz, seq_len, self.num_heads,
                            self.head_dim).transpose(1, 2).contiguous()
 
@@ -401,7 +390,6 @@ class LlamaAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
-        """forward."""
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
@@ -513,7 +501,6 @@ class LlamaAttention(nn.Module):
 
 
 class LlamaDecoderLayer(nn.Module):
-    """Llama Decoder Layer."""
 
     def __init__(self, config: LlamaConfig):
         super().__init__()
@@ -608,7 +595,6 @@ LLAMA_START_DOCSTRING = r"""    # noqa: E501
     LLAMA_START_DOCSTRING,
 )
 class LlamaPreTrainedModel(PreTrainedModel):
-    """LlamaPreTrainedModel."""
     config_class = LlamaConfig
     base_model_prefix = 'model'
     supports_gradient_checkpointing = True
@@ -616,7 +602,6 @@ class LlamaPreTrainedModel(PreTrainedModel):
     _skip_keys_device_placement = 'past_key_values'
 
     def _init_weights(self, module):
-        """initialize weights."""
         std = self.config.initializer_range
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=std)
@@ -628,7 +613,6 @@ class LlamaPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
     def _set_gradient_checkpointing(self, module, value=False):
-        """set gradient checkpointing."""
         if isinstance(module, LlamaModel):
             module.gradient_checkpointing = value
 
@@ -726,17 +710,14 @@ class LlamaModel(LlamaPreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
-        """get input embeddings."""
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
-        """set input embeddings."""
         self.embed_tokens = value
 
     # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask    # noqa
     def _prepare_decoder_attention_mask(self, attention_mask, input_shape,
                                         inputs_embeds, past_key_values_length):
-        """prepare decoder attention mask."""
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
@@ -774,7 +755,6 @@ class LlamaModel(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        """forward."""
         output_attentions = (output_attentions if output_attentions is not None
                              else self.config.output_attentions)
         output_hidden_states = (output_hidden_states
@@ -906,7 +886,6 @@ class LlamaModel(LlamaPreTrainedModel):
 
 
 class LlamaForCausalLM(LlamaPreTrainedModel):
-    """LlamaForCausalLM."""
     _tied_weights_keys = ['lm_head.weight']
 
     def __init__(self, config):
@@ -922,27 +901,21 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         convert_to_qmodules(self)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
-        """set input embeddings."""
         self.model.embed_tokens = value
 
     def get_output_embeddings(self):
-        """get output embeddings."""
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
-        """set output embeddings."""
         self.lm_head = new_embeddings
 
     def set_decoder(self, decoder):
-        """set decoder."""
         self.model = decoder
 
     def get_decoder(self):
-        """get decoder."""
         return self.model
 
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
@@ -1052,7 +1025,6 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
                                       attention_mask=None,
                                       inputs_embeds=None,
                                       **kwargs):
-        """prepare inputs for generation."""
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
@@ -1081,7 +1053,6 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
 
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
-        """reorder cache."""
         reordered_past = ()
         for layer_past in past_key_values:
             reordered_past += (tuple(
@@ -1106,7 +1077,6 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
     LLAMA_START_DOCSTRING,
 )
 class LlamaForSequenceClassification(LlamaPreTrainedModel):
-    """LlamaForSequenceClassification."""
 
     def __init__(self, config):
         super().__init__(config)
@@ -1118,11 +1088,9 @@ class LlamaForSequenceClassification(LlamaPreTrainedModel):
         self.post_init()
 
     def get_input_embeddings(self):
-        """get input embeddings."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
-        """set input embeddings."""
         self.model.embed_tokens = value
 
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
