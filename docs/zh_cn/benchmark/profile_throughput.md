@@ -67,7 +67,7 @@ python3 profile_throughput.py <dataset> <model_path> <optional arguments>
 
   模型在张量并行时，使用的显卡数量。必须是2的整数次幂。默认为 1
 
-- `--top_k`、`--top_p` 和 `temperature`
+- `--top_k`、`--top_p` 和 `--temperature`
 
   这三个参数用来采样生成的 token_id
 

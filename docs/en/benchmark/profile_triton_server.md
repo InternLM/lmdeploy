@@ -69,11 +69,7 @@ Optional arguments are listed as below:
 
   The number of sampled prompts from dataset to process. The default is 1000. It is suggested 2000 when `concurrency >= 64`
 
-- `--tp`
-
-  The number of GPUs used when the inference is in tensor parallel mode. It must be a power of 2. The default is 1.
-
-- `--top_k`、`--top_p` and `temperature`
+- `--top_k`、`--top_p` and `--temperature`
 
   They are used to sample the generated token_id.
 
