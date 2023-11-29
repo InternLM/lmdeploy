@@ -29,11 +29,11 @@ def test(port=33337):
             keywords=['您好', '你好'],
         ),
         dict(
-            prompts='How many days does a week have?',
-            keywords=['seven'],
+            prompts='How many days does a week have? ',
+            keywords=['seven', '7'],
         ),
         dict(
-            prompts='一周有多少天',
+            prompts='一周有多少天?请用中文回答。',
             keywords=['七天', '7天'],
         ),
     ]
