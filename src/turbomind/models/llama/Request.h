@@ -14,9 +14,11 @@ namespace turbomind {
 
 struct Request {
     uint64_t id;
-    bool     start_flag;
-    bool     end_flag;
-    bool     stop_flag;
+    uint64_t priority;
+
+    bool start_flag;
+    bool end_flag;
+    bool stop_flag;
 
     // per rank inputs/outputs
     std::vector<TensorMap> inputs;
@@ -31,7 +33,8 @@ struct Request {
         kConflict = 2,
         kBusy     = 3,
         kInactive = 4,
-        kFail     = 5
+        kFail     = 5,
+        kTooLong  = 6
     };
     std::promise<int> signal;
 };
@@ -66,11 +69,16 @@ public:
     void dequeue(std::vector<std::shared_ptr<Request>>& stop_requests,
                  std::vector<std::shared_ptr<Request>>& infer_requests,
                  unsigned                               max_infer_count,
-                 bool                                   blocking)
+                 bool                                   blocking,
+                 bool&                                  abort)
     {
         std::unique_lock<std::mutex> lock(mutex_);
         if (blocking) {
-            cv_.wait(lock, [this] { return !(stop_queue_.empty() && infer_queue_.empty() && closed_ == false); });
+            cv_.wait(lock, [this] { return !(stop_queue_.empty() && infer_queue_.empty()) || closed_; });
+            if (closed_) {
+                abort = true;
+                return;
+            }
         }
 
         stop_requests.clear();
@@ -88,8 +96,10 @@ public:
 
     void close()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        closed_ = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closed_ = true;
+        }
         cv_.notify_all();
     }
 
@@ -98,7 +108,7 @@ private:
     std::queue<std::shared_ptr<Request>> infer_queue_;
     std::mutex                           mutex_;
     std::condition_variable              cv_;
-    bool                                 closed_ = false;
+    bool                                 closed_{false};
 };
 
 }  // namespace turbomind

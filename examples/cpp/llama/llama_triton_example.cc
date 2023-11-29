@@ -80,7 +80,9 @@ broadCastRequest(const std::vector<int>& v_start_ids,
     if (node_id == 0) {
         memcpy(v_input_ids.data(), v_start_ids.data(), size_1 * sizeof(int));
         memcpy(v_input_lengths.data(), v_start_lengths.data(), size_2 * sizeof(int));
-        memcpy(v_input_bad_words.data(), v_bad_words.data(), size_bad_words * sizeof(int));
+        if (!v_input_bad_words.empty()) {
+            memcpy(v_input_bad_words.data(), v_bad_words.data(), size_bad_words * sizeof(int));
+        }
     }
     if (kUSE_MPI) {
         ft::mpi::barrier();
@@ -431,6 +433,8 @@ int main(int argc, char* argv[])
     const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
     const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
 
+    ft::FT_CHECK(beam_width == 1);
+
     std::vector<int> seq_lens(batch_size);
     // step 6: check results
     if (node_id == 0) {
@@ -440,32 +444,25 @@ int main(int argc, char* argv[])
             printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
         }
         else {
-            size_t outCount = batch_size * beam_width * seq_len;
-            // int*   hBuf     = new int[outCount];
+            const size_t outCount = batch_size * beam_width * seq_len;
+
             std::vector<int> hBuf(outCount);
-            ft::cudaD2Hcpy(hBuf.data(), d_output_ids, outCount);
-            ft::cudaD2Hcpy(seq_lens.data(), d_seq_lens, batch_size);
+
+            ft::cudaAutoCpy(hBuf.data(), d_output_ids, outCount);
+            ft::cudaAutoCpy(seq_lens.data(), d_seq_lens, batch_size);
+
             std::cout << "sequence length: ";
             for (int i = 0; i < batch_size; ++i) {
                 std::cout << (i ? ", " : "") << seq_lens[i];
             }
             std::cout << "\n";
-            {
-                std::cout << "Writing " << outCount << " elements\n";
-                int zeroCount = 0;
-                for (size_t i = 0; i < outCount; i++) {
-                    if (hBuf[i] == int(0))
-                        zeroCount++;
-                    outFile << hBuf[i] << " ";
-                    if ((i + 1) % (seq_len) == 0)
-                        outFile << std::endl;
 
-                    if (i < 10)
-                        printf("%5d ", hBuf[i]);
-                    if ((i + 1) % (seq_len) == 0 && i < 10)
-                        std::cout << std::endl;
+            for (int i = 0; i < batch_size; ++i) {
+                outFile << (i ? "\n" : "");
+                auto buf = hBuf.data() + seq_len * i;
+                for (int j = 0; j < seq_lens[i]; ++j) {
+                    outFile << buf[j] << " ";
                 }
-                std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
             }
         }
     }
@@ -475,7 +472,7 @@ int main(int argc, char* argv[])
     }
     cudaDeviceSynchronize();
 
-    if (1) {
+    if (0) {
         // test time
         auto start = std::chrono::high_resolution_clock::now();
 

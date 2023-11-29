@@ -20,6 +20,7 @@
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 // #include <glog/logging.h>
 
@@ -46,6 +47,7 @@ void LlamaFfnLayer<T>::freeBuffer()
 template<typename T>
 void LlamaFfnLayer<T>::activation(int num_token)
 {
+    NvtxScope scope("activation");
     invokeGenericActivation<SiluActivation>(gating_buf_,
                                             (const T*)nullptr,  // bias
                                             inter_buf_,
@@ -76,6 +78,8 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
      *   \param ffn_output [token_num, hidden_dimension]
      */
 
+    NvtxScope scope("ffn");
+
     const size_t num_token = input_tensors->at("ffn_input").shape[0];
     // LOG(WARNING);
 
@@ -84,24 +88,28 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     const T* ffn_input_data  = input_tensors->at("ffn_input").getPtr<T>();
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
 
-    PUSH_RANGE("ffn");
-
     if (weights->fused_gating_intermediate.kernel) {
+        NvtxScope scope("fused_silu_ffn");
         linear_.forward(
             gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, LlamaLinear<T>::kFusedSiluFfn);
     }
     else {
-        // w1(x)
-        linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating);
-        // w3(x)
-        linear_.forward(inter_buf_, ffn_input_data, num_token, weights->intermediate);
+        {  // w1(x)
+            NvtxScope scope("w1");
+            linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating);
+        }
+        {  // w3(x)
+            NvtxScope scope("w3");
+            linear_.forward(inter_buf_, ffn_input_data, num_token, weights->intermediate);
+        }
         // silu(w1(x)) * w3(x)
         activation(num_token);
     }
 
-    // w2(x)
-    linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output);
-    POP_RANGE;
+    {  // w2(x)
+        NvtxScope scope("w2");
+        linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output);
+    }
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);

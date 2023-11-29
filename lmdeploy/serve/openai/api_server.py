@@ -517,6 +517,9 @@ def main(
                                                  tp=tp,
                                                  model_name=model_name,
                                                  **kwargs)
+    for i in range(3):
+        print(f'HINT:    Please open \033[93m\033[1mhttp://{server_name}:'
+              f'{server_port}\033[0m in a browser for detailed api usage!!!')
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
 

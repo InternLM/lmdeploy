@@ -2,11 +2,16 @@
 
 ### Launch Service
 
+The user can open the http url print by the following command in a browser.
+
+- **Please check the http url for the detailed api usage!!!**
+- **Please check the http url for the detailed api usage!!!**
+- **Please check the http url for the detailed api usage!!!**
+
 ```shell
 lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
 ```
 
-Then, the user can open the swagger UI: `http://{server_ip}:{server_port}` for the detailed api usage.
 We provide four restful api in total. Three of them are in OpenAI format.
 
 - /v1/chat/completions
@@ -145,8 +150,8 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 
 ### FAQ
 
-1. When user got `"finish_reason":"length"` which means the session is too long to be continued.
-   Please add `"renew_session": true` into the next request.
+1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be
+   modified by passing `--session_len` to api_server.
 
 2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
 

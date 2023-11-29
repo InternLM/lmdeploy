@@ -21,6 +21,7 @@
 
 #include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/decoder_multihead_attention/kv_cache.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
@@ -28,6 +29,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
@@ -43,37 +45,37 @@ void LlamaContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     // no padding
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_, true);
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_, false);
 
     // padding is rebuilt for q/k/v_buf_2_
     // [qH + 2kvH, B, S, D]
     q_buf_2_ = (T*)allocator_->reMalloc(
-        q_buf_2_, sizeof(T) * local_q_kv_head_num * batch_size * max_q_len * size_per_head_, true);
+        q_buf_2_, sizeof(T) * local_q_kv_head_num * batch_size * max_q_len * size_per_head_, false);
     k_buf_2_ = q_buf_2_ + local_head_num_ * batch_size * max_q_len * size_per_head_;
     v_buf_2_ = k_buf_2_ + local_kv_head_num_ * batch_size * max_q_len * size_per_head_;
 
     if (use_fmha_) {
         FlashAttentionOp<T> flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
         if (flash_attention.get_workspace_size() > 0) {
-            qk_buf_float_ = (float*)allocator_->reMalloc(qk_buf_float_, flash_attention.get_workspace_size(), true);
+            qk_buf_float_ = (float*)allocator_->reMalloc(qk_buf_float_, flash_attention.get_workspace_size(), false);
         }
     }
     else {
         // kv heads are repeated for unfused attention
         k_cache_buf_ = (T*)allocator_->reMalloc(
-            k_cache_buf_, 2 * sizeof(T) * batch_size * local_head_num_ * max_k_len * size_per_head_, true);
+            k_cache_buf_, 2 * sizeof(T) * batch_size * local_head_num_ * max_k_len * size_per_head_, false);
         v_cache_buf_ = k_cache_buf_ + batch_size * local_head_num_ * max_k_len * size_per_head_;
 
         qk_buf_ =
-            (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * max_q_len * max_k_len, true);
+            (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * max_q_len * max_k_len, false);
 
         // qkv_buf_2_ has padding
         qkv_buf_2_ = (T*)allocator_->reMalloc(
-            qkv_buf_2_, sizeof(T) * batch_size * max_q_len * local_head_num_ * size_per_head_, true);
+            qkv_buf_2_, sizeof(T) * batch_size * max_q_len * local_head_num_ * size_per_head_, false);
     }
 
     // qkv_buf_3_ padding is removed
-    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * num_token * local_head_num_ * size_per_head_, true);
+    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * num_token * local_head_num_ * size_per_head_, false);
 
     is_allocate_buffer_ = true;
 }
@@ -116,6 +118,7 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
      *   \param history_lengths [batch_size], int
      *   \param context_lengths [batch_size], int
      *   \param cu_seqlens [batch_size+1], int
+     *   \param cu_block_counts [batch_size+1], int
      *   \param max_seq_len [1], int on cpu
      *   \param is_final_layer [1], bool on cpu
      *   \param layer_id [1], int on cpu
@@ -141,12 +144,22 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
     T* attention_mask  = input_tensors->at("attention_mask").getPtr<T>();
 
-    const auto input_length   = input_tensors->at("input_lengths").getPtr<const int>();
-    const auto history_length = input_tensors->at("history_lengths").getPtr<const int>();
-    const auto context_length = input_tensors->at("context_lengths").getPtr<const int>();
-    int*       cu_seqlens     = input_tensors->at("cu_seqlens").getPtr<int>();
+    const auto input_length    = input_tensors->at("input_lengths").getPtr<const int>();
+    const auto context_length  = input_tensors->at("context_lengths").getPtr<const int>();
+    int*       cu_seqlens      = input_tensors->at("cu_seqlens").getPtr<int>();
+    int*       cu_block_counts = input_tensors->at("cu_block_counts").getPtr<int>();
+
+    const float* rope_theta = input_tensors->getPtr<const float>("rope_theta", nullptr);
 
     const auto padding_offset = input_tensors->at("padding_offset").getPtr<int>();
+
+    auto Show = [&](const T* x, size_t n) {
+        std::vector<T> vec(n);
+        cudaMemcpyAsync(vec.data(), x, sizeof(T) * n, cudaMemcpyDefault, stream_);
+        cudaStreamSynchronize(stream_);
+        std::vector<float> float_vec(vec.begin(), vec.end());
+        dbg(float_vec);
+    };
 
     /////////////////////////////////////////////
     /// allocate buffers
@@ -166,26 +179,32 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    qkv_buf_,
                                    weights->qkv.bias,
                                    padding_offset,  // padding_offset,
-                                   history_length,  // used for applying rotary embedding
+                                   context_length,  // used for applying rotary embedding
                                    input_length,
+                                   rope_theta,
                                    batch_size,
                                    max_q_len,  // seq_len
                                    num_token,  // batch_size * seq_len
                                    local_head_num_,
                                    local_kv_head_num_,
                                    size_per_head_,
-                                   params_.rotray_embedding_dim,
+                                   params_.rotary_embedding_dim,
                                    params_.rotary_embedding_base,
                                    params_.max_position_embeddings,
-                                   params_.use_dynamic_ntk,
+                                   false,  // params_.use_dynamic_ntk,
                                    params_.use_logn_attn,
                                    stream_);
     sync_check_cuda_error();
 
-    const size_t layer_offset = layer_id * local_kv_head_num_ * max_seq_len * size_per_head_;
+    // [2, L, H, s, D]
+    const size_t layer_offset = layer_id * local_kv_head_num_ * kv_cache_block_len_ * size_per_head_;
 
-    auto k_cache_ptrs = output_tensors->getPtr<T*>("key_cache");
-    auto v_cache_ptrs = output_tensors->getPtr<T*>("value_cache");
+    auto k_cache_ptrs = output_tensors->getPtr<void*>("key_cache");
+    auto v_cache_ptrs = output_tensors->getPtr<void*>("value_cache");
+
+    auto tmp_k_ptrs = output_tensors->getPtr<T*>("tmp_k");
+    auto tmp_v_ptrs = output_tensors->getPtr<T*>("tmp_v");
+
     //////////////////////////////////////////////////////////
     /// insert the k/v computed from inputs into k/v cache
     /// transpose kv -> kv cache
@@ -194,25 +213,53 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     // v_buf_2 [B, kvH, s, D] -> val_cache [B, kvH, S[t:t+s], D/x, x]
     invokeExtendKVCache(k_cache_ptrs,
                         v_cache_ptrs,
-                        layer_offset,
                         k_buf_2_,
                         v_buf_2_,
-                        batch_size,
+                        cu_block_counts,
                         input_length,
+                        context_length,
+                        batch_size,
+                        kv_cache_block_len_,
+                        layer_offset,
                         max_q_len,
-                        history_length,
-                        max_seq_len,
                         size_per_head_,
                         local_kv_head_num_,
-                        stream_,
                         quant_policy_,
-                        weights->past_kv_scale.data());
-
+                        weights->past_kv_scale.data(),
+                        stream_);
     sync_check_cuda_error();
+
+    const int kv_cache_elem_bits = quant_policy_ & QuantPolicy::kCacheKVInt8 ? 8 : sizeof(T) * 8;
+
+    ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
+                                  (const void**)v_cache_ptrs,
+                                  (T**)tmp_k_ptrs,
+                                  (T**)tmp_v_ptrs,
+                                  cu_block_counts,
+                                  context_length,
+                                  layer_offset,
+                                  kv_cache_block_len_,
+                                  max_seq_len,
+                                  local_kv_head_num_,
+                                  size_per_head_,
+                                  batch_size,
+                                  quant_policy_,
+                                  weights->past_kv_scale.data(),
+                                  stream_);
+    sync_check_cuda_error();
+
+    // dbg(kv_cache_block_len_, max_seq_len, local_kv_head_num_, size_per_head_, batch_size);
+    // void *kk, *vv;
+    // cudaMemcpyAsync(&kk, tmp_k_ptrs, sizeof(void*), cudaMemcpyDefault, stream_);
+    // cudaMemcpyAsync(&vv, tmp_v_ptrs, sizeof(void*), cudaMemcpyDefault, stream_);
+    // cudaStreamSynchronize(stream_);
+    // Show((const T*)kk, local_kv_head_num_ * max_seq_len * size_per_head_);
+    // Show((const T*)vv, local_kv_head_num_ * max_seq_len * size_per_head_);
+
     if (use_fmha_) {
-        fusedMultiHeadAttention(k_cache_ptrs,
-                                v_cache_ptrs,
-                                layer_offset,
+        fusedMultiHeadAttention(tmp_k_ptrs,
+                                tmp_v_ptrs,
+                                0,
                                 attention_mask,
                                 cu_seqlens,
                                 input_tensors->at("context_lengths").getPtr<int>(),
@@ -222,9 +269,9 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                 max_seq_len);
     }
     else {
-        unfusedMultiHeadAttention(k_cache_ptrs,
-                                  v_cache_ptrs,
-                                  layer_offset,
+        unfusedMultiHeadAttention(tmp_k_ptrs,
+                                  tmp_v_ptrs,
+                                  0,
                                   attention_mask,
                                   padding_offset,
                                   context_length,
@@ -235,6 +282,14 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   max_seq_len,
                                   quant_policy_,
                                   weights->past_kv_scale.data());
+    }
+
+    // Compare(qkv_buf_3_, num_token * hidden_units_, Concat("qkv_buf_3", layer_id), kCmpRead, stream_);
+
+    // dbg(max_seq_len);
+
+    if (0) {
+        Show(qkv_buf_3_, num_token * hidden_units_);
     }
 
     //////////////////////////////////////////////
@@ -342,7 +397,7 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_c
                            local_head_num_,
                            head_n_rep_,
                            stream_,
-                           quant,
+                           0,  // dequant handled in block->linear conversion
                            kv_scale);
     sync_check_cuda_error();
 

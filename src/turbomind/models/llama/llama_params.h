@@ -5,11 +5,12 @@
 namespace turbomind {
 
 struct LlamaAttentionParams {
-    int   rotray_embedding_dim;
+    int   rotary_embedding_dim;
     float rotary_embedding_base;
     int   max_position_embeddings;
-    bool  use_dynamic_ntk;
-    bool  use_logn_attn;
+    float rope_scaling_factor;
+    // bool  use_dynamic_ntk;
+    bool use_logn_attn;
 };
 
 }  // namespace turbomind

@@ -25,7 +25,9 @@
 #include "src/turbomind/models/llama/LlamaContextDecoder.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/debug_utils.h"
 
 namespace turbomind {
 
@@ -64,6 +66,7 @@ template<typename T>
 void LlamaContextDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                         size_t                      kv_head_num,
                                         bool                        use_fmha,
+                                        int                         cache_block_seq_len,
                                         int                         quant_policy)
 {
     h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
@@ -78,6 +81,7 @@ void LlamaContextDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
                                                                  allocator_,
                                                                  is_free_buffer_after_forward_,
                                                                  use_fmha,
+                                                                 cache_block_seq_len,
                                                                  quant_policy);
 
     silu_ffn_layer_ = new LlamaFfnLayer<T>(head_num_,
@@ -93,6 +97,7 @@ void LlamaContextDecoder<T>::initialize(const LlamaAttentionParams& attn_params,
 template<typename T>
 void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                                 sess,
                                              T*                                             attn_io,
+                                             std::unordered_map<std::string, Tensor>*       output_tensors,
                                              const std::unordered_map<std::string, Tensor>* input_tensors,
                                              int                                            layer,
                                              bool                                           is_final)
@@ -107,18 +112,17 @@ void LlamaContextDecoder<T>::forwardSelfAttn(const Session&                     
         {"padding_offset", {MEMORY_GPU, TYPE_INT32, {sess.token_num}, padding_offset_}},
         {"cu_seqlens", {MEMORY_GPU, TYPE_INT32, {sess.batch_size + 1}, cu_seqlens_}},
         {"input_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.input_length}},
-        {"history_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.history_length}},
         {"context_lengths", {MEMORY_GPU, TYPE_INT32, {sess.batch_size}, sess.context_length}},
+        {"cu_block_counts", input_tensors->at("cu_block_counts")},
+        {"rope_theta", input_tensors->at("rope_theta")},
         {"max_seq_len", input_tensors->at("max_seq_len")}};
-
-    auto& k_cache = *sess.k_cache;
-    auto& v_cache = *sess.v_cache;
 
     TensorMap self_attention_output_tensors{
         {"hidden_features", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_io}},
-        {"key_cache", k_cache},
-        {"value_cache", v_cache},
-    };
+        {"key_cache", output_tensors->at("key_cache")},
+        {"value_cache", output_tensors->at("value_cache")},
+        {"tmp_k", output_tensors->at("tmp_k")},
+        {"tmp_v", output_tensors->at("tmp_v")}};
 
     context_attention_layer_->forward(&self_attention_output_tensors,  //
                                       &self_attention_input_tensors,
@@ -139,6 +143,7 @@ LlamaContextDecoder<T>::LlamaContextDecoder(size_t                      head_num
                                             IAllocator*                 allocator,
                                             bool                        is_free_buffer_after_forward,
                                             bool                        use_fmha,
+                                            int                         cache_block_seq_len,
                                             int                         quant_policy):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
@@ -150,7 +155,7 @@ LlamaContextDecoder<T>::LlamaContextDecoder(size_t                      head_num
     tensor_para_(tensor_para),
     data_type_(getTensorType<T>())
 {
-    initialize(attn_params, kv_head_num, use_fmha, quant_policy);
+    initialize(attn_params, kv_head_num, use_fmha, cache_block_seq_len, quant_policy);
 }
 
 template<typename T>
@@ -201,16 +206,15 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     sess.weights       = decoder_layer_weights;
 
     sess.input_length   = input_tensors->at("input_lengths").getPtr<int>();
-    sess.history_length = input_tensors->at("history_lengths").getPtr<int>();
     sess.context_length = input_tensors->at("context_lengths").getPtr<int>();
 
     T* decoder_input_output = input_tensors->at("decoder_input").getPtr<T>();
     T* decoder_output       = output_tensors->at("decoder_output").getPtr<T>();
 
-    sess.k_cache = &output_tensors->at("key_cache");
-    sess.v_cache = &output_tensors->at("value_cache");
-
     allocateBuffer(sess.batch_size, sess.token_num, sess.max_query_len, sess.max_key_len);
+
+    // dbg(padding_offset_);
+    FT_CHECK(padding_offset_);
 
     size_t tmp_token_num{};
     invokeGetPaddingOffsetAndCuSeqLens(h_pinned_token_num_ptr_,
@@ -222,6 +226,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                        sess.max_query_len,
                                        stream_);
     sync_check_cuda_error();
+    dbg(tmp_token_num, sess.token_num);
     FT_CHECK(tmp_token_num == sess.token_num);
 
     invokeCreateCausalMasks(attention_mask_,
@@ -232,6 +237,9 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                             sess.batch_size,
                             stream_);
     sync_check_cuda_error();
+
+    // Compare(
+    //     decoder_input_output, sess.token_num * hidden_units_, Concat("context_decoder_input", 0), kCmpRead, stream_);
 
     /////////////////////////////////////////////
     /// RMSNorm
@@ -247,7 +255,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     for (size_t layer = 0; layer < num_layer_; ++layer) {
         /////////////////////////////////////////////
         /// self-attention
-        forwardSelfAttn(sess, decoder_output, input_tensors, layer, false);
+        forwardSelfAttn(sess, decoder_output, output_tensors, input_tensors, layer, false);
 
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,
                                           decoder_output,

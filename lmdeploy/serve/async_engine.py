@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
-import os.path as osp
 import random
 from contextlib import contextmanager
 from typing import List, Literal, Optional
+
+from transformers.utils import ExplicitEnum
 
 from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.tokenizer import Tokenizer
@@ -18,6 +19,12 @@ class GenOut:
     input_token_len: int
     generate_token_len: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+
+
+class Backend(ExplicitEnum):
+    """AsyncEngine backend."""
+    PYTORCH = 'pytorch'
+    TURBOMIND = 'turbomind'
 
 
 class AsyncEngine:
@@ -34,32 +41,31 @@ class AsyncEngine:
                  instance_num=32,
                  tp=1,
                  model_name: str = None,
+                 backend: Backend = Backend.TURBOMIND,
                  **kwargs) -> None:
-        self.is_hf = osp.exists(osp.join(model_path, 'config.json'))
-        if self.is_hf:
+        if backend == Backend.PYTORCH:
             from lmdeploy.pytorch_poc.engine import Engine
             assert model_name is not None, 'please set model_name for hf model'
-            tokenizer_model_path = model_path
+            self.tokenizer = Tokenizer(model_path)
+            self.tm_model = Engine(model_path,
+                                   eos_id=self.tokenizer.eos_token_id,
+                                   tp=tp,
+                                   **kwargs)
+            self.model_name = model_name
+            self.model: BaseModel = MODELS.get(model_name)(**kwargs)
         else:
-            from lmdeploy.turbomind import TurboMind as Engine
-            tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                            'tokenizer')
-        tokenizer = Tokenizer(tokenizer_model_path)
-        self.tm_model = Engine(model_path,
-                               eos_id=tokenizer.eos_token_id,
-                               tp=tp,
-                               **kwargs)
-        self.tokenizer = tokenizer
+            from lmdeploy.turbomind import TurboMind
+            self.tm_model = TurboMind.from_pretrained(model_path,
+                                                      tp=tp,
+                                                      model_name=model_name,
+                                                      **kwargs)
+            self.tokenizer = self.tm_model.tokenizer
+            self.model = self.tm_model.model
+            self.model_name = self.tm_model.model_name
         self.generators = [
             self.tm_model.create_instance() for i in range(instance_num)
         ]
         self.instance_num = instance_num
-        if not self.is_hf:
-            self.model = self.tm_model.model
-            self.model_name = self.tm_model.model_name
-        else:
-            self.model_name = model_name
-            self.model: BaseModel = MODELS.get(model_name)(**kwargs)
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}
@@ -228,7 +234,7 @@ class AsyncEngine:
         prompt = messages
         if do_preprocess:
             prompt = self.model.messages2prompt(prompt, sequence_start)
-        input_ids = self.tokenizer.encode(prompt)
+        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = 'stop' if stop else None
         if self.steps[str(session_id)] + len(
                 input_ids) + request_output_len >= self.tm_model.session_len:

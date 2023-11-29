@@ -134,7 +134,14 @@ if __name__ == '__main__':
             'lmdeploy': lmdeploy_package_data,
         },
         include_package_data=True,
-        install_requires=parse_requirements('requirements.txt'),
+        setup_requires=parse_requirements('requirements/build.txt'),
+        tests_require=parse_requirements('requirements/test.txt'),
+        install_requires=parse_requirements('requirements/runtime.txt'),
+        extras_require={
+            'all': parse_requirements('requirements.txt'),
+            'lite': parse_requirements('requirements/lite.txt'),
+            'serve': parse_requirements('requirements/serve.txt')
+        },
         has_ext_modules=check_ext_modules,
         classifiers=[
             'Programming Language :: Python :: 3.8',

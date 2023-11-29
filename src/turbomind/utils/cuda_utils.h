@@ -131,7 +131,7 @@ void check(T result, char const* const func, const char* const file, int const l
 inline void syncAndCheck(const char* const file, int const line)
 {
     // When FT_DEBUG_LEVEL=DEBUG, must check error
-    static char* level_name = std::getenv("FT_DEBUG_LEVEL");
+    static char* level_name = std::getenv("TM_DEBUG_LEVEL");
     if (level_name != nullptr) {
         static std::string level = std::string(level_name);
         if (level == "DEBUG") {

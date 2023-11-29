@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from pathlib import Path
 from typing import Union
 
@@ -6,11 +7,28 @@ import numpy as np
 import torch
 
 
+def _export_weight(into: str,
+                   kv_qparams: np.array,
+                   out_path: str,
+                   tm_params: dict = None):
+    """Save kv_qparams to disk or copy to tm_params."""
+    if tm_params is None:
+        print(into)
+        kv_qparams.tofile(out_path)
+    else:
+        name = os.path.basename(out_path)
+        src = torch.from_numpy(kv_qparams)
+        for tm_tensor in tm_params[name]:
+            tm_tensor.copy_from(src)
+        tm_params.pop(name)
+
+
 def _export_sym(key_stats: dict,
                 value_stats: dict,
                 bits: int,
                 out_dir: Union[str, Path],
-                tp: int = 1) -> None:
+                tp: int = 1,
+                tm_params: dict = None) -> None:
     """Export symmetric quantization parameters to specified directory."""
     keys_absmax = key_stats['absmax']
     values_absmax = value_stats['absmax']
@@ -31,15 +49,16 @@ def _export_sym(key_stats: dict,
 
             kv_qparams = np.array([k_s, v_s], dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'  # noqa: E501
-            kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} qparam: {k_s} \t{v_s}')
+            info = f'Layer {layer_idx} MP {i} qparam: {k_s} \t{v_s}'
+            _export_weight(info, kv_qparams, out_path, tm_params)
 
 
 def _export_asym(key_stats: dict,
                  value_stats: dict,
                  bits: int,
                  out_dir: Union[str, Path],
-                 tp: int = 1) -> None:
+                 tp: int = 1,
+                 tm_params: dict = None) -> None:
     """Export asymmetric quantization parameters to specified directory."""
     keys_min = key_stats['min']
     values_min = value_stats['min']
@@ -81,16 +100,17 @@ def _export_asym(key_stats: dict,
             kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp],
                                   dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'
-            kv_qparams.tofile(out_path)
-            print(f'Layer {layer_idx} MP {i} qparam: '
-                  f'\t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}')
+            info = f'Layer {layer_idx} MP {i} qparam: ' \
+                f'\t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}'
+            _export_weight(info, kv_qparams, out_path, tm_params)
 
 
 def main(work_dir: str,
          turbomind_dir: str,
          kv_bits: int = 8,
          kv_sym: bool = False,
-         num_tp: int = 1) -> None:
+         num_tp: int = 1,
+         tm_params: dict = None) -> None:
     """Main function to export key and value stats.
 
     Args:
@@ -102,6 +122,7 @@ def main(work_dir: str,
         kv_sym (bool, optional): Whether to use symmetric quantizaiton.
             Defaults to False.
         num_tp (int, optional): Number of tensor parallelism. Defaults to 1.
+        tm_params (dict): turbomind model weights.
     """
 
     work_dir = Path(work_dir)
@@ -113,9 +134,10 @@ def main(work_dir: str,
     value_stats = torch.load(work_dir / 'value_stats.pth')
 
     if kv_sym:
-        _export_sym(key_stats, value_stats, kv_bits, tm_dir, num_tp)
+        _export_sym(key_stats, value_stats, kv_bits, tm_dir, num_tp, tm_params)
     else:
-        _export_asym(key_stats, value_stats, kv_bits, tm_dir, num_tp)
+        _export_asym(key_stats, value_stats, kv_bits, tm_dir, num_tp,
+                     tm_params)
 
 
 if __name__ == '__main__':

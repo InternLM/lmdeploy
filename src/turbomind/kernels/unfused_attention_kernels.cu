@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/turbomind/kernels/decoder_multihead_attention/array_ops.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
@@ -854,19 +854,20 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                    T* v_buf,
                                                    T* QKV,
                                                    const T* __restrict qkv_bias,
-                                                   const int* padding_offset,
-                                                   const int* history_length,
-                                                   const int* input_length,
-                                                   int        batch_size,
-                                                   int        seq_len,
-                                                   int        head_num,
-                                                   int        kv_head_num,
-                                                   int        size_per_head,
-                                                   int        rotary_embedding_dim,
-                                                   float      rotary_embedding_base,
-                                                   int        max_position_embeddings,
-                                                   bool       use_dynamic_ntk,
-                                                   bool       use_logn_attn)
+                                                   const int*   padding_offset,
+                                                   const int*   context_length,
+                                                   const int*   input_length,
+                                                   const float* rope_theta,
+                                                   int          batch_size,
+                                                   int          seq_len,
+                                                   int          head_num,
+                                                   int          kv_head_num,
+                                                   int          size_per_head,
+                                                   int          rotary_embedding_dim,
+                                                   float        rotary_embedding_base,
+                                                   int          max_position_embeddings,
+                                                   bool         use_dynamic_ntk,
+                                                   bool         use_logn_attn)
 {
     // This kernel add bias to QKV, which has shape [batch_size, seq_len, 3, head_num, size_per_head], and
     // QKV split to 3 split buffer q, k, v and transpose them to [batch_size, head_num, seq_len, size_per_head].
@@ -907,12 +908,18 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     Vec_t q, k, v;
     Vec_t q_bias, k_bias, v_bias;
 
+    using Vec = Array<T, vec_size>;
+
+    static_assert(sizeof(Vec_t) == sizeof(Vec));
+
+    using namespace ops;
+
     // load Q and apply bias
     if (!is_masked) {
         q = *reinterpret_cast<const Vec_t*>(&QKV[src_q_idx]);
         if (qkv_bias) {
-            q_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx]);
-            q      = mmha::add(q, q_bias);
+            q_bias  = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx]);
+            (Vec&)q = (Vec&)q + (Vec&)q_bias;
         }
     }
 
@@ -921,35 +928,32 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
         k = *reinterpret_cast<const Vec_t*>(&QKV[src_k_idx]);
         v = *reinterpret_cast<const Vec_t*>(&QKV[src_v_idx]);
         if (qkv_bias) {
-            k_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + k_offset]);
-            v_bias = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + v_offset]);
-            k      = mmha::add(k, k_bias);
-            v      = mmha::add(v, v_bias);
+            k_bias  = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + k_offset]);
+            v_bias  = *reinterpret_cast<const Vec_t*>(&qkv_bias[hidden_idx + v_offset]);
+            (Vec&)k = (Vec&)k + (Vec&)k_bias;
+            (Vec&)v = (Vec&)v + (Vec&)v_bias;
         }
     }
 
-    const int history_len = history_length[batch_idx];
-    const int context_len = history_len + input_length[batch_idx];
+    const int context_len = context_length[batch_idx];
+    const int history_len = context_len - input_length[batch_idx];
     const int timestep    = history_len + seq_idx;
 
-    if (use_dynamic_ntk) {
-        rotary_embedding_base = mmha::rotary_embedding_get_base(
-            context_len, max_position_embeddings, rotary_embedding_dim, rotary_embedding_base);
+    if (rope_theta) {
+        rotary_embedding_base = rope_theta[batch_idx];
     }
 
-    // TODO: unused computation on k if GQA is used
-    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, rotary_embedding_base, timestep);
+    RotaryEmbedding<vec_size> rotary_emb(rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0});
+    rotary_emb.apply((Array<T, vec_size>&)q);
+
+    if (head_idx < kv_head_num) {
+        rotary_emb.apply((Array<T, vec_size>&)k);
+    }
 
     if (use_logn_attn) {
         // +1 to convert to context length at the timestep
-        float logn_scaling = mmha::logn_attn_get_scaling(timestep + 1, max_position_embeddings);
-        if constexpr (std::is_same_v<T, float>) {
-            q = mmha::mul<Vec_t, float, Vec_t>(logn_scaling, q);
-        }
-        else if constexpr (std::is_same_v<T, half>) {
-            half tmp = __float2half(logn_scaling);
-            q        = mmha::mul<Vec_t, uint16_t, Vec_t>((uint16_t&)tmp, q);
-        }
+        LogNScaling logn_scaling(timestep + 1, max_position_embeddings);
+        logn_scaling.apply((Array<T, vec_size>&)q);
     }
 
     if (!is_masked && !q_buf) {  // also skip modifying QKV if q/k/v_buf are present
@@ -982,8 +986,9 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                                                              QKV,                      \
                                                                                              qkv_bias,                 \
                                                                                              padding_offset,           \
-                                                                                             history_length,           \
+                                                                                             context_length,           \
                                                                                              input_length,             \
+                                                                                             rope_theta,               \
                                                                                              batch_size,               \
                                                                                              seq_len,                  \
                                                                                              head_num,                 \
@@ -1002,8 +1007,9 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     T*           QKV,
                                     const T*     qkv_bias,
                                     const int*   padding_offset,
-                                    const int*   history_length,
+                                    const int*   context_length,
                                     const int*   input_length,
+                                    const float* rope_theta,
                                     const int    batch_size,
                                     const int    seq_len,
                                     const int    token_num,
@@ -1034,6 +1040,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                                  const int*   padding_offset,                                          \
                                                  const int*   history_length,                                          \
                                                  const int*   input_length,                                            \
+                                                 const float* rope_theta,                                              \
                                                  const int    batch_size,                                              \
                                                  const int    seq_len,                                                 \
                                                  const int    token_num,                                               \

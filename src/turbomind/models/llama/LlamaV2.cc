@@ -28,14 +28,15 @@
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
 #include <functional>
 #include <memory>
 #include <sstream>
-#include <stdexcept>
 
 namespace turbomind {
 
@@ -54,7 +55,8 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     int                          step_length,
                     int                          start_id,
                     int                          end_id,
-                    int                          cache_max_entry_count,
+                    float                        cache_max_block_count,
+                    int                          cache_block_seq_len,
                     int                          cache_chunk_size,
                     int                          quant_policy,
                     bool                         use_context_fmha,
@@ -71,12 +73,14 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     inter_size_(inter_size),
     num_layer_(num_layer),
     vocab_size_(vocab_size),
+    attn_params_(attn_params),
     vocab_size_padded_(vocab_size),
     rmsnorm_eps_(norm_eps),
     start_id_(start_id),
     end_id_(end_id),
     hidden_units_(head_num * size_per_head),
     local_head_num_(head_num / tensor_para.world_size_),
+    local_kv_head_num_(head_num / tensor_para.world_size_),
     weights_(weights),
     tensor_para_(tensor_para),
     stream_(stream),
@@ -86,7 +90,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     cuda_device_prop_(cuda_device_prop),
     debug_(isDebug()),
     step_length_(step_length),
-    batch_(max_batch_size, max_context_token_num, session_len, this),
     shared_state_(shared_state)
 
 {
@@ -99,10 +102,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     size_t elem_bits = 0;
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
         elem_bits = sizeof(int8_t) * 8;
-        if (use_context_fmha) {
-            TM_LOG_ERROR("use_context_fmha not support int8");
-            assert(0);
-        }
     }
     else {
         elem_bits = sizeof(T) * 8;
@@ -110,25 +109,38 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 
     const size_t local_kv_head_num = kv_head_num / tensor_para.world_size_;
 
-    kv_cache_mgr_ = std::make_unique<LlamaCacheManager>(num_layer_,
-                                                        local_kv_head_num,
-                                                        size_per_head_,
-                                                        session_len,
-                                                        elem_bits,
-                                                        cache_max_entry_count,
-                                                        cache_chunk_size,
-                                                        tensor_para.rank_,
-                                                        allocator);
-    initialize(attn_params, kv_head_num, use_context_fmha, quant_policy);
-    start();
+    auto sequence_manager = std::make_unique<SequenceManager>(num_layer,
+                                                              local_kv_head_num,
+                                                              size_per_head_,
+                                                              cache_block_seq_len,
+                                                              cache_max_block_count,
+                                                              cache_chunk_size,
+                                                              elem_bits,
+                                                              tensor_para_.rank_,
+                                                              allocator);
+
+    const size_t max_session_len = sequence_manager->max_block_count() * cache_block_seq_len;
+    if (max_session_len < session_len) {
+        if (tensor_para.rank_ == 0) {
+            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
+                           session_len,
+                           max_session_len);
+        }
+        session_len = max_session_len;
+    }
+
+    batch_ = std::make_unique<LlamaBatch<T>>(
+        max_batch_size, max_context_token_num, session_len, std::move(sequence_manager), this);
+
+    initialize(attn_params, kv_head_num, use_context_fmha, cache_block_seq_len, quant_policy);
+
+    /// TODO: decouple Llama model and batch inference
+    batch_->Start();
 }
 
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
-    shared_state_->request_queue.close();
-    internal_thread_.join();
-
     delete decoder_;
     delete dynamic_decode_layer_;
     delete context_decoder_;
@@ -138,6 +150,7 @@ template<typename T>
 void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                             size_t                      kv_head_num,
                             bool                        use_context_fmha,
+                            int                         cache_block_seq_len,
                             int                         quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -155,6 +168,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                                   allocator_,
                                                   is_free_buffer_after_forward_,
                                                   use_context_fmha,
+                                                  cache_block_seq_len,
                                                   quant_policy);
 
     decoder_ = new LlamaDecoder<T>(head_num_,
@@ -169,6 +183,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                    cublas_wrapper_,
                                    allocator_,
                                    is_free_buffer_after_forward_,
+                                   cache_block_seq_len,
                                    quant_policy);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
@@ -184,6 +199,7 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
 template<typename T>
 void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step)
 {
+    NvtxScope scope("embeddingLookup");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     // ! This kernel can't be used in context decoding
     invokeEmbeddingLookupPosEncodingPadCount(embeddings,
@@ -202,20 +218,23 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::contextDecode(T*         deocder_output,
-                               uintptr_t* k_cache_ptr,
-                               uintptr_t* v_cache_ptr,
-                               T*         context_decoder_input_buf,
-                               T*         context_decoder_output_buf,
-                               const int* input_ids,
-                               const int* input_length,
-                               const int* history_length,
-                               const int* context_length,
-                               size_t     token_num,
-                               size_t     max_input_len,
-                               size_t     max_context_len,
-                               size_t     session_len,
-                               size_t     batch_size)
+void LlamaV2<T>::contextDecode(T*           deocder_output,
+                               uintptr_t*   k_cache_ptr,
+                               uintptr_t*   v_cache_ptr,
+                               void**       tmp_k_ptrs,
+                               void**       tmp_v_ptrs,
+                               T*           context_decoder_input_buf,
+                               T*           context_decoder_output_buf,
+                               const int*   input_ids,
+                               const int*   input_length,
+                               const int*   context_length,
+                               const int*   cu_block_counts,
+                               const float* rope_theta,
+                               size_t       token_num,
+                               size_t       max_input_len,
+                               size_t       max_context_len,
+                               size_t       session_len,
+                               size_t       batch_size)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -248,17 +267,19 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
         {"decoder_input", {MEMORY_GPU, dtype, {token_num, hidden_units_}, context_decoder_input_buf}},
         {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
         {"input_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, input_length}},
-        {"history_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, history_length}},
         {"context_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, context_length}},
         {"max_q_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_q_len}},
         {"max_kv_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_kv_len}},
         {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
-    };
+        {"rope_theta", {MEMORY_GPU, TYPE_FP32, {hidden_units_}, rope_theta}},
+        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}}};
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
         {"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, context_decoder_output_buf}},
         {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_cache_ptr}},
         {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
+        {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_k_ptrs}},
+        {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_v_ptrs}},
         {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
 
     context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
@@ -269,32 +290,35 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
 }
 
 template<typename T>
-void LlamaV2<T>::decoderForward(T*         decoder_output,
-                                uintptr_t* k_cache_ptr,
-                                uintptr_t* v_cache_ptr,
-                                T*         decoder_input,
-                                const int* sequence_length,
-                                const int* total_padding_count,
-                                bool*      finished,
-                                int        step,
-                                int        ite,
-                                size_t     session_len,
-                                size_t     batch_size)
+void LlamaV2<T>::decoderForward(T*           decoder_output,
+                                uintptr_t*   k_cache_ptr,
+                                uintptr_t*   v_cache_ptr,
+                                T*           decoder_input,
+                                const int*   sequence_length,
+                                const bool*  finished,
+                                const int*   cu_block_counts,
+                                const float* rope_theta,
+                                int          step,
+                                int          ite,
+                                int          sum_seq_len,
+                                int          max_seq_len,
+                                size_t       batch_size)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    const int  max_seq_len = session_len;
-    const auto dtype       = getTensorType<T>();
+    const auto dtype = getTensorType<T>();
 
     // max_input_length is not used w/o linear_bias_slopes
     // sequence_lengths_ will be incremented in dynamic decode
     std::unordered_map<std::string, Tensor> decoder_input_tensors{
         {"decoder_input", {MEMORY_GPU, dtype, {batch_size, hidden_units_}, decoder_input}},
         {"sequence_lengths", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
-        {"total_padding_tokens", {MEMORY_GPU, TYPE_INT32, {batch_size}, total_padding_count}},
+        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}},
+        {"sum_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &sum_seq_len}},
         {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
         {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
         {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
+        {"rope_theta", {MEMORY_GPU, TYPE_FP32, {batch_size}, rope_theta}},
         {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
         {"ite", {MEMORY_CPU, TYPE_INT32, {1}, &ite}},
     };
@@ -312,6 +336,7 @@ void LlamaV2<T>::decoderForward(T*         decoder_output,
 template<typename T>
 void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size)
 {
+    NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     cudaDataType_t data_type = getCudaDataType<T>();
     float          alpha     = 1.f;
@@ -377,6 +402,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
                                bool*           finished,
                                int*            sequence_length,
                                bool*           should_stop,
+                               curandState_t*  curand_state,
                                TensorMap*      inputs,
                                TensorMap*      outputs,
                                const float*    logits,
@@ -389,6 +415,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
                                size_t          token_ids_len,
                                size_t          batch_size)
 {
+    NvtxScope scope("dynamicDecode");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     int local_batch_size = (int)batch_size;
 
@@ -420,7 +447,8 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
         {"output_ids", {MEMORY_GPU, TYPE_INT32, {token_ids_len, batch_size, 1U}, token_ids}},
         {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
         {"sequence_length", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
-        {"should_stop", {MEMORY_CPU, TYPE_BOOL, {1}, should_stop}}};
+        {"should_stop", {MEMORY_CPU, TYPE_BOOL, {1}, should_stop}},
+        {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, curand_state}}};
 
     const std::vector<std::string> optional_outputs{"cum_log_probs", "output_log_probs"};
     for (const auto& key : optional_outputs) {
@@ -430,83 +458,6 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     }
 
     dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-}
-
-template<typename T>
-void LlamaV2<T>::internalThreadEntry(int device_id)
-{
-    TM_LOG_INFO("[internalThreadEntry] %d", (int)tensor_para_.rank_);
-    check_cuda_error(cudaSetDevice(device_id));
-
-    auto& request_queue  = shared_state_->request_queue;
-    auto& infer_requests = shared_state_->infer_requests;
-    auto& stop_requests  = shared_state_->stop_requests;
-
-    while (1) {
-        if (tensor_para_.rank_ == 0) {
-            const int  free_slot_count = batch_.maxSize() - batch_.size() + batch_.finishedCount();
-            const bool is_empty        = free_slot_count == batch_.maxSize();
-
-            request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty);
-
-            // request queue was closed
-            // and there are no unprocessed requests in the queue
-            if (is_empty && infer_requests.empty() && stop_requests.empty()) {
-                // rank 0 sets flag
-                shared_state_->should_stop = true;
-            }
-
-            batch_.verifyRequests(stop_requests, infer_requests);
-        }
-
-        // wait while rank-0 is dequeueing
-        shared_state_->barrier->wait();
-
-        // exit if job is done
-        if (shared_state_->should_stop) {
-            return;
-        }
-
-        bool modified = false;
-
-        if (!(batch_.finishedCount() == 0 && stop_requests.empty() && infer_requests.empty())) {
-            batch_.handleStopRequests(stop_requests);
-            batch_.synchronize();
-            modified = true;
-        }
-
-        const int infer_request_count = infer_requests.size();
-
-        if (!infer_requests.empty()) {
-            batch_.initialize(infer_requests);  // reinitialize when new requests come, possible buffer allocation
-            batch_.contextDecode();
-            modified = true;
-        }
-
-        // wait while shared stop/infer_requests is being used
-        shared_state_->barrier->wait();
-
-        if (batch_.size()) {
-            if (modified) {
-                batch_.initializeGeneration();
-                batch_.initializeSampling(infer_request_count);
-            }
-            for (int i = 0; i < step_length_; ++i) {
-                if (!batch_.generate()) {
-                    break;
-                }
-            }
-            batch_.finish();
-        }
-    }
-}
-
-template<typename T>
-void LlamaV2<T>::start()
-{
-    int device_id = -1;
-    check_cuda_error(cudaGetDevice(&device_id));
-    internal_thread_ = std::thread(&LlamaV2<T>::internalThreadEntry, this, device_id);
 }
 
 static inline Tensor slice(const Tensor& tensor, int index)
@@ -591,15 +542,25 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
     bool             has_error = 0;
     if (rank == 0) {
         TM_LOG_INFO("[forward] Enqueue requests");
+
+        std::vector<uint64_t> ids;
+        for (const auto& r : requests) {
+            ids.push_back(r->id);
+        }
+
         auto futures = shared_state_->request_queue.enqueue(std::move(requests));
 
+        FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
+
         TM_LOG_INFO("[forward] Wait for requests to complete ...");
-        for (auto& f : futures) {
-            auto ec = f.get();
+
+        for (int i = 0; i < futures.size(); ++i) {
+            auto ec = futures[i].get();
             error_codes.push_back(ec);
             if (ec) {
                 has_error = true;
             }
+            TM_LOG_INFO("[forward] Request complete for %ld, code %d", (long)ids[i], (int)ec);
         }
     }
 

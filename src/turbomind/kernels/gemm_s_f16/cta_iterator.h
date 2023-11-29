@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common.h"
+#include <cstddef>
 #include <cstdint>
 
 namespace turbomind {
@@ -236,7 +237,13 @@ struct IteratorA {
 
     __device__ void prefetch(bool mask)
     {
+#if TURBOMIND_ARCH_SM80
         cp_async_cg_A(smem_int_ptr_ + dst_offset_, (const AccessType*)src_ + src_offset_, mask);
+#else
+        if (mask) {
+            *(AccessType*)((uint8_t*)smem_ + dst_offset_) = __ldg((const AccessType*)src_ + src_offset_);
+        }
+#endif
     }
 };
 
@@ -417,7 +424,13 @@ struct IteratorQ {
 
     __device__ void prefetch(bool mask)
     {
+#if TURBOMIND_ARCH_SM80
         cp_async_ca(smem_int_ptr_ + dst_offset_, (const AccessType*)src_ + src_offset_, mask);
+#else
+        if (mask) {
+            *(AccessType*)((uint8_t*)smem_ + dst_offset_) = __ldg((const AccessType*)src_ + src_offset_);
+        }
+#endif
     }
 };
 
@@ -613,8 +626,14 @@ struct IteratorB {
 
     __device__ void prefetch(bool mask)
     {
+#if TURBOMIND_ARCH_SM80
         cp_async_cg_B(
             smem_int_ptr_ + tmp_dst_offset_, (const AccessType*)(src_ + tmp_src_offset_), is_valid_n_ && mask);
+#else
+        if (is_valid_n_ && mask) {
+            *(AccessType*)((uint8_t*)smem_ + tmp_dst_offset_) = __ldg((const AccessType*)(src_ + tmp_src_offset_));
+        }
+#endif
     }
 };
 

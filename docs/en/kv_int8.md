@@ -52,12 +52,7 @@ You can also first set `turbomind_dir` to a private directory, then copy the sca
 
 Modify `workspace/triton_models/weights/config.ini`:
 
-- Set use_context_fmha to 0, which means turning off flashattention
 - Set quant_policy to 4. This means enabling kv_cache int8
-
-This is because there are two versions of flashattention, v1 and v2, and kv_cache int8 has also previously realized the symmetric version.
-
-Considering there are four combinations of kernels needed to be implemented, premature optimization when the algorithm is uncertain can be disastrous for software.
 
 ### **Step Four**
 
