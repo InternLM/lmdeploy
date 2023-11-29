@@ -7,7 +7,7 @@
 测试脚本是 `profile_restful_api.py`。测试之前，请安装 lmdeploy 预编译包，并下载评测脚本和测试数据集。
 
 ```shell
-pip install lmdeploy
+pip install 'lmdeploy>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
@@ -23,9 +23,17 @@ LMDeploy 统计首token延时（first_token_latency）、token吞吐量（tokens
 
 `first_token_latency` 只有在流式推理的情况下才会输出。
 
-token吞吐量的计算公式为：$吞吐量 = 生成的token数量 / 总时间$
+token吞吐量的计算公式为：
 
-请求吞吐量的计算公式为：$吞吐量 = 请求数量 / 总时间$
+$$
+token吞吐量 = 生成的token数量 / 总时间
+$$
+
+请求吞吐量的计算公式为：
+
+$$
+吞吐量 = 请求数量 / 总时间
+$$
 
 总时间包括 prefill 时间
 

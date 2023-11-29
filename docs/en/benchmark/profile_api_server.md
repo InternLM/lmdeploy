@@ -5,7 +5,7 @@ The way to profiling api_server performance is similar to the method for [profil
 The evaluation script is `profile_restful_api.py`. Before running it, please install the lmdeploy precompiled package, download the evaluation script and the test dataset:
 
 ```shell
-pip install lmdeploy
+pip install 'lmdeploy[serve]>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
@@ -28,6 +28,7 @@ TokenThroughput=Number\\ of\\ generated\\ tokens/TotalTime
 $$
 
 And the formula for calculating `request throughput` is:
+
 $$
 RPM(request per minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
 $$

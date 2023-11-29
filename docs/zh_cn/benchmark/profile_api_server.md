@@ -5,7 +5,7 @@ api_server 的测试方式与[求吞吐量测试方法](./profile_throughput.md)
 测试脚本是 `profile_restful_api.py`。测试之前，请安装 lmdeploy 预编译包，并下载评测脚本和测试数据集。
 
 ```shell
-pip install lmdeploy
+pip install 'lmdeploy[serve]>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
@@ -28,6 +28,7 @@ $$
 $$
 
 请求吞吐量的计算公式为：
+
 $$
 吞吐量 = 请求数量 / 总时间
 $$

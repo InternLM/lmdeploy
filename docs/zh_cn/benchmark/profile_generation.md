@@ -5,7 +5,7 @@
 评测脚本是 `profile_generation.py`，在运行此脚本前，请安装 lmdeploy 预编译包，并下载评测脚本
 
 ```shell
-pip install lmdeploy
+pip install 'lmdeploy>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 ```
 

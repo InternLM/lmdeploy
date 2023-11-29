@@ -5,7 +5,7 @@ We view the performance of the inference engine under the fixed batch and fixed 
 The evaluation script is `profile_generation.py`. Before running it, please install the lmdeploy precompiled package and download the evaluation script:
 
 ```shell
-pip install lmdeploy
+pip install 'lmdeploy>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 ```
 
@@ -21,9 +21,11 @@ LMDeploy records test results like first token latency, token throughput (tokens
 `first_token_latency` is only reported in the case of streaming inference.
 
 The formula for calculating `throughput` is:
+
 $$
 TokenThroughput=Number\\ of\\ generated\\ tokens/TotalTime
 $$
+
 Total time includes prefill time.
 
 During the test process, all graphics cards on the node should not run any other programs, otherwise the statistics of GPU mem would be inaccurate.
