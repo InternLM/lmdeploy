@@ -1,7 +1,7 @@
 FROM nvcr.io/nvidia/tritonserver:22.12-py3
 
 RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -y --no-install-recommends \
-    rapidjson-dev libgoogle-glog-dev gdb libgl1 \
+    rapidjson-dev libgoogle-glog-dev gdb  \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
