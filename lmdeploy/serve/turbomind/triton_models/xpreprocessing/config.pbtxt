@@ -1,0 +1,55 @@
+name: "xpreprocessing"
+backend: "python"
+max_batch_size: 1
+
+input [
+    {
+        name: "QUERY"
+        data_type: TYPE_STRING
+        dims: [ -1 ]
+    },
+    {
+        name: "KWARGS"
+        data_type: TYPE_STRING
+        dims: [ -1 ]
+    }
+]
+output [
+    {
+        name: "INPUT_ID"
+        data_type: TYPE_UINT32
+        dims: [ -1 ]
+    },
+    {
+        name: "REQUEST_INPUT_LEN"
+        data_type: TYPE_UINT32
+        dims: [ 1 ]
+    },
+    {
+        name: "OFFSET"
+        data_type: TYPE_INT32
+        dims: [ 1 ]
+    }
+]
+
+instance_group [
+    {
+        count: 4
+        kind: KIND_CPU
+    }
+]
+
+parameters {
+  key: "tokenizer_path"
+  value: {
+    string_value: "tokenizer/tokenizer.model"
+  }
+}
+
+# information
+# parameters {
+#   key: "model_name"
+#   value: {
+#     string_value: "qwen-vl-chat"
+#   }
+# }

@@ -58,6 +58,61 @@ class Preprocessor:
         return output0, output1
 
 
+class XPreprocessor:
+    """Tokenize raw prompts.
+
+    Args:
+        tritonserver_addr (str): the communication address of the inference
+          server
+    """
+
+    def __init__(self, tritonserver_addr: str):
+        self.tritonserver_addr = tritonserver_addr
+        self.model_name = 'xpreprocessing'
+
+    def __call__(self, *args, **kwargs):
+        return self.infer(*args, **kwargs)
+
+    def infer(self, prompts: Union[str, List[str]], **kwargs) -> tuple:
+        """Tokenize the input prompts.
+
+        Args:
+            prompts(str | List[str]): user's prompt, or a batch prompts
+            kwargs(dict): kwargs
+
+        Returns:
+            Tuple(numpy.ndarray, numpy.ndarray, numpy.ndarray): prompt's token
+            ids, ids' length and requested output length
+        """
+        import json
+        if isinstance(prompts, str):
+            input0 = [[prompts]]
+        elif isinstance(prompts, List):
+            input0 = [[prompt] for prompt in prompts]
+        else:
+            assert 0, f'str or List[str] prompts are expected but got ' \
+                      f'{type(prompts)}'
+
+        input0_data = np.array(input0).astype(object)
+        input1_data = np.array([[json.dumps(kwargs)] * len(input0)
+                                ]).astype(object)
+        inputs = [
+            prepare_tensor('QUERY', input0_data),
+            prepare_tensor('KWARGS', input1_data)
+        ]
+
+        with grpcclient.InferenceServerClient(self.tritonserver_addr) as \
+                client:
+            result = client.infer(self.model_name, inputs)
+            output0 = result.as_numpy('INPUT_ID')
+            output1 = result.as_numpy('REQUEST_INPUT_LEN')
+            output2 = result.as_numpy('OFFSET')
+            if len(kwargs):
+                return output0, output1, output2
+            else:
+                return output0, output1
+
+
 class Postprocessor:
     """De-tokenize prompts.
 

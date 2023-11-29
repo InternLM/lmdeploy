@@ -29,7 +29,11 @@ class Session:
     sequence_length: int = 0  # the total generated token number in the session
     prompt: str = ''
     response: str = ''
+    response_ids: List[int] = None
     status: int = None  # status of the session
+    image_embs: List[np.array] = None
+    image_offsets: List[int] = None
+    history_ids: List[int] = None
 
 
 class StatusCode(Enum):
@@ -70,6 +74,8 @@ class Chatbot:
         profile_generation (bool): profile token generation or not
     """
 
+    MODEL_REGISTRY = MODELS
+
     def __init__(self,
                  tritonserver_addr: str,
                  model_name: str = '',
@@ -81,20 +87,35 @@ class Chatbot:
                  **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
-        if self.model_name == '':
-            self.model_name = self._get_model_name()
-        assert self.model_name in MODELS.module_dict.keys(), \
-            f"'{self.model_name}' is not supported. " \
-            f'The supported models are: {MODELS.module_dict.keys()}'
-        self.model = MODELS.get(self.model_name)(**model_kwargs)
+        self.ignore_eos = ignore_eos
+        self.log_level = log_level
+        self.display = display
+        self.profile_generation = profile_generation
+        self.profile_serving = profile_serving
         self._session = None
+        self._post_init(**model_kwargs)
+
+    def _post_init(self, **model_kwargs):
+        self._init_prepost_processor()
+        self._init_cfg(**model_kwargs)
+
+    def _init_prepost_processor(self):
+        tritonserver_addr = self.tritonserver_addr
         self.preprocess = Preprocessor(tritonserver_addr)
         self.postprocess = Postprocessor(tritonserver_addr)
+
+    def _init_cfg(self, **model_kwargs):
+        if self.model_name == '':
+            self.model_name = self._get_model_name()
+        assert self.model_name in self.MODEL_REGISTRY.module_dict.keys(), \
+            f"'{self.model_name}' is not supported. The supported models " \
+            f'are: {self.MODEL_REGISTRY.module_dict.keys()}'
+        self.model = self.MODEL_REGISTRY.get(self.model_name)(**model_kwargs)
         self.bos_id = self._get_bos()
         self.eos_id = self._get_eos()
         stop_words = self._stop_words(self.model.stop_words)
         bad_words = None
-        if ignore_eos:
+        if self.ignore_eos:
             stop_words = None
             bad_words = np.array([[[self.eos_id], [1]]], dtype=np.int32)
         self.cfg = mmengine.Config(
@@ -105,10 +126,6 @@ class Chatbot:
                  repetition_penalty=self.model.repetition_penalty,
                  stop_words=stop_words,
                  bad_words=bad_words))
-        self.log_level = log_level
-        self.display = display
-        self.profile_generation = profile_generation
-        self.profile_serving = profile_serving
 
     def stream_infer(self,
                      session_id: int,
@@ -147,14 +164,16 @@ class Chatbot:
             yield StatusCode.TRITON_SESSION_CLOSED, '', 0
             return
 
+        self.cfg.update(**kwargs)
         self._session.status = 1
         self._session.request_id = request_id
         self._session.response = ''
-        self.cfg.update(**kwargs)
+        self._session.response_ids = []
 
         self._session.prompt = self._get_prompt(prompt, sequence_start)
-        for status, res, tokens in self._stream_infer(self._session,
-                                                      self._session.prompt,
+        input_ids, _ = self.preprocess(self._session.prompt)
+
+        for status, res, tokens in self._stream_infer(self._session, input_ids,
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
@@ -200,8 +219,9 @@ class Chatbot:
             return StatusCode.TRITON_SESSION_CLOSED
 
         self._session.status = 0
+        input_ids = np.array([[1]], dtype=np.uint32)
         for status, _, _ in self._stream_infer(self._session,
-                                               prompt='',
+                                               input_ids=input_ids,
                                                request_output_len=0,
                                                sequence_start=False,
                                                sequence_end=True):
@@ -241,8 +261,9 @@ class Chatbot:
 
         prev_session = self._session
         status, res = None, None
+        input_ids = np.array([[]], dtype=np.uint32)
         for status, res, _ in self._stream_infer(self._session,
-                                                 prompt='',
+                                                 input_ids=input_ids,
                                                  request_output_len=0,
                                                  sequence_start=False,
                                                  sequence_end=False,
@@ -287,8 +308,10 @@ class Chatbot:
         self._session.status = 1
         self._session.sequence_length = 0
         histories = self._session.histories
+        input_ids, _ = self.preprocess(histories)
+
         for status, _, _ in self._stream_infer(self._session,
-                                               prompt=histories,
+                                               input_ids=input_ids,
                                                request_output_len=0,
                                                sequence_start=True,
                                                sequence_end=False):
@@ -339,11 +362,12 @@ class Chatbot:
         self._session.status = 1
         self._session.request_id = request_id
         self._session.response = ''
+        self._session.response_ids = []
 
         self._session.prompt = self._get_prompt(prompt, sequence_start)
+        input_ids, _ = self.preprocess(self._session.prompt)
         status, res, tokens = None, '', 0
-        for status, res, tokens in self._stream_infer(self._session,
-                                                      self._session.prompt,
+        for status, res, tokens in self._stream_infer(self._session, input_ids,
                                                       request_output_len,
                                                       sequence_start,
                                                       sequence_end):
@@ -396,8 +420,8 @@ class Chatbot:
         if stop_words is None:
             return None
         assert isinstance(stop_words, List) and \
-               all(isinstance(elem, str) for elem in stop_words), \
-               f'stop_words must be a list but got {type(stop_words)}'
+            all(isinstance(elem, str) for elem in stop_words), \
+            f'stop_words must be a list but got {type(stop_words)}'
         # each id in stop_words represents a stop word
         # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
         # detailed explanation about turbomind's stop_words
@@ -406,8 +430,8 @@ class Chatbot:
             for stop_word in stop_words
         ]
         assert isinstance(stop_words, List) and \
-               all(isinstance(elem, int) for elem in stop_words), \
-               'invalid stop_words'
+            all(isinstance(elem, int) for elem in stop_words), \
+            'invalid stop_words'
         stop_word_offsets = range(1, len(stop_words) + 1)
         stop_words = np.array([[stop_words,
                                 stop_word_offsets]]).astype(np.int32)
@@ -422,17 +446,18 @@ class Chatbot:
 
     def _stream_infer(self,
                       session: Session,
-                      prompt: str,
+                      input_ids: np.array,
                       request_output_len: int = 512,
                       sequence_start: bool = True,
                       sequence_end: bool = False,
-                      cancel: bool = False):
+                      cancel: bool = False,
+                      **kwargs):
         """communicate with inference server to chat, or cancel a session, or
         end a session.
 
         Args:
             session (Session): an instance of a session
-            prompt (str): the concatenated prompt
+            input_ids (np.array): the input ids
             request_output_len (int): the max number of tokens to be generated
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
@@ -448,9 +473,9 @@ class Chatbot:
                     f'end {sequence_end}, cancel {cancel}')
 
         assert request_output_len is None or \
-               isinstance(request_output_len, int), \
-               f'request_output_len is supposed to be None or int, ' \
-               f'but got {type(request_output_len)}'
+            isinstance(request_output_len, int), \
+            f'request_output_len is supposed to be None or int, ' \
+            f'but got {type(request_output_len)}'
 
         if sequence_start:
             logger.info(f'session {session.session_id}, clear history since '
@@ -458,7 +483,7 @@ class Chatbot:
             session.histories = ''
             session.sequence_length = 0
 
-        input_ids, input_lengths = self.preprocess(prompt)
+        input_lengths = np.ones((1, 1), dtype=np.uint32) * input_ids.shape[-1]
         # got input_ids with default add_bos == True
         if not sequence_start and input_ids[0][0] == self.bos_id:
             input_ids = input_ids[:, 1:]
@@ -470,7 +495,7 @@ class Chatbot:
         input_tokens = input_lengths.squeeze()
         if self.profile_generation:
             yield StatusCode.TRITON_STREAM_ING, \
-                  'ignore preprocessing during profiling generation', 0
+                'ignore preprocessing during profiling generation', 0
         if request_output_len is None:
             request_output_len = max(
                 128,
@@ -495,6 +520,7 @@ class Chatbot:
 
         preseq_length = session.sequence_length
         session.response = ''
+        session.response_ids = []
         session.status = StatusCode.TRITON_SESSION_READY
 
         que = queue.Queue()
@@ -502,7 +528,8 @@ class Chatbot:
                                     args=(self.tritonserver_addr, session, que,
                                           self.cfg, input_ids, input_lengths,
                                           request_output_len, sequence_start,
-                                          sequence_end, preseq_length, cancel))
+                                          sequence_end, preseq_length, cancel),
+                                    kwargs=kwargs)
         producer.start()
         for status, res, n_token in self.stream_consumer(
                 self.postprocess, que, session, input_tokens, preseq_length,
@@ -517,10 +544,58 @@ class Chatbot:
                     f'{preseq_length}, cur seq_len {curseq_length}, '
                     f'diff {curseq_length - preseq_length}')
 
-    @staticmethod
-    def _stream_producer(tritonserver_addr, session, que, cfg, input_ids,
+    def _create_input(self, session, cfg, input_ids, input_lengths,
+                      request_output_len, sequence_start, sequence_end,
+                      preseq_length, cancel, **kwargs):
+        inputs = [
+            prepare_tensor('input_ids', input_ids),
+            prepare_tensor('input_lengths', input_lengths),
+            prepare_tensor('request_output_len', request_output_len),
+            prepare_tensor('runtime_top_p',
+                           cfg.top_p * np.ones((1, 1), dtype=np.float32)),
+            prepare_tensor('temperature',
+                           cfg.temperature * np.ones(
+                               (1, 1), dtype=np.float32)),
+            prepare_tensor(
+                'repetition_penalty',
+                cfg.repetition_penalty * np.ones((1, 1), dtype=np.float32)),
+            prepare_tensor('step',
+                           preseq_length * np.ones((1, 1), dtype=np.int32))
+        ]
+        if cfg.top_k is not None:
+            inputs += prepare_tensor(
+                'runtime_top_k', cfg.top_k * np.ones((1, 1), dtype=np.uint32)),
+        if cfg.stop_words is not None:
+            inputs += [prepare_tensor('stop_words_list', cfg.stop_words)]
+        if cfg.bad_words is not None:
+            inputs += [prepare_tensor('bad_words_list', cfg.bad_words)]
+
+        inputs += [
+            prepare_tensor(
+                'session_len',
+                cfg.session_len *
+                np.ones([input_ids.shape[0], 1], dtype=np.uint32)),
+            prepare_tensor('START', (1 if sequence_start else 0) * np.ones(
+                (1, 1), dtype=np.int32)),
+            prepare_tensor('END', (1 if sequence_end else 0) * np.ones(
+                (1, 1), dtype=np.int32)),
+            prepare_tensor(
+                'CORRID', session.session_id * np.ones(
+                    (1, 1), dtype=np.uint64)),
+            prepare_tensor('STOP', (1 if cancel else 0) * np.ones(
+                (1, 1), dtype=np.int32))
+        ]
+        if sequence_start:
+            random_seed = random.getrandbits(64)
+            inputs += [
+                prepare_tensor('random_seed',
+                               random_seed * np.ones((1, 1), dtype=np.uint64))
+            ]
+        return inputs
+
+    def _stream_producer(self, tritonserver_addr, session, que, cfg, input_ids,
                          input_lengths, request_output_len, sequence_start,
-                         sequence_end, preseq_length, cancel):
+                         sequence_end, preseq_length, cancel, **kwargs):
         """Send a request to the triton inference server.
 
         Args:
@@ -542,53 +617,10 @@ class Chatbot:
 
         callback = partial(stream_callback, que)
         with grpcclient.InferenceServerClient(tritonserver_addr) as client:
-            inputs = [
-                prepare_tensor('input_ids', input_ids),
-                prepare_tensor('input_lengths', input_lengths),
-                prepare_tensor('request_output_len', request_output_len),
-                prepare_tensor('runtime_top_p',
-                               cfg.top_p * np.ones((1, 1), dtype=np.float32)),
-                prepare_tensor(
-                    'temperature',
-                    cfg.temperature * np.ones((1, 1), dtype=np.float32)),
-                prepare_tensor(
-                    'repetition_penalty',
-                    cfg.repetition_penalty * np.ones(
-                        (1, 1), dtype=np.float32)),
-                prepare_tensor('step',
-                               preseq_length * np.ones((1, 1), dtype=np.int32))
-            ]
-            if cfg.top_k is not None:
-                inputs += prepare_tensor(
-                    'runtime_top_k',
-                    cfg.top_k * np.ones((1, 1), dtype=np.uint32)),
-            if cfg.stop_words is not None:
-                inputs += [prepare_tensor('stop_words_list', cfg.stop_words)]
-            if cfg.bad_words is not None:
-                inputs += [prepare_tensor('bad_words_list', cfg.bad_words)]
-
-            inputs += [
-                prepare_tensor(
-                    'session_len',
-                    cfg.session_len *
-                    np.ones([input_ids.shape[0], 1], dtype=np.uint32)),
-                prepare_tensor('START', (1 if sequence_start else 0) * np.ones(
-                    (1, 1), dtype=np.int32)),
-                prepare_tensor('END', (1 if sequence_end else 0) * np.ones(
-                    (1, 1), dtype=np.int32)),
-                prepare_tensor(
-                    'CORRID',
-                    session.session_id * np.ones((1, 1), dtype=np.uint64)),
-                prepare_tensor('STOP', (1 if cancel else 0) * np.ones(
-                    (1, 1), dtype=np.int32))
-            ]
-            if sequence_start:
-                random_seed = random.getrandbits(64)
-                inputs += [
-                    prepare_tensor(
-                        'random_seed',
-                        random_seed * np.ones((1, 1), dtype=np.uint64))
-                ]
+            inputs = self._create_input(session, cfg, input_ids, input_lengths,
+                                        request_output_len, sequence_start,
+                                        sequence_end, preseq_length, cancel,
+                                        **kwargs)
             client.start_stream(callback)
             client.async_stream_infer('turbomind',
                                       inputs,
@@ -634,6 +666,7 @@ class Chatbot:
                              f'token {session.sequence_length}')
                 session.sequence_length = preseq_length
                 session.response = ''
+                session.response_ids = []
                 status = StatusCode.TRITON_SERVER_ERR
                 res = f"{result['errcode']}, {result['errmsg']}"
                 n_token = 0
@@ -675,6 +708,7 @@ class Chatbot:
                 if display:
                     print(text, end='', flush=True)
                 session.response += text
+                session.response_ids = output_ids.flatten().tolist()
                 yield (StatusCode.TRITON_STREAM_ING, session.response,
                        output_ids.shape[-1])
             except Exception as e:

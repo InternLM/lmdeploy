@@ -553,8 +553,9 @@ class TurboMindInstance:
             if isinstance(image_offsets[0], int):
                 image_offsets = [image_offsets]
                 image_embs = [image_embs]
-            image_embs = [[torch.from_numpy(x).unsqueeze(0) for x in y]
-                          for y in image_embs]
+            image_embs = [[
+                torch.from_numpy(x).squeeze().unsqueeze(0) for x in y
+            ] for y in image_embs]
             image_embs = [torch.cat(x) for x in image_embs]
             image_embs = pad_sequence(image_embs, batch_first=True)
             image_offsets = [torch.IntTensor(x) for x in image_offsets]
