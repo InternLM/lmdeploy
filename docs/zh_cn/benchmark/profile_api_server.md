@@ -60,11 +60,11 @@ python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optiona
 
 - `--concurrency`
 
-  客户端请求线程的数量，并发请求会被推理引擎拼成 batch，默认为 32。并发请求会被推理引擎拼成 batch。并发数不能超过api_server的`--instance-num`。否则，超出部分的请求会在推理队列中等待。
+  客户端请求线程的数量，并发请求会被推理引擎拼成 batch，默认为 64。并发请求会被推理引擎拼成 batch。并发数不能超过api_server的`--instance-num`。否则，超出部分的请求会在推理队列中等待。
 
 - `--num-prompts`
 
-  从数据集中采样的prompt数量，默认是 1000。当 `concurrency >= 64` 是，推荐使用 2000
+  从数据集中采样的prompt数量，默认是 2000
 
 - `--tp`
 

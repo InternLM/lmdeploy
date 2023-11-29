@@ -58,12 +58,12 @@ Optional arguments are listed as below:
 
 - `--concurrency`
 
-  It represents the number of request threads with default value 32. Requests of concurrent threads will be batched by the inference engine. Its value should not exceed the number of inference instances in the api_server.
+  It represents the number of request threads with default value 64. Requests of concurrent threads will be batched by the inference engine. Its value should not exceed the number of inference instances in the api_server.
   Otherwise, the excess requests will wait in the inference queue.
 
 - `--num-prompts`
 
-  The number of sampled prompts from dataset to process. The default is 1000. It is suggested 2000 when `concurrency >= 64`
+  The number of sampled prompts from dataset to process. The default is 2000.
 
 - `--tp`
 
