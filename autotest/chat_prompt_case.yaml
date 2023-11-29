@@ -1,0 +1,61 @@
+identity_case:
+    - 你好，你叫什么名字#hi, what's your name:
+
+memory_test:
+    - 介绍成都的景点#please introduce some attractions in Chengdu:
+        - contain:
+            - chengdu
+            - 成都
+        - contain:
+            - 熊猫
+            - panda
+    - 介绍美食#please introduce some delicious foods:
+        - contain:
+            - 成都
+            - chengdu
+        - contain:
+            - 火锅
+            - hotpot
+            - hot pot
+new_session_without_memory:
+    - 介绍成都的景点#please introduce some attractions in Chengdu:
+        - contain:
+            - chengdu
+            - 成都
+    - end:
+    - 介绍美食#please introduce some delicious foods:
+        - not_contain:
+            - 成都
+            - chengdu
+chinese_poem_case:
+    - 给我一首中文打油诗，需要添加标点符号。和，#Give me a Chinese poem in Chinese:
+        - contain:
+            - "，"
+        - contain:
+            - "。"
+        - len_g:
+            10
+english_poem_case:
+    - write a romantic poem:
+        - contain:
+            - ","
+        - contain:
+            - "."
+        - contain:
+            - love
+        - len_g:
+            100
+emoji_case:
+    - 你能输出👍的emoji么#Can you output the emoji of 👍:
+        - contain:
+            - 👍
+traditional_chinese_case:
+    - 請介紹香港維多利亞港，用繁体中文回答:
+        - contain:
+            - 維多利亞港
+session_len_error:
+    - 这是很长的一段话这是很长的一段话这是很长的一段话这是很长的一段话这是很长的一段话:
+        - contain:
+            - exceed session max length.
+        - contain:
+            - Please end the session.
