@@ -52,5 +52,5 @@ jobs:
             source /opt/conda/bin/activate
             conda activate py38
             mkdir build && cd build
-            bash ../generate.sh
+            bash ../generate.sh make
             make -j$(nproc) && make install
