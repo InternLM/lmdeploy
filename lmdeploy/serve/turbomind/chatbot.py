@@ -70,15 +70,17 @@ class Chatbot:
         profile_generation (bool): profile token generation or not
     """
 
-    def __init__(self,
-                 tritonserver_addr: str,
-                 model_name: str = '',
-                 ignore_eos: bool = False,
-                 log_level: int = logging.INFO,
-                 display: bool = False,
-                 profile_generation: bool = False,
-                 profile_serving: bool = False,
-                 **model_kwargs):
+    def __init__(
+            self,
+            tritonserver_addr: str,
+            model_name: str = '',
+            ignore_eos: bool = False,
+            log_level: int = logging.INFO,
+            display: bool = False,
+            profile_generation: bool = False,
+            profile_serving: bool = False,
+            decode_interval: int = 5,  # an empirical value
+            **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
         if self.model_name == '':
@@ -109,6 +111,7 @@ class Chatbot:
         self.display = display
         self.profile_generation = profile_generation
         self.profile_serving = profile_serving
+        self.decode_interval = decode_interval
 
     def stream_infer(self,
                      session_id: int,
@@ -507,7 +510,7 @@ class Chatbot:
         for status, res, n_token in self.stream_consumer(
                 self.postprocess, que, session, input_tokens, preseq_length,
                 cancel, logger, self.display, self.profile_generation,
-                self.eos_id):
+                self.eos_id, self.decode_interval):
             yield status, res, n_token
 
         producer.join()
@@ -601,7 +604,7 @@ class Chatbot:
     @staticmethod
     def stream_consumer(postprocess, res_queue, session, n_input_token,
                         preseq_length, cancel, logger, display,
-                        profile_generation, eos_id):
+                        profile_generation, eos_id, decode_interval):
         """Consume the response from the triton inference server.
 
         Args:
@@ -616,18 +619,25 @@ class Chatbot:
             display (bool): display the text in the consolo interface or not
             profile_generation (bool): indicator for profiling token generation
             eos_id (int): eos token id
+            decode_interval (int): the interval of decoding section by section.
 
         Yields:
             tuple: status, text, generated token number
         """
         status, res, n_token = None, '', 0
+        break_flag, prev_result = False, None
         while True:
-            result = res_queue.get()
-            if result is None:
+            if break_flag:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
                 session.status = StatusCode.TRITON_STREAM_END
                 break
+            result = res_queue.get()
+            if result is None:
+                break_flag = True
+                result = prev_result
+            else:
+                prev_result = result
             if 'errcode' in result:
                 logger.error(f'got error from turbomind, code '
                              f"{result['errcode']}, {result['errmsg']}, "
@@ -662,6 +672,9 @@ class Chatbot:
                     yield (StatusCode.TRITON_STREAM_ING,
                            'postprocessing is ignored during profiling '
                            'token generation', output_ids.shape[-1])
+                    continue
+                if not break_flag and output_ids.shape[
+                        -1] - n_token < decode_interval:
                     continue
                 output_str = postprocess(
                     output_ids, np.array([[n_token]], dtype=np.uint32))
