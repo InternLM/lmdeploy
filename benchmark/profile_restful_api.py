@@ -203,8 +203,8 @@ class Engine:
 def main(server_addr: str,
          tokenizer_path: str,
          dataset: str,
-         concurrency: int = 32,
-         num_prompts: int = 1000,
+         concurrency: int = 64,
+         num_prompts: int = 2000,
          top_p: float = 1.0,
          temperature: float = 1.0,
          stream_output: bool = False,
@@ -217,8 +217,8 @@ def main(server_addr: str,
         tokenizer_path (str): Path to the tokenizer model in localhost
         dataset (str): Path to the dataset
         concurrency (int, optional): Number of working threads to process the sampled prompts.
-            Defaults to 32.
-        num_prompts (int, optional): Number of prompts to process. Defaults to 1000.
+            Defaults to 64.
+        num_prompts (int, optional): Number of prompts to process. Defaults to 2000.
         top_p (float, optional): the set of most probable tokens with
             probabilities that add up to top_p or higher
             are kept for generation. Defaults to 1.0.
