@@ -24,8 +24,6 @@
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/models/llama/LlamaContextDecoder.h"
-#include "src/turbomind/models/llama/LlamaDecoder.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
@@ -182,9 +180,7 @@ private:
 
     const bool debug_{false};
 
-    LlamaWeight<T>*         weights_{};
-    LlamaDecoder<T>*        decoder_{};
-    LlamaContextDecoder<T>* context_decoder_{};
+    LlamaWeight<T>* weights_{};
 
     std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
     DynamicDecodeLayer<float>*         dynamic_decode_layer_{};

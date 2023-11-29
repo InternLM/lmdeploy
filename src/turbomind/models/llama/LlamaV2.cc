@@ -105,9 +105,8 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 template<typename T>
 LlamaV2<T>::~LlamaV2()
 {
-    delete decoder_;
+    unified_decoder_.reset();
     delete dynamic_decode_layer_;
-    delete context_decoder_;
 }
 
 template<typename T>
@@ -118,46 +117,6 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                             int                         quant_policy)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    context_decoder_ = new LlamaContextDecoder<T>(head_num_,
-                                                  kv_head_num,
-                                                  size_per_head_,
-                                                  inter_size_,
-                                                  num_layer_,
-                                                  attn_params,
-                                                  rmsnorm_eps_,
-                                                  tensor_para_,
-                                                  stream_,
-                                                  cublas_wrapper_,
-                                                  allocator_,
-                                                  is_free_buffer_after_forward_,
-                                                  use_context_fmha,
-                                                  cache_block_seq_len,
-                                                  quant_policy);
-
-    decoder_ = new LlamaDecoder<T>(head_num_,
-                                   kv_head_num,
-                                   size_per_head_,
-                                   inter_size_,
-                                   num_layer_,
-                                   attn_params,
-                                   rmsnorm_eps_,
-                                   tensor_para_,
-                                   stream_,
-                                   cublas_wrapper_,
-                                   allocator_,
-                                   is_free_buffer_after_forward_,
-                                   cache_block_seq_len,
-                                   quant_policy);
-
-    dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
-                                                          vocab_size_padded_,
-                                                          0,  // end_id, deprecated
-                                                          stream_,
-                                                          cublas_wrapper_,
-                                                          allocator_,
-                                                          is_free_buffer_after_forward_,
-                                                          cuda_device_prop_);
 
     unified_decoder_.reset(new UnifiedDecoder<T>(head_num_,
                                                  kv_head_num,
@@ -174,6 +133,15 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                                  use_context_fmha,
                                                  cache_block_seq_len,
                                                  quant_policy));
+
+    dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
+                                                          vocab_size_padded_,
+                                                          0,  // end_id, deprecated
+                                                          stream_,
+                                                          cublas_wrapper_,
+                                                          allocator_,
+                                                          is_free_buffer_after_forward_,
+                                                          cuda_device_prop_);
 }
 
 template<typename T>
