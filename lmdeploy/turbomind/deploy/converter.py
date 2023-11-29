@@ -6,8 +6,10 @@ import shutil
 from pathlib import Path
 
 import fire
+from huggingface_hub import snapshot_download
 
 from lmdeploy.model import MODELS
+from lmdeploy.turbomind.utils import create_hf_download_args
 
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
@@ -143,7 +145,8 @@ def main(model_name: str,
          dst_path: str = 'workspace',
          tp: int = 1,
          quant_path: str = None,
-         group_size: int = 0):
+         group_size: int = 0,
+         **kwargs):
     """deploy llama family models via turbomind.
 
     Args:
@@ -162,6 +165,7 @@ def main(model_name: str,
         quant_path (str): Path of the quantized model, which can be None.
         group_size (int): a parameter used in AWQ to quantize fp16 weights
             to 4 bits
+        kwargs (dict): other params for convert
     """
 
     assert model_name in MODELS.module_dict.keys(), \
@@ -183,6 +187,13 @@ def main(model_name: str,
               f'the inferred model format is {inferred_model_format}, '
               f'which is not in supported list {supported_keys}')
         exit(-1)
+
+    if not os.path.exists(model_path):
+        print(f'can\'t find model from local_path {model_path}, '
+              'try to download from huggingface')
+        download_kwargs = create_hf_download_args(**kwargs)
+        model_path = snapshot_download(model_path, **download_kwargs)
+        print(f'load model from {model_path}')
 
     # get tokenizer path
     tokenizer_path = get_tokenizer_path(model_path, tokenizer_path)
