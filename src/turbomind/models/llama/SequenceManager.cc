@@ -378,8 +378,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
                                   std::vector<int>             context_lengths,
                                   const std::vector<uint64_t>& priorities,
                                   int                          step_length,
-                                  int                          input_count1,
-                                  int                          input_count2) -> Outcome
+                                  AdjustInputCount             adjust) -> Outcome
 {
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule the assignment of blocks to sequences
@@ -394,6 +393,8 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // Verify and lock cache sequences to avoid their blocks being evicted unnoticed
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
+
+    auto [input_count1, input_count2] = adjust(sequences, context_lengths);
 
     std::vector<int> required = CountRequiredBlocks(sequences, context_lengths, step_length);
     // dbg(required);

@@ -357,12 +357,25 @@ void LlamaBatch<T>::AdjustMaxInputCount(GenerationState&                    g,
     }
     const int batch_size = sequences.size();
     input_count -= batch_size;
-    input_count = (input_count + prefill_max_iterations_ - 1) / prefill_max_iterations_;
-    input_count = std::max(input_count, batch_size + prefill_token_count_);
+
+    // min tokens per iter for satisfying max prefill iters constraint
+    input_count = (input_count + max_prefill_iters_ - 1) / max_prefill_iters_;
+
+    if (g.min_input_count.empty()) {
+        g.min_input_count.resize(max_prefill_iters_);
+    }
+    g.min_input_count.pop_front();
+    g.min_input_count.push_back(input_count);
+    /// TODO: sub-optimal when there are inactive sequences due to memory constraint
+    for (auto& x : g.min_input_count) {
+        x = std::max(x, input_count);
+    }
+
+    input_count = std::max(g.min_input_count.front() + batch_size, num_tokens_per_iter_);
     input_count = std::min(input_count, max_context_token_num_);
     // update max input count
     g.max_input_count1 = input_count;
-    g.max_input_count2 = std::min(input_count + prefill_token_tolerance_, max_context_token_num_);
+    g.max_input_count2 = std::min(input_count + extra_tokens_per_iter_, max_context_token_num_);
 }
 
 template<typename T>
@@ -403,13 +416,14 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     process(state_);
     process(incoming_);
 
-    if (incoming_->size) {
-        AdjustMaxInputCount(g, sequences, context_lengths);
-    }
+    auto adjust = [this, &g](const Sequences&        sequences,
+                             const std::vector<int>& context_length) -> std::pair<int, int> {
+        AdjustMaxInputCount(g, sequences, context_length);
+        return {g.max_input_count1, g.max_input_count2};
+    };
 
     // TM_LOG_INFO("max_input_count %d", max_input_count);
-    auto outcome = sequence_manager_->Materialize(
-        sequences, context_lengths, priorities, step_length_, g.max_input_count1, g.max_input_count2);
+    auto outcome = sequence_manager_->Materialize(sequences, context_lengths, priorities, step_length_, adjust);
 
     if (outcome.allocation || outcome.swap_in || outcome.swap_out) {
         dbg(outcome);
@@ -546,16 +560,12 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
                                          unique_ids.begin(),
                                          unique_ids.end() - partial);
 
-    g = GenerationState{g.max_init_ctx_len,  //
-                        g.step,
-                        sum_seq_len,
-                        max_seq_len,
-                        partial,
-                        partial_len,
-                        std::move(unique_ids),
-                        g.max_input_count1,
-                        g.max_input_count2,
-                        0};
+    g.sum_seq_len            = sum_seq_len;
+    g.max_seq_len            = max_seq_len;
+    g.partial                = partial;
+    g.partial_context_legnth = partial_len;
+    g.unique_ids             = std::move(unique_ids);
+    g.finished_count         = 0;
 
     if (!skip_init_sampling) {
         g.max_init_ctx_len = max_context_len;
@@ -853,9 +863,9 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
     step_length_(params.step_length),
     model_(model),
     data_type_(getTensorType<T>()),
-    prefill_token_count_(params.prefill_token_count),
-    prefill_token_tolerance_(params.prefill_token_tolerance),
-    prefill_max_iterations_(params.prefill_max_iterations)
+    num_tokens_per_iter_(params.num_tokens_per_iter),
+    extra_tokens_per_iter_(params.extra_tokens_per_iter),
+    max_prefill_iters_(params.max_prefill_iters)
 {
     stream_         = model_->stream_;
     allocator_      = model_->allocator_;

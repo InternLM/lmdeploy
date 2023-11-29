@@ -113,10 +113,10 @@ void LlamaTritonModel<T>::handleMissingParams()
                        (int)engine_params_.cache_chunk_size);
     }
 
-    if (!engine_params_.prefill_token_count) {
-        engine_params_.prefill_token_count = engine_params_.max_context_token_num;
-        TM_LOG_WARNING("[LlamaTritonModel] `prefill_token_count` is not set, default to `max_context_token_num` (%d).",
-                       (int)engine_params_.max_context_token_num);
+    if (!engine_params_.num_tokens_per_iter) {
+        engine_params_.num_tokens_per_iter = engine_params_.max_context_token_num;
+        TM_LOG_WARNING("[LlamaTritonModel] `num_tokens_per_iter` is not set, default to `max_context_token_num` (%d).",
+                       (int)engine_params_.num_tokens_per_iter);
     }
 }
 
@@ -188,9 +188,9 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_params_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
     engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
 
-    engine_params_.prefill_token_count     = reader.GetInteger("llama", "prefill_token_count", 0);
-    engine_params_.prefill_token_tolerance = reader.GetInteger("llama", "prefill_token_tolerance", 0);
-    engine_params_.prefill_max_iterations  = reader.GetInteger("llama", "prefill_max_iterations", 1);
+    engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
+    engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
+    engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
     handleMissingParams();
 

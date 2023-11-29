@@ -57,6 +57,8 @@ struct GenerationState {
     int max_input_count1;
     int max_input_count2;
 
+    std::deque<int> min_input_count;
+
     int finished_count;
 };
 
@@ -295,9 +297,9 @@ private:
 
     int* h_output_ids_{};
 
-    const int prefill_token_count_;
-    const int prefill_token_tolerance_;
-    const int prefill_max_iterations_;
+    const int num_tokens_per_iter_;
+    const int extra_tokens_per_iter_;
+    const int max_prefill_iters_;
 };
 
 }  // namespace turbomind

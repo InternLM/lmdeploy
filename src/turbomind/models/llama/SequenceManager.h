@@ -78,12 +78,13 @@ public:
         int swap_out;
     };
 
+    using AdjustInputCount = std::function<std::pair<int, int>(const Sequences&, const std::vector<int>&)>;
+
     [[nodiscard]] Outcome Materialize(Sequences                    sequences,
                                       std::vector<int>             context_lengths,
                                       const std::vector<uint64_t>& priorities,
                                       int                          step_length,
-                                      int                          input_count1,
-                                      int                          input_count2);
+                                      AdjustInputCount             adjust);
 
     void* OffsetKey(void* block_ptr)
     {

@@ -23,11 +23,11 @@ struct EngineParams {
     float cache_max_block_count;
     int   cache_chunk_size;
 
-    // prefill chunking params
+    // chunking params
     int max_context_token_num;
-    int prefill_token_count;
-    int prefill_token_tolerance;
-    int prefill_max_iterations;
+    int num_tokens_per_iter;
+    int extra_tokens_per_iter;
+    int max_prefill_iters;
 };
 
 }  // namespace turbomind
