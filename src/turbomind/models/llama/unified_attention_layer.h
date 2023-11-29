@@ -105,7 +105,7 @@ public:
                 void**            k_cache_ptrs,
                 void**            v_cache_ptrs,
                 const int*        cu_block_count,
-                const int*        sequence_length,
+                const int*        context_length,
                 const bool*       is_finished,
                 const float*      rope_theta,
                 size_t            layer_offset,

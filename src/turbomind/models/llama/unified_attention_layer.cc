@@ -166,7 +166,6 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     T*     attention_input = inputs->getPtr<T>("input_query");
     int*   input_length    = inputs->getPtr<int>("input_lengths");
     int*   context_length  = inputs->getPtr<int>("context_lengths");
-    int*   sequence_length = inputs->getPtr<int>("sequence_lengths");
     bool*  is_finished     = inputs->getPtr<bool>("finished");
     int*   cu_block_count  = inputs->getPtr<int>("cu_block_counts");
     int*   cu_seqlens      = inputs->getPtr<int>("cu_seqlens", nullptr);
@@ -228,7 +227,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
                k_cache_ptrs,
                v_cache_ptrs,
                cu_block_count,
-               sequence_length,
+               context_length,
                is_finished,
                rope_theta,
                layer_offset,
@@ -386,7 +385,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
                                       void**            k_cache_ptrs,
                                       void**            v_cache_ptrs,
                                       const int*        cu_block_count,
-                                      const int*        sequence_length,
+                                      const int*        context_length,
                                       const bool*       is_finished,
                                       const float*      rope_theta,
                                       size_t            layer_offset,
@@ -415,9 +414,9 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.v_cache_block_ptrs  = (void**)v_cache_ptrs;
     params.kv_cache_block_size = kv_cache_block_len_;
 
-    params.finished          = is_finished;
-    params.per_sample_length = sequence_length;
-    params.rope_theta        = rope_theta;
+    params.finished       = is_finished;
+    params.context_length = context_length;
+    params.rope_theta     = rope_theta;
 
     params.layer_offset = layer_offset;
 

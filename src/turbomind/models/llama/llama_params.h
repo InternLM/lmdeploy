@@ -13,4 +13,21 @@ struct LlamaAttentionParams {
     bool use_logn_attn;
 };
 
+struct EngineParams {
+    // batch params
+    int max_batch_size;
+    int session_len;
+    int step_length;
+
+    // cache params
+    float cache_max_block_count;
+    int   cache_chunk_size;
+
+    // prefill chunking params
+    int max_context_token_num;
+    int prefill_token_count;
+    int prefill_token_tolerance;
+    int prefill_max_iterations;
+};
+
 }  // namespace turbomind

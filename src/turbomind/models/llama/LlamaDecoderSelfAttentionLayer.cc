@@ -149,7 +149,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     params.kv_cache_block_size = kv_cache_block_len_;
 
     params.finished          = finished_data;
-    params.per_sample_length = sequence_lengths_data;
+    // params.per_sample_length = sequence_lengths_data;
     params.rope_theta        = rope_theta;
 
     params.layer_offset = layer_offset;

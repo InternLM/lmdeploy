@@ -48,19 +48,14 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     size_t                       inter_size,
                     size_t                       num_layer,
                     size_t                       vocab_size,
-                    const LlamaAttentionParams&  attn_params,
                     float                        norm_eps,
-                    int                          max_batch_size,
-                    int                          max_context_token_num,
-                    int                          session_len,
-                    int                          step_length,
+                    const LlamaAttentionParams&  attn_params,
                     int                          start_id,
                     int                          end_id,
-                    float                        cache_max_block_count,
                     int                          cache_block_seq_len,
-                    int                          cache_chunk_size,
                     int                          quant_policy,
                     bool                         use_context_fmha,
+                    const EngineParams&          engine_params,
                     std::shared_ptr<SharedState> shared_state,
                     LlamaWeight<T>*              weights,
                     NcclParam                    tensor_para,
@@ -90,7 +85,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     is_free_buffer_after_forward_(is_free_buffer_after_forward),
     cuda_device_prop_(cuda_device_prop),
     debug_(isDebug()),
-    step_length_(step_length),
     shared_state_(shared_state)
 
 {
@@ -100,38 +94,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     vocab_size_padded_ =
         (vocab_size_padded_ + tensor_para_.world_size_ - 1) / tensor_para_.world_size_ * tensor_para_.world_size_;
 
-    size_t elem_bits = 0;
-    if (quant_policy & QuantPolicy::kCacheKVInt8) {
-        elem_bits = sizeof(int8_t) * 8;
-    }
-    else {
-        elem_bits = sizeof(T) * 8;
-    }
-
-    const size_t local_kv_head_num = kv_head_num / tensor_para.world_size_;
-
-    auto sequence_manager = std::make_unique<SequenceManager>(num_layer,
-                                                              local_kv_head_num,
-                                                              size_per_head_,
-                                                              cache_block_seq_len,
-                                                              cache_max_block_count,
-                                                              cache_chunk_size,
-                                                              elem_bits,
-                                                              tensor_para_.rank_,
-                                                              allocator);
-
-    const size_t max_session_len = sequence_manager->max_block_count() * cache_block_seq_len;
-    if (max_session_len < session_len) {
-        if (tensor_para.rank_ == 0) {
-            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
-                           session_len,
-                           max_session_len);
-        }
-        session_len = max_session_len;
-    }
-
-    batch_ = std::make_unique<LlamaBatch<T>>(
-        max_batch_size, max_context_token_num, session_len, std::move(sequence_manager), this);
+    batch_ = std::make_unique<LlamaBatch<T>>(engine_params, cache_block_seq_len, quant_policy, this);
 
     initialize(attn_params, kv_head_num, use_context_fmha, cache_block_seq_len, quant_policy);
 
@@ -243,7 +206,6 @@ void LlamaV2<T>::forwardUnified(T*           out,
                                 const int*   input_ids,
                                 const int*   cu_block_cnts,
                                 const float* rope_theta,
-                                const int*   dc_sequence_length,
                                 const bool*  dc_finished,
                                 const int*   pf_input_length,
                                 const int*   pf_context_length,
@@ -285,9 +247,7 @@ void LlamaV2<T>::forwardUnified(T*           out,
                      {"dc_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &dc_batch_size}},
                      {"dc_sum_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &dc_sum_seq_len}},
                      {"dc_max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &dc_max_seq_len}},
-                     {"sequence_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, dc_sequence_length}},
                      {"finished", {MEMORY_GPU, TYPE_BOOL, {bsz}, dc_finished}},
-                     {"step", {MEMORY_CPU, TYPE_INT32, {1}, &dc_step}},
                      {"pf_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &pf_batch_size}},
                      {"pf_max_q_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_max_input_len}},
                      {"pf_max_k_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_max_context_len}},
@@ -301,8 +261,6 @@ void LlamaV2<T>::forwardUnified(T*           out,
                       {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_k_ptrs}},
                       {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_v_ptrs}},
                       {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, out}}};
-
-    // context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
 
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
 }

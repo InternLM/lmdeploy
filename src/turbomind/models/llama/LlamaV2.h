@@ -60,19 +60,14 @@ public:
             size_t                       inter_size,
             size_t                       num_layer,
             size_t                       vocab_size,
-            const LlamaAttentionParams&  attn_params,
             float                        norm_eps,
-            int                          max_batch_size,
-            int                          max_context_token_num,
-            int                          session_len,
-            int                          step_length,
+            const LlamaAttentionParams&  attn_params,
             int                          start_id,
             int                          end_id,
-            float                        cache_max_block_count,
             int                          cache_block_seq_len,
-            int                          cache_chunk_size,
             int                          quant_policy,
             bool                         use_context_fmha,
+            const EngineParams&          engine_params,
             std::shared_ptr<SharedState> shared_state,
             LlamaWeight<T>*              weights,
             NcclParam                    tensor_para,
@@ -122,7 +117,6 @@ private:
                         const int*   input_ids,
                         const int*   cu_block_cnts,
                         const float* rope_theta,
-                        const int*   dc_sequence_length,
                         const bool*  dc_finished,
                         const int*   pf_input_length,
                         const int*   pf_context_length,
@@ -195,7 +189,6 @@ private:
     std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
     DynamicDecodeLayer<float>*         dynamic_decode_layer_{};
 
-    const int                      step_length_;
     std::shared_ptr<SharedState>   shared_state_;
     ffi_api_lock_ctrl_t            ffi_lock_;
     std::unique_ptr<LlamaBatch<T>> batch_;

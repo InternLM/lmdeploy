@@ -182,7 +182,12 @@ struct SATypeConverter<half> {
 };
 
 template<typename T>
-void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t st)
+void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p,
+                       T**                                       per_sample_k_cache,
+                       T**                                       per_sample_v_cache,
+                       const int*                                sequence_length,
+                       int                                       max_memory_len,
+                       cudaStream_t                              st)
 {
     using DataType = typename SATypeConverter<T>::Type;
 
@@ -204,18 +209,18 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t
     params.stride   = p.stride;
     params.finished = (bool*)p.finished;
 
-    params.k_cache_per_sample         = reinterpret_cast<DataType**>(p.per_sample_k_cache);
-    params.v_cache_per_sample         = reinterpret_cast<DataType**>(p.per_sample_v_cache);
+    params.k_cache_per_sample         = reinterpret_cast<DataType**>(per_sample_k_cache);
+    params.v_cache_per_sample         = reinterpret_cast<DataType**>(per_sample_v_cache);
     params.kv_cache_per_sample_offset = p.layer_offset;
     params.batch_size                 = p.batch_size;
     params.beam_width                 = 1;
-    params.memory_max_len             = p.max_seq_len;
+    params.memory_max_len             = max_memory_len;
     params.prefix_prompt_lengths      = 0;
     params.max_prefix_prompt_length   = 0;
-    params.length_per_sample          = p.per_sample_length;  // max_input_length + current output length
+    params.length_per_sample          = sequence_length;  // max_input_length + current output length
 
     for (int i = 0; i < p.batch_size; ++i) {
-        params.timestep = std::max(p.per_sample_length[i], params.timestep);
+        params.timestep = std::max(sequence_length[i], params.timestep);
     }
 
     std::cout << "timestep = " << params.timestep << "\n";
@@ -237,6 +242,11 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p, cudaStream_t
     masked_multihead_attention(params, st);
 }
 
-template void mmha_ft_reference(const DecoderMultiHeadAttentionParams<half>& params, cudaStream_t st);
+template void mmha_ft_reference(const DecoderMultiHeadAttentionParams<half>& params,
+                                half**                                       per_sample_k_cache,
+                                half**                                       per_sample_v_cache,
+                                const int*                                   sequence_length,
+                                int                                          max_memory_len,
+                                cudaStream_t                                 st);
 
 }  // namespace turbomind

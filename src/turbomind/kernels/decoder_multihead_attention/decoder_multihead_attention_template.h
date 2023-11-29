@@ -145,7 +145,7 @@ struct DecoderMultiHeadAttentionKernel {
         kv_head_idx_             = head_idx_ / gqa_group_size;
         is_gqa_leader_           = head_idx_ % gqa_group_size == 0;
 
-        timestep_ = params_.per_sample_length[batch_idx_];
+        timestep_ = params_.context_length[batch_idx_] - 1;
 
         if (kSplitK && params.max_split_k > 1) {
             const int slice_count     = (timestep_ + kSliceLen - 1) / kSliceLen;
@@ -815,7 +815,7 @@ struct DecoderMultiHeadAttentionKernel {
     {
         const int batch_idx       = get_batch_idx();
         const int head_idx        = get_head_idx();
-        const int timestep        = params.per_sample_length[batch_idx];
+        const int timestep        = params.context_length[batch_idx] - 1;
         const int max_split_k     = params.max_split_k;
         const int slice_count     = get_slice_count(timestep);
         const int slice_per_split = (slice_count + max_split_k - 1) / max_split_k;

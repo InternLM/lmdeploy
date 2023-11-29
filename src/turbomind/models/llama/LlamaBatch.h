@@ -9,6 +9,7 @@
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -53,6 +54,9 @@ struct GenerationState {
 
     std::vector<uint64_t> unique_ids;
 
+    int max_input_count1;
+    int max_input_count2;
+
     int finished_count;
 };
 
@@ -72,6 +76,10 @@ public:
 
     void ProcessInferRequests(const Requests& requests);
 
+    void AdjustMaxInputCount(GenerationState&                    g,
+                             const std::vector<const Sequence*>& sequences,
+                             const std::vector<int>&             context_length);
+
     void Initialize(GenerationState& g);
 
     void InitializeSampling(const GenerationState& g);
@@ -85,11 +93,7 @@ public:
     void
     OutputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
 
-    explicit LlamaBatch(int                              max_batch_size,
-                        int                              max_context_token_num,
-                        int                              session_len,
-                        std::unique_ptr<SequenceManager> sequence_manager,
-                        LlamaV2<T>*                      llama);
+    explicit LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model);
 
     ~LlamaBatch()
     {
@@ -180,7 +184,7 @@ private:
 private:
     const int  max_batch_size_;
     const int  max_context_token_num_;
-    const int  session_len_;
+    int        session_len_;
     const int  rank_;
     const bool debug_;
     const int  step_length_;
@@ -290,6 +294,10 @@ private:
     bool                    output_stop_token_{false};
 
     int* h_output_ids_{};
+
+    const int prefill_token_count_;
+    const int prefill_token_tolerance_;
+    const int prefill_max_iterations_;
 };
 
 }  // namespace turbomind
