@@ -7,6 +7,7 @@ The evaluation script is `profile_serving.py`. Before running it, please install
 ```shell
 pip install 'lmdeploy[serve]>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
@@ -30,15 +31,35 @@ $$
 And the formula for calculating `request throughput` is:
 
 $$
-RPM(request\\ per\\ minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
+RPM(request\\ per\\ minute)=Number\\ of\\ prompts/TotalTime * 60
 $$
 
 Total time includes prefill time.
 
-## Methods
+## Example
+
+We take `internlm-7b` as an example. The entire benchmark procedure is:
 
 ```shell
-python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optional arguments>
+pip install 'lmdeploy[serve]>=0.1.0a0'
+git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
+wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+
+# get internlm-7b from huggingface and convert it to turbomind format
+lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+
+# launch server
+bash ./internlm-7b/service_docker_up.sh
+
+# open another terminal and run the following command in the directory `lmdeploy/benchmark`
+python3 ./profile_serving 0.0.0.0:33337 ./internlm-7b/triton_models/tokenizer ./ShareGPT_V3_unfiltered_cleaned_split.json
+```
+
+## Command details
+
+```shell
+python3 profile_serving.py <server_addr> <tokenizer_path> <dataset> <optional arguments>
 ```
 
 The required parameters are:

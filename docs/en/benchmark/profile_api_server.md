@@ -7,6 +7,7 @@ The evaluation script is `profile_restful_api.py`. Before running it, please ins
 ```shell
 pip install 'lmdeploy[serve]>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
@@ -30,12 +31,35 @@ $$
 And the formula for calculating `request throughput` is:
 
 $$
-RPM(request\\ per\\ minute)=Number\\ of\\ generated\\ tokens/TotalTime * 60
+RPM(request\\ per\\ minute)=Number\\ of\\ prompts/TotalTime * 60
 $$
 
 Total time includes prefill time.
 
+## Example
+
+We take `internlm-7b` as an example. The entire benchmark procedure is:
+
+```shell
+pip install 'lmdeploy[serve]>=0.1.0a0'
+git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
+wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+
+# get internlm-7b from huggingface and convert it to turbomind format
+lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+
+# launch server
+lmdeploy serve api_server ./internlm-7b --server-port 23333
+
+# open another terminal and run the following command in the directory `lmdeploy/benchmark`
+python3 ./profile_restful_api.py http://0.0.0.0:23333 ./internlm-7b/triton_models/tokenizer ./ShareGPT_V3_unfiltered_cleaned_split.json
+```
+
 ## Methods
+
+Please refer to [this](../restful_api.md) guide to start `api_server`.
+The argument `--instance-num` reflects the inference instance number. When more than `--instance-num` requests arrive at the `api_server` at the same time, the exceeding part of the requests will wait in the inference queue.
 
 ```shell
 python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optional arguments>

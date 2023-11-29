@@ -9,6 +9,7 @@ The evaluation script is `profile_throughput.py`. Before running it, please inst
 ```shell
 pip install 'lmdeploy>=0.1.0a0'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
@@ -32,12 +33,28 @@ $$
 And the formula for calculating `request throughput` is:
 
 $$
-RPM(request\\ per\\ minute) = Number\\ of\\ generated\\ tokens/TotalTime * 60
+RPM(request\\ per\\ minute) = Number\\ of\\ prompts/TotalTime * 60
 $$
 
 Total time includes prefill time.
 
-## Methods
+## Example
+
+We take `internlm-7b` as an example. The entire benchmark procedure is:
+
+```shell
+pip install 'lmdeploy[serve]>=0.1.0a0'
+git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
+wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+
+# get internlm-7b from huggingface and convert it to turbomind format
+lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+
+python3 profile_throughput.py ./internlm-7b ./ShareGPT_V3_unfiltered_cleaned_split.json
+```
+
+## Command details
 
 ```shell
 python3 profile_throughput.py <dataset> <model_path> <optional arguments>

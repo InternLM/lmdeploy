@@ -37,6 +37,23 @@ $$
 
 总时间包括 prefill 时间
 
+## 测试案例
+
+我们用 `internlm-7b` 为例，api_server的速度测试全流程如下：
+
+```shell
+pip install 'lmdeploy[serve]>=0.1.0a0'
+git clone --depth=1 https://github.com/InternLM/lmdeploy
+cd lmdeploy/benchmark
+wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+
+# 从huggingface下载internlm-7b，并转为turbomind模型格式
+lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+
+# 执行测速脚本
+python3 profile_throughput.py ./internlm-7b ./ShareGPT_V3_unfiltered_cleaned_split.json
+```
+
 ## 测试方法
 
 ```shell
