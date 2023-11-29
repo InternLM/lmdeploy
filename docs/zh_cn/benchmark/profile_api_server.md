@@ -67,7 +67,7 @@ python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optiona
 
   从数据集中采样的prompt数量，默认是 2000
 
-- `--top_k`、`--top_p` 和 `--temperature`
+- `--top_p` 和 `--temperature`
 
   这三个参数用来采样生成的 token_id
 

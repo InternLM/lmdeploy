@@ -66,7 +66,7 @@ Optional arguments are listed as below:
 
   The number of sampled prompts from dataset to process. The default is 2000.
 
-- `--top_k`、`--top_p` and `--temperature`
+- `--top_p` and `--temperature`
 
   They are used to sample the generated token_id.
 
