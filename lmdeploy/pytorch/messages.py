@@ -149,7 +149,11 @@ class SchedulerSequence:
         if len(self.logical_blocks) == 0:
             return 0
         else:
-            return sum(block.num_tokens for block in self.logical_blocks)
+            if self.logical_blocks[0].block_size == 1:
+                # unify paging
+                return len(self.logical_blocks)
+            else:
+                return sum(block.num_tokens for block in self.logical_blocks)
 
     def num_required_tokens(self) -> int:
         """num required tokens."""
@@ -183,9 +187,10 @@ class SchedulerSequence:
             logical_block.append_tokens(num_tokens=num_tokens)
             self.logical_blocks.append(logical_block)
 
-    def update_token_ids(self, token_ids: Tensor):
+    def update_token_ids(self, token_ids: Tensor, update_history: bool = True):
         """Update token ids, old token ids will be added to history."""
-        self.history_token_ids += self.token_ids.tolist()
+        if update_history:
+            self.history_token_ids += self.token_ids.tolist()
         if not isinstance(token_ids, Tensor):
             token_ids = self.token_ids.new_tensor(token_ids)
         if token_ids.dim() == 0:

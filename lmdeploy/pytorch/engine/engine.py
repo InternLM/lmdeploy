@@ -149,6 +149,7 @@ class Engine:
         scheduler_config = scheduler_config or SchedulerConfig(
             max_batches=64, max_session_len=4096, max_request_output_len=512)
 
+        # block_size = 1 to enable unified paging
         cache_config = cache_config or CacheConfig(
             block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
 
@@ -336,17 +337,18 @@ class Engine:
         if not is_decoding:
             seq_length = [tokens.size(0) for tokens in token_ids]
             max_seq_len = max(seq_length)
-            q_start_loc = torch.tensor([0] +
-                                       seq_length).cumsum(0)[:-1].to(device)
+            q_start_loc = torch.tensor(
+                [0] + seq_length, dtype=torch.long).cumsum(0)[:-1].to(device)
 
             attention_mask = torch.tensor([
                 seq_len * [1] + (max_seq_len - seq_len) * [0]
                 for seq_len in seq_length
-            ]).to(device)
+            ],
+                                          dtype=torch.long).to(device)
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids += position_ids.new_tensor(history_lengths).unsqueeze(
                 -1)
-            seq_length = torch.tensor(seq_length).to(device)
+            seq_length = torch.tensor(seq_length, dtype=torch.long).to(device)
         else:
             q_start_loc = torch.arange(batch_size, device=device)
             attention_mask = torch.ones(batch_size,
@@ -360,6 +362,7 @@ class Engine:
                                     device=device)
 
         block_tables = self.scheduler.get_block_tables(messages)
+        # TODO: get block offsets is slow when block_size = 1
         block_offsets = [[block.block_id for block in block_table]
                          for block_table in block_tables]
 

@@ -59,29 +59,45 @@ def _fill_kv_cache_kernel(
         tl.store(vc_ptrs + idx, vs, mask=mask)
 
 
-def _create_fill_cache_info(is_decoding: bool, block_size: int,
-                            start_loc: Tensor, seq_length: Tensor,
-                            block_offsets: Tensor, history_lengths: Sequence,
-                            device: torch.device):
-    """create information for cache filling.
-
-    There are 4 tensor that we need to generate. Each one has shape (N) where
-    N is the number of blocks that need to fill data.
-    1. state_start: the token offset where we copy data from.
-    2. cache_start: the token offset in block that we want to copy to.
-    3. state_len: how many data (tokens) we want to copy
-    4. block_offset1d: which block we want to perform the filling.
-    """
-    batch_size = block_offsets.size(0)
-
+def _prefilling_cache_info(block_size: int, seq_length: Tensor,
+                           block_offsets: Tensor, history_lengths: Sequence,
+                           device: torch.device):
     # make sure history lengths is a tensor
     if not isinstance(history_lengths, Tensor):
         history_lengths = torch.tensor(history_lengths, device=device)
 
-    first_block_ids = history_lengths // block_size
-    token_ids_start = history_lengths % block_size
-    if not is_decoding:
-        # prefilling
+    def _unified_cache_info():
+        total_blocks = seq_length.sum().item()
+
+        # cache start
+        cache_start = torch.zeros((total_blocks, ),
+                                  dtype=torch.long,
+                                  device=device)
+
+        state_len = torch.ones((total_blocks, ),
+                               dtype=torch.long,
+                               device=device)
+
+        # state_start (0~cumed state len)
+        cum_state_len = state_len.cumsum(0)
+        state_start = torch.cat(
+            [state_len.new_zeros((1, )), cum_state_len[:-1]])
+
+        # block offsets
+        block_offsets1d = [
+            offs[first:last]
+            for offs, first, last in zip(block_offsets, history_lengths.cpu(),
+                                         (seq_length + history_lengths).cpu())
+        ]
+        block_offsets1d = torch.cat(block_offsets1d)
+        return dict(state_start=state_start,
+                    state_len=state_len,
+                    cache_start=cache_start,
+                    block_offsets1d=block_offsets1d)
+
+    def _default_cache_info():
+        first_block_ids = history_lengths // block_size
+        token_ids_start = history_lengths % block_size
 
         # initialize
         kv_seq_length = history_lengths + seq_length
@@ -119,21 +135,55 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
                 block_offsets, first_block_ids.cpu(), last_block_ids.cpu())
         ]
         block_offsets1d = torch.cat(block_offsets1d)
+        return dict(state_start=state_start,
+                    state_len=state_len,
+                    cache_start=cache_start,
+                    block_offsets1d=block_offsets1d)
+
+    if block_size == 1:
+        return _unified_cache_info()
     else:
-        # decoding
-        state_start = start_loc
-        state_len = seq_length
-        cache_start = token_ids_start
-        batch_ids = torch.arange(batch_size, device=device)
-        block_offsets1d = block_offsets[batch_ids, first_block_ids]
+        return _default_cache_info()
 
-    fill_cache_info = dict()
-    fill_cache_info['state_start'] = state_start
-    fill_cache_info['state_len'] = state_len
-    fill_cache_info['cache_start'] = cache_start
-    fill_cache_info['block_offsets1d'] = block_offsets1d
 
-    return fill_cache_info
+def _decoding_cache_info(block_size: int, start_loc: Tensor,
+                         seq_length: Tensor, block_offsets: Tensor,
+                         history_lengths: Sequence, device: torch.device):
+    batch_size = block_offsets.size(0)
+
+    # make sure history lengths is a tensor
+    if not isinstance(history_lengths, Tensor):
+        history_lengths = torch.tensor(history_lengths, device=device)
+
+    first_block_ids = history_lengths // block_size
+    token_ids_start = history_lengths % block_size
+
+    batch_ids = torch.arange(batch_size, device=device)
+    return dict(state_start=start_loc,
+                state_len=seq_length,
+                cache_start=token_ids_start,
+                block_offsets1d=block_offsets[batch_ids, first_block_ids])
+
+
+def _create_fill_cache_info(is_decoding: bool, block_size: int,
+                            start_loc: Tensor, seq_length: Tensor,
+                            block_offsets: Tensor, history_lengths: Sequence,
+                            device: torch.device):
+    """create information for cache filling.
+
+    There are 4 tensor that we need to generate. Each one has shape (N) where
+    N is the number of blocks that need to fill data.
+    1. state_start: the token offset where we copy data from.
+    2. cache_start: the token offset in block that we want to copy to.
+    3. state_len: how many data (tokens) we want to copy
+    4. block_offset1d: which block we want to perform the filling.
+    """
+    if not is_decoding:
+        return _prefilling_cache_info(block_size, seq_length, block_offsets,
+                                      history_lengths, device)
+    else:
+        return _decoding_cache_info(block_size, start_loc, seq_length,
+                                    block_offsets, history_lengths, device)
 
 
 def fill_kv_cache(k_states: Tensor,
@@ -162,6 +212,14 @@ def fill_kv_cache(k_states: Tensor,
         history_lengths (Sequence): The history lengths of each data in batch.
         context (Any): Context object of current step.
     """
+
+    def _kernel_meta():
+        device = k_states.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     fill_cache_info = getattr(context, 'fill_cache_info', None)
 
     if fill_cache_info is None:
@@ -187,28 +245,21 @@ def fill_kv_cache(k_states: Tensor,
     BLOCK_M = k_caches.size(-3)
     BLOCK_N = min(128, k_caches.stride(-3), v_caches.stride(-3))
 
-    device = k_states.device
-    device_idx = device.index
-    device_type = device.type
-    stream = get_cuda_stream(device_idx)
-    _fill_kv_cache_kernel[grid](
-        k_states,
-        v_states,
-        k_caches,
-        v_caches,
-        state_start=state_start,
-        state_len=state_len,
-        cache_start=cache_start,
-        block_offsets1d=block_offsets1d,
-        stride_kss=k_states.stride(-3),
-        stride_vss=v_states.stride(-3),
-        stride_kcs=k_caches.stride(-3),
-        stride_vcs=v_caches.stride(-3),
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        num_warps=4,
-        num_stages=1,
-        stream=stream,
-        device=device_idx,
-        device_type=device_type,
-    )
+    kernel_meta = _kernel_meta()
+    _fill_kv_cache_kernel[grid](k_states,
+                                v_states,
+                                k_caches,
+                                v_caches,
+                                state_start=state_start,
+                                state_len=state_len,
+                                cache_start=cache_start,
+                                block_offsets1d=block_offsets1d,
+                                stride_kss=k_states.stride(-3),
+                                stride_vss=v_states.stride(-3),
+                                stride_kcs=k_caches.stride(-3),
+                                stride_vcs=v_caches.stride(-3),
+                                BLOCK_M=BLOCK_M,
+                                BLOCK_N=BLOCK_N,
+                                num_warps=4,
+                                num_stages=1,
+                                **kernel_meta)

@@ -211,7 +211,6 @@ class PatchedSelfAttention(nn.Module):
         context_layer = torch.empty_like(query_layer)
 
         block_offsets = context.block_offsets
-        block_size = cache_k.size(1)
 
         paged_attention_fwd(query_layer,
                             cache_k,
@@ -221,8 +220,7 @@ class PatchedSelfAttention(nn.Module):
                             b_start_loc=q_start_loc,
                             b_seq_len=q_seq_length,
                             b_kv_seq_len=kv_seq_length,
-                            max_input_len=max_seq_len,
-                            BLOCK=block_size)
+                            max_input_len=max_seq_len)
 
         context_layer = context_layer.transpose(1, 0).flatten(-2)
 

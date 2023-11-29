@@ -30,7 +30,8 @@ class TestScheduler:
     def scheduler_config(self):
         yield SchedulerConfig(max_batches=4,
                               max_session_len=128,
-                              max_request_output_len=64)
+                              max_request_output_len=64,
+                              eviction_type='copy')
 
     @pytest.fixture
     def scheduler(self, cache_config, scheduler_config):

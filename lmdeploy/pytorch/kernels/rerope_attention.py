@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-import torch.utils.benchmark as benchmark
 import triton
 import triton.language as tl
 
@@ -219,6 +218,7 @@ def rerope_attention_fwd(q1,
 if __name__ == '__main__':
 
     def test_rerope():
+        import torch.utils.benchmark as benchmark
         Z = 1
         H = 40
         N_CTX = 2176

@@ -117,15 +117,15 @@ class StepContext:
     @classmethod
     def tensorlize_block_offsets(cls, block_offsets, device):
         """tensorlize block_offsets."""
-        # padding zero
-        # torch.nn.utils.rnn.pad_sequence is slower than manually concate
+        import numpy as np
         offset_len = [len(offset) for offset in block_offsets]
         max_offsets_len = max(offset_len)
         pad_block_offsets = [
             offset + [0] * (max_offsets_len - off_len)
             for offset, off_len in zip(block_offsets, offset_len)
         ]
-        block_offsets = torch.tensor(pad_block_offsets).to(device)
+        pad_block_offsets = np.array(pad_block_offsets, dtype=np.int64)
+        block_offsets = torch.from_numpy(pad_block_offsets).to(device)
         return block_offsets
 
     @classmethod
