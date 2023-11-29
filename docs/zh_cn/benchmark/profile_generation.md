@@ -5,7 +5,7 @@
 评测脚本是 `profile_generation.py`，在运行此脚本前，请安装 lmdeploy 预编译包，并下载评测脚本
 
 ```shell
-pip install 'lmdeploy>=0.1.0a0'
+pip install 'lmdeploy>=0.1.0a1'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 ```
 
@@ -35,12 +35,12 @@ $$
 我们用 `internlm-7b` 为例，api_server的速度测试全流程如下：
 
 ```shell
-pip install 'lmdeploy[serve]>=0.1.0a0'
+pip install 'lmdeploy>=0.1.0a1'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 
 # 从huggingface下载internlm-7b，并转为turbomind模型格式
-lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 
 # 执行测速脚本
 python3 profile_generation ./internlm-7b

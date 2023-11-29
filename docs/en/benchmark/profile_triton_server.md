@@ -5,7 +5,7 @@ Triton Inference Server (TIS) is another serving method supported by LMDeploy be
 The evaluation script is `profile_serving.py`. Before running it, please install the lmdeploy precompiled package, download the evaluation script and the test dataset:
 
 ```shell
-pip install 'lmdeploy[serve]>=0.1.0a0'
+pip install 'lmdeploy[serve]>=0.1.0a1'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
@@ -41,13 +41,13 @@ Total time includes prefill time.
 We take `internlm-7b` as an example. The entire benchmark procedure is:
 
 ```shell
-pip install 'lmdeploy[serve]>=0.1.0a0'
+pip install 'lmdeploy[serve]>=0.1.0a1'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
 # get internlm-7b from huggingface and convert it to turbomind format
-lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 
 # launch server
 bash ./internlm-7b/service_docker_up.sh

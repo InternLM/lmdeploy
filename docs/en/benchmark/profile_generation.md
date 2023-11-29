@@ -5,7 +5,7 @@ We view the performance of the inference engine under the fixed batch and fixed 
 The evaluation script is `profile_generation.py`. Before running it, please install the lmdeploy precompiled package and download the evaluation script:
 
 ```shell
-pip install 'lmdeploy>=0.1.0a0'
+pip install 'lmdeploy>=0.1.0a1'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 ```
 
@@ -35,12 +35,12 @@ During the test process, all graphics cards on the node should not run any other
 We take `internlm-7b` as an example. The entire benchmark procedure is:
 
 ```shell
-pip install 'lmdeploy[serve]>=0.1.0a0'
+pip install 'lmdeploy>=0.1.0a1'
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 
 # get internlm-7b from huggingface and convert it to turbomind format
-lmdeploy convert internlm-7b internlm/internlm-7b --dst-path ./internlm-7b
+lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 
 # benchmark
 python3 profile_generation.py ./internlm-7b
