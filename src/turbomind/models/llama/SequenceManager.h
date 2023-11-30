@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/BlockManager.h"
+#include <functional>
 
 namespace turbomind {
 
