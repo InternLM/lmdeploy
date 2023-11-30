@@ -19,7 +19,7 @@ def commondLineTest(config, case, case_info, model, type, extra):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model, case, case_info)
+    return commonTest(config, cmd, model, case, case_info, type == 'turbomind')
 
 
 def hfCommondLineTest(config, case, case_info, model_case, model_name):
@@ -32,7 +32,7 @@ def hfCommondLineTest(config, case, case_info, model_case, model_name):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case, case_info)
+    return commonTest(config, cmd, model_case, case, case_info, False)
 
 
 def pytorchCommondLineTest(config, case, case_info, model_case):
@@ -45,7 +45,7 @@ def pytorchCommondLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case, case_info)
+    return commonTest(config, cmd, model_case, case, case_info, False)
 
 
 def deepspeedCommondLineTest(config, case, case_info, model_case):
@@ -59,10 +59,10 @@ def deepspeedCommondLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case, case_info)
+    return commonTest(config, cmd, model_case, case, case_info, False)
 
 
-def commonTest(config, cmd, model, case, case_info):
+def commonTest(config, cmd, model, case, case_info, need_extract_output):
     log_path = config.get('log_path')
 
     if case == 'session_len_error':
@@ -109,7 +109,7 @@ def commonTest(config, cmd, model, case, case_info):
         # 结果判断
         index = 0
         for prompt_detail in case_info:
-            if type == 'turbomind':
+            if need_extract_output:
                 output = extract_output(outputDialogs[index], model)
             else:
                 output = outputDialogs[index]
@@ -152,7 +152,7 @@ def extract_output(output: str, model: str):
     if 'Baichuan2' in model:
         if len(output.split('<reserved_107>')) >= 2:
             return output.split('<reserved_107>')[1]
-    if 'Llama2' in model or 'CodeLlama' in model:
+    if 'llama' in model or 'Llama' in model:
         if len(output.split('[/INST]')) >= 2:
             return output.split('[/INST]')[1]
 

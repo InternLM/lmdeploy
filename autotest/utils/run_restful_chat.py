@@ -17,8 +17,6 @@ def openAiChatTest(config, case_info, model, url):
     result = True
 
     api_client = APIClient(url)
-    file.writelines('available_models:' +
-                    ','.join(api_client.available_models) + '\n')
     model_name = model
 
     messages = []
