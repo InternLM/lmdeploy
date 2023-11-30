@@ -1,4 +1,4 @@
-name: cuda12.1-whl
+name: cuda12.1-whl-release
 
 on:
   push:
@@ -91,7 +91,7 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    # environment: 'prod'
+    environment: 'prod'
     needs:
       - linux-build
       - windows-build
