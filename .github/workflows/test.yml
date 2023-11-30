@@ -7,6 +7,7 @@ on:
       - ".github/workflows/test.yml"
       - "cmake/**"
       - "src/**"
+      - "autotest/**"
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
@@ -93,8 +94,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
-          echo "TODO: awaiting PR of adding autotest"
-          # pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
+          pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
