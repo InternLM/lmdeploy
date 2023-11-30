@@ -822,7 +822,7 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                 }
                 const int max_size = *std::max_element(params.size.begin(), params.size.end());
                 auto      pred     = [&](auto S) { return max_size <= S; };
-                auto      func     = [&](auto S) {
+                auto      func     = [&](auto S) -> void {
                     constexpr int threads         = 128;
                     constexpr int items_per_block = threads / S;
                     const int     blocks          = (count + items_per_block - 1) / items_per_block;
