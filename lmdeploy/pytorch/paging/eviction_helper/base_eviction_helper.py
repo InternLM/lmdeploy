@@ -8,30 +8,38 @@ SeqList = List[SchedulerSequence]
 
 
 class BaseEvictionHelper:
+    """Base eviction helper."""
 
     def __init__(self, block_manager: BlockManager):
         self.block_manager: BlockManager = block_manager
 
     def can_swap_out(self, seq: SchedulerSequence):
+        """sequence can swap out."""
         raise NotImplementedError('Not implemented.')
 
     def can_swap_in(self, seq: SchedulerSequence):
+        """sequence can swap in."""
         raise NotImplementedError('Not implemented.')
 
     def need_swap_in(self, seq: SchedulerSequence):
+        """sequence need swap in."""
         raise NotImplementedError('Not implemented.')
 
     def try_swap_out_seqs(self, seqs: SeqList, swap_out_map: Dict[int, int]):
+        """try swap sequence out."""
         raise NotImplementedError('Not implemented.')
 
     def swap_in(self, seq: SchedulerSequence, swap_in_map: Dict[int, int]):
+        """sequence swap in."""
         raise NotImplementedError('Not implemented.')
 
     def swap_out(self, seq: SchedulerSequence, swap_out_map: Dict[int, int]):
+        """sequence swap out."""
         raise NotImplementedError('Not implemented.')
 
     def try_swap_out(self, hanging: SeqList, waiting: SeqList,
                      swap_out_map: Dict[int, int]):
+        """try swap out hanging and waiting sequence."""
         if self.try_swap_out_seqs(hanging, swap_out_map):
             return True
         else:
