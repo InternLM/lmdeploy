@@ -101,6 +101,23 @@ class RMSNorm(nn.Module):
 
 
 class RotaryEmbedding(torch.nn.Module):
+    """RotaryEmbedding for Baichuan Model.
+
+    This module generates sine and cosine positional encodings based on
+    the paper "RoFormer: Enhanced Transformer with Rotary Position Embedding".
+    The purpose of this class is to provide positional embeddings to the
+    input tensors. It utilizes a cache mechanism to store precomputed
+    sine and cosine values for speedup.
+
+    Args:
+        dim (int): The dimensionality of the embeddings.
+        max_position_embeddings (int, optional): The maximum number of
+            position embeddings. Default is 2048.
+        base (int, optional): The base value for the inverse frequency
+            calculation. Default is 10000.
+        device (str, optional): The device to run operations on.
+            If None, defaults to the device of the model.
+    """
 
     def __init__(self,
                  dim,
@@ -129,6 +146,10 @@ class RotaryEmbedding(torch.nn.Module):
                              persistent=False)
 
     def forward(self, x, seq_len=None):
+        """Forward propagation method for the embedding layer.
+
+        Generates positional embeddings for the given input tensor.
+        """
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in
         # `__init__`. Keep the logic here just in case.
@@ -161,6 +182,12 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
+    """Apply rotary positional embeddings to query and key tensors.
+
+    This function applies the cosine and sine positional embeddings on the
+    input query (q) and key (k) tensors using element-wise multiplication and
+    addition.
+    """
     # The first two dimensions of cos and sin are always 1,
     # so we can `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
@@ -173,6 +200,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
 
 
 class MLP(nn.Module):
+    """MLP for Baichuan Model."""
 
     def __init__(
         self,
@@ -229,6 +257,7 @@ class Attention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
+        """Forward propagation method for the attention layer."""
         bsz, q_len, _ = hidden_states.size()
 
         proj = self.W_pack(hidden_states)
@@ -305,6 +334,7 @@ class Attention(nn.Module):
 
 
 class DecoderLayer(nn.Module):
+    """Decoder layer for Baichuan Model."""
 
     def __init__(self, config: BaiChuanConfig):
         super().__init__()
@@ -599,6 +629,13 @@ class Model(PreTrainedModel):
 
 
 class BaiChuanForCausalLM(PreTrainedModel):
+    """This class extends the `PreTrainedModel` to enable causal language
+    modeling.
+
+    It wraps the basic Baichuan model (`Model`) and includes a linear layer as
+    a language model head (`lm_head`). The purpose is to predict token
+    probabilities, given the previous tokens in the sequence.
+    """
 
     def __init__(self, config):
         super().__init__(config)
@@ -613,21 +650,27 @@ class BaiChuanForCausalLM(PreTrainedModel):
         convert_to_qmodules(self)
 
     def get_input_embeddings(self):
+        """Get the token embedding layer."""
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value):
+        """Set the token embedding layer."""
         self.model.embed_tokens = value
 
     def get_output_embeddings(self):
+        """Get the output embedding layer."""
         return self.lm_head
 
     def set_output_embeddings(self, new_embeddings):
+        """Set the output embedding layer."""
         self.lm_head = new_embeddings
 
     def set_decoder(self, decoder):
+        """Set the decoder model."""
         self.model = decoder
 
     def get_decoder(self):
+        """Get the decoder model."""
         return self.model
 
     def forward(
@@ -725,6 +768,20 @@ class BaiChuanForCausalLM(PreTrainedModel):
                                       attention_mask=None,
                                       inputs_embeds=None,
                                       **kwargs):
+        """Prepare inputs for generating sequences using the model.
+
+        Args:
+            input_ids (torch.Tensor): Input token ids.
+            past_key_values (list[torch.Tensor], optional): List of past key
+                and value states.
+            attention_mask (torch.Tensor, optional): Mask indicating which
+                tokens should be attended to.
+            inputs_embeds (torch.FloatTensor, optional): Optionally,
+                the input embeddings instead of token ids.
+
+        Returns:
+            dict: Dictionary containing prepared inputs for model generation.
+        """
         if past_key_values:
             input_ids = input_ids[:, -1:]
 
@@ -753,6 +810,12 @@ class BaiChuanForCausalLM(PreTrainedModel):
 
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
+        """Reorder cached past key-values during generation using beam search.
+
+        This function reorders the cached past key-values according to the
+        given indices. It's useful in beam search where the order of hypotheses
+        can change from one time-step to another.
+        """
         reordered_past = ()
         for layer_past in past_key_values:
             reordered_past += (tuple(
