@@ -801,6 +801,13 @@ __global__ void batchedCopy(BatchedCopyParam<T, C> param)
     }
 }
 
+// MSVC does not like CUDA kernel launch inside nested lambdas
+template<int S, int C, class T>
+void launchBatchedCopy(int blocks, int threads, const BatchedCopyParam<T, C>& params, cudaStream_t st)
+{
+    batchedCopy<S><<<blocks, threads, 0, st>>>(params);
+}
+
 void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cudaStream_t st)
 {
     dispatch(
@@ -825,11 +832,11 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                     std::integer_sequence<int, 1, 2, 4, 8, 16, 32, 64, 128>{},
                     [&](auto S) { return max_size <= S; },
                     [&](auto S) {
-                        // constexpr int threads         = 128;
-                        // constexpr int items_per_block = threads / S;
-                        // const int     blocks          = (count + items_per_block - 1) / items_per_block;
-                        // batchedCopy<S><<<blocks, threads, 0, st>>>(params);
-                        // return 0;
+                        constexpr int threads         = 128;
+                        constexpr int items_per_block = threads / S;
+                        const int     blocks          = (count + items_per_block - 1) / items_per_block;
+                        launchBatchedCopy<S>(blocks, threads, params, st);
+                        return 0;
                     });
             }
         });
