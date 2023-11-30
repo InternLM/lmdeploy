@@ -821,14 +821,16 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                     params.size[i] = size[c + i] / sizeof(T);
                 }
                 const int max_size = *std::max_element(params.size.begin(), params.size.end());
-                auto      pred     = [&](auto S) { return max_size <= S; };
-                auto      func     = [&](auto S) -> void {
-                    constexpr int threads         = 128;
-                    constexpr int items_per_block = threads / S;
-                    const int     blocks          = (count + items_per_block - 1) / items_per_block;
-                    batchedCopy<S><<<blocks, threads, 0, st>>>(params);
-                };
-                dispatch(std::integer_sequence<int, 1, 2, 4, 8, 16, 32, 64, 128>{}, pred, func);
+                dispatch(
+                    std::integer_sequence<int, 1, 2, 4, 8, 16, 32, 64, 128>{},
+                    [&](auto S) { return max_size <= S; },
+                    [&](auto S) {
+                        constexpr int threads         = 128;
+                        constexpr int items_per_block = threads / S;
+                        const int     blocks          = (count + items_per_block - 1) / items_per_block;
+                        batchedCopy<S><<<blocks, threads, 0, st>>>(params);
+                        return 0;
+                    });
             }
         });
 }
