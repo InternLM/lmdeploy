@@ -1,8 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import generators
+
 import asyncio
 import dataclasses
 import random
 from contextlib import contextmanager
+from queue import Queue
 from typing import List, Literal, Optional
 
 
@@ -40,18 +43,21 @@ class AsyncEngine:
         self.starts = [None] * instance_num
         self.steps = {}
         self.loop = asyncio.get_event_loop()
+        self.generator_alone = self.tm_model.create_instance()
+        self.gen_queue = Queue()
+        for i in range(instance_num):
+            self.gen_queue.put(self.generators[i])
 
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
-        for outputs in self.generators[instance_id].stream_infer(
-                session_id,
-                input_ids,
-                request_output_len=0,
-                sequence_start=False,
-                sequence_end=False,
-                stop=True):
+        for outputs in self.generator_alone.stream_infer(session_id,
+                                                         input_ids,
+                                                         request_output_len=0,
+                                                         sequence_start=False,
+                                                         sequence_end=False,
+                                                         stop=True):
             pass
         self.available[instance_id] = True
 
@@ -59,26 +65,24 @@ class AsyncEngine:
         """Clear a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
-        for outputs in self.generators[instance_id].stream_infer(
-                session_id,
-                input_ids,
-                request_output_len=0,
-                sequence_start=False,
-                sequence_end=True,
-                stop=True):
+        for outputs in self.generator_alone.stream_infer(session_id,
+                                                         input_ids,
+                                                         request_output_len=0,
+                                                         sequence_start=False,
+                                                         sequence_end=True,
+                                                         stop=True):
             pass
         self.steps[str(session_id)] = 0
         self.available[instance_id] = True
 
     @contextmanager
-    def safe_run(self, instance_id: int, session_id: Optional[int] = None):
+    def safe_run(self, generator, session_id: Optional[int] = None):
         """A context manager to make sure server's safe running."""
-        self.available[instance_id] = False
         try:
             yield
         except (Exception, asyncio.CancelledError) as e:  # noqa
             self.stop_session(session_id)
-        self.available[instance_id] = True
+        self.gen_queue.put(generator)
 
     async def get_embeddings(self, prompt, do_prerpocess=False):
         if do_prerpocess:
@@ -86,12 +90,13 @@ class AsyncEngine:
         input_ids = self.tokenizer.encode(prompt)
         return input_ids
 
-    async def get_generator(self, instance_id: int, stop: bool = False):
+    async def get_generator(self, stop: bool):
         """Only return the model instance if it is available."""
-        if not stop:
-            while self.available[instance_id] is False:
-                await asyncio.sleep(0.1)
-        return self.generators[instance_id]
+        if stop:
+            return self.generator_alone
+        while self.gen_queue.qsize() == 0:
+            await asyncio.sleep(0.01)
+        return self.gen_queue.get()
 
     def batch_infer(self,
                     prompts: List[str],
@@ -189,7 +194,6 @@ class AsyncEngine:
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages.
         """
-        instance_id = session_id % self.instance_num
         if str(session_id) not in self.steps:
             self.steps[str(session_id)] = 0
         if step != 0:
@@ -208,8 +212,8 @@ class AsyncEngine:
             if sequence_end is True and sequence_start is False:
                 self.end_session(session_id)
         else:
-            generator = await self.get_generator(instance_id, stop)
-            with self.safe_run(instance_id, session_id):
+            generator = await self.get_generator(stop=stop)
+            with self.safe_run(generator, session_id):
                 response_size = 0
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
