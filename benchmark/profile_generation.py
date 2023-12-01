@@ -20,6 +20,7 @@ from lmdeploy.turbomind import TurboMind
 
 
 def infer(model, session_id: int, input_ids: List, output_seqlen: int,
+          top_k: int, top_p: float, temperature: float,
           test_round: int, que: Queue):
     chatbot = model.create_instance()
     stats = []
@@ -45,7 +46,10 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
                                             sequence_start=True,
                                             sequence_end=True,
                                             ignore_eos=True,
-                                            stream_output=True):
+                                            stream_output=True,
+                                            top_k=top_k,
+                                            top_p=top_p,
+                                            temperature=temperature):
             _, n_token = outputs[0]
             now = time.perf_counter()
             if n_pre_token != n_token:
@@ -75,7 +79,10 @@ def warmup(model,
                                           request_output_len=output_seqlen,
                                           sequence_start=True,
                                           sequence_end=True,
-                                          ignore_eos=True):
+                                          ignore_eos=True,
+                                          top_k=1,
+                                          top_p=1.0,
+                                          temperature=1.0):
                 continue
 
     _start = time.perf_counter()
@@ -97,11 +104,14 @@ def warmup(model,
 
 
 def profile_throughput(model_path: str,
-                       concurrency: int = 1,
-                       input_seqlen: int = 1,
-                       output_seqlen: int = 512,
-                       test_round: int = 10,
-                       tp: int = 1,
+                       concurrency: int,
+                       input_seqlen: int,
+                       output_seqlen: int,
+                       tp: int,
+                       top_k: int,
+                       top_p: float,
+                       temperature: float,
+                       test_round: int,
                        **kwargs):
     # avoid turbomind checking chat template name by setting
     # `model_name='llama'`
@@ -111,7 +121,7 @@ def profile_throughput(model_path: str,
                          **kwargs)
     # tokenizer = tm_model.tokenizer
 
-    # make up a prompt that can be tokenized into {input_seqlen} tokens
+    # make up a dump `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
     input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
     warmup(tm_model, concurrency, input_ids, output_seqlen)
@@ -123,6 +133,7 @@ def profile_throughput(model_path: str,
     for i in range(concurrency):
         proc = Thread(target=infer,
                       args=(tm_model, i + 1, input_ids, output_seqlen,
+                            top_k, top_p, temperature,
                             test_round, que))
         procs.append(proc)
         proc.start()
@@ -368,24 +379,25 @@ def main():
                               mem_per_proc=memory,
                               mem_per_gpu=memory / tp,
                               mem_per_node=memory / tp * device_count))
-    with open(args.csv, 'w') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow([
-            'batch', 'prompt_tokens', 'completion_tokens',
-            '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
-            '1st_token_latency(ave)(s)', 'percentile50(s)', 'percentile75(s)',
-            'percentile95(s)', 'percentile99(s)', 'throughput(token/s)',
-            'mem_per_proc(GB)', 'mem_per_gpu(GB)'
-        ])
-        for re in results:
+    if args.csv:
+        with open(args.csv, 'w') as csvfile:
+            writer = csv.writer(csvfile)
             writer.writerow([
-                re.batch, re.prompt_tokens, re.completion_tokens,
-                re.first_token_latency[0], re.first_token_latency[1],
-                re.first_token_latency[2], re.percentiles[0],
-                re.percentiles[1], re.percentiles[2], re.percentiles[3],
-                f'{re.throughput_per_proc:.2f}', f'{re.mem_per_proc:.2f}',
-                f'{re.mem_per_gpu:.2f}'
+                'batch', 'prompt_tokens', 'completion_tokens',
+                '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
+                '1st_token_latency(ave)(s)', 'percentile50(s)', 'percentile75(s)',
+                'percentile95(s)', 'percentile99(s)', 'throughput(token/s)',
+                'mem_per_proc(GB)', 'mem_per_gpu(GB)'
             ])
+            for re in results:
+                writer.writerow([
+                    re.batch, re.prompt_tokens, re.completion_tokens,
+                    re.first_token_latency[0], re.first_token_latency[1],
+                    re.first_token_latency[2], re.percentiles[0],
+                    re.percentiles[1], re.percentiles[2], re.percentiles[3],
+                    f'{re.throughput_per_proc:.2f}', f'{re.mem_per_proc:.2f}',
+                    f'{re.mem_per_gpu:.2f}'
+                ])
 
 
 if __name__ == '__main__':
