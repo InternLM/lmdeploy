@@ -121,7 +121,7 @@ def profile_throughput(model_path: str,
                          **kwargs)
     # tokenizer = tm_model.tokenizer
 
-    # make up a dump `input_ids` with the length of `input_seqlen` exactly
+    # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
     input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
     warmup(tm_model, concurrency, input_ids, output_seqlen)
