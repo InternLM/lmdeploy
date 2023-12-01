@@ -20,8 +20,8 @@ from lmdeploy.turbomind import TurboMind
 
 
 def infer(model, session_id: int, input_ids: List, output_seqlen: int,
-          top_k: int, top_p: float, temperature: float,
-          test_round: int, que: Queue):
+          top_k: int, top_p: float, temperature: float, test_round: int,
+          que: Queue):
     chatbot = model.create_instance()
     stats = []
     for _ in range(test_round):
@@ -103,16 +103,9 @@ def warmup(model,
     print(f'end warmup, elapsed time: {round(_end - _start, 2)}s')
 
 
-def profile_throughput(model_path: str,
-                       concurrency: int,
-                       input_seqlen: int,
-                       output_seqlen: int,
-                       tp: int,
-                       top_k: int,
-                       top_p: float,
-                       temperature: float,
-                       test_round: int,
-                       **kwargs):
+def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
+                       output_seqlen: int, tp: int, top_k: int, top_p: float,
+                       temperature: float, test_round: int, **kwargs):
     # avoid turbomind checking chat template name by setting
     # `model_name='llama'`
     tm_model = TurboMind(model_path=model_path,
@@ -132,9 +125,8 @@ def profile_throughput(model_path: str,
 
     for i in range(concurrency):
         proc = Thread(target=infer,
-                      args=(tm_model, i + 1, input_ids, output_seqlen,
-                            top_k, top_p, temperature,
-                            test_round, que))
+                      args=(tm_model, i + 1, input_ids, output_seqlen, top_k,
+                            top_p, temperature, test_round, que))
         procs.append(proc)
         proc.start()
 
@@ -385,9 +377,9 @@ def main():
             writer.writerow([
                 'batch', 'prompt_tokens', 'completion_tokens',
                 '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
-                '1st_token_latency(ave)(s)', 'percentile50(s)', 'percentile75(s)',
-                'percentile95(s)', 'percentile99(s)', 'throughput(token/s)',
-                'mem_per_proc(GB)', 'mem_per_gpu(GB)'
+                '1st_token_latency(ave)(s)', 'percentile50(s)',
+                'percentile75(s)', 'percentile95(s)', 'percentile99(s)',
+                'throughput(token/s)', 'mem_per_proc(GB)', 'mem_per_gpu(GB)'
             ])
             for re in results:
                 writer.writerow([
