@@ -54,11 +54,12 @@ class TestScheduler:
         assert seq in scheduler.waiting
 
         output = scheduler.schedule()
+        block_tables = scheduler.get_block_tables(output.running)
 
         assert seq.status == MessageStatus.RUNNING
         assert seq in output.running
-        assert len(output.block_tables) == 1
-        assert len(output.block_tables[0]) == num_blocks
+        assert len(block_tables) == 1
+        assert len(block_tables[0]) == num_blocks
         assert block_manager.get_num_free_gpu_blocks(
         ) == num_gpu_blocks - num_blocks
 

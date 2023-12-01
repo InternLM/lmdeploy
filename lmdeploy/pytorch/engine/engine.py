@@ -126,6 +126,22 @@ def _build_model_agent(model_path: str,
     return model_agent
 
 
+def _tensorlize_block_offsets(block_offsets):
+    """tensorlize block_offsets."""
+    import numpy as np
+    offset_len = [len(offset) for offset in block_offsets]
+    max_offsets_len = max(offset_len)
+    batch_size = len(offset_len)
+    pad_block_offsets = np.zeros((batch_size, max_offsets_len), dtype=np.int64)
+
+    for pad_offset, offset, off_len in zip(pad_block_offsets, block_offsets,
+                                           offset_len):
+        pad_offset[:off_len] = offset
+
+    block_offsets = torch.from_numpy(pad_block_offsets)
+    return block_offsets
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -361,10 +377,9 @@ class Engine:
                                     dtype=torch.long,
                                     device=device)
 
-        block_tables = self.scheduler.get_block_tables(messages)
         # TODO: get block offsets is slow when block_size = 1
-        block_offsets = [[block.block_id for block in block_table]
-                         for block_table in block_tables]
+        block_offsets = self.scheduler.get_block_tables(messages)
+        block_offsets = _tensorlize_block_offsets(block_offsets).to(device)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -404,7 +419,7 @@ class Engine:
             return msg.remain_output_len <= 0
 
         def _check_session_len(msg, max_session_len):
-            session_len = sum(block.num_tokens for block in msg.logical_blocks)
+            session_len = msg.logical_blocks.num_tokens()
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param

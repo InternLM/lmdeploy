@@ -95,7 +95,7 @@ class StepContext:
         json_config: dict = None,
     ):
         self.inputs = inputs
-        self.block_offsets_list = inputs.block_offsets
+        self.block_offsets = inputs.block_offsets
         self.position_ids = inputs.position_ids
         self.q_start_loc = inputs.q_start_loc
         self.history_lengths = inputs.history_lengths
@@ -107,8 +107,6 @@ class StepContext:
         # seq_len + history_length
         self.kv_seq_length = self.position_ids[..., -1] + 1
 
-        self.block_offsets = self.tensorlize_block_offsets(
-            self.block_offsets_list, device)
         self.position_ids_1d = self.get_position_ids_1d(
             self.position_ids, self.seq_length, device)
 
@@ -120,11 +118,14 @@ class StepContext:
         import numpy as np
         offset_len = [len(offset) for offset in block_offsets]
         max_offsets_len = max(offset_len)
-        pad_block_offsets = [
-            offset + [0] * (max_offsets_len - off_len)
-            for offset, off_len in zip(block_offsets, offset_len)
-        ]
-        pad_block_offsets = np.array(pad_block_offsets, dtype=np.int64)
+        batch_size = len(offset_len)
+        pad_block_offsets = np.zeros((batch_size, max_offsets_len),
+                                     dtype=np.int64)
+
+        for pad_offset, offset, off_len in zip(pad_block_offsets,
+                                               block_offsets, offset_len):
+            pad_offset[:off_len] = offset
+
         block_offsets = torch.from_numpy(pad_block_offsets).to(device)
         return block_offsets
 
@@ -319,6 +320,29 @@ def _tp_build_model(
     patched_model = None
     cache_engine = None
 
+    def _broadcast_config(cache_config):
+        """broadcast cache config, use minimum cache."""
+        if rank == 0:
+            gathered_configs = [None] * world_size
+            dist.gather_object(cache_config, gathered_configs)
+            num_gpu_blocks_list = [
+                config.num_gpu_blocks for config in gathered_configs
+            ]
+            num_cpu_blocks_list = [
+                config.num_cpu_blocks for config in gathered_configs
+            ]
+            min_num_gpu_blocks = min(num_gpu_blocks_list)
+            min_num_cpu_blocks = min(num_cpu_blocks_list)
+            cache_config.num_cpu_blocks = min_num_cpu_blocks
+            cache_config.num_gpu_blocks = min_num_gpu_blocks
+            config_list = [cache_config]
+        else:
+            gathered_configs = None
+            dist.gather_object(cache_config, gathered_configs)
+            config_list = [None]
+        dist.broadcast_object_list(config_list)
+        return config_list[0]
+
     try:
         config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
@@ -341,6 +365,7 @@ def _tp_build_model(
         )
 
         _update_cache_config(model_config, cache_config)
+        cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
                                    rank=rank,

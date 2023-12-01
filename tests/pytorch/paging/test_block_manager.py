@@ -2,47 +2,71 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.messages import SchedulerSession
-from lmdeploy.pytorch.paging.block_manager import BlockAllocator, BlockManager
+from lmdeploy.pytorch.paging.block_manager import (BlockManager,
+                                                   LogicalAllocator)
 
 
 class TestAllocator:
 
     @pytest.fixture
-    def block_size(self):
+    def num_gpu_blocks(self):
         yield 16
 
     @pytest.fixture
-    def block_num(self):
+    def num_cpu_blocks(self):
         yield 4
 
     @pytest.fixture
-    def device(self):
-        yield 'cpu'
+    def allocator(self, num_cpu_blocks, num_gpu_blocks):
+        yield LogicalAllocator(num_cpu_blocks, num_gpu_blocks)
 
-    @pytest.fixture
-    def allocator(self, block_size, block_num, device):
-        yield BlockAllocator(block_size, block_num, device)
+    def test_alloc(self, allocator, num_cpu_blocks, num_gpu_blocks):
 
-    def test_alloc(self, allocator, block_num):
-        assert allocator.get_num_free_blocks() == block_num
+        # initialize
+        num_blocks = num_cpu_blocks + num_gpu_blocks
+        gpu_allocator = allocator.get_phy_allocator('gpu')
+        cpu_allocator = allocator.get_phy_allocator('cpu')
+        assert allocator.get_num_free_blocks() == num_blocks
+        assert cpu_allocator.get_num_free_blocks() == num_cpu_blocks
+        assert gpu_allocator.get_num_free_blocks() == num_gpu_blocks
+
         # test allocate
-        block = allocator.allocate()
-        assert allocator.get_num_free_blocks() == block_num - 1
+        block_size = 4
+        blocks = allocator.allocate(block_size, 'gpu')
+        assert len(blocks) == block_size
+        assert allocator.get_num_free_blocks() == num_blocks - block_size
+        assert gpu_allocator.get_num_free_blocks(
+        ) == num_gpu_blocks - block_size
+
         # test free
-        block.ref_count += 1
-        allocator.free(block)
-        assert allocator.get_num_free_blocks() == block_num - 1
-        allocator.free(block)
-        assert allocator.get_num_free_blocks() == block_num
+        allocator.add_ref_count(blocks, 1)
+        allocator.free(blocks)
+        assert allocator.get_num_free_blocks() == num_blocks - block_size
+        allocator.free(blocks)
+        assert allocator.get_num_free_blocks() == num_blocks
+        assert gpu_allocator.get_num_free_blocks() == num_gpu_blocks
+        assert cpu_allocator.get_num_free_blocks() == num_cpu_blocks
+
+    def test_full(self, allocator, num_cpu_blocks, num_gpu_blocks):
+
+        num_blocks = num_cpu_blocks + num_gpu_blocks
+        gpu_allocator = allocator.get_phy_allocator('gpu')
+        cpu_allocator = allocator.get_phy_allocator('cpu')
+
         # no free blocks
-        blocks = [allocator.allocate() for _ in range(block_num)]
+        gpu_block_size = num_gpu_blocks
+        gpu_blocks = allocator.allocate(gpu_block_size, 'gpu')
+        cpu_block_size = num_cpu_blocks
+        cpu_blocks = allocator.allocate(cpu_block_size, 'cpu')
+        assert cpu_allocator.get_num_free_blocks() == 0
+        assert gpu_allocator.get_num_free_blocks() == 0
         with pytest.raises(MemoryError):
-            allocator.allocate()
-        for block in blocks:
-            allocator.free(block)
-        # double free
-        with pytest.raises(ValueError):
-            allocator.free(blocks[0])
+            allocator.allocate(1, 'gpu')
+        allocator.free(gpu_blocks)
+        allocator.free(cpu_blocks)
+        assert allocator.get_num_free_blocks() == num_blocks
+        assert gpu_allocator.get_num_free_blocks() == num_gpu_blocks
+        assert cpu_allocator.get_num_free_blocks() == num_cpu_blocks
 
 
 class TestBlockManager:
@@ -60,16 +84,16 @@ class TestBlockManager:
         yield 4
 
     @pytest.fixture
-    def block_mgr(self, block_size, num_cpu_blocks, num_gpu_blocks):
-        yield BlockManager(block_size, num_cpu_blocks, num_gpu_blocks)
+    def block_mgr(self, num_cpu_blocks, num_gpu_blocks):
+        yield BlockManager(num_cpu_blocks, num_gpu_blocks)
 
     def test_alloc(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0)
+        sess = SchedulerSession(0, block_size)
 
         # test alloc
         token_ids = torch.tensor([1])
         msg = sess.add_sequence(token_ids)
-        msg.append_tokens(1, block_size)
+        # msg.append_tokens(1, block_size)
         assert block_mgr.can_allocate(msg)
         block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
@@ -80,95 +104,100 @@ class TestBlockManager:
         # test free
         block_mgr.free(msg)
         block_table = block_mgr.get_block_table(msg)
-        assert block_table is None
+        assert block_table is None or len(block_table) == 0
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
 
         # alloc over limit
+        token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ),
+                                dtype=torch.int64)
         msg = sess.add_sequence(token_ids)
-        msg.append_tokens(num_gpu_blocks * block_size + 1, block_size)
         assert not block_mgr.can_allocate(msg)
 
     def test_append_slot(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0)
+        sess = SchedulerSession(0, block_size)
 
         # test append
         token_ids = torch.tensor([1])
         msg = sess.add_sequence(token_ids)
-        msg.append_tokens(1, block_size)
         block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
+        assert len(block_table) == 1
 
         # no new logical block
-        msg.append_tokens(block_size - 1, block_size)
+        msg.update_token_ids(torch.tensor([1] * (block_size - 1)))
         assert block_mgr.can_append_slot(msg)
         block_mgr.append_slot(msg)
+        block_table = block_mgr.get_block_table(msg)
         assert len(block_table) == 1
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 1
 
         # with new logical block
-        msg.append_tokens(1, block_size)
+        msg.update_token_ids(torch.tensor([1]))
         block_mgr.append_slot(msg)
+        block_table = block_mgr.get_block_table(msg)
         assert len(block_table) == 2
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
 
     def test_fork(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0)
+        sess = SchedulerSession(0, block_size)
 
-        token_ids = torch.tensor([1])
+        token_ids = torch.tensor([1] * (block_size * 2 + 1))
         from_msg = sess.add_sequence(token_ids)
-        from_msg.append_tokens(block_size + 1, block_size)
         block_mgr.allocate(from_msg)
         from_block_table = block_mgr.get_block_table(from_msg)
+        assert len(from_block_table) == 3
 
-        to_msg = sess.fork_sequence(token_ids, from_msg)
-        to_msg.append_tokens(1, block_size)
+        to_msg = sess.fork_sequence(torch.tensor([1]), from_msg)
 
         # fork
         assert block_mgr.can_fork(from_msg)
         copy_map = block_mgr.fork(from_msg, to_msg)
         block_table = block_mgr.get_block_table(to_msg)
-        assert len(block_table) == 2
-        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        assert len(block_table) == 3
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 4
         assert block_table[0] == from_block_table[0]
-        assert block_table[0].ref_count == 2
-        assert block_table[1] != from_block_table[1]
+        assert block_table[1] == from_block_table[1]
+        assert block_table[2] != from_block_table[2]
         assert len(copy_map) == 1
-        assert copy_map[
-            from_block_table[1].block_id] == block_table[1].block_id
+        assert copy_map[from_block_table[2]] == block_table[2]
 
         # can not fork
-        assert block_mgr.can_fork(from_msg)
+        assert not block_mgr.can_fork(from_msg)
 
     def test_swap(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0)
+        sess = SchedulerSession(0, block_size)
 
-        token_ids = torch.tensor([1])
+        token_ids = torch.tensor([1] * (block_size + 1))
         msg = sess.add_sequence(token_ids)
-        msg.append_tokens(block_size + 1, block_size)
         block_mgr.allocate(msg)
-        block_table = block_mgr.get_block_table(msg)
-        gpu_block_id = [block.block_id for block in block_table]
 
-        assert block_mgr.can_swap_out(msg)
-        swap_out_map = block_mgr.swap_out(msg)
+        old_phy_blocks = block_mgr.get_block_table(msg)
+        success, swap_map = block_mgr.try_swap_out(msg)
+        new_phy_blocks = block_mgr.get_block_table(msg)
+        assert success
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
         assert block_mgr.get_num_free_cpu_blocks() == num_gpu_blocks - 2
-        assert len(swap_out_map) == 2
-        for block_id in gpu_block_id:
-            assert block_id in swap_out_map
-        for block in block_table:
-            assert block.device == 'cpu'
+        assert len(swap_map) == 2
+        for block_id in old_phy_blocks:
+            assert block_id in swap_map
+        for block_id in new_phy_blocks:
+            assert block_id in swap_map.values()
 
-        assert block_mgr.can_swap_in(msg)
-        swap_in_map = block_mgr.swap_in(msg)
+        old_phy_blocks = block_mgr.get_block_table(msg)
+        success, swap_map = block_mgr.try_swap_in(msg)
+        new_phy_blocks = block_mgr.get_block_table(msg)
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
         assert block_mgr.get_num_free_cpu_blocks() == num_gpu_blocks
-        assert len(swap_in_map) == 2
-        for block in block_table:
-            assert block.device == 'gpu'
+        assert len(swap_map) == 2
+        for block_id in old_phy_blocks:
+            assert block_id in swap_map
+        for block_id in new_phy_blocks:
+            assert block_id in swap_map.values()
 
-        swap_out_map = block_mgr.swap_out(msg)
+        success, swap_map = block_mgr.try_swap_out(msg)
+        assert success
+        token_ids = torch.tensor([1] * (block_size * 4))
         msg_full = sess.add_sequence(token_ids)
-        msg_full.append_tokens(block_size * 4, block_size)
         block_mgr.allocate(msg_full)
-        assert not block_mgr.can_swap_out(msg_full)
+        success, swap_map = block_mgr.try_swap_out(msg)
+        assert not success

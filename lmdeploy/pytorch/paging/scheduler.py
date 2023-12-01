@@ -6,7 +6,6 @@ from typing import Dict, List
 
 from lmdeploy.utils import get_logger
 
-from ..block import PhysicalTokenBlock
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession
 from .block_manager import BlockManager
@@ -14,7 +13,6 @@ from .block_manager import BlockManager
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
-BlockTable = List[PhysicalTokenBlock]
 
 
 def _find_seq_with_session_id(group: SeqList, session_id: int):
@@ -29,7 +27,6 @@ class SchedulerOutput:
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
     copy_map: Dict[int, int]
-    block_tables: List[BlockTable]
 
 
 class Scheduler:
@@ -52,7 +49,6 @@ class Scheduler:
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = BlockManager(
-            cache_config.block_size,
             cache_config.num_gpu_blocks,
             cache_config.num_cpu_blocks,
         )
@@ -88,7 +84,7 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id)
+        session = SchedulerSession(session_id, self.cache_config.block_size)
         self.sessions[session_id] = session
         return session
 
@@ -141,13 +137,9 @@ class Scheduler:
             else:
                 return False
 
-        block_size = self.cache_config.block_size
-
         # 1. running
         for seq in self.running:
             # token + 1
-            num_required_tokens = seq.num_required_tokens()
-            seq.append_tokens(num_required_tokens, block_size)
 
             if len(seq.logical_blocks) > self.block_manager.num_gpu_blocks:
                 # Reach max gpu cache size.
@@ -161,8 +153,8 @@ class Scheduler:
             if not _try_append_slot(seq):
                 # try free unused cache from hanging and waiting
                 do_running = False
-                while eviction_helper.try_swap_out(self.hanging, self.waiting,
-                                                   swap_out_map):
+                while eviction_helper.try_swap_out_unused(
+                        self.hanging, self.waiting, swap_out_map):
                     if _try_append_slot(seq):
                         do_running = True
                         break
@@ -177,8 +169,6 @@ class Scheduler:
         self.waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
         while len(self.waiting) > 0 and len(running) < max_batches:
             seq = self.waiting[0]
-            num_required_tokens = seq.num_required_tokens()
-            seq.append_tokens(num_required_tokens, block_size)
 
             block_table = block_manager.get_block_table(seq)
             if block_table is not None:
@@ -192,9 +182,7 @@ class Scheduler:
                     if not can_append:
                         break
                 if eviction_helper.need_swap_in(seq):
-                    if eviction_helper.can_swap_in(seq):
-                        eviction_helper.swap_in(seq, swap_in_map)
-                    else:
+                    if not eviction_helper.try_swap_in(seq, swap_in_map):
                         break
                 block_manager.append_slot(seq)
                 self.waiting.pop(0)
@@ -229,16 +217,11 @@ class Scheduler:
         """Schedule inputs for next steps."""
         running, swap_in_map, swap_out_map, copy_map = self._schedule()
 
-        block_tables = [
-            self.block_manager.get_block_table(seq) for seq in running
-        ]
-
         return SchedulerOutput(
             running=running,
             swap_in_map=swap_in_map,
             swap_out_map=swap_out_map,
             copy_map=copy_map,
-            block_tables=block_tables,
         )
 
     def _set_session_status(self, session_id: int, status: MessageStatus):

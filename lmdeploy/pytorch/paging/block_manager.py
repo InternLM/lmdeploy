@@ -1,75 +1,233 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict, List
+from typing import Dict
 
-from ..block import PhysicalTokenBlock
+import numpy as np
+
 from ..messages import SchedulerSequence
 
 
-class BlockAllocator:
-    """The block allocator.
+class LogicalMemory:
+    """Logical memory blocks."""
 
-    The allocator won't allocate real memory. It is used to support
-    block manager.
+    def __init__(self, num_blocks: int) -> None:
+        self._num_blocks = num_blocks
 
-    Args:
-        block_size (int): The num tokens of each block.
-        block_num (int): Total blocks.
-        device (str): The device name.
+        self.phy_map: np.ndarray = np.zeros(self._num_blocks, dtype=np.int64)
+
+    def get_physical_blocks(self, logical_address: np.ndarray):
+        """get physical address."""
+        return self.phy_map[logical_address]
+
+    def num_blocks(self):
+        """get num blocks."""
+        return self._num_blocks
+
+
+class PhysicalMemory:
+    """physical memory blocks."""
+
+    def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int) -> None:
+        self._num_cpu_blocks = num_cpu_blocks
+        self._num_gpu_blocks = num_gpu_blocks
+        self._num_blocks = num_cpu_blocks + num_gpu_blocks
+
+        self.ref_count: np.ndarray = np.zeros((self._num_blocks, ),
+                                              dtype=np.int64)
+        self.swap_count: np.ndarray = np.zeros((self._num_blocks, ),
+                                               dtype=np.int64)
+
+    def num_cpu_blocks(self):
+        """get num cpu blocks."""
+        return self._num_cpu_blocks
+
+    def num_gpu_blocks(self):
+        """get num gpu blocks."""
+        return self._num_gpu_blocks
+
+
+class PhysicalAllocator:
+    """The physical block allocator.
+
+    The allocator won't allocate real memory. It is used to support block
+    manager.
     """
 
-    def __init__(self, block_size: int, block_num: int, device: str):
-        self.block_size = block_size
-        self.block_num = block_num
-        self.device = device
+    def __init__(self,
+                 memory: PhysicalMemory,
+                 num_blocks: int,
+                 offset: int = 0):
+        self._mem = memory
+        self._num_blocks = num_blocks
+        self._offset = offset
 
-        free_blocks: List[PhysicalTokenBlock] = [
-            PhysicalTokenBlock(device, i, block_size) for i in range(block_num)
-        ]
-        self.free_blocks = free_blocks
+        self._free_blocks = np.arange(num_blocks, dtype=np.int64) + offset
+        self._free_count = num_blocks
 
-    def allocate(self):
+    def allocate(self, num_blocks: int):
         """Allocate block from block pool."""
-        if len(self.free_blocks) > 0:
-            block = self.free_blocks.pop(0)
-            block.ref_count += 1
-            return block
+        if self.get_num_free_blocks() >= num_blocks:
+            num_used = self._num_blocks - self._free_count
+            blocks = self._free_blocks[num_used:num_used + num_blocks]
+            self._mem.ref_count.put(blocks, 1)
+            self._free_count -= num_blocks
+            return blocks
         else:
-            raise MemoryError(f'No free {self.device} memory blocks.')
+            raise MemoryError('No enough free memory blocks.')
 
-    def free(self, block: PhysicalTokenBlock):
+    def free(self, blocks: np.ndarray):
         """Free block to block pool."""
-        if block.ref_count == 0:
-            raise ValueError(f'Double free {block}.')
-        block.ref_count -= 1
-        if block.ref_count == 0:
-            self.free_blocks.append(block)
+        np.add.at(self._mem.ref_count, blocks, -1)
+        ref_count = self.get_ref_count(blocks)
+        freed_blocks = blocks[ref_count == 0]
+        num_freed_blocks = len(freed_blocks)
+        if num_freed_blocks > 0:
+            num_used = self._num_blocks - self._free_count
+            self._free_blocks[num_used -
+                              num_freed_blocks:num_used] = freed_blocks
+            self._free_count += num_freed_blocks
+        return freed_blocks
 
     def get_num_free_blocks(self):
         """Get numbers of free blocks."""
-        return len(self.free_blocks)
+        return self._free_count
+
+    def get_ref_count(self, blocks: np.ndarray):
+        """get ref count."""
+        return self._mem.ref_count[blocks]
 
 
-BlockTable = List[PhysicalTokenBlock]
+class LogicalAllocator:
+    """The logical block allocator."""
+
+    def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int) -> None:
+        self._log_mem = LogicalMemory(num_cpu_blocks + num_gpu_blocks)
+        self._phy_mem = PhysicalMemory(num_cpu_blocks, num_gpu_blocks)
+
+        self._cpu_mem_offset = num_gpu_blocks
+        self._gpu_allocator = PhysicalAllocator(self._phy_mem, num_gpu_blocks,
+                                                0)
+        self._cpu_allocator = PhysicalAllocator(self._phy_mem, num_cpu_blocks,
+                                                self._cpu_mem_offset)
+
+        num_blocks = self._log_mem.num_blocks()
+        self._num_blocks = num_blocks
+        self._free_blocks = np.arange(num_blocks)
+        self._free_count = num_blocks
+
+    def get_phy_allocator(self, device: str):
+        """get allocator."""
+        if device == 'gpu':
+            return self._gpu_allocator
+        elif device == 'cpu':
+            return self._cpu_allocator
+        else:
+            raise ValueError(f'Unsupported device: {device}')
+
+    def allocate(self, num_blocks: int, device: str = 'gpu'):
+        """allocate logical blocks."""
+        phy_allocator = self.get_phy_allocator(device)
+        logical_enable = self.get_num_free_blocks() >= num_blocks
+        physical_enable = phy_allocator.get_num_free_blocks() >= num_blocks
+        if logical_enable and physical_enable:
+            num_used = self._num_blocks - self._free_count
+            blocks = self._free_blocks[num_used:num_used + num_blocks]
+            phy_blocks = phy_allocator.allocate(num_blocks)
+            self._log_mem.phy_map.put(blocks, phy_blocks)
+            self._free_count -= num_blocks
+            return blocks.copy()
+        else:
+            raise MemoryError('No enough free memory blocks.')
+
+    def free(self, blocks: np.ndarray):
+        """Free logical block."""
+        phy_blocks = self.get_physical_blocks(blocks)
+
+        cpu_blocks = phy_blocks[phy_blocks >= self._cpu_mem_offset]
+        gpu_blocks = phy_blocks[phy_blocks < self._cpu_mem_offset]
+        if len(cpu_blocks) > 0:
+            self._cpu_allocator.free(cpu_blocks)
+        if len(gpu_blocks) > 0:
+            self._gpu_allocator.free(gpu_blocks)
+
+        ref_count = self._phy_mem.ref_count[phy_blocks]
+        freed_blocks = blocks[ref_count == 0]
+        num_freed_blocks = len(freed_blocks)
+        if num_freed_blocks > 0:
+            num_used = self._num_blocks - self._free_count
+            self._free_blocks[num_used -
+                              num_freed_blocks:num_used] = freed_blocks
+            self._free_count += num_freed_blocks
+
+    def get_num_free_blocks(self):
+        """Get numbers of free blocks."""
+        return self._free_count
+
+    def get_physical_blocks(self, blocks: np.ndarray):
+        """get physical address."""
+        return self._log_mem.get_physical_blocks(blocks)
+
+    def get_ref_count(self, blocks: np.ndarray):
+        """get ref count."""
+        phy_blocks = self.get_physical_blocks(blocks)
+        return self._phy_mem.ref_count[phy_blocks]
+
+    def add_ref_count(self, blocks: np.ndarray, value: np.ndarray):
+        """update ref count."""
+        phy_blocks = self.get_physical_blocks(blocks)
+        np.add.at(self._phy_mem.ref_count, phy_blocks, value)
+
+    def cpu_mem_offset(self):
+        """get cpu mem offset in unified physical memory."""
+        return self._cpu_mem_offset
+
+    def count_cpu_blocks(self, blocks: np.ndarray):
+        """count cpu blocks."""
+        phy_blocks = self.get_physical_blocks(blocks)
+        return np.count_nonzero(phy_blocks >= self.cpu_mem_offset())
+
+    def count_gpu_blocks(self, blocks: np.ndarray):
+        """count gpu blocks."""
+        phy_blocks = self.get_physical_blocks(blocks)
+        return np.count_nonzero(phy_blocks < self.cpu_mem_offset())
+
+    def update_phy_map(self, log_blocks: np.ndarray, phy_blocks: np.ndarray):
+        """update physical map."""
+        assert len(phy_blocks) == len(log_blocks)
+        self._log_mem.phy_map.put(log_blocks, phy_blocks)
+
+    def on_device(self, blocks: np.ndarray, device: str):
+        """blocks on given device."""
+        if len(blocks) == 0:
+            return False
+
+        # TODO: check all blocks
+        cpu_mem_offset = self.cpu_mem_offset()
+
+        phy_blocks = self.get_physical_blocks(blocks[:1])
+        if phy_blocks[0] < cpu_mem_offset:
+            phy_device = 'gpu'
+        else:
+            phy_device = 'cpu'
+        return device == phy_device
+
+
+BlockTable = np.ndarray
 
 
 class BlockManager:
     """Manage the usage of blocks, generate block tables.
 
     Args:
-        block_size (int): The num tokens of each block.
         num_gpu_blocks (int): number of gpu blocks.
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self, block_size: int, num_gpu_blocks: int,
-                 num_cpu_blocks: int) -> None:
-        self.block_size = block_size
+    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int) -> None:
         self.num_gpu_blocks = num_gpu_blocks
         self.num_cpu_blocks = num_cpu_blocks
 
-        self.gpu_allocator = BlockAllocator(block_size, num_gpu_blocks, 'gpu')
-        self.cpu_allocator = BlockAllocator(block_size, num_cpu_blocks, 'cpu')
+        self.allocator = LogicalAllocator(num_cpu_blocks, num_gpu_blocks)
 
         self.block_tables: Dict[int, BlockTable] = {}
 
@@ -79,181 +237,186 @@ class BlockManager:
         Args:
             msg (SchedulerSequence): The msg to get block table.
         """
-        seq_id = msg.seq_id
-        if seq_id in self.block_tables:
-            return self.block_tables[seq_id]
-        else:
-            return None
+        logical_blocks = msg.logical_blocks
+        return self.allocator.get_physical_blocks(
+            logical_blocks.get_real_blocks())
 
     def can_allocate(self, msg: SchedulerSequence):
         """Return if physical block can be allocated for given message."""
-        required_blocks = len(msg.logical_blocks)
-        return required_blocks <= self.gpu_allocator.get_num_free_blocks()
+        num_required_blocks = msg.num_required_blocks()
+        num_free_phy = self.get_num_free_gpu_blocks()
+        return num_required_blocks <= num_free_phy
 
     def allocate(self, msg: SchedulerSequence):
         """Allocate physical blocks for given message according to logical
         blocks."""
-        assert msg.seq_id not in self.block_tables
-        block_table: BlockTable = []
         logical_blocks = msg.logical_blocks
-
-        for _ in logical_blocks:
-            phy_block = self.gpu_allocator.allocate()
-            block_table.append(phy_block)
-
-        self.block_tables[msg.seq_id] = block_table
-
-    def _free_block_table(self, block_table: BlockTable):
-        """Free physical blocks of given block table."""
-        for block in block_table:
-            if block.device == 'cpu':
-                self.cpu_allocator.free(block)
-            elif block.device == 'gpu':
-                self.gpu_allocator.free(block)
-            else:
-                raise ValueError(f'Can not free block {block}.')
+        num_required_tokens = msg.num_required_tokens()
+        num_required_blocks = logical_blocks.num_required_blocks(
+            num_required_tokens)
+        blocks = self.allocator.allocate(num_required_blocks, 'gpu')
+        logical_blocks.append(blocks)
+        logical_blocks.add_tokens(num_required_tokens)
 
     def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the session."""
-        seq_id = msg.seq_id
-        if seq_id not in self.block_tables:
-            return
-
-        block_table = self.block_tables[seq_id]
-        self._free_block_table(block_table)
-        self.block_tables.pop(seq_id)
+        self.allocator.free(msg.logical_blocks.get_real_blocks())
+        msg.logical_blocks.reset()
 
     def can_append_slot(self, msg: SchedulerSequence):
         """Return true if the message can append new slot."""
-        seq_id = msg.seq_id
-        num_blocks = len(msg.logical_blocks)
-        assert seq_id in self.block_tables
-        block_table = self.block_tables[seq_id]
-        gpu_block_table = [
-            block for block in block_table if block.device == 'gpu'
-        ]
-        return num_blocks - len(
-            gpu_block_table) <= self.gpu_allocator.get_num_free_blocks()
+        return self.can_allocate(msg)
 
     def append_slot(self, msg: SchedulerSequence):
         """Append new slot to message."""
-        seq_id = msg.seq_id
-        logical_blocks = msg.logical_blocks
-
-        assert seq_id in self.block_tables
-        block_table = self.block_tables[seq_id]
-
-        while len(logical_blocks) > len(block_table):
-            block = self.gpu_allocator.allocate()
-            block_table.append(block)
+        return self.allocate(msg)
 
     def can_fork(self, from_msg: SchedulerSequence):
         """Return true if blocks can be folked."""
-        seq_id = from_msg.seq_id
-        assert seq_id in self.block_tables
         logical_blocks = from_msg.logical_blocks
-        if logical_blocks[-1].is_full():
-            # every block can be shared
+        if logical_blocks.last_block_size() == logical_blocks.get_block_size():
             return True
 
-        block_table = self.block_tables[seq_id]
-        device = block_table[-1].device
-        if device == 'cpu':
-            allocator = self.cpu_allocator
-        elif device == 'gpu':
-            allocator = self.gpu_allocator
+        cpu_mem_offset = self.allocator.cpu_mem_offset()
+        phy_block = self.allocator.get_physical_blocks(logical_blocks[-1])
+        if phy_block < cpu_mem_offset:
+            device = 'gpu'
         else:
-            raise ValueError(f'Unknown device {device}')
-        return allocator.get_num_free_blocks() >= 1
+            device = 'cpu'
+        phy_allocator = self.allocator.get_phy_allocator(device)
+        return phy_allocator.get_num_free_blocks() >= 1
 
     def fork(self, from_msg: SchedulerSequence, to_msg: SchedulerSequence):
         """Fork new message."""
-        from_msg_id = from_msg.seq_id
-        from_block_table = self.block_tables[from_msg_id]
 
-        block_table: BlockTable = []
-        for block in from_block_table[:-1]:
-            block.ref_count += 1
-            block_table.append(block)
+        def _copy_lask_block(logical_blocks, copy_map):
+            cpu_mem_offset = self.allocator.cpu_mem_offset()
+            phy_block = self.allocator.get_physical_blocks(logical_blocks[-1])
+            if phy_block < cpu_mem_offset:
+                device = 'gpu'
+            else:
+                device = 'cpu'
+            block = self.allocator.allocate(1, device)
+            new_phy_block = self.allocator.get_physical_blocks(block[0])
+            copy_map[phy_block] = new_phy_block
+            return block[0]
 
-        # process last block
-        from_logical_blocks = from_msg.logical_blocks
-        last_block = from_block_table[-1]
+        logical_blocks = from_msg.logical_blocks
         copy_map: Dict[int, int] = dict()
-        if from_logical_blocks[-1].is_full():
-            last_block.ref_count += 1
-            block_table.append(last_block)
+        if logical_blocks.last_block_size() == logical_blocks.get_block_size():
+            self.allocator.add_ref_count(logical_blocks, 1)
         else:
-            device = last_block.device
-            if device == 'cpu':
-                allocator = self.cpu_allocator
-            elif device == 'gpu':
-                allocator = self.gpu_allocator
-            block = allocator.allocate()
-            block_table.append(block)
-            copy_map[last_block.block_id] = block.block_id
+            new_logical_blocks = logical_blocks.clone()
+            self.allocator.add_ref_count(new_logical_blocks[:-1], 1)
+            block = _copy_lask_block(logical_blocks, copy_map)
+            new_logical_blocks[-1] = block
+            to_msg.logical_blocks = new_logical_blocks
 
-        self.block_tables[to_msg.seq_id] = block_table
         return copy_map
 
-    def _can_swap(self, msg: SchedulerSequence, allocator: BlockAllocator):
-        """Check if swap can be performed."""
-        block_table = self.get_block_table(msg)
-        assert block_table is not None
+    def try_swap_out(self, msg: SchedulerSequence):
+        """Try swap msg out."""
+        swap_map = dict()
+        logical_blocks = msg.logical_blocks
+        cpu_mem_offset = self.allocator.cpu_mem_offset()
+        phy_blocks = self.allocator.get_physical_blocks(logical_blocks)
+        cpu_allocator = self.allocator.get_phy_allocator('cpu')
+        gpu_allocator = self.allocator.get_phy_allocator('gpu')
 
-        num_free_blocks = allocator.get_num_free_blocks()
-        return num_free_blocks > len(block_table)
+        def _can_swap():
+            """check swap."""
+            if len(logical_blocks) == 0:
+                return False
 
-    def can_swap_in(self, msg: SchedulerSequence):
-        """Check if the message can be swapped in."""
-        return self._can_swap(msg, self.gpu_allocator)
+            # we only support all blocks of a sequence on same device
+            if phy_blocks[0] >= cpu_mem_offset:
+                return False
 
-    def swap_in(self, msg: SchedulerSequence):
-        """Swap the message into GPU."""
-        block_table = self.get_block_table(msg)
-        assert block_table is not None
+            # no free blocks
+            num_free = self.get_num_free_cpu_blocks()
+            if num_free < len(phy_blocks):
+                return False
 
-        swap_map: Dict[int, int] = {}
-        for i in range(len(block_table)):
-            block = block_table[i]
-            if block.device == 'cpu':
-                new_block = self.gpu_allocator.allocate()
-                swap_map[block.block_id] = new_block.block_id
-                block_table[i] = new_block
-                self.cpu_allocator.free(block)
+            # don't swap sequence with multiple reference
+            ref_count = gpu_allocator.get_ref_count(phy_blocks)
+            if np.count_nonzero(ref_count != 1) > 0:
+                return False
 
-        return swap_map
+            return True
 
-    def can_swap_out(self, msg: SchedulerSequence):
-        """Check if the message can be swap out."""
-        return self._can_swap(msg, self.cpu_allocator)
+        def _do_swap():
+            """perform swap."""
+            new_blocks = cpu_allocator.allocate(len(logical_blocks))
 
-    def swap_out(self, msg: SchedulerSequence):
-        """Swap the message out to host."""
-        block_table = self.get_block_table(msg)
-        assert block_table is not None
+            old_blocks = phy_blocks
+            swap_map = dict(zip(old_blocks, new_blocks))
 
-        swap_map: Dict[int, int] = {}
-        for i in range(len(block_table)):
-            block = block_table[i]
-            if block.device == 'gpu':
-                new_block = self.cpu_allocator.allocate()
-                swap_map[block.block_id] = new_block.block_id
-                block_table[i] = new_block
-                self.gpu_allocator.free(block)
+            gpu_allocator.free(old_blocks)
+            self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
+                                          new_blocks)
+            return True, swap_map
 
-        return swap_map
+        if not _can_swap():
+            return False, swap_map
+        else:
+            return _do_swap()
 
-    def reset(self) -> None:
-        """Reset block table."""
-        for block_table in self.block_tables.values():
-            self._free_block_table(block_table)
-        self.block_tables.clear()
+    def try_swap_in(self, msg: SchedulerSequence):
+        """Try swap msg in."""
+        swap_map = dict()
+        logical_blocks = msg.logical_blocks
+        cpu_mem_offset = self.allocator.cpu_mem_offset()
+        phy_blocks = self.allocator.get_physical_blocks(logical_blocks)
+        cpu_allocator = self.allocator.get_phy_allocator('cpu')
+        gpu_allocator = self.allocator.get_phy_allocator('gpu')
+
+        def _can_swap():
+            """check swap."""
+            if len(logical_blocks) == 0:
+                return False
+
+            # we only support all blocks of a sequence on same device
+            if phy_blocks[0] < cpu_mem_offset:
+                return False
+
+            # no free blocks
+            num_free = self.get_num_free_gpu_blocks()
+            if num_free < len(phy_blocks):
+                return False
+
+            # don't swap sequence with multiple reference
+            ref_count = cpu_allocator.get_ref_count(phy_blocks)
+            if np.count_nonzero(ref_count != 1) > 0:
+                return False
+
+            return True
+
+        def _do_swap():
+            """perform swap."""
+            new_blocks = gpu_allocator.allocate(len(logical_blocks))
+
+            old_blocks = phy_blocks
+            swap_map = dict(zip(old_blocks, new_blocks))
+
+            cpu_allocator.free(old_blocks)
+            self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
+                                          new_blocks)
+            return True, swap_map
+
+        if not _can_swap():
+            return False, swap_map
+        else:
+            return _do_swap()
 
     def get_num_free_gpu_blocks(self) -> int:
         """Get number of free gpu blocks."""
-        return self.gpu_allocator.get_num_free_blocks()
+        return self.allocator.get_phy_allocator('gpu').get_num_free_blocks()
 
     def get_num_free_cpu_blocks(self) -> int:
         """Get number of free cpu blocks."""
-        return self.cpu_allocator.get_num_free_blocks()
+        return self.allocator.get_phy_allocator('cpu').get_num_free_blocks()
+
+    def on_device(self, msg: SchedulerSequence, device: str):
+        allocator = self.allocator
+        logical_blocks = msg.logical_blocks
+        return allocator.on_device(logical_blocks.get_real_blocks(), device)
