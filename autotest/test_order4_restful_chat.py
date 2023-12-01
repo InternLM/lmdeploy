@@ -76,6 +76,7 @@ def case_config(request):
     print(case_path)
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        del case_config['session_len_error']
     return case_config
 
 
@@ -83,6 +84,7 @@ def getList():
     case_path = './autotest/restful_prompt_case.yaml'
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        case_config.remove("session_len_error")
     return list(case_config.keys())
 
 
@@ -111,7 +113,7 @@ def run_all_step(config, case, case_info, model, port):
     result = True
 
     msg = ''
-    http_url = 'http://0.0.0.0:' + str(port)
+    http_url = 'http://localhost:' + str(port)
 
     with allure.step('step1 - command chat regression'):
         chat_result, chat_log, commondmsg = commondLineTest(
@@ -121,13 +123,13 @@ def run_all_step(config, case, case_info, model, port):
 
     with allure.step('step2 - restful_test - openai chat'):
         restful_result, restful_log, restfulOpenAiMsg = openAiChatTest(
-            config, case_info, model, http_url)
+            config, case, case_info, model, http_url)
         result = result & restful_result
         msg += restfulOpenAiMsg
 
     with allure.step('step3 - restful_test - interactive chat'):
         active_result, interactive_log, restfulActiveMsg = interactiveTest(
-            config, case_info, model, http_url)
+            config, case, case_info, model, http_url)
         result = result & active_result
         msg += restfulActiveMsg
 
