@@ -736,7 +736,7 @@ struct DecoderMultiHeadAttentionKernel {
         }
 
         // early exit if split if out of bound
-        if (kSplitK && step_begin_ >= step_end_) {
+        if (kSplitK && step_begin_ && step_begin_ >= step_end_) {
             return;
         }
 
