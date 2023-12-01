@@ -84,7 +84,7 @@ def getList():
     case_path = './autotest/restful_prompt_case.yaml'
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        case_config.remove("session_len_error")
+        del case_config["session_len_error"]
     return list(case_config.keys())
 
 
