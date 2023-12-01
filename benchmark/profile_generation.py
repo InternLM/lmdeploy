@@ -109,13 +109,11 @@ def profile_throughput(model_path: str,
                          tp=tp,
                          model_name='llama',
                          **kwargs)
-    tokenizer = tm_model.tokenizer
+    # tokenizer = tm_model.tokenizer
 
     # make up a prompt that can be tokenized into {input_seqlen} tokens
     assert input_seqlen > 0, 'input_seqlen should > 0'
-    input_ids = tokenizer('hi').input_ids
-    input_ids = input_ids * input_seqlen
-
+    input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
     warmup(tm_model, concurrency, input_ids, output_seqlen)
 
     que = Queue()
