@@ -22,6 +22,8 @@ from lmdeploy.turbomind import TurboMind
 def infer(model, session_id: int, input_ids: List, output_seqlen: int,
           top_k: int, top_p: float, temperature: float, test_round: int,
           que: Queue):
+    if session_id == 1:
+        pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
     stats = []
     for _ in range(test_round):
@@ -56,6 +58,8 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
                 token_latency_stats[n_pre_token] = np.round(now - prev, 3)
                 n_pre_token = n_token
             prev = now
+        if session_id == 1:
+            pbar.update(1)
 
         assert output_seqlen <= n_token <= output_seqlen + 1, \
             f'Error. session_id({session_id}) request {output_seqlen} ' \
@@ -64,11 +68,11 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
     que.put((session_id, stats))
 
 
-def warmup(model,
-           concurrency: int,
-           input_ids: List[int],
-           output_seqlen: int,
-           warmup_round: int = 2):
+def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
+           warmup_round: int):
+    if not warmup_round:
+        return
+
     print('start to warmup ...')
 
     def _infer(model, session_id):
@@ -92,32 +96,33 @@ def warmup(model,
         procs.append(proc)
         proc.start()
 
-    try:
-        for proc in procs:
-            proc.join()
-    except Exception:
-        for proc in procs:
-            proc.stop()
-        exit(1)
+    for proc in procs:
+        proc.join()
+
     _end = time.perf_counter()
     print(f'end warmup, elapsed time: {round(_end - _start, 2)}s')
 
 
 def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
                        output_seqlen: int, tp: int, top_k: int, top_p: float,
-                       temperature: float, test_round: int, **kwargs):
-    # avoid turbomind checking chat template name by setting
-    # `model_name='llama'`
+                       temperature: float, test_round: int, warmup_round: int,
+                       **kwargs):
+
+    print(f'profiling ... concurrency: {concurrency}, '
+          f'n_prompt_token: {input_seqlen}, '
+          f'n_completion_token: {output_seqlen}, '
+          f'test_round: {test_round}, warmup_round: {warmup_round}')
+
+    # avoid turbomind checking chat template name by setting `model_name='llama'` # noqa
     tm_model = TurboMind(model_path=model_path,
                          tp=tp,
                          model_name='llama',
                          **kwargs)
-    # tokenizer = tm_model.tokenizer
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
     input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
-    warmup(tm_model, concurrency, input_ids, output_seqlen)
+    warmup(tm_model, concurrency, input_ids, output_seqlen, warmup_round)
 
     que = Queue()
     procs = []
@@ -130,13 +135,9 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
         procs.append(proc)
         proc.start()
 
-    try:
-        for proc in procs:
-            proc.join()
-    except Exception:
-        for proc in procs:
-            proc.stop()
-        exit(1)
+    for proc in procs:
+        proc.join()
+
     _end = time.perf_counter()
     elapsed_time = _end - _start
 
@@ -324,7 +325,11 @@ def parse_args():
     parser.add_argument('--test-round',
                         type=int,
                         help='number of test rounds',
-                        default=10)
+                        default=6)
+    parser.add_argument('--warmup-round',
+                        type=int,
+                        help='number of warmuop rounds',
+                        default=1)
     args = parser.parse_args()
     return args
 
@@ -337,9 +342,9 @@ def main():
 
     os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
-    for batch in tqdm(args.concurrency):
-        for prompt_tokens, completion_tokens in tqdm(
-                zip(args.prompt_tokens, args.completion_tokens)):
+    for batch in args.concurrency:
+        for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
+                                                    args.completion_tokens):
             MemoryMonitor.start()
             from functools import partial
             from multiprocessing import Pool
@@ -351,7 +356,8 @@ def main():
                                      top_k=args.top_k,
                                      top_p=args.top_p,
                                      temperature=args.temperature,
-                                     test_round=args.test_round)
+                                     test_round=args.test_round,
+                                     warmup_round=args.warmup_round)
             output = Pool(1).map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
                 throughput_per_proc, tp = output[0]
