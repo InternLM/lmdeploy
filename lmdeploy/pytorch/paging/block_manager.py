@@ -126,6 +126,8 @@ class LogicalAllocator:
 
     def allocate(self, num_blocks: int, device: str = 'gpu'):
         """allocate logical blocks."""
+        if num_blocks == 0:
+            return np.empty((0, ), dtype=np.int64)
         phy_allocator = self.get_phy_allocator(device)
         logical_enable = self.get_num_free_blocks() >= num_blocks
         physical_enable = phy_allocator.get_num_free_blocks() >= num_blocks
@@ -254,9 +256,10 @@ class BlockManager:
         num_required_tokens = msg.num_required_tokens()
         num_required_blocks = logical_blocks.num_required_blocks(
             num_required_tokens)
-        blocks = self.allocator.allocate(num_required_blocks, 'gpu')
-        logical_blocks.append(blocks)
-        logical_blocks.add_tokens(num_required_tokens)
+        if num_required_blocks > 0:
+            blocks = self.allocator.allocate(num_required_blocks, 'gpu')
+            logical_blocks.append(blocks)
+            logical_blocks.add_tokens(num_required_tokens)
 
     def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the session."""
