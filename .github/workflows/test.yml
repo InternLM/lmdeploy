@@ -85,7 +85,8 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 xformers
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 xformers 
+          python3 -m pip install nvidia-cublas-cu11 nvidia-cuda-cupti-cu11 nvidia-cuda-nvrtc-cu11 nvidia-cuda-runtime-cu11 nvidia-cudnn-cu11 nvidia-cufft-cu11 nvidia-curand-cu11 nvidia-cusolver-cu11 nvidia-cusparse-cu11 nvidia-nccl-cu11 nvidia-nvtx-cu11
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
