@@ -105,6 +105,8 @@ void invokeIndexedCopy(void**       h_src_ptr,
                        int          n_copys,
                        cudaStream_t st);
 
+void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cudaStream_t st);
+
 // ABCDe            ABCDe     e
 // ABCDEFGHIJk      ABCDEFGHIJk
 // ABCDEFGHi    ->  ABCDEFGHi i
@@ -112,6 +114,10 @@ void invokeIndexedCopy(void**       h_src_ptr,
 // ABCd             ABCd      d
 void invokePadLastTokenIds(
     int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream);
+
+template<typename T>
+void invokeGetFeatureOfLastToken(
+    T* output, const T* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream);
 
 void invokeMyCopyInt(int* dst, const int* src, size_t count, cudaStream_t st);
 

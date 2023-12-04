@@ -33,6 +33,11 @@ private:
 };
 
 template<typename T>
-void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& params, cudaStream_t st);
+void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& params,
+                       T**                                       per_sample_k_cache,
+                       T**                                       per_sample_v_cache,
+                       const int*                                sequence_length,
+                       int                                       max_memory_len,
+                       cudaStream_t                              st);
 
 }  // namespace turbomind

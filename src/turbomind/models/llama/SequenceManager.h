@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/BlockManager.h"
+#include <functional>
 
 namespace turbomind {
 
@@ -16,19 +17,23 @@ struct Sequence {
     };
 
     uint64_t id;
-    Status   status;
+    Status   status = kCached;
 
     std::vector<const Block*> blocks;
     std::vector<uint64_t>     block_unique_ids;
 
+    int input_length = 0;
+
     mutable std::vector<int> tokens;  // update by user
 
-    mutable int cache_len;
+    mutable int cache_len = 0;
 
     // additional data kept round-to-round
     mutable std::vector<std::byte> random_state;  // update by user
 
-    mutable float rope_theta;
+    mutable float rope_theta = 0.f;
+
+    Sequence(uint64_t _id): id(_id) {}
 
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
 };
@@ -74,10 +79,13 @@ public:
         int swap_out;
     };
 
+    using AdjustInputCount = std::function<std::pair<int, int>(const Sequences&, const std::vector<int>&)>;
+
     [[nodiscard]] Outcome Materialize(Sequences                    sequences,
                                       std::vector<int>             context_lengths,
                                       const std::vector<uint64_t>& priorities,
-                                      int                          step_length);
+                                      int                          step_length,
+                                      AdjustInputCount             adjust);
 
     void* OffsetKey(void* block_ptr)
     {
