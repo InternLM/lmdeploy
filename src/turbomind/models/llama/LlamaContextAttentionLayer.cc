@@ -474,5 +474,8 @@ void LlamaContextAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_c
 
 template class LlamaContextAttentionLayer<float>;
 template class LlamaContextAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class LlamaContextAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

@@ -88,6 +88,9 @@ void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps,
 
 template void invokeRootMeanSquareNorm(float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeRootMeanSquareNorm(half*, const half*, const half*, float, int, int, cudaStream_t);
+#ifdef ENABLE_BF16
+template void invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+#endif
 
 // #ifdef ENABLE_BF16
 
@@ -206,6 +209,9 @@ void invokeCreateCausalMasks(
 
 template void invokeCreateCausalMasks(float* mask, const int*, const int*, int, int, int, cudaStream_t);
 template void invokeCreateCausalMasks(half* mask, const int*, const int*, int, int, int, cudaStream_t);
+#ifdef ENABLE_BF16
+template void invokeCreateCausalMasks(__nv_bfloat16* mask, const int*, const int*, int, int, int, cudaStream_t);
+#endif
 
 template<typename Ti, typename To>
 struct ExtendKvCache {
@@ -375,6 +381,24 @@ template void invokeExtendKVCache(void**       k_dst_ptrs,
                                   int          quant,
                                   const float* kv_scale,
                                   cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeExtendKVCache(void**       k_dst_ptrs,
+                                  void**       v_dst_ptrs,
+                                  const __nv_bfloat16*  k_src,
+                                  const __nv_bfloat16*  v_src,
+                                  const int*   cu_block_counts,
+                                  const int*   query_length,
+                                  const int*   history_length,
+                                  int          batch_size,
+                                  int          block_length,
+                                  size_t       dst_layer_offset,
+                                  int          max_q_len,
+                                  int          head_dim,
+                                  int          head_num,
+                                  int          quant,
+                                  const float* kv_scale,
+                                  cudaStream_t stream);
+#endif
 
 template<typename Ti, typename To>
 struct TransposeKvCache {
@@ -525,6 +549,23 @@ template void invokeTransposeKVCache(half*,
                                      cudaStream_t stream,
                                      int,
                                      const float*);
+#ifdef ENABLE_BF16
+template void invokeTransposeKVCache(__nv_bfloat16*,
+                                     __nv_bfloat16*,
+                                     const __nv_bfloat16**,
+                                     const __nv_bfloat16**,
+                                     size_t,
+                                     int,
+                                     const int*,
+                                     int,
+                                     int,
+                                     int,
+                                     int,
+                                     int,
+                                     cudaStream_t stream,
+                                     int,
+                                     const float*);
+#endif
 
 __global__ void gatherOutput(int*       output_ids,
                              const int* ids,
@@ -833,5 +874,8 @@ void FlashAttentionOp<T>::operator()(Params& params, cudaStream_t st) const
 
 template class FlashAttentionOp<float>;
 template class FlashAttentionOp<half>;
+#ifdef ENABLE_BF16
+template class FlashAttentionOp<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

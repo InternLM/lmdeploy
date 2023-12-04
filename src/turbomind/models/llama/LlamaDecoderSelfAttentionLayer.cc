@@ -231,5 +231,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
 
 template class LlamaDecoderSelfAttentionLayer<float>;
 template class LlamaDecoderSelfAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class LlamaDecoderSelfAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

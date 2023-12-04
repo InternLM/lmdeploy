@@ -262,5 +262,8 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        ou
 
 template class LlamaDecoder<half>;
 template class LlamaDecoder<float>;
+#ifdef ENABLE_BF16
+template class LlamaDecoder<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

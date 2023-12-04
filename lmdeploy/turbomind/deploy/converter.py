@@ -113,6 +113,30 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
                     osp.join(triton_models_path, 'tokenizer'))
 
 
+def update_output_format(model_name: str, model_format: str, model_path: str,
+                         output_format: str):
+    """Update output format according to model info."""
+    TORCH_DTYPE_MAP = {'bfloat16': 'bf16'}
+    MODEL_NAME_MAP = {'qwen': 'bf16'}
+    model_name = model_name.split('-')[0]
+
+    def _infer_output_format(config):
+        """_infer_output_format."""
+        torch_dtype = getattr(config, 'torch_dtype', None)
+        if torch_dtype:
+            return TORCH_DTYPE_MAP.get(torch_dtype, output_format)
+        else:
+            # get model name prefix
+            return MODEL_NAME_MAP.get(model_name, output_format)
+
+    if model_format != 'hf':
+        return MODEL_NAME_MAP.get(model_name, output_format)
+    else:
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_path)
+        return _infer_output_format(config)
+
+
 def pack_model_repository(workspace_path: str):
     """package the model repository.
 
@@ -215,6 +239,9 @@ def main(model_name: str,
         cfg.weight_type = 'int4'
         output_format = 'w4'
         assert group_size > 0, f'group_size: {group_size} should > 0'
+    else:
+        output_format = update_output_format(model_name, inferred_model_format,
+                                             model_path, output_format)
 
     # convert
     print('model_name            ', model_name)

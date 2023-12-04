@@ -1523,5 +1523,8 @@ void LlamaBatch<T>::OutputThreadEntry()
 
 template class LlamaBatch<half>;
 template class LlamaBatch<float>;
+#ifdef ENABLE_BF16
+template class LlamaBatch<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

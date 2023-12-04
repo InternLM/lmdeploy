@@ -12,7 +12,7 @@
 
 void run_mha_fwd(Flash_fwd_params& params, cudaStream_t stream)
 {
-    FP16_SWITCH(true,
+    FP16_SWITCH(!params.is_bf16,
                 [&] { FWD_HEADDIM_SWITCH(params.d, [&] { run_mha_fwd_<elem_type, kHeadDim>(params, stream); }); });
 }
 
@@ -126,7 +126,7 @@ public:
 
         fwd_params.blockmask = reinterpret_cast<void*>(params.mask);
 
-        fwd_params.is_bf16   = false;
+        fwd_params.is_bf16   = std::is_same<T, __nv_bfloat16>::value;
         fwd_params.is_causal = true;
 
         fwd_params.q_enable_seqlen = params.layout_q.use_seqlens;
@@ -163,5 +163,8 @@ void FlashAttentionOpImpl<T, FMHA_VERSION>::operator()(Params& params, cudaStrea
 
 template class FlashAttentionOpImpl<float, FMHA_VERSION>;
 template class FlashAttentionOpImpl<half, FMHA_VERSION>;
+#ifdef ENABLE_BF16
+template class FlashAttentionOpImpl<__nv_bfloat16, FMHA_VERSION>;
+#endif
 
 }  // namespace turbomind

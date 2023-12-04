@@ -590,6 +590,39 @@ __inline__ __device__ uint4 vec_conversion<uint4, Float8_>(const Float8_& a)
     return b;
 }
 
+#ifdef ENABLE_BF16
+template<>
+__inline__ __device__ __nv_bfloat162 vec_conversion<__nv_bfloat162, float2>(const float2& a)
+{
+    return __float22bfloat162_rn(a);
+}
+template<>
+__inline__ __device__ bf16_4_t vec_conversion<bf16_4_t, float4>(const float4& a)
+{
+    bf16_4_t b;
+    float2 val;
+    val.x = a.x;
+    val.y = a.y;
+    b.x   = vec_conversion<__nv_bfloat162, float2>(val);
+
+    val.x = a.z;
+    val.y = a.w;
+    b.y   = vec_conversion<__nv_bfloat162, float2>(val);
+
+    return b;
+}
+template<>
+__inline__ __device__ bf16_8_t vec_conversion<bf16_8_t, Float8_>(const Float8_& a)
+{
+    bf16_8_t b;
+    b.x = vec_conversion<__nv_bfloat162, float2>(a.x);
+    b.y = vec_conversion<__nv_bfloat162, float2>(a.y);
+    b.z = vec_conversion<__nv_bfloat162, float2>(a.z);
+    b.w = vec_conversion<__nv_bfloat162, float2>(a.w);
+    return b;
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<int THREADS_PER_KEY, typename K_vec, int N>
@@ -1053,6 +1086,56 @@ inline __device__ int64_t quant(uint4 a, const float scale, const float zp)
     int16[3] = quant(a.w, scale, zp);
     return int64;
 }
+
+
+// bfloat16 to int8
+inline __device__ int8_t quant(__nv_bfloat16 a, const float scale, const float zp)
+{
+    int8_t int8;
+    float  b = bfloat16_to_float(a);
+    int8     = round(max(-128.f, min(127.f, (b - zp) / scale)));
+    return int8;
+}
+// bfloat16x2 to int8x2
+inline __device__ int16_t quant(__nv_bfloat162 a, const float scale, const float zp)
+{
+    union {
+        int8_t int8[2];
+        short  int16;
+    };
+    float2 b = bfloat162_to_float2(a);
+
+    int8[0] = round(max(-128.f, min(127.f, (b.x - zp) / scale)));
+    int8[1] = round(max(-128.f, min(127.f, (b.y - zp) / scale)));
+    return int16;
+}
+// bfloat16x4 to int8x4
+inline __device__ int32_t quant(bf16_4_t a, const float scale, const float zp)
+{
+    union {
+        int16_t int16[2];
+        int32_t int32;
+    };
+
+    int16[0] = quant(a.x, scale, zp);
+    int16[1] = quant(a.y, scale, zp);
+    return int32;
+}
+// bfloat16x8 to int8x8
+inline __device__ int64_t quant(bf16_8_t a, const float scale, const float zp)
+{
+    union {
+        int16_t int16[4];
+        int64_t int64;
+    };
+
+    int16[0] = quant(a.x, scale, zp);
+    int16[1] = quant(a.y, scale, zp);
+    int16[2] = quant(a.z, scale, zp);
+    int16[3] = quant(a.w, scale, zp);
+    return int64;
+}
+
 // int8 to float32, then `vec_conversion` to target format
 inline __device__ float dequant(int8_t a, const float scale, const float zp)
 {

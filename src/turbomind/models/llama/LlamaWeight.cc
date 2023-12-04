@@ -140,5 +140,8 @@ TensorMap LlamaWeight<T>::getParams()
 
 template struct LlamaWeight<float>;
 template struct LlamaWeight<half>;
+#ifdef ENABLE_BF16
+template struct LlamaWeight<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

@@ -111,5 +111,7 @@ void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>&
 
 template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<half>& params);
 template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<float>& params);
-
+#ifdef ENABLE_BF16
+template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<__nv_bfloat16>& params);
+#endif
 }  // namespace turbomind

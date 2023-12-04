@@ -438,3 +438,6 @@ int LlamaTritonModel<T>::getPipelineParaSize()
 
 template struct LlamaTritonModel<float>;
 template struct LlamaTritonModel<half>;
+#ifdef ENABLE_BF16
+template struct LlamaTritonModel<__nv_bfloat16>;
+#endif
