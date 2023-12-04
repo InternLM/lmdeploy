@@ -53,7 +53,7 @@ lmdeploy lite kv_qparams \
 修改 `workspace/triton_models/weights/config.ini`：
 
 - quant_policy 设置为 4。表示打开 kv_cache int8
-- use_context_fmha设置为0。表示关闭 FlashAttention
+
 
 ### **第四步**
 
