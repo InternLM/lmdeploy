@@ -51,7 +51,7 @@ wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/r
 # get internlm-7b from huggingface and convert it to turbomind format
 lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 
-python3 profile_throughput.py ./internlm-7b ./ShareGPT_V3_unfiltered_cleaned_split.json
+python3 profile_throughput.py ./ShareGPT_V3_unfiltered_cleaned_split.json ./internlm-7b
 ```
 
 ## Command details
