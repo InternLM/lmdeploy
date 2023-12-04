@@ -69,7 +69,7 @@ class SubCliServe(object):
             allow_headers (List[str]): a list of allowed HTTP headers for CORS
             kwargs (dict) extra params to init api server
         """
-        from lmdeploy.serve.openai.api_server import main as run_api_server
+        from lmdeploy.serve.openai.api_server import serve as run_api_server
 
         run_api_server(model_path,
                        server_name=server_name,

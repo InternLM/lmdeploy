@@ -3,7 +3,7 @@ import asyncio
 import dataclasses
 import random
 from contextlib import contextmanager
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 
 @dataclasses.dataclass
@@ -40,6 +40,42 @@ class AsyncEngine:
         self.starts = [None] * instance_num
         self.steps = {}
         self.loop = asyncio.get_event_loop()
+
+    def __call__(self,
+                 prompts: List[str],
+                 request_output_len=512,
+                 top_k=40,
+                 top_p=0.8,
+                 temperature=0.8,
+                 repetition_penalty=1.0,
+                 ignore_eos=False,
+                 do_preprocess=True,
+                 **kwargs):
+        """Inference a batch of prompts.
+
+        Args:
+            prompts (List[str]): a batch of prompts
+            request_output_len (int): output token nums
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+            are kept for generation.
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+              1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+            do_preprocess (bool): whether pre-process the messages.
+        """
+        return self.batch_infer(prompts,
+                                request_output_len=request_output_len,
+                                top_k=top_k,
+                                top_p=top_p,
+                                temperature=temperature,
+                                repetition_penalty=repetition_penalty,
+                                ignore_eos=ignore_eos,
+                                do_preprocess=do_preprocess,
+                                **kwargs)
 
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -94,7 +130,7 @@ class AsyncEngine:
         return self.generators[instance_id]
 
     def batch_infer(self,
-                    prompts: List[str],
+                    prompts: Union[List[str], str],
                     request_output_len=512,
                     top_k=40,
                     top_p=0.8,
@@ -106,7 +142,7 @@ class AsyncEngine:
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str]): a batch of prompts
+            prompts (List[str] | str): a batch of prompts
             request_output_len (int): output token nums
             top_k (int): The number of the highest probability vocabulary
               tokens to keep for top-k-filtering
@@ -119,6 +155,8 @@ class AsyncEngine:
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages.
         """
+        input_str = isinstance(prompts, str)
+        prompts = [prompts] if input_str else prompts
         assert isinstance(prompts, List), 'prompts should be a list'
         batch_size = len(prompts)
         outputs = [''] * batch_size
@@ -148,6 +186,7 @@ class AsyncEngine:
                 *[_inner_call(i, generators[i]) for i in range(batch_size)])
 
         self.loop.run_until_complete(gather())
+        outputs = outputs[0] if input_str else outputs
         return outputs
 
     async def generate(

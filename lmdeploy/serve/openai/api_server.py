@@ -471,17 +471,17 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
-def main(model_path: str,
-         server_name: str = '0.0.0.0',
-         server_port: int = 23333,
-         instance_num: int = 64,
-         tp: int = 1,
-         allow_origins: List[str] = ['*'],
-         allow_credentials: bool = True,
-         allow_methods: List[str] = ['*'],
-         allow_headers: List[str] = ['*'],
-         log_level: str = 'ERROR',
-         **kwargs):
+def serve(model_path: str,
+          server_name: str = '0.0.0.0',
+          server_port: int = 23333,
+          instance_num: int = 64,
+          tp: int = 1,
+          allow_origins: List[str] = ['*'],
+          allow_credentials: bool = True,
+          allow_methods: List[str] = ['*'],
+          allow_headers: List[str] = ['*'],
+          log_level: str = 'ERROR',
+          **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -521,4 +521,4 @@ def main(model_path: str,
 if __name__ == '__main__':
     import fire
 
-    fire.Fire(main)
+    fire.Fire(serve)
