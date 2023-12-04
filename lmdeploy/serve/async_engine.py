@@ -95,7 +95,7 @@ class AsyncEngine:
         if stop:
             return self.generator_alone
         while self.gen_queue.qsize() == 0:
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
         return self.gen_queue.get()
 
     def batch_infer(self,
