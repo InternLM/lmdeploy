@@ -75,7 +75,7 @@ class Engine:
                    stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
-        # to get each generated token's latency
+        # get each generated token's latency
         per_token_latency_stats = []
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
@@ -117,7 +117,8 @@ class Engine:
                 first_token_latency, completion_tokens, output_seqlen,
                 total_tokens
             ])
-            per_token_latency_stats += _per_token_latency_stats
+            # skip the first token latency
+            per_token_latency_stats.append(_per_token_latency_stats[1:])
             self.pbar.update(1)
         res_queue.put((session_id, stats, per_token_latency_stats))
 
@@ -157,9 +158,10 @@ class Engine:
         while not res_queue.empty():
             session_id, _stats, _per_token_latency_stats = res_queue.get()
             stats.append(np.array(_stats))
-            # skip the first token latency
-            per_token_latency_stats += _per_token_latency_stats[1:]
-
+            per_token_latency_stats += [
+                item for sublist in _per_token_latency_stats
+                for item in sublist
+            ]
         stats = np.concatenate(stats).reshape(-1, 4)
 
         first_token_latency_min = np.min(stats[:, 0], axis=0)
@@ -188,8 +190,8 @@ class Engine:
                   f'{first_token_latency_min:.3f}, '
                   f'{first_token_latency_max:.3f}, '
                   f'{first_token_latency_ave:.3f}')
-            print(
-                f'per-token latency(s) percentile(50, 75, 95, 99): {percentiles}\n')
+            print(f'per-token latency(s) percentile(50, 75, 95, 99): '
+                  f'{percentiles}\n')
         print(
             f'number of prompt tokens: {prompt_tokens:.0f}\n'
             f'number of completion tokens: {completion_tokens:.0f}\n'
@@ -207,9 +209,8 @@ class Engine:
                     'completion_tokens', '1st_token_latency(min)(s)',
                     '1st_token_latency(max)(s)', '1st_token_latency(ave)(s)',
                     'percentile50(s)', 'percentile75(s)', 'percentile95(s)',
-                    'percentile99(s)', 
-                    'output token thr(tokens/s)', 'total token thr(token/s)',
-                    'RPS', 'RPM'
+                    'percentile99(s)', 'output token thr(tokens/s)',
+                    'total token thr(token/s)', 'RPS', 'RPM'
                 ])
                 writer.writerow([
                     concurrency,
