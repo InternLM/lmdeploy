@@ -8,8 +8,6 @@ import yaml
 from utils.run_client_chat import commondLineTest
 from utils.run_restful_chat import interactiveTest, openAiChatTest
 
-HTTP_PREFIX = 'http://0.0.0.0:'
-
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config):
