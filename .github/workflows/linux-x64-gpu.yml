@@ -25,7 +25,11 @@ permissions:
   contents: read
 
 jobs:
-  cuda-118:
+  build:
+    strategy:
+      matrix:
+        cudaver: [11.8, 12.1]
+    name: cuda-${{ matrix.cudaver }}
     runs-on: ubuntu-latest
     steps:
       - name: Free disk space
@@ -45,37 +49,7 @@ jobs:
       - name: Build
         uses: addnab/docker-run-action@v3
         with:
-          image: openmmlab/lmdeploy-builder:cuda11.8
-          options: -v ${{ github.workspace }}:/work
-          run: |
-            cd /work
-            source /opt/conda/bin/activate
-            conda activate py38
-            mkdir build && cd build
-            bash ../generate.sh make
-            make -j$(nproc) && make install
-
-  cuda-121:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
-          tool-cache: false
-          docker-images: false
-          # All of these default to true, but feel free to set to "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: false
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Build
-        uses: addnab/docker-run-action@v3
-        with:
-          image: openmmlab/lmdeploy-builder:cuda12.1
+          image: openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }}
           options: -v ${{ github.workspace }}:/work
           run: |
             cd /work
