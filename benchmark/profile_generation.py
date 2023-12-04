@@ -29,7 +29,7 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
     for _ in range(test_round):
         token_latency_stats = [0] * (output_seqlen + 1)
         prev = time.perf_counter()
-        n_pre_token = 0
+        n_prev_token = 0
         """
         The iterator provided by `stream_infer` denotes the number of generated tokens so far,
         which is represented by the variable `n_token`.
@@ -54,9 +54,9 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
                                             temperature=temperature):
             _, n_token = outputs[0]
             now = time.perf_counter()
-            if n_pre_token != n_token:
-                token_latency_stats[n_pre_token] = np.round(now - prev, 3)
-                n_pre_token = n_token
+            if n_prev_token != n_token:
+                token_latency_stats[n_prev_token] = np.round(now - prev, 3)
+                n_prev_token = n_token
             prev = now
         if session_id == 1:
             pbar.update(1)
