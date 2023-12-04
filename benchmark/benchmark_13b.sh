@@ -46,16 +46,7 @@ benchmark_generation () {
     --csv ${output_path}/generation.csv
 }
 
-
-output_path=benchmark/output/"${foldername}"-tp"${tp}"
-# benchmark request throughput and static inference
-benchmark_rpm ${output_path}
-benchmark_generation  ${output_path}
-
-
-################################# BENCHMARK AGAIN AFTER TUNING GEMM #################################
-output_path=benchmark/output/"${foldername}"-tunned-gemm-tp"${tp}"
-
+################################# BENCHMARK AFTER TUNING GEMM #################################
 # tune gemm
 head_num=$(crudini --get "${config_path}" llama head_num)
 size_per_head=$(crudini --get "${config_path}" llama size_per_head)
@@ -74,6 +65,7 @@ python3 lmdeploy/turbomind/generate_gemm_config.py \
     --tensor_para_size ${tensor_para_size} \
     --max_batch_size ${max_batch_size}
 
+output_path=benchmark/output/"${foldername}"-tunned-gemm-tp"${tp}"
 # benchmark request throughput and static inference
 benchmark_rpm ${output_path}
 benchmark_generation ${output_path}

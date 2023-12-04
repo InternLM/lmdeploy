@@ -46,14 +46,7 @@ benchmark_generation () {
     --csv ${output_path}/generation.csv
 }
 
-
-output_path=benchmark/output/"${foldername}"-tp"${tp}"
-# benchmark request throughput and static inference
-benchmark_rpm ${output_path}
-benchmark_generation  ${output_path}
-
-
-################################# BENCHMARK AGAIN AFTER TUNING GEMM #################################
+################################# BENCHMARK AFTER TUNING GEMM #################################
 output_path=benchmark/output/"${foldername}"-tunned-gemm-tp"${tp}"
 
 # tune gemm
