@@ -89,16 +89,11 @@ private:
     size_t                          num_layer_;
     size_t                          vocab_size_;
     turbomind::LlamaAttentionParams attn_params_;
+    turbomind::EngineParams         engine_params_;
     float                           norm_eps_;
-    int                             max_batch_size_;
-    int                             max_context_token_num_;
-    int                             session_len_;
-    int                             step_length_;
     int                             start_id_;
     int                             end_id_;
-    float                           cache_max_block_count_;
     int                             cache_block_seq_len_;
-    int                             cache_chunk_size_;
     int                             use_context_fmha_;
     size_t                          tensor_para_size_;
     size_t                          pipeline_para_size_;

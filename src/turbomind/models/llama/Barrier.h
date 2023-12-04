@@ -34,10 +34,11 @@ public:
 
 class Barrier {
 public:
-    Barrier(unsigned count)
+    Barrier(unsigned count): count_(count)
     {
-        TM_LOG_INFO("Barrier(%d)", (int)count);
-        pthread_barrier_init(&barrier_, nullptr, count);
+        if (count_ > 1) {
+            pthread_barrier_init(&barrier_, nullptr, count);
+        }
     }
 
     Barrier(const Barrier&) = delete;
@@ -47,15 +48,20 @@ public:
 
     void wait()
     {
-        pthread_barrier_wait(&barrier_);
+        if (count_ > 1) {
+            pthread_barrier_wait(&barrier_);
+        }
     }
 
     ~Barrier()
     {
-        pthread_barrier_destroy(&barrier_);
+        if (count_ > 1) {
+            pthread_barrier_destroy(&barrier_);
+        }
     }
 
 private:
+    const int         count_;
     pthread_barrier_t barrier_{};
 };
 

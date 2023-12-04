@@ -9,11 +9,13 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/dispatch.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
 #include <cstdint>
 #include <cub/block/block_reduce.cuh>
 #include <type_traits>
+#include <utility>
 
 namespace turbomind {
 
@@ -543,8 +545,10 @@ __global__ void gatherOutput(int*       output_ids,
             continue;
         }
         // skip padding for dst
-        const int dst_idx   = src_idx < context_len ? src_idx : src_idx - (max_context_len - context_len);
-        output_ids[dst_idx] = ids[src_idx * batch_size + batch_id];
+        const int dst_idx = src_idx < context_len ? src_idx : src_idx - (max_context_len - context_len);
+        if (dst_idx < max_output_len) {
+            output_ids[dst_idx] = ids[src_idx * batch_size + batch_id];
+        }
     }
 }
 
@@ -694,50 +698,31 @@ void invokeIndexedCopyImpl(void**       h_src_ptr,
                            int          count,
                            cudaStream_t st)
 {
-    auto invoke = [&](auto max_count) {
-        constexpr int C = decltype(max_count)::value;
-        // maximum parameter size: sm<70: 4kB, sm>=70: 32kB
-        static_assert(sizeof(IndexedCopyParam<N, C>) <= 4096);
-        IndexedCopyParam<N, C> param{};
-        std::copy_n(h_src_ptr, N, param.src_ptr.data());
-        std::copy_n(h_dst_ptr, N, param.dst_ptr.data());
-        std::transform(h_elem_sz, h_elem_sz + N, param.stride.data(), [](int size) {
-            // Basic alignment check
-            FT_CHECK_WITH_INFO(size % sizeof(T) == 0, fmtstr("misalignment: %d %% %d", size, (int)sizeof(T)));
-            return size / sizeof(T);
+    dispatch(  // dispatch for num of copy operations
+        std::integer_sequence<int, 4, 8, 16, 32, 64, 128, 256>{},
+        [&](auto C) { return count <= C; },
+        [&](auto C) {
+            // maximum parameter size: sm<70: 4kB, sm>=70: 32kB
+            static_assert(sizeof(IndexedCopyParam<N, C>) <= 4096);
+            IndexedCopyParam<N, C> param{};
+            std::copy_n(h_src_ptr, N, param.src_ptr.data());
+            std::copy_n(h_dst_ptr, N, param.dst_ptr.data());
+            std::transform(h_elem_sz, h_elem_sz + N, param.stride.data(), [](int size) {
+                // Basic alignment check
+                FT_CHECK_WITH_INFO(size % sizeof(T) == 0, fmtstr("misalignment: %d %% %d", size, (int)sizeof(T)));
+                return size / sizeof(T);
+            });
+            param.max_stride = *std::max_element(param.stride.begin(), param.stride.end());
+            auto copy_idx    = [](const int* src, int offset, int n, auto dst) {
+                return src ? (void)std::copy_n(src + offset, n, dst) : std::iota(dst, dst + n, offset);
+            };
+            for (int c = 0; c < count; c += C) {
+                int batch_size = std::min(count - c, (int)C);
+                copy_idx(h_src_idx, c, batch_size, param.src_idx.data());
+                copy_idx(h_dst_idx, c, batch_size, param.dst_idx.data());
+                indexedCopy<T><<<batch_size, 128, 0, st>>>(param);
+            }
         });
-        param.max_stride = *std::max_element(param.stride.begin(), param.stride.end());
-        auto copy_idx    = [](const int* src, int offset, int n, auto dst) {
-            return src ? (void)std::copy_n(src + offset, n, dst) : std::iota(dst, dst + n, offset);
-        };
-        for (int c = 0; c < count; c += C) {
-            int batch_size = std::min(count - c, C);
-            copy_idx(h_src_idx, c, batch_size, param.src_idx.data());
-            copy_idx(h_dst_idx, c, batch_size, param.dst_idx.data());
-            indexedCopy<T><<<batch_size, 128, 0, st>>>(param);
-        }
-    };
-    if (count <= 4) {
-        invoke(std::integral_constant<int, 4>{});
-    }
-    if (count <= 8) {
-        invoke(std::integral_constant<int, 8>{});
-    }
-    else if (count <= 16) {
-        invoke(std::integral_constant<int, 16>{});
-    }
-    else if (count <= 32) {
-        invoke(std::integral_constant<int, 32>{});
-    }
-    else if (count <= 64) {
-        invoke(std::integral_constant<int, 64>{});
-    }
-    else if (count <= 128) {
-        invoke(std::integral_constant<int, 128>{});
-    }
-    else {
-        invoke(std::integral_constant<int, 256>{});
-    }
 }
 
 void invokeIndexedCopy(void**       h_src_ptr,
@@ -749,19 +734,14 @@ void invokeIndexedCopy(void**       h_src_ptr,
                        int          n_copys,
                        cudaStream_t st)
 {
-    auto args = std::tuple{h_src_ptr, h_dst_ptr, h_elem_sz, h_src_idx, h_dst_idx, count, st};
-    switch (n_copys) {
-        case 1:
-            return std::apply(invokeIndexedCopyImpl<uint32_t, 1>, args);
-        case 2:
-            return std::apply(invokeIndexedCopyImpl<uint32_t, 2>, args);
-        case 3:
-            return std::apply(invokeIndexedCopyImpl<uint32_t, 3>, args);
-        case 4:
-            return std::apply(invokeIndexedCopyImpl<uint32_t, 4>, args);
-        default:
-            FT_CHECK(0);
-    }
+    auto success = dispatch(std::integer_sequence<int, 1, 2, 3, 4>{}, [&](auto N) {
+        if (N == n_copys) {
+            invokeIndexedCopyImpl<uint32_t, N>(h_src_ptr, h_dst_ptr, h_elem_sz, h_src_idx, h_dst_idx, count, st);
+            return true;
+        }
+        return false;
+    });
+    FT_CHECK(success);
 }
 
 __global__ void padLastTokenIds(int* token_ids, const int* context_length, int max_context_len, int batch_size)
@@ -775,6 +755,96 @@ void invokePadLastTokenIds(
     int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream)
 {
     padLastTokenIds<<<1, 512, 0, stream>>>(token_ids, context_length, max_context_len, batch_size);
+}
+
+template<typename T>
+__global__ void getFeatureOfLastToken(T* output, const T* input, const int* cu_seqlens, int dims)
+{
+    int bi = blockIdx.x;
+    int ti = cu_seqlens[bi + 1] - 1;
+    for (int i = threadIdx.x; i < dims; i += blockDim.x) {
+        output[dims * bi + i] = input[dims * ti + i];
+    }
+}
+
+template<typename T>
+void invokeGetFeatureOfLastToken(
+    T* output, const T* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
+{
+    getFeatureOfLastToken<<<batch_size, 256, 0, stream>>>(output, input, cu_seqlens, dims);
+}
+
+template void invokeGetFeatureOfLastToken(half*, const half*, const int*, int, int, cudaStream_t);
+template void invokeGetFeatureOfLastToken(float*, const float*, const int*, int, int, cudaStream_t);
+
+template<class T, int C>
+struct BatchedCopyParam {
+    Array<T*, C>  src_ptr;
+    Array<T*, C>  dst_ptr;
+    Array<int, C> size;
+    int           count;
+};
+
+template<int kThrPerCpy, class T, int C>
+__global__ void batchedCopy(BatchedCopyParam<T, C> param)
+{
+    const int ti = threadIdx.x + blockIdx.x * blockDim.x;
+    const int bi = ti / kThrPerCpy;
+    if (bi >= param.count) {
+        return;
+    }
+    const T* __restrict__ src = param.src_ptr[bi];
+    T* __restrict__ dst       = param.dst_ptr[bi];
+    int size                  = param.size[bi];
+    for (int i = ti % kThrPerCpy; i < size; i += kThrPerCpy) {
+        dst[i] = src[i];
+    }
+}
+
+// MSVC does not like CUDA kernel launch inside nested lambdas
+template<class P>
+struct BatchedCopyLauncher {
+    int          max_size;
+    int          count;
+    const P*     params;
+    cudaStream_t st;
+
+    template<int S>
+    void operator()(std::integral_constant<int, S>) const
+    {
+        constexpr int threads         = 128;
+        constexpr int items_per_block = threads / S;
+        const int     blocks          = (count + items_per_block - 1) / items_per_block;
+        batchedCopy<S><<<blocks, threads, 0, st>>>(*params);
+    }
+};
+
+void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cudaStream_t st)
+{
+    dispatch(
+        std::integer_sequence<int, 1, 8, 32, 128>{},
+        [&](auto C) { return count <= C; },
+        [&](auto C) {
+            using T = uint32_t;
+            BatchedCopyParam<T, C> params{};
+            // TODO: on CUDA 12.1 and sm_70+ this can be 32K
+            static_assert(sizeof(params) <= 4096);
+            for (int c = 0; c < count; c += C) {
+                const int bsz = std::min<int>(count - c, C);
+                params.count  = bsz;
+                for (int i = 0; i < bsz; ++i) {
+                    params.src_ptr[i] = (T*)src_ptr[c + i];
+                    params.dst_ptr[i] = (T*)dst_ptr[c + i];
+                    FT_CHECK(size[c + i] % sizeof(T) == 0);
+                    params.size[i] = size[c + i] / sizeof(T);
+                }
+                const int max_size = *std::max_element(params.size.begin(), params.size.end());
+                dispatch(
+                    std::integer_sequence<int, 1, 2, 4, 8, 16, 32, 64, 128>{},
+                    [&](auto S) { return max_size <= S; },
+                    BatchedCopyLauncher<BatchedCopyParam<T, C>>{max_size, count, &params, st});
+            }
+        });
 }
 
 #define VERSION_SWITCH(VERSION, CONST_NAME, ...)                                                                       \

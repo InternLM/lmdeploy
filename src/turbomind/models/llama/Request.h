@@ -13,8 +13,8 @@
 namespace turbomind {
 
 struct Request {
-    uint64_t id;
-    uint64_t priority;
+    uint64_t id;         // sequence id
+    uint64_t unique_id;  // monotonic increasing
 
     bool start_flag;
     bool end_flag;
