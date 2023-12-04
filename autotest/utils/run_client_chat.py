@@ -17,8 +17,8 @@ def commondLineTest(config, case, case_info, model, type, extra):
             ' --temperture 0.5'
         ]
 
-    #if case == 'session_len_error':
-    cmd[0] = cmd[0] + ' --session_len 20'
+    if case == 'session_len_error':
+        cmd[0] = cmd[0] + ' --session_len 20'
     return commonTest(config, cmd, model, case_info, type == 'turbomind')
 
 
