@@ -36,7 +36,7 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         Please note that `n_token` is not a continuous value. In other words, during the iteration,
         its value might be 5, 7, 8, 16, and so on, rather than 1, 2, 3, 4, etc.
         So, it is quite difficult to get the latency of each generated token.
-        As a work-around, we set the latency `new-prev` of each iteration to the first token of
+        As a work-around, we set the latency `now-prev` of each iteration to the first token of
         the new generated tokens, and leave the latency of the rest tokens being 0.
         For example, in the first iteration, 5 tokens are generated.
         The time elapsing in this iteration `now-prev` is set to the latency of first token of
