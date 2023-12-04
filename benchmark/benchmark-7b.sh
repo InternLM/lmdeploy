@@ -13,6 +13,7 @@ config_path=${turbomind_model_path}/triton_models/weights/config.ini
 
 apt-get install crudini
 
+crudini --set ${config_path} llama max_context_token_num 4
 crudini --set ${config_path} llama cache_chunk_size -1
 crudini --set ${config_path} llama cache_max_entry_count 1000
 crudini --set ${config_path} llama max_batch_size 256
@@ -25,13 +26,13 @@ benchmark_rpm () {
     batches=(64 128)
     for batch in "${batches[@]}"
     do
-        for i in {1..6}
+        for i in {1..3}
         do
         python3 benchmark/profile_throughput.py \
             benchmark/ShareGPT_V3_unfiltered_cleaned_split.json \
             ${turbomind_model_path} \
             --concurrency "$batch" \
-            --num_prompts 5000 \
+            --num_prompts 3000 \
             --csv ${output_path}/rpm_localhost_batch_"${batch}"_"${i}"th.csv
         done
     done
@@ -47,7 +48,7 @@ benchmark_generation () {
 
 
 output_path=benchmark/output/"${foldername}"-tp"${tp}"
-# benchmark request throughput and static inferenece
+# benchmark request throughput and static inference
 benchmark_rpm ${output_path}
 benchmark_generation  ${output_path}
 
@@ -73,7 +74,7 @@ python3 lmdeploy/turbomind/generate_gemm_config.py \
     --tensor_para_size ${tensor_para_size} \
     --max_batch_size ${max_batch_size}
 
-# benchmark request throughput and static inferenece
+# benchmark request throughput and static inference
 benchmark_rpm ${output_path}
 benchmark_generation ${output_path}
 
