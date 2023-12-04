@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from __future__ import generators
-
 import asyncio
 import dataclasses
 import random
