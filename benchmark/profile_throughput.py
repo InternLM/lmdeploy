@@ -99,9 +99,10 @@ class Engine:
                 self.tokenizer.decode(res, offset)
                 offset = n_token
                 now = time.perf_counter()
-                _per_token_latency_stats[n_prev_token] = np.round(
-                    now - prev, 3)
-                n_prev_token = n_token
+                if n_prev_token != n_token:
+                    _per_token_latency_stats[n_prev_token] = np.round(
+                        now - prev, 3)
+                    n_prev_token = n_token
                 prev = now
 
             assert output_seqlen <= n_token <= output_seqlen + 1, \
@@ -155,7 +156,7 @@ class Engine:
         per_token_latency_stats = []
         while not res_queue.empty():
             session_id, _stats, _per_token_latency_stats = res_queue.get()
-            stats.append(np.array(_stats[:4]))
+            stats.append(np.array(_stats))
             # skip the first token latency
             per_token_latency_stats += _per_token_latency_stats[1:]
 
