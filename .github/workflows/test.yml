@@ -85,7 +85,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
@@ -98,12 +98,10 @@ jobs:
       - name: Generate reports
         if: always()
         run: |
-          if test -D "allure-results"; then
-            export date_today="$(date +'%Y%m%d-%H%M%S')"
-            export report_dir="$REPORT_DIR/$date_today"
-            echo "Save report to $ALLURE_DIR"
-            allure generate -c -o $report_dir
-          fi
+          export date_today="$(date +'%Y%m%d-%H%M%S')"
+          export report_dir="$REPORT_DIR/$date_today"
+          echo "Save report to $ALLURE_DIR"
+          allure generate -c -o $report_dir
       - name: Clear workfile
         if: always()
         run: |
