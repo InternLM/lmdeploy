@@ -46,7 +46,6 @@ benchmark_generation () {
     --csv ${output_path}/generation.csv
 }
 
-
 output_path=benchmark/output/"${foldername}"-tp"${tp}"
 # benchmark request throughput and static inference
 benchmark_rpm ${output_path}

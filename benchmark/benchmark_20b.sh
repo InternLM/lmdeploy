@@ -15,7 +15,7 @@ apt-get install crudini
 
 crudini --set ${config_path} llama max_context_token_num 4
 crudini --set ${config_path} llama cache_chunk_size -1
-crudini --set ${config_path} llama cache_max_entry_count 750
+crudini --set ${config_path} llama cache_max_entry_count 700
 crudini --set ${config_path} llama max_batch_size 256
 # end of update config
 
