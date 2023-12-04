@@ -1,4 +1,9 @@
 #!/bin/bash
+if [ - z "$1" ]
+then
+    echo
+fi
+
 tp=1
 model_name=llama2
 model_path=/workspace/models-140/llama2/huggingface/llama-2-7b-chat/
@@ -16,12 +21,12 @@ apt-get install crudini
 crudini --set ${config_path} llama max_context_token_num 4
 crudini --set ${config_path} llama cache_chunk_size -1
 crudini --set ${config_path} llama cache_max_entry_count 1000
-crudini --set ${config_path} llama max_batch_size 256
+crudini --set ${config_path} llama max_batch_size 128
 # end of update config
 
 benchmark_rpm () {
     output_path=$1
-    mkdir -p ${output_path}
+    mkdir -p "${output_path}"
 
     batches=(64 128)
     for batch in "${batches[@]}"
@@ -40,6 +45,8 @@ benchmark_rpm () {
 
 benchmark_generation () {
     output_path=$1
+    mkdir -p "${output_path}"
+
     python3 benchmark/profile_generation.py \
     ${turbomind_model_path} \
     --concurrency 1 16 32 64 \

@@ -21,7 +21,7 @@ crudini --set ${config_path} llama max_batch_size 256
 
 benchmark_rpm () {
     output_path=$1
-    mkdir -p ${output_path}
+    mkdir -p "${output_path}"
 
     batches=(64 128 256)
     for batch in "${batches[@]}"
@@ -40,6 +40,8 @@ benchmark_rpm () {
 
 benchmark_generation () {
     output_path=$1
+    mkdir -p "${output_path}"
+
     python3 benchmark/profile_generation.py \
     ${turbomind_model_path} \
     --concurrency 1 64 128 256 \
