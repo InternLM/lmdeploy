@@ -17,9 +17,9 @@ def commondLineTest(config, case, case_info, model, type, extra):
             ' --temperture 0.5'
         ]
 
-    if case == 'session_len_error':
-        cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model, case, case_info, type == 'turbomind')
+    #if case == 'session_len_error':
+    cmd[0] = cmd[0] + ' --session_len 20'
+    return commonTest(config, cmd, model, case_info, type == 'turbomind')
 
 
 def hfCommondLineTest(config, case, case_info, model_case, model_name):
@@ -32,7 +32,7 @@ def hfCommondLineTest(config, case, case_info, model_case, model_name):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case, case_info, False)
+    return commonTest(config, cmd, model_case, case_info, False)
 
 
 def pytorchCommondLineTest(config, case, case_info, model_case):
@@ -45,7 +45,7 @@ def pytorchCommondLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case, case_info, False)
+    return commonTest(config, cmd, model_case, case_info, False)
 
 
 def deepspeedCommondLineTest(config, case, case_info, model_case):
@@ -59,14 +59,12 @@ def deepspeedCommondLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case, case_info, False)
+    return commonTest(config, cmd, model_case, case_info, False)
 
 
-def commonTest(config, cmd, model, case, case_info, need_extract_output):
+def commonTest(config, cmd, model, case_info, need_extract_output):
     log_path = config.get('log_path')
 
-    if case == 'session_len_error':
-        cmd[0] = cmd[0] + ' --session_len 20'
     chat_log = os.path.join(log_path, 'chat_' + model + '.log')
 
     file = open(chat_log, 'w')
