@@ -136,7 +136,11 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos)
+        ignore_eos=request.ignore_eos,
+        do_preprocess=not isinstance(
+            request.messages,
+            str),  # seems openai do text completion for string input
+    )
 
     def create_stream_response_json(
         index: int,
