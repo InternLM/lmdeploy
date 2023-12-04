@@ -32,30 +32,27 @@ class AsyncEngine:
                                                      tp=tp,
                                                      **kwargs)
         self.tokenizer = self.tm_model.tokenizer
-        self.generators = [
-            self.tm_model.create_instance() for i in range(instance_num)
-        ]
         self.instance_num = instance_num
         self.model = self.tm_model.model
         self.available = [True] * instance_num
         self.starts = [None] * instance_num
         self.steps = {}
         self.loop = asyncio.get_event_loop()
-        self.generator_alone = self.tm_model.create_instance()
-        self.gen_queue = Queue()
+        self.special_gen = self.tm_model.create_instance()
+        self.gens_queue = Queue()
         for i in range(instance_num):
-            self.gen_queue.put(self.generators[i])
+            self.gens_queue.put(self.tm_model.create_instance())
 
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
-        for outputs in self.generator_alone.stream_infer(session_id,
-                                                         input_ids,
-                                                         request_output_len=0,
-                                                         sequence_start=False,
-                                                         sequence_end=False,
-                                                         stop=True):
+        for outputs in self.special_gen.stream_infer(session_id,
+                                                     input_ids,
+                                                     request_output_len=0,
+                                                     sequence_start=False,
+                                                     sequence_end=False,
+                                                     stop=True):
             pass
         self.available[instance_id] = True
 
@@ -63,12 +60,12 @@ class AsyncEngine:
         """Clear a session by a session_id."""
         instance_id = session_id % self.instance_num
         input_ids = self.tokenizer.encode('')
-        for outputs in self.generator_alone.stream_infer(session_id,
-                                                         input_ids,
-                                                         request_output_len=0,
-                                                         sequence_start=False,
-                                                         sequence_end=True,
-                                                         stop=True):
+        for outputs in self.special_gen.stream_infer(session_id,
+                                                     input_ids,
+                                                     request_output_len=0,
+                                                     sequence_start=False,
+                                                     sequence_end=True,
+                                                     stop=True):
             pass
         self.steps[str(session_id)] = 0
         self.available[instance_id] = True
@@ -80,7 +77,7 @@ class AsyncEngine:
             yield
         except (Exception, asyncio.CancelledError) as e:  # noqa
             self.stop_session(session_id)
-        self.gen_queue.put(generator)
+        self.gens_queue.put(generator)
 
     async def get_embeddings(self, prompt, do_prerpocess=False):
         if do_prerpocess:
@@ -91,10 +88,10 @@ class AsyncEngine:
     async def get_generator(self, stop: bool):
         """Only return the model instance if it is available."""
         if stop:
-            return self.generator_alone
-        while self.gen_queue.qsize() == 0:
+            return self.special_gen
+        while self.gens_queue.qsize() == 0:
             await asyncio.sleep(0)
-        return self.gen_queue.get()
+        return self.gens_queue.get()
 
     def batch_infer(self,
                     prompts: List[str],
