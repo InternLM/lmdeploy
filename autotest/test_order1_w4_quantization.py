@@ -34,7 +34,7 @@ def test_quantization_internlm_chat_20b(config):
 
 
 @pytest.mark.quantization
-@pytest.mark.Qwen_7B_Chat
+@pytest.mark.Qwen_14B_Chat
 @allure.story('Qwen-14B-Chat')
 def test_quantization_Qwen_14B_Chat(config):
     result = quantization(config, 'Qwen-14B-Chat-inner-w4', 'Qwen-14B-Chat')
