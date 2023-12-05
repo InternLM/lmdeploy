@@ -37,7 +37,7 @@ env:
 
 jobs:
   test_functions:
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-a100]python3 -m pip install -r requirements.txt -r requirements/test.txt
     timeout-minutes: 4320 # 72hours
     environment: 'prod'
     env:
@@ -63,13 +63,13 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.0.1 torchaudio==2.0.2 torchvision==0.15.2 --extra-index-url https://download.pytorch.org/whl/cu117
+          python3 -m pip install torch==2.0.1 torchvision==0.15.2 --extra-index-url https://download.pytorch.org/whl/cu117
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
           # use cached build
-          cp -r ../../build build
+          mkdir build
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -86,9 +86,7 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 xformers==0.0.20
-          python3 -m pip install nvidia-cublas-cu11 nvidia-cuda-cupti-cu11 nvidia-cuda-nvrtc-cu11 nvidia-cuda-runtime-cu11 nvidia-cudnn-cu11 nvidia-cufft-cu11 nvidia-curand-cu11 nvidia-cusolver-cu11 nvidia-cusparse-cu11 nvidia-nccl-cu11 nvidia-nvtx-cu11
           python3 -m pip install -r requirements.txt -r requirements/test.txt
-          python3 -m pip install lmdeploy==0.1.0a1
           python3 -m pip install .
       - name: Check env
         run: |
