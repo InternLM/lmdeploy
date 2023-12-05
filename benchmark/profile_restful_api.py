@@ -83,16 +83,15 @@ class Engine:
                 req_queue.get, [None, None, None]):
             timestamps = []
             timestamps.append(time.perf_counter())
-            for output in client.chat_completions_v1(
-                    model=self.model_name,
-                    messages=prompt,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    n=1,
-                    max_tokens=output_seqlen,
-                    stream=stream_output,
-                    session_id=session_id,
-                    ignore_eos=True):
+            for output in client.completions_v1(model=self.model_name,
+                                                prompt=prompt,
+                                                temperature=self.temperature,
+                                                top_p=self.top_p,
+                                                n=1,
+                                                max_tokens=output_seqlen,
+                                                stream=stream_output,
+                                                session_id=session_id,
+                                                ignore_eos=True):
                 timestamps.append(time.perf_counter())
 
             first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
