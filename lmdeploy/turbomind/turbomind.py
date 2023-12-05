@@ -559,7 +559,9 @@ class TurboMindInstance:
             image_embs = [torch.cat(x) for x in image_embs]
             image_embs = pad_sequence(image_embs, batch_first=True)
             image_offsets = [torch.IntTensor(x) for x in image_offsets]
-            image_offsets = pad_sequence(image_offsets, batch_first=True)
+            image_offsets = pad_sequence(image_offsets,
+                                         batch_first=True,
+                                         padding_value=-1)
             if self.tm_model.config.weight_type == 'fp32':
                 image_embs = image_embs.float()
             else:

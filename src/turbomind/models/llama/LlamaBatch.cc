@@ -260,9 +260,18 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 
         // copy image embeddings
         if (model_->image_dim_ > 0 && r->inputs[rank_].isExist("image_embs")) {
+            auto       image_embs_tensor = r->inputs[rank_].at("image_embs");
+            const auto n_offsets         = r->inputs[rank_].at("image_offsets").shape.back();
+            if (image_embs_tensor.shape.size() != 4 || image_embs_tensor.shape[1] != n_offsets
+                || image_embs_tensor.shape[2] != model_->image_dim_) {
+                TM_LOG_WARNING("[ImageFeature] Invalid image feature, id = %ld, info = %s",
+                               (long)seq.id,
+                               image_embs_tensor.toString().c_str());
+                continue;
+            }
+
             T*         image_embs      = r->inputs[rank_].getPtr<T>("image_embs");
             const int* h_image_offsets = r->inputs[rank_].getPtr<int>("image_offsets");
-            const auto n_offsets       = r->inputs[rank_].at("image_offsets").shape.back();
             const int  count           = model_->image_dim_ * model_->hidden_units_;
             for (size_t i = 0; i < n_offsets && h_image_offsets[i] > 0; i++) {
                 seq.image_offsets.push_back(seq.tokens.size() + h_image_offsets[i]);
