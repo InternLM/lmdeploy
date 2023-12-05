@@ -75,36 +75,42 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `kv_head_num` is not set, default to `head_num` (%d).", (int)kv_head_num_);
     }
 
-    if (!max_batch_size_) {
-        max_batch_size_ = 64;
-        TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.", (int)max_batch_size_);
-    }
-
-    if (!session_len_) {
-        session_len_ = 2160;
-        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)session_len_);
-    }
-
     if (!attn_params_.max_position_embeddings) {
-        attn_params_.max_position_embeddings = session_len_;
-        TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to `session_len` (%d).",
+        attn_params_.max_position_embeddings = 2048;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
                        (int)attn_params_.max_position_embeddings);
     }
 
-    if (!max_context_token_num_) {
-        max_context_token_num_ = (int)std::sqrt(max_batch_size_);
+    if (!engine_params_.max_batch_size) {
+        engine_params_.max_batch_size = 64;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.",
+                       (int)engine_params_.max_batch_size);
+    }
+
+    if (!engine_params_.session_len) {
+        engine_params_.session_len = attn_params_.max_position_embeddings;
+        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_params_.session_len);
+    }
+
+    if (!engine_params_.max_context_token_num) {
+        engine_params_.max_context_token_num = engine_params_.session_len;
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
-                       (int)max_context_token_num_);
+                       (int)engine_params_.max_context_token_num);
     }
 
-    if (!step_length_) {
-        step_length_ = 1;
-        TM_LOG_WARNING("[LlamaTritonModel] `step_length` is not set, default to %d.", (int)step_length_);
+    if (engine_params_.max_context_token_num <= engine_params_.max_batch_size) {
+        engine_params_.max_context_token_num *= engine_params_.session_len;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` = %d.", (int)engine_params_.max_context_token_num);
     }
 
-    if (!cache_max_block_count_) {
-        cache_max_block_count_ = .95f;
-        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %f.", cache_max_block_count_);
+    if (!engine_params_.step_length) {
+        engine_params_.step_length = 1;
+    }
+
+    if (!engine_params_.cache_max_block_count) {
+        engine_params_.cache_max_block_count = .95f;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %f.",
+                       engine_params_.cache_max_block_count);
     }
 
     if (!cache_block_seq_len_) {
@@ -112,9 +118,16 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `cache_block_seq_len` is not set, default to %d.", cache_block_seq_len_);
     }
 
-    if (!cache_chunk_size_) {
-        cache_chunk_size_ = cache_max_block_count_;
-        TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.", (int)cache_chunk_size_);
+    if (!engine_params_.cache_chunk_size) {
+        engine_params_.cache_chunk_size = engine_params_.cache_max_block_count;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.",
+                       (int)engine_params_.cache_chunk_size);
+    }
+
+    if (!engine_params_.num_tokens_per_iter) {
+        engine_params_.num_tokens_per_iter = engine_params_.max_context_token_num;
+        TM_LOG_WARNING("[LlamaTritonModel] `num_tokens_per_iter` is not set, default to `max_context_token_num` (%d).",
+                       (int)engine_params_.num_tokens_per_iter);
     }
 }
 
@@ -153,24 +166,18 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         }
     }
 
-    model_name_            = reader.Get("llama", "model_name");
-    head_num_              = reader.GetInteger("llama", "head_num");
-    kv_head_num_           = reader.GetInteger("llama", "kv_head_num", 0);
-    size_per_head_         = reader.GetInteger("llama", "size_per_head");
-    inter_size_            = reader.GetInteger("llama", "inter_size");
-    num_layer_             = reader.GetInteger("llama", "num_layer");
-    vocab_size_            = reader.GetInteger("llama", "vocab_size");
-    norm_eps_              = reader.GetFloat("llama", "norm_eps");
-    start_id_              = reader.GetInteger("llama", "start_id");
-    end_id_                = reader.GetInteger("llama", "end_id");
-    max_batch_size_        = reader.GetInteger("llama", "max_batch_size", 0);
-    max_context_token_num_ = reader.GetInteger("llama", "max_context_token_num", 0);
-    session_len_           = reader.GetInteger("llama", "session_len", 0);
-    step_length_           = reader.GetInteger("llama", "step_length", 0);
-    cache_max_block_count_ = reader.GetFloat("llama", "cache_max_entry_count", 0);
-    cache_block_seq_len_   = reader.GetInteger("llama", "cache_block_seq_len", 0);
-    cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
-    use_context_fmha_      = reader.GetInteger("llama", "use_context_fmha", 1);
+    model_name_          = reader.Get("llama", "model_name");
+    head_num_            = reader.GetInteger("llama", "head_num");
+    kv_head_num_         = reader.GetInteger("llama", "kv_head_num", 0);
+    size_per_head_       = reader.GetInteger("llama", "size_per_head");
+    inter_size_          = reader.GetInteger("llama", "inter_size");
+    num_layer_           = reader.GetInteger("llama", "num_layer");
+    vocab_size_          = reader.GetInteger("llama", "vocab_size");
+    norm_eps_            = reader.GetFloat("llama", "norm_eps");
+    start_id_            = reader.GetInteger("llama", "start_id");
+    end_id_              = reader.GetInteger("llama", "end_id");
+    use_context_fmha_    = reader.GetInteger("llama", "use_context_fmha", 1);
+    cache_block_seq_len_ = reader.GetInteger("llama", "cache_block_seq_len", 0);
 
     attn_bias_    = reader.GetInteger("llama", "attn_bias", 0);
     quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
@@ -184,11 +191,19 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     // attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
     attn_params_.use_logn_attn = reader.GetInteger("llama", "use_logn_attn", 0);
 
-    handleMissingParams();
+    engine_params_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
+    engine_params_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);
+    engine_params_.session_len           = reader.GetInteger("llama", "session_len", 0);
+    engine_params_.step_length           = reader.GetInteger("llama", "step_length", 0);
 
-    if (max_context_token_num_ <= max_batch_size_) {
-        max_context_token_num_ *= session_len_;
-    }
+    engine_params_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
+    engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
+
+    engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
+    engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
+    engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
+
+    handleMissingParams();
 
     shared_state_          = std::make_shared<typename ft::LlamaV2<T>::SharedState>();
     shared_state_->barrier = std::make_shared<ft::Barrier>(tensor_para_size);
@@ -277,19 +292,14 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   inter_size_,
                                                   num_layer_,
                                                   vocab_size_,
-                                                  attn_params_,
                                                   norm_eps_,
-                                                  max_batch_size_,
-                                                  max_context_token_num_,
-                                                  session_len_,
-                                                  step_length_,
+                                                  attn_params_,
                                                   start_id_,
                                                   end_id_,
-                                                  cache_max_block_count_,
                                                   cache_block_seq_len_,
-                                                  cache_chunk_size_,
                                                   quant_policy_,
                                                   use_context_fmha_,
+                                                  engine_params_,
                                                   shared_state_,
                                                   shared_weights_[device_id].get(),
                                                   tensor_para,
@@ -307,7 +317,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                           std::move(cuda_device_prop_ptr),
                                           shared_weights_[device_id],
                                           std::move(llama),
-                                          session_len_});
+                                          engine_params_.session_len});
 }
 
 template<typename T>
@@ -386,10 +396,11 @@ std::string LlamaTritonModel<T>::toString()
     ss << "Model: "
        << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
        << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << max_batch_size_
-       << "\nmax_context_token_num: " << max_context_token_num_ << "\nsession_len: " << session_len_
-       << "\nstep_length: " << step_length_ << "\ncache_max_entry_count: " << cache_max_block_count_
-       << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << cache_chunk_size_
+       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
+       << "\nmax_context_token_num: " << engine_params_.max_context_token_num
+       << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
+       << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count
+       << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << engine_params_.cache_chunk_size
        << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_

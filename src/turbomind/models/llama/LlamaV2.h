@@ -24,12 +24,11 @@
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/models/llama/LlamaContextDecoder.h"
-#include "src/turbomind/models/llama/LlamaDecoder.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/instance_comm.h"
@@ -59,19 +58,14 @@ public:
             size_t                       inter_size,
             size_t                       num_layer,
             size_t                       vocab_size,
-            const LlamaAttentionParams&  attn_params,
             float                        norm_eps,
-            int                          max_batch_size,
-            int                          max_context_token_num,
-            int                          session_len,
-            int                          step_length,
+            const LlamaAttentionParams&  attn_params,
             int                          start_id,
             int                          end_id,
-            float                        cache_max_block_count,
             int                          cache_block_seq_len,
-            int                          cache_chunk_size,
             int                          quant_policy,
             bool                         use_context_fmha,
+            const EngineParams&          engine_params,
             std::shared_ptr<SharedState> shared_state,
             LlamaWeight<T>*              weights,
             NcclParam                    tensor_para,
@@ -113,37 +107,28 @@ private:
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void contextDecode(T*           decoder_output,
-                       uintptr_t*   k_block_ptrs,
-                       uintptr_t*   v_block_ptrs,
-                       void**       k_tmp_ptrs,
-                       void**       v_tmp_ptrs,
-                       T*           context_decoder_input_buf,
-                       T*           context_decoder_output_buf,
-                       const int*   input_ids,
-                       const int*   input_length,
-                       const int*   context_length,
-                       const int*   cu_block_counts,
-                       const float* rope_theta,
-                       size_t       token_num,
-                       size_t       max_input_len,
-                       size_t       max_context_len,
-                       size_t       session_len,
-                       size_t       batch_size);
-
-    void decoderForward(T*           decoder_output,
-                        uintptr_t*   k_cache_ptr,
-                        uintptr_t*   v_cache_ptr,
+    void forwardUnified(T*           out,
+                        T*           decoder_output,
                         T*           decoder_input,
-                        const int*   sequence_length,
-                        const bool*  finished,
-                        const int*   cu_block_counts,
+                        void**       k_block_ptrs,
+                        void**       v_block_ptrs,
+                        const int*   input_ids,
+                        const int*   cu_block_cnts,
                         const float* rope_theta,
-                        int          step,
-                        int          ite,
-                        int          sum_seq_len,
-                        int          max_seq_len,
-                        size_t       batch_size);
+                        const bool*  dc_finished,
+                        const int*   pf_input_length,
+                        const int*   pf_context_length,
+                        T**          pf_tmp_k_ptrs,
+                        T**          pf_tmp_v_ptrs,
+                        size_t       token_num,
+                        int          dc_batch_size,
+                        int          dc_step,
+                        int          dc_sum_seq_len,
+                        int          dc_max_seq_len,
+                        int          pf_batch_size,
+                        int          pf_max_input_len,
+                        int          pf_max_context_len,
+                        int          pf_session_len);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 
@@ -195,12 +180,11 @@ private:
 
     const bool debug_{false};
 
-    LlamaWeight<T>*            weights_{};
-    LlamaDecoder<T>*           decoder_{};
-    LlamaContextDecoder<T>*    context_decoder_{};
-    DynamicDecodeLayer<float>* dynamic_decode_layer_{};
+    LlamaWeight<T>* weights_{};
 
-    const int                      step_length_;
+    std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
+    DynamicDecodeLayer<float>*         dynamic_decode_layer_{};
+
     std::shared_ptr<SharedState>   shared_state_;
     ffi_api_lock_ctrl_t            ffi_lock_;
     std::unique_ptr<LlamaBatch<T>> batch_;

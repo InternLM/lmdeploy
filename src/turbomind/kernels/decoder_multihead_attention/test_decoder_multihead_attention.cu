@@ -53,7 +53,7 @@ void TestBlocks(thrust::universal_vector<half>&  linear,          // linear data
     std::mt19937       g(rd());
     std::shuffle(idxs.begin(), idxs.end(), g);
 
-    for (int i = 0; i < idxs.size(); ++i) {
+    for (size_t i = 0; i < idxs.size(); ++i) {
         ptrs[i] = blocks.data().get() + idxs[i] * head_num * block_size * head_dim;
     }
 
@@ -115,8 +115,8 @@ int main(int argc, char* argv[])
     constexpr int KvHeadNum  = 32;
     constexpr int kBatchSize = 1;
     // constexpr int kContextLen = 7306;
-    constexpr int kContextLen  = 1024;
-    constexpr int kSequenceLen = kContextLen + 1;
+    constexpr int kSequenceLen = 1024;
+    constexpr int kContextLen  = kSequenceLen + 1;
     constexpr int kBlockSz     = 128;
     constexpr int kTestIter    = 10;
     constexpr int kMaxSplitK   = 1;
@@ -126,9 +126,10 @@ int main(int argc, char* argv[])
     thrust::universal_vector<half>  output(kBatchSize * kHeadNum * kHeadDim);
     thrust::universal_vector<half>  qkv(kBatchSize * (kHeadNum + KvHeadNum * 2) * kHeadDim);
     thrust::universal_vector<bool>  finished(kBatchSize);
-    thrust::universal_vector<half>  k_cache(kBatchSize * kSequenceLen * KvHeadNum * kHeadDim);
-    thrust::universal_vector<half>  v_cache(kBatchSize * kSequenceLen * KvHeadNum * kHeadDim);
-    thrust::universal_vector<int>   sequence_lengths(kBatchSize);
+    thrust::universal_vector<half>  k_cache(kBatchSize * kContextLen * KvHeadNum * kHeadDim);
+    thrust::universal_vector<half>  v_cache(kBatchSize * kContextLen * KvHeadNum * kHeadDim);
+    thrust::universal_vector<int>   context_length(kBatchSize);
+    thrust::universal_vector<int>   sequence_length(kBatchSize);
     thrust::universal_vector<void*> k_cache_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ptrs(kBatchSize);
 
@@ -138,23 +139,23 @@ int main(int argc, char* argv[])
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
-    if (kContextLen) {
-        rng.GenerateNormal(k_cache.data().get(), kBatchSize * KvHeadNum * kSequenceLen * kHeadDim);
-        rng.GenerateNormal(v_cache.data().get(), kBatchSize * KvHeadNum * kSequenceLen * kHeadDim);
+    if (kSequenceLen) {
+        rng.GenerateNormal(k_cache.data().get(), kBatchSize * KvHeadNum * kContextLen * kHeadDim);
+        rng.GenerateNormal(v_cache.data().get(), kBatchSize * KvHeadNum * kContextLen * kHeadDim);
 
-        cudaMemset2DAsync(k_cache.data().get() + kContextLen * kHeadDim,
-                          sizeof(half) * kSequenceLen * kHeadDim,
+        cudaMemset2DAsync(k_cache.data().get() + kSequenceLen * kHeadDim,
+                          sizeof(half) * kContextLen * kHeadDim,
                           0,
                           sizeof(half) * kHeadDim,
                           kBatchSize * KvHeadNum);
         if constexpr (0) {
             for (int b = 0; b < kBatchSize; ++b) {
                 for (int h = 0; h < KvHeadNum; ++h) {
-                    for (int s = 0; s < kSequenceLen; ++s) {
+                    for (int s = 0; s < kContextLen; ++s) {
                         for (int d = 0; d < kHeadDim; ++d) {
                             std::cout << std::setw(7) << std::setprecision(4) << std::fixed
-                                      << (float)k_cache[b * KvHeadNum * kSequenceLen * kHeadDim
-                                                        + h * kSequenceLen * kHeadDim + s * kHeadDim + d]
+                                      << (float)k_cache[b * KvHeadNum * kContextLen * kHeadDim
+                                                        + h * kContextLen * kHeadDim + s * kHeadDim + d]
                                       << " ";
                         }
                         std::cout << "\n";
@@ -166,8 +167,8 @@ int main(int argc, char* argv[])
             std::exit(0);
         }
 
-        cudaMemset2DAsync(v_cache.data().get() + kContextLen * kHeadDim,
-                          sizeof(half) * kSequenceLen * kHeadDim,
+        cudaMemset2DAsync(v_cache.data().get() + kSequenceLen * kHeadDim,
+                          sizeof(half) * kContextLen * kHeadDim,
                           0,
                           sizeof(half) * kHeadDim,
                           kBatchSize * KvHeadNum);
@@ -193,7 +194,8 @@ int main(int argc, char* argv[])
     cudaDeviceSynchronize();
 
     for (int i = 0; i < kBatchSize; ++i) {
-        sequence_lengths[i] = kContextLen;
+        sequence_length[i]  = kSequenceLen;
+        context_length[i]   = kContextLen;
         k_cache_ptrs[i]     = k_cache.data().get() + i * k_cache.size() / kBatchSize;
         v_cache_ptrs[i]     = v_cache.data().get() + i * v_cache.size() / kBatchSize;
         k_cache_ref_ptrs[i] = k_cache_ref.data().get() + i * k_cache_ref.size() / kBatchSize;
@@ -212,7 +214,7 @@ int main(int argc, char* argv[])
     params.stride = (kHeadNum + 2 * KvHeadNum) * kHeadDim;
 
     params.batch_size    = kBatchSize;
-    params.max_seq_len   = kContextLen + 1;
+    params.max_seq_len   = kSequenceLen;
     params.cu_block_cnts = cu_block_cnts.data().get();
 
     printf("%d %d\n", (int)k_ptrs.size(), (int)v_ptrs.size());
@@ -220,11 +222,9 @@ int main(int argc, char* argv[])
     params.v_cache_block_ptrs  = (void**)v_ptrs.data().get();
     params.kv_cache_block_size = kBlockSz;
 
-    params.finished           = finished.data().get();
-    params.per_sample_length  = sequence_lengths.data().get();
-    params.per_sample_k_cache = k_cache_ref_ptrs.data().get();
-    params.per_sample_v_cache = v_cache_ref_ptrs.data().get();
-    params.layer_offset       = 0;
+    params.finished       = finished.data().get();
+    params.context_length = context_length.data().get();
+    params.layer_offset   = 0;
 
     params.num_heads     = kHeadNum;
     params.num_kv_heads  = KvHeadNum;
@@ -238,8 +238,16 @@ int main(int argc, char* argv[])
     params.partial_M = partial_M.data().get();
     params.partial_O = partial_O.data().get();
 
+    params.max_split_k = kMaxSplitK;
+    params.arch        = 80;
+
     for (int i = 0; i < kTestIter; ++i) {
-        mmha_ft_reference(params, cudaStream_t{});
+        mmha_ft_reference(params,
+                          (half**)k_cache_ref_ptrs.data().get(),
+                          (half**)v_cache_ref_ptrs.data().get(),
+                          sequence_length.data().get(),
+                          kContextLen,
+                          cudaStream_t{});
     }
 
     cudaDeviceSynchronize();
@@ -249,14 +257,7 @@ int main(int argc, char* argv[])
     }
     std::cout << "---------------------------------------------------\n";
 
-    params.out                = output.data().get();
-    params.per_sample_k_cache = k_cache_ptrs.data().get();
-    params.per_sample_v_cache = v_cache_ptrs.data().get();
-
-    params.max_split_k = kMaxSplitK;
-    params.max_seq_len = kContextLen;
-
-    params.arch = 80;
+    params.out = output.data().get();
 
     std::vector<thrust::universal_vector<half>> outputs;
 
@@ -271,19 +272,14 @@ int main(int argc, char* argv[])
         }
     }
 
-    thrust::universal_vector<int> seq_lens(kBatchSize);
-    for (auto& x : seq_lens) {
-        x = kContextLen + 1;
-    }
-
     if (1) {
         ConvertBlocksToLinear((const half**)k_ptrs.data().get(),
                               k_cache.data().get(),
                               cu_block_cnts.data().get(),
-                              seq_lens.data().get(),
+                              context_length.data().get(),
                               0,
                               kBlockSz,
-                              kSequenceLen,
+                              kContextLen,
                               KvHeadNum,
                               kHeadDim,
                               kBatchSize,
@@ -291,10 +287,10 @@ int main(int argc, char* argv[])
         ConvertBlocksToLinear((const half**)v_ptrs.data().get(),
                               v_cache.data().get(),
                               cu_block_cnts.data().get(),
-                              seq_lens.data().get(),
+                              context_length.data().get(),
                               0,
                               kBlockSz,
-                              kSequenceLen,
+                              kContextLen,
                               KvHeadNum,
                               kHeadDim,
                               kBatchSize,
@@ -316,15 +312,15 @@ int main(int argc, char* argv[])
 
     // [H, S, D]
 
-    Compare(k_cache.data().get() + kContextLen * kHeadDim,
-            k_cache_ref.data().get() + kContextLen * kHeadDim,
-            kSequenceLen * kHeadDim,
+    Compare(k_cache.data().get() + kSequenceLen * kHeadDim,
+            k_cache_ref.data().get() + kSequenceLen * kHeadDim,
+            kContextLen * kHeadDim,
             kHeadDim,
             KvHeadNum);
 
-    Compare(v_cache.data().get() + kContextLen * kHeadDim,
-            v_cache_ref.data().get() + kContextLen * kHeadDim,
-            kSequenceLen * kHeadDim,
+    Compare(v_cache.data().get() + kSequenceLen * kHeadDim,
+            v_cache_ref.data().get() + kSequenceLen * kHeadDim,
+            kContextLen * kHeadDim,
             kHeadDim,
             KvHeadNum);
 

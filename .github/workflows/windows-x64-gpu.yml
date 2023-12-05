@@ -25,7 +25,11 @@ permissions:
   contents: read
 
 jobs:
-  cuda-118:
+  build:
+    strategy:
+      matrix:
+        cudaver: [11.8.0, 12.1.0]
+    name: cuda-${{ matrix.cudaver }}
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -40,7 +44,7 @@ jobs:
       - uses: Jimver/cuda-toolkit@v0.2.11
         id: cuda-toolkit
         with:
-          cuda: '11.8.0'
+          cuda: ${{ matrix.cudaver }}
           use-github-cache: false
       - name: Build wheel
         run: |

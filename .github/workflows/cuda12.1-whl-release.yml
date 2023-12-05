@@ -1,13 +1,13 @@
-name: publish to pypi
+name: cuda12.1-whl-release
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "lmdeploy/version.py"
+    tags:
+      - '*'
   workflow_dispatch:
 
+permissions:
+  contents: write
 
 jobs:
   linux-build:
@@ -18,8 +18,9 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
-      OUTPUT_FOLDER: cuda11.8_dist
+      DOCKER_TAG: cuda12.1
+      OUTPUT_FOLDER: cuda12.1_dist
+      CUDA_VER: 12.1
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -69,13 +70,12 @@ jobs:
       - uses: Jimver/cuda-toolkit@v0.2.11
         id: cuda-toolkit
         with:
-          cuda: '11.8.0'
+          cuda: '12.1.0'
           use-github-cache: false
       - name: Build wheel
         run: |
           mkdir build
           cd build
-          # https://github.com/pypa/setuptools/issues/1631
           pip install -U setuptools
           ..\builder\windows\generate.ps1
           cmake --build . --config Release -- /m > build.log.txt
@@ -101,11 +101,8 @@ jobs:
         uses: actions/download-artifact@v3
       - name: Display artifacts
         run: ls artifact/ -lh
-      - name: Set up python3.8
-        uses: actions/setup-python@v4
+      - name: Publish
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          python-version: '3.8'
-      - name: Upload to pypi
-        run: |
-          pip install twine
-          twine upload artifact/* -u __token__ -p ${{ secrets.pypi_password }}
+          files: artifact/*

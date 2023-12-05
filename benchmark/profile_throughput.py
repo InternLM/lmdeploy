@@ -77,11 +77,13 @@ class Engine:
         stats = []
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
-            input_ids = self.tokenizer(prompt).input_ids
             offset = 0
             timestamps = []
             tokens = []
+
             timestamps.append(time.perf_counter())
+
+            input_ids = self.tokenizer(prompt).input_ids
             for outputs in model_inst.stream_infer(
                     session_id,
                     input_ids=input_ids,
