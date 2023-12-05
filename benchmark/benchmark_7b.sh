@@ -22,7 +22,8 @@ fi
 # update recommended config to config.ini
 config_path=${turbomind_model_path}/triton_models/weights/config.ini
 
-apt-get install crudini
+apt-get update
+apt-get install crudini -y
 
 crudini --set ${config_path} llama max_context_token_num 4
 crudini --set ${config_path} llama cache_chunk_size -1

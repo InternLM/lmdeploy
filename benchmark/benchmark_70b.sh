@@ -22,7 +22,8 @@ fi
 # update recommended config to config.ini
 config_path=${turbomind_model_path}/triton_models/weights/config.ini
 
-apt-get install crudini
+apt-get update
+apt-get install crudini -y
 
 crudini --set ${config_path} llama max_context_token_num 4
 crudini --set ${config_path} llama cache_chunk_size -1
@@ -42,10 +43,10 @@ benchmark_rpm () {
     batches=(64 128 256)
     for batch in "${batches[@]}"
     do
-        for i in {1..6}
+        for i in {1..3}
         do
-        python3 benchmark/profile_throughput.py \
-            benchmark/ShareGPT_V3_unfiltered_cleaned_split.json \
+        python3 profile_throughput.py \
+            ShareGPT_V3_unfiltered_cleaned_split.json \
             ${turbomind_model_path} \
             --concurrency "$batch" \
             --num_prompts 5000 \
@@ -58,7 +59,7 @@ benchmark_generation () {
     output_path=$1
     mkdir -p "${output_path}"
 
-    python3 benchmark/profile_generation.py \
+    python3 profile_generation.py \
     ${turbomind_model_path} \
     --concurrency 1 64 128 256 \
     --csv ${output_path}/generation.csv
