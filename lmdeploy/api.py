@@ -8,9 +8,8 @@ def pipeline(model_path, instance_num=32, tp=1, log_level='ERROR', **kwargs):
         model_path (str): the path of the deployed model
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
-        log_level(str): set log level whose value among
-            [CRITICAL, ERROR, WARNING, INFO, DEBUG]
-    """
+        log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+    """ # noqa E501
     from lmdeploy.serve.async_engine import AsyncEngine
     os.environ['TM_LOG_LEVEL'] = log_level
     return AsyncEngine(model_path, instance_num=instance_num, tp=tp, **kwargs)
@@ -32,9 +31,14 @@ def serve(model_path: str,
         instance_num (int): number of instances of turbomind model
         tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+
+    Return:
+        APIClient: A client chatbot for LLaMA series models.
     """ # noqa E501
+    import time
     from multiprocessing import Process
 
+    from lmdeploy.serve.openai.api_client import APIClient
     from lmdeploy.serve.openai.api_server import serve
     task = Process(target=serve,
                    args=(model_path, ),
@@ -45,6 +49,11 @@ def serve(model_path: str,
                                log_level=log_level,
                                **kwargs))
     task.start()
+    client = APIClient(f'http://{server_name}:{server_port}')
+    while True:
+        time.sleep(1)
+        if client.service_available:
+            return client
 
 
 def client(api_server_url: str = 'http://0.0.0.0:23333', **kwargs):
