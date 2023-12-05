@@ -90,6 +90,9 @@ template<typename T>
 void LlamaWeight<T>::loadModel(std::string dir_path)
 {
     FtCudaDataType model_file_type = FtCudaDataType::FP16;
+    if(weight_type_ == WeightType::kBF16){
+        model_file_type = FtCudaDataType::BF16;
+    }
     dir_path += '/';
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,

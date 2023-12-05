@@ -27,10 +27,12 @@ struct ToCutlassType_<half> {
     using Type = cutlass::half_t;
 };
 
+#ifdef ENABLE_BF16
 template<>
 struct ToCutlassType_<__nv_bfloat16> {
     using Type = cutlass::bfloat16_t;
 };
+#endif
 
 template<
     // dtype of Q/K/V/M

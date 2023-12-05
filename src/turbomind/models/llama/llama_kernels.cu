@@ -837,7 +837,7 @@ FlashAttentionOp<T>::FlashAttentionOp(int batch_size, int head_num, int key_len,
 #ifdef _MSC_VER
     op_version_ = 1;
 #else
-    op_version_ = std::is_same<half, typename std::decay<T>::type>::value ? 2 : 1;
+    op_version_ = std::is_same<float, typename std::decay<T>::type>::value ? 1 : 2;
     if (op_version_ == 2 && getSMVersion() < 80) {
         op_version_ = 1;
     }

@@ -46,6 +46,17 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_dir);
+    }else if (data_type == "bf16") {
+#ifdef ENABLE_BF16
+        return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
+            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
+            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
+            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
+            model_dir);
+#else
+        TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF16");
+        ft::FT_CHECK(false);
+#endif
     }
     else {
         return std::make_shared<LlamaTritonModel<float>>(
@@ -190,6 +201,9 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     if (weight_type_str == "fp16") {
         weight_type_ = ft::WeightType::kFP16;
     }
+    else if (weight_type_str == "bf16") {
+        weight_type_ = ft::WeightType::kBF16;
+    }
     else if (weight_type_str == "fp32") {
         weight_type_ = ft::WeightType::kFP32;
     }
@@ -245,6 +259,11 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     else if (std::is_same<T, float>::value) {
         cublas_wrapper->setFP32GemmConfig();
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper->setBF16GemmConfig();
+    }
+#endif
 
     ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
