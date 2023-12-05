@@ -930,6 +930,8 @@ void FlashAttentionOpImpl<T, 1>::operator()(Params& params, cudaStream_t st) con
 
 template class FlashAttentionOpImpl<float, 1>;
 template class FlashAttentionOpImpl<half, 1>;
+#ifdef ENABLE_BF16
 template class FlashAttentionOpImpl<__nv_bfloat16, 1>;
+#endif // ENABLE_BF16
 
 }  // namespace turbomind
