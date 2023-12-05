@@ -139,11 +139,13 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
 
 def update_config_weight_type(output_format: str,
                               config: TurbomindModelConfig):
-    WEIGHT_TYPE_MAP = {'fp32': 'fp32',
-                       'fp16': 'fp16',
-                       'bf16': 'bf16',
-                       'w4': 'int4',
-                       'w8': 'int8'}
+    WEIGHT_TYPE_MAP = {
+        'fp32': 'fp32',
+        'fp16': 'fp16',
+        'bf16': 'bf16',
+        'w4': 'int4',
+        'w8': 'int8'
+    }
     config.weight_type = WEIGHT_TYPE_MAP[output_format]
 
 
