@@ -37,7 +37,7 @@ env:
 
 jobs:
   test_functions:
-    runs-on: [self-hosted, linux-a100]python3 -m pip install -r requirements.txt -r requirements/test.txt
+    runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
     environment: 'prod'
     env:
