@@ -121,13 +121,13 @@ def run_all_step(config, case, case_info, model, port):
 
     with allure.step('step2 - restful_test - openai chat'):
         restful_result, restful_log, restfulOpenAiMsg = openAiChatTest(
-            config, case, case_info, model, http_url)
+            config, case_info, model, http_url)
         result = result & restful_result
         msg += restfulOpenAiMsg
 
     with allure.step('step3 - restful_test - interactive chat'):
         active_result, interactive_log, restfulActiveMsg = interactiveTest(
-            config, case, case_info, model, http_url)
+            config, case_info, model, http_url)
         result = result & active_result
         msg += restfulActiveMsg
 

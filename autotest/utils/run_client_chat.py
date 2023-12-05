@@ -19,8 +19,6 @@ def commondLineTest(config, case, case_info, model, type, extra):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    else: 
-        cmd[0] = cmd[0] + ' --session_len 2000'
     return commonTest(config, cmd, model, case_info, type == 'turbomind')
 
 
@@ -34,9 +32,7 @@ def hfCommondLineTest(config, case, case_info, model_case, model_name):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    else: 
-        cmd[0] = cmd[0] + ' --session_len 2000'
-    return commonTest(config, cmd, model_case, case_info, False)
+    return commonTest(config, cmd, model_case, case_info, True)
 
 
 def pytorchCommondLineTest(config, case, case_info, model_case):

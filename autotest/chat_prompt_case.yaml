@@ -34,6 +34,7 @@ chinese_poem_case:
             - 打油
         - contain:
             - "。"
+            - 打油
         - len_g:
             10
 english_poem_case:
@@ -56,6 +57,7 @@ traditional_chinese_case:
         - contain:
             - 維多利亞港
             - 维多利亚港
+            - victoria
 session_len_error:
     - 这是很长的一段话这是很长的一段话这是很长的一段话这是很长的一段话这是很长的一段话:
         - contain:

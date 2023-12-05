@@ -85,7 +85,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 xformers==0.0.20
+          python3 -m pip install packaging protobuf transformers_stream_generator flash-attn transformers==4.33.0 xformers==0.0.20
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
