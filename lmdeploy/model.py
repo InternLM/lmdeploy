@@ -238,7 +238,7 @@ class InternLMChat7B(BaseModel):
             role = message['role']
             content = message['content']
             ret += f'{eval(f"self.{role}")}{content}{eox_map[role]}'
-        ret += f'{self.assistant}:'
+        ret += f'{self.assistant}'
         return ret
 
 
