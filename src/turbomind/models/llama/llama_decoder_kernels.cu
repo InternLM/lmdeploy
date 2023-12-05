@@ -3,6 +3,7 @@
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cuda_fp16.h>
@@ -88,11 +89,11 @@ template<>
 struct res_norm_ops_t<__nv_bfloat16> {
     __device__ float2 cast(const uint& x) const
     {
-        return __bfloat1622float2(reinterpret_cast<const __nv_bfloat162&>(x));
+        return cuda_cast<float2, __nv_bfloat162>(reinterpret_cast<const __nv_bfloat162&>(x));
     }
     __device__ uint cast(const float2& x) const
     {
-        auto y = __float22bfloat162_rn(x);
+        auto y = cuda_cast<__nv_bfloat162, float2>(x);
         return reinterpret_cast<uint&>(y);
     }
     __device__ float2 add(const float2& a, const float2& b, const float2& bias, float& accum) const

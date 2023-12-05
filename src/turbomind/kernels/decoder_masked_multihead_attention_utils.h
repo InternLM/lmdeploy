@@ -319,7 +319,7 @@ inline __device__ float bfloat16_to_float(__nv_bfloat16 h)
 
 inline __device__ float2 bfloat162_to_float2(__nv_bfloat162 v)
 {
-    return __bfloat1622float2(v);
+    return cuda_cast<float2, __nv_bfloat162>(v);
     // __nv_bfloat16 lo, hi;
     // asm volatile("mov.b32 {%0, %1}, %2;\n" : "=h"(lo), "=h"(hi) : "r"(v));
     // return make_float2(bfloat16_to_float(lo), bfloat16_to_float(hi));

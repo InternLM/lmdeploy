@@ -594,7 +594,7 @@ __inline__ __device__ uint4 vec_conversion<uint4, Float8_>(const Float8_& a)
 template<>
 __inline__ __device__ __nv_bfloat162 vec_conversion<__nv_bfloat162, float2>(const float2& a)
 {
-    return __float22bfloat162_rn(a);
+    return cuda_cast<__nv_bfloat162, float2>(a);
 }
 template<>
 __inline__ __device__ bf16_4_t vec_conversion<bf16_4_t, float4>(const float4& a)
