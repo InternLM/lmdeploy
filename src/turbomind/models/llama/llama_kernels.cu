@@ -91,7 +91,8 @@ void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps,
 template void invokeRootMeanSquareNorm(float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeRootMeanSquareNorm(half*, const half*, const half*, float, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
-template void invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+template void
+invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
 #endif
 
 // #ifdef ENABLE_BF16
@@ -384,22 +385,22 @@ template void invokeExtendKVCache(void**       k_dst_ptrs,
                                   const float* kv_scale,
                                   cudaStream_t stream);
 #ifdef ENABLE_BF16
-template void invokeExtendKVCache(void**       k_dst_ptrs,
-                                  void**       v_dst_ptrs,
-                                  const __nv_bfloat16*  k_src,
-                                  const __nv_bfloat16*  v_src,
-                                  const int*   cu_block_counts,
-                                  const int*   query_length,
-                                  const int*   history_length,
-                                  int          batch_size,
-                                  int          block_length,
-                                  size_t       dst_layer_offset,
-                                  int          max_q_len,
-                                  int          head_dim,
-                                  int          head_num,
-                                  int          quant,
-                                  const float* kv_scale,
-                                  cudaStream_t stream);
+template void invokeExtendKVCache(void**               k_dst_ptrs,
+                                  void**               v_dst_ptrs,
+                                  const __nv_bfloat16* k_src,
+                                  const __nv_bfloat16* v_src,
+                                  const int*           cu_block_counts,
+                                  const int*           query_length,
+                                  const int*           history_length,
+                                  int                  batch_size,
+                                  int                  block_length,
+                                  size_t               dst_layer_offset,
+                                  int                  max_q_len,
+                                  int                  head_dim,
+                                  int                  head_num,
+                                  int                  quant,
+                                  const float*         kv_scale,
+                                  cudaStream_t         stream);
 #endif
 
 template<typename Ti, typename To>
@@ -819,7 +820,7 @@ template void invokeGetFeatureOfLastToken(half*, const half*, const int*, int, i
 template void invokeGetFeatureOfLastToken(float*, const float*, const int*, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
 template void invokeGetFeatureOfLastToken(__nv_bfloat16*, const __nv_bfloat16*, const int*, int, int, cudaStream_t);
-#endif // ENABLE_BF16
+#endif  // ENABLE_BF16
 
 template<class T, int C>
 struct BatchedCopyParam {

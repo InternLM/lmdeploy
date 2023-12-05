@@ -79,8 +79,7 @@ namespace mmha {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Dh>
-struct Qk_vec_m_ {
-};
+struct Qk_vec_m_ {};
 
 template<>
 struct Qk_vec_m_<float, 32> {
@@ -180,8 +179,7 @@ struct Qk_vec_k_<__nv_fp8_e4m3, 256> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int THREADS_PER_KEY>
-struct K_vec_m_ {
-};
+struct K_vec_m_ {};
 
 template<>
 struct K_vec_m_<float, 4> {
@@ -262,8 +260,7 @@ struct K_vec_k_<__nv_fp8_e4m3, 1> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int V_VEC_SIZE>
-struct V_vec_m_ {
-};
+struct V_vec_m_ {};
 
 template<>
 struct V_vec_m_<float, 1> {
@@ -343,8 +340,7 @@ struct V_vec_k_<__nv_fp8_e4m3, 16> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_FMA
 template<typename T>
-struct Qk_vec_acum_fp32_ {
-};
+struct Qk_vec_acum_fp32_ {};
 
 template<>
 struct Qk_vec_acum_fp32_<float> {
@@ -426,8 +422,7 @@ struct Qk_vec_acum_fp32_<fp8_4_t> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-struct K_vec_acum_fp32_ {
-};
+struct K_vec_acum_fp32_ {};
 
 template<>
 struct K_vec_acum_fp32_<float> {
@@ -489,8 +484,7 @@ struct K_vec_acum_fp32_<fp8_4_t> {
 
 #ifdef MMHA_USE_FP32_ACUM_FOR_OUT
 template<typename T>
-struct V_vec_acum_fp32_ {
-};
+struct V_vec_acum_fp32_ {};
 
 template<>
 struct V_vec_acum_fp32_<float> {
@@ -600,7 +594,7 @@ template<>
 __inline__ __device__ bf16_4_t vec_conversion<bf16_4_t, float4>(const float4& a)
 {
     bf16_4_t b;
-    float2 val;
+    float2   val;
     val.x = a.x;
     val.y = a.y;
     b.x   = vec_conversion<__nv_bfloat162, float2>(val);
@@ -793,7 +787,7 @@ inline __device__ void convert_from_float(__nv_bfloat162& dst, float2 src)
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     dst = __float22bfloat162_rn(src);
 #else
-    dst   = __floats2bfloat162_rn(src.x, src.y);
+    dst = __floats2bfloat162_rn(src.x, src.y);
 #endif
 }
 #endif  // ENABLE_BF16
@@ -1087,7 +1081,6 @@ inline __device__ int64_t quant(uint4 a, const float scale, const float zp)
     return int64;
 }
 
-
 // bfloat16 to int8
 inline __device__ int8_t quant(__nv_bfloat16 a, const float scale, const float zp)
 {
@@ -1342,7 +1335,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     }
     Tk* logits_smem = reinterpret_cast<Tk*>(logits_smem_);
 #else
-    float*         logits_smem    = reinterpret_cast<float*>(logits_smem_);
+    float* logits_smem = reinterpret_cast<float*>(logits_smem_);
 #endif
 
     // The shared memory to do the final reduction for the output values. Reuse qk_smem.
@@ -1738,7 +1731,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
             logit = is_mask ? 0.f : __expf(qk_smem[ti - first_step] - qk_max);
         }
 #else
-        float logit       = is_mask ? 0.f : __expf(qk_smem[ti - first_step] - qk_max);
+        float logit = is_mask ? 0.f : __expf(qk_smem[ti - first_step] - qk_max);
 #endif
         sum += logit;
         qk_smem[ti - first_step] = logit;

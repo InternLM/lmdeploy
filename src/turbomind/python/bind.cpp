@@ -6,12 +6,12 @@
 #include "src/turbomind/utils/nccl_utils.h"
 #include <cuda_runtime.h>
 #include <memory>
-#include <stdexcept>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include <stdexcept>
 
 namespace py = pybind11;
 namespace ft = turbomind;
@@ -381,7 +381,7 @@ PYBIND11_MODULE(_turbomind, m)
                     model->setFfiLock(gil_control);
                     return model;
                 }
-                if(data_type == "bf16") {
+                if (data_type == "bf16") {
 #ifdef ENABLE_BF16
                     auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);

@@ -12,8 +12,7 @@ namespace cg = cooperative_groups;
 namespace turbomind {
 
 template<typename T>
-struct res_norm_ops_t {
-};
+struct res_norm_ops_t {};
 
 template<typename T>
 struct res_norm_t {
@@ -191,6 +190,7 @@ template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
-template void invokeFusedAddBiasResidualRMSNorm(__nv_bfloat16*, __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+template void invokeFusedAddBiasResidualRMSNorm(
+    __nv_bfloat16*, __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
 #endif
 }  // namespace turbomind
