@@ -1,12 +1,23 @@
 ##!/bin/bash
+if [ -z "$1" ]
+then
+    echo "Error. Please input the model path of internlm-20b model"
+    exit 1
+fi
+
+workspace_dir=$(dirname $(realpath "$0"))
+
 tp=2
-model_name=internlm-chat-20b
-model_path=/workspace/models-140/InternLM/internlm-chat-20b
-turbomind_model_path=workspace/internlm-chat-20b
-foldername=$(basename "$turbomind_model_path")
+model_path="$1"
+model_foldername=$(basename "$model_path")
+turbomind_model_path="${workspace_dir}"/workspace/"${model_foldername}"
 
 # convert
-lmdeploy convert ${model_name} ${model_path} --dst-path ${turbomind_model_path} --tp ${tp}
+lmdeploy convert internlm-20b ${model_path} --dst-path ${turbomind_model_path} --tp ${tp}
+if [ $? != 0 ]
+then
+    exit 1
+fi
 
 # update recommended config to config.ini
 config_path=${turbomind_model_path}/triton_models/weights/config.ini
@@ -18,6 +29,11 @@ crudini --set ${config_path} llama cache_chunk_size -1
 crudini --set ${config_path} llama cache_max_entry_count 700
 crudini --set ${config_path} llama max_batch_size 128
 # end of update config
+
+cd ${workspace_dir}
+
+# download dataset
+wget -O ShareGPT_V3_unfiltered_cleaned_split.json https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
 benchmark_rpm () {
     output_path=$1
@@ -59,7 +75,7 @@ max_batch_size=$(crudini --get "${config_path}" llama max_batch_size)
 
 echo $head_num, $size_per_head, $vocab_size, $inter_size, $tensor_para_size, $max_batch_size
 
-python3 lmdeploy/turbomind/generate_gemm_config.py \
+python3 -m lmdeploy.turbomind.generate_gemm_config \
     --head_num ${head_num} \
     --size_per_head ${size_per_head} \
     --vocab_size ${vocab_size} \
@@ -67,7 +83,7 @@ python3 lmdeploy/turbomind/generate_gemm_config.py \
     --tensor_para_size ${tensor_para_size} \
     --max_batch_size ${max_batch_size}
 
-output_path=benchmark/output/"${foldername}"-tunned-gemm-tp"${tp}"
+output_path="${workspace_dir}"/output/"${model_foldername}"-tunned-gemm-tp"${tp}"
 # benchmark request throughput and static inference
 benchmark_rpm ${output_path}
 benchmark_generation ${output_path}
