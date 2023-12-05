@@ -459,6 +459,8 @@ class TurboMindInstance:
     def stream_infer(self,
                      session_id,
                      input_ids,
+                     image_embs=None,
+                     image_offsets=None,
                      request_output_len: int = 512,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
@@ -543,6 +545,27 @@ class TurboMindInstance:
             END=_broadcast_np((1 if sequence_end else 0), np.int32),
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
+
+        if image_embs is not None:
+            assert len(image_offsets) == len(image_embs)
+            # image_embs     Union[List[np.array], List[List[np.array]]]
+            # image_offsets  Union[List[int], List[List[int]]]
+            if isinstance(image_offsets[0], int):
+                image_offsets = [image_offsets]
+                image_embs = [image_embs]
+            image_embs = [[
+                torch.from_numpy(x).squeeze().unsqueeze(0) for x in y
+            ] for y in image_embs]
+            image_embs = [torch.cat(x) for x in image_embs]
+            image_embs = pad_sequence(image_embs, batch_first=True)
+            image_offsets = [torch.IntTensor(x) for x in image_offsets]
+            image_offsets = pad_sequence(image_offsets, batch_first=True)
+            if self.tm_model.config.weight_type == 'fp32':
+                image_embs = image_embs.float()
+            else:
+                image_embs = image_embs.half()
+            inputs['image_embs'] = image_embs
+            inputs['image_offsets'] = image_offsets
 
         if ignore_eos:
             stop_words = None

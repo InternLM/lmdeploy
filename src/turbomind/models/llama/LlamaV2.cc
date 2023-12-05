@@ -48,6 +48,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     size_t                       inter_size,
                     size_t                       num_layer,
                     size_t                       vocab_size,
+                    size_t                       image_dim,
                     float                        norm_eps,
                     const LlamaAttentionParams&  attn_params,
                     int                          start_id,
@@ -69,6 +70,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     inter_size_(inter_size),
     num_layer_(num_layer),
     vocab_size_(vocab_size),
+    image_dim_(image_dim),
     attn_params_(attn_params),
     vocab_size_padded_(vocab_size),
     rmsnorm_eps_(norm_eps),
@@ -166,28 +168,63 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::forwardUnified(T*           out,
-                                T*           decoder_output,
-                                T*           decoder_input,
-                                void**       k_block_ptrs,
-                                void**       v_block_ptrs,
-                                const int*   input_ids,
-                                const int*   cu_block_cnts,
-                                const float* rope_theta,
-                                const bool*  dc_finished,
-                                const int*   pf_input_length,
-                                const int*   pf_context_length,
-                                T**          pf_tmp_k_ptrs,
-                                T**          pf_tmp_v_ptrs,
-                                size_t       token_num,
-                                int          dc_batch_size,
-                                int          dc_step,
-                                int          dc_sum_seq_len,
-                                int          dc_max_seq_len,
-                                int          pf_batch_size,
-                                int          pf_max_input_len,
-                                int          pf_max_context_len,
-                                int          pf_session_len)
+void LlamaV2<T>::updateImageEmbedding(T*               decoder_input,
+                                      const int        bsz,
+                                      const int*       decode_lengths,
+                                      const Sequence** sequences)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    if (image_dim_ <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < bsz; i++) {
+        decoder_input += ((i > 0) ? decode_lengths[i - 1] : 0) * hidden_units_;
+        if (decode_lengths[i] == 1) {
+            continue;
+        }
+        const auto& seq = *sequences[i];
+        for (int j = 0; j < seq.image_offsets.size(); j++) {
+            if (seq.image_offsets[j] + image_dim_ <= seq.cache_len) {
+                continue;
+            }
+            int        off_dst = std::max(0, seq.image_offsets[j] - seq.cache_len);
+            int        off_src = std::max(0, seq.cache_len - seq.image_offsets[j]);
+            T*         dst_ptr = decoder_input + off_dst * hidden_units_;
+            std::byte* src_ptr = seq.image_embs[j].data() + off_src * hidden_units_;
+            size_t     count   = (image_dim_ - off_src) * hidden_units_ * sizeof(T);
+            cudaMemcpyAsync(dst_ptr, src_ptr, count, cudaMemcpyDefault, stream_);
+        }
+    }
+    sync_check_cuda_error();
+}
+
+template<typename T>
+void LlamaV2<T>::forwardUnified(T*               out,
+                                T*               decoder_output,
+                                T*               decoder_input,
+                                void**           k_block_ptrs,
+                                void**           v_block_ptrs,
+                                const int*       input_ids,
+                                const int*       cu_block_cnts,
+                                const float*     rope_theta,
+                                const bool*      dc_finished,
+                                const int*       pf_input_length,
+                                const int*       pf_context_length,
+                                T**              pf_tmp_k_ptrs,
+                                T**              pf_tmp_v_ptrs,
+                                size_t           token_num,
+                                int              dc_batch_size,
+                                int              dc_step,
+                                int              dc_sum_seq_len,
+                                int              dc_max_seq_len,
+                                int              pf_batch_size,
+                                int              pf_max_input_len,
+                                int              pf_max_context_len,
+                                int              pf_session_len,
+                                const int*       decode_lengths,
+                                const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -203,6 +240,9 @@ void LlamaV2<T>::forwardUnified(T*           out,
                                              1,
                                              hidden_units_,
                                              stream_);
+
+    updateImageEmbedding(decoder_input, dc_batch_size + pf_batch_size, decode_lengths, sequences);
+
     sync_check_cuda_error();
 
     const auto   dtype = getTensorType<T>();

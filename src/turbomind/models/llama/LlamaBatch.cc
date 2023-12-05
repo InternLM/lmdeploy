@@ -258,6 +258,21 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             output_ids = Copy(input_ids, input_length, output_ids);
         }
 
+        // copy image embeddings
+        if (model_->image_dim_ > 0 && r->inputs[rank_].isExist("image_embs")) {
+            T*         image_embs      = r->inputs[rank_].getPtr<T>("image_embs");
+            const int* h_image_offsets = r->inputs[rank_].getPtr<int>("image_offsets");
+            const auto n_offsets       = r->inputs[rank_].at("image_offsets").shape.back();
+            const int  count           = model_->image_dim_ * model_->hidden_units_;
+            for (size_t i = 0; i < n_offsets && h_image_offsets[i] > 0; i++) {
+                seq.image_offsets.push_back(seq.tokens.size() + h_image_offsets[i]);
+                auto& emb = seq.image_embs.emplace_back();
+                emb.resize(count * sizeof(T));
+                std::memcpy(emb.data(), image_embs, count * sizeof(T));
+                image_embs += count;
+            }
+        }
+
         // total context length (history + input)
         state.h_context_length[idx] = output_ids - output_ids_base;
         state.h_finished[idx]       = false;
@@ -1420,6 +1435,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
         std::vector<int> decode_indices{};
         std::vector<int> decode_lengths{};
 
+        std::vector<const Sequence*> sequences;
+
         BatchedCopy batched_copy;
         for (int i = first; i < last; ++i) {
             input_ids = batched_copy.Add(input_d_ptrs[i], h_input_length_buf_[i], input_ids);
@@ -1436,6 +1453,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
             }
             decode_indices.push_back(i);
             decode_lengths.push_back(h_input_length_buf_[i]);
+            sequences.push_back(state_->sequences[i]);
             max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
         }
         int token_count = input_ids - context_decoder_ids_buf_;
@@ -1482,7 +1500,9 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                                pf_batch_size,
                                max_input_len,
                                max_context_cnts[p],
-                               max_context_cnts[p]);
+                               max_context_cnts[p],
+                               decode_lengths.data(),
+                               sequences.data());
 
         if (iter == 0) {
             // compute logits of inputs if requested
