@@ -94,7 +94,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
-          pytest autotest --alluredir=allure-results --clean-alluredir
+          pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
