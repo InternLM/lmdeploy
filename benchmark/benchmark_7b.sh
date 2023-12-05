@@ -1,9 +1,4 @@
 #!/bin/bash
-if [ - z "$1" ]
-then
-    echo
-fi
-
 tp=1
 model_name=llama2
 model_path=/workspace/models-140/llama2/huggingface/llama-2-7b-chat/
