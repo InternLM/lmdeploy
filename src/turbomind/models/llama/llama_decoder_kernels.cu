@@ -2,8 +2,8 @@
 
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
-#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cuda_fp16.h>
