@@ -5,7 +5,7 @@ from time import sleep
 import allure
 import pytest
 import yaml
-from utils.run_client_chat import commondLineTest
+from utils.run_client_chat import commandLineTest
 from utils.run_restful_chat import interactiveTest, openAiChatTest
 
 
@@ -91,7 +91,7 @@ def run_all_step(config, case, case_info, model, port):
     http_url = 'http://localhost:' + str(port)
 
     with allure.step('step1 - command chat regression'):
-        chat_result, chat_log, commondmsg = commondLineTest(
+        chat_result, chat_log, commondmsg = commandLineTest(
             config, case, case_info, model, 'api_client', http_url)
         result = result & chat_result
         msg += commondmsg

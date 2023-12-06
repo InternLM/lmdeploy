@@ -1,7 +1,7 @@
 import allure
 import pytest
 import yaml
-from utils.run_client_chat import hfCommondLineTest
+from utils.run_client_chat import hfCommandLineTest
 
 
 def getList():
@@ -134,7 +134,7 @@ def run_command_line_test(config, case, case_info, model_case):
         return {'success': False, 'msg': 'the model is incorrect'}
     model_name = model_map.get(model_case)
 
-    result, chat_log, msg = hfCommondLineTest(config, case, case_info,
+    result, chat_log, msg = hfCommandLineTest(config, case, case_info,
                                               model_case, model_name)
     allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 

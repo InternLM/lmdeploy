@@ -4,7 +4,7 @@ from subprocess import PIPE, Popen
 from utils.rule_condition_assert import assert_result
 
 
-def commondLineTest(config, case, case_info, model, type, extra):
+def commandLineTest(config, case, case_info, model, type, extra):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
@@ -19,10 +19,10 @@ def commondLineTest(config, case, case_info, model, type, extra):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model, case_info, type == 'turbomind')
+    return commandTest(config, cmd, model, case_info, type == 'turbomind')
 
 
-def hfCommondLineTest(config, case, case_info, model_case, model_name):
+def hfCommandLineTest(config, case, case_info, model_case, model_name):
     model_path = config.get('model_path')
 
     cmd = [
@@ -32,10 +32,10 @@ def hfCommondLineTest(config, case, case_info, model_case, model_name):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case_info, True)
+    return commandTest(config, cmd, model_case, case_info, True)
 
 
-def pytorchCommondLineTest(config, case, case_info, model_case):
+def pytorchCommandLineTest(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
     cmd = [
@@ -45,10 +45,10 @@ def pytorchCommondLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case_info, False)
+    return commandTest(config, cmd, model_case, case_info, False)
 
 
-def deepspeedCommondLineTest(config, case, case_info, model_case):
+def deepspeedCommandLineTest(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
     cmd = [
@@ -59,10 +59,10 @@ def deepspeedCommondLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commonTest(config, cmd, model_case, case_info, False)
+    return commandTest(config, cmd, model_case, case_info, False)
 
 
-def commonTest(config, cmd, model, case_info, need_extract_output):
+def commandTest(config, cmd, model, case_info, need_extract_output):
     log_path = config.get('log_path')
 
     chat_log = os.path.join(log_path, 'chat_' + model + '.log')
