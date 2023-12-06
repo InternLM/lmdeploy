@@ -517,5 +517,5 @@ struct ConvertKvCache<int8_t, __nv_bfloat16> {
         return vo;
     }
 };
-#endif // ENABLE_BF16
+#endif  // ENABLE_BF16
 }  // namespace turbomind
