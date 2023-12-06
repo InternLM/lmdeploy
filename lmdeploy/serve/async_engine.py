@@ -21,13 +21,22 @@ class AsyncEngine:
 
     Args:
         model_path (str): the path of the deployed model
+        model_name (str): needed when model_path is a pytorch model on
+            huggingface.co, such as "InternLM/internlm-chat-7b",
+            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
     """
 
-    def __init__(self, model_path, instance_num=32, tp=1, **kwargs) -> None:
+    def __init__(self,
+                 model_path,
+                 model_name: Optional[str] = None,
+                 instance_num=32,
+                 tp=1,
+                 **kwargs) -> None:
         from lmdeploy import turbomind as tm
         self.tm_model = tm.TurboMind.from_pretrained(model_path,
+                                                     model_name=model_name,
                                                      tp=tp,
                                                      **kwargs)
         self.tokenizer = self.tm_model.tokenizer

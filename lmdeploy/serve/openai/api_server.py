@@ -472,6 +472,7 @@ async def chat_interactive_v1(request: GenerateRequest,
 
 
 def serve(model_path: str,
+          model_name: Optional[str] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           instance_num: int = 64,
@@ -487,6 +488,8 @@ def serve(model_path: str,
 
     Args:
         model_path (str): the path of the deployed model
+        model_name (str): needed when model_path is a pytorch model on
+            huggingface.co, such as "InternLM/internlm-chat-7b"
         server_name (str): host ip for serving
         server_port (int): server port
         instance_num (int): number of instances of turbomind model
@@ -509,6 +512,7 @@ def serve(model_path: str,
         )
 
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
+                                                 model_name=model_name,
                                                  instance_num=instance_num,
                                                  tp=tp,
                                                  **kwargs)
