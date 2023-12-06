@@ -75,13 +75,14 @@ class Engine:
                    stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
+        # get each generated token's latency
+        per_token_latency_stats = []
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
+            _per_token_latency_stats = [0] * (output_seqlen + 1)
             offset = 0
-            timestamps = []
-            tokens = []
-
-            timestamps.append(time.perf_counter())
+            prev = time.perf_counter()
+            n_prev_token = 0
 
             input_ids = self.tokenizer(prompt).input_ids
             for outputs in model_inst.stream_infer(
@@ -94,25 +95,32 @@ class Engine:
                     sequence_end=True,
                     ignore_eos=True,
                     stream_output=stream_output):
-                res, token = outputs[0]
+                res, n_token = outputs[0]
                 self.tokenizer.decode(res, offset)
-                offset = token
-                timestamps.append(time.perf_counter())
-                tokens.append(token)
-            first_token_latency = np.round(timestamps[1] - timestamps[0], 3)
-            token_latency = np.round(timestamps[-1] - timestamps[0], 3)
-            completion_tokens = tokens[-1]
-            assert output_seqlen <= completion_tokens <= output_seqlen + 1, \
+                offset = n_token
+                now = time.perf_counter()
+                if n_prev_token != n_token:
+                    _per_token_latency_stats[n_prev_token] = np.round(
+                        now - prev, 3)
+                    n_prev_token = n_token
+                prev = now
+
+            assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \
-                f'tokens, but generate {completion_tokens} tokens.\n' \
+                f'tokens, but generate {n_token} tokens.\n' \
                 f'prompt: {prompt}'
-            total_tokens = tokens[-1] + input_seqlen
+
+            first_token_latency = _per_token_latency_stats[0]
+            completion_tokens = n_token
+            total_tokens = n_token + input_seqlen
             stats.append([
                 first_token_latency, completion_tokens, output_seqlen,
-                total_tokens, token_latency
+                total_tokens
             ])
+            # skip the first token latency
+            per_token_latency_stats.append(_per_token_latency_stats[1:])
             self.pbar.update(1)
-        res_queue.put((session_id, stats))
+        res_queue.put((session_id, stats, per_token_latency_stats))
 
     def process_request(self,
                         requests,
@@ -146,13 +154,15 @@ class Engine:
         elapsed_time = time.time() - start
 
         stats = []
+        per_token_latency_stats = []
         while not res_queue.empty():
-            session_id, _stats = res_queue.get()
-            # print(f'\n{"-" * 50}\n'
-            #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
+            session_id, _stats, _per_token_latency_stats = res_queue.get()
             stats.append(np.array(_stats))
-
-        stats = np.concatenate(stats).reshape(-1, 5)
+            per_token_latency_stats += [
+                item for sublist in _per_token_latency_stats
+                for item in sublist
+            ]
+        stats = np.concatenate(stats).reshape(-1, 4)
 
         first_token_latency_min = np.min(stats[:, 0], axis=0)
         first_token_latency_max = np.max(stats[:, 0], axis=0)
@@ -162,23 +172,33 @@ class Engine:
         prompt_tokens = total_tokens - completion_tokens
         completion_token_throughput = completion_tokens / elapsed_time
         total_token_throughput = total_tokens / elapsed_time
-        rqs = len(requests) / elapsed_time
-        rqm = rqs * 60
+        rps = len(requests) / elapsed_time
+        rpm = rps * 60
+
+        per_token_latency_stats.sort()
+        percentiles = [
+            np.round(
+                per_token_latency_stats[int(percent *
+                                            len(per_token_latency_stats))], 3)
+            for percent in [0.5, 0.75, 0.95, 0.99]
+        ]
 
         print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
               f'elapsed_time: {elapsed_time:.3f}s\n')
         if stream_output:
-            print(f'first_token latency(min, max, ave): '
-                  f'{first_token_latency_min:.3f}s, '
-                  f'{first_token_latency_max:.3f}s, '
-                  f'{first_token_latency_ave:.3f}s\n')
+            print(f'first token latency(s)(min, max, ave): '
+                  f'{first_token_latency_min:.3f}, '
+                  f'{first_token_latency_max:.3f}, '
+                  f'{first_token_latency_ave:.3f}')
+            print(f'per-token latency(s) percentile(50, 75, 95, 99): '
+                  f'{percentiles}\n')
         print(
             f'number of prompt tokens: {prompt_tokens:.0f}\n'
             f'number of completion tokens: {completion_tokens:.0f}\n'
             f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
             f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
-            f'RPS (request per second): {rqs:.3f} req/s\n'
-            f'RPM (request per minute): {rqm:.3f} req/min\n'
+            f'RPS (request per second): {rps:.3f} req/s\n'
+            f'RPM (request per minute): {rpm:.3f} req/min\n'
             f'{"-" * 50}\n')
 
         if self.csv:
@@ -188,8 +208,9 @@ class Engine:
                     'batch', 'num_promts', 'prompt_tokens',
                     'completion_tokens', '1st_token_latency(min)(s)',
                     '1st_token_latency(max)(s)', '1st_token_latency(ave)(s)',
-                    'output token thr(tokens/s', 'total token thr(token/s)',
-                    'RPM'
+                    'percentile50(s)', 'percentile75(s)', 'percentile95(s)',
+                    'percentile99(s)', 'output token thr(tokens/s)',
+                    'total token thr(token/s)', 'RPS', 'RPM'
                 ])
                 writer.writerow([
                     concurrency,
@@ -197,8 +218,12 @@ class Engine:
                     f'{first_token_latency_min:.3f}' if stream_output else '-',
                     f'{first_token_latency_max:.3f}' if stream_output else '-',
                     f'{first_token_latency_ave:.3f}' if stream_output else '-',
+                    f'{percentiles[0]:.3f}' if stream_output else '-',
+                    f'{percentiles[1]:.3f}' if stream_output else '-',
+                    f'{percentiles[2]:.3f}' if stream_output else '-',
+                    f'{percentiles[3]:.3f}' if stream_output else '-',
                     f'{completion_token_throughput:.3f}',
-                    f'{total_token_throughput:.3f}', f'{rqm:.3f}'
+                    f'{total_token_throughput:.3f}', f'{rps:.3f}', f'{rpm:.3f}'
                 ])
 
 
