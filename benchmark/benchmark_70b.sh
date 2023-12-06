@@ -60,9 +60,9 @@ benchmark_generation () {
     mkdir -p "${output_path}"
 
     python3 profile_generation.py \
-    ${turbomind_model_path} \
-    --concurrency 1 64 128 256 \
-    --csv ${output_path}/generation.csv
+        ${turbomind_model_path} \
+        --concurrency 1 64 128 256 \
+        --csv ${output_path}/generation.csv
 }
 
 output_path="${workspace_dir}"/output/"${model_foldername}"-tp"${tp}"

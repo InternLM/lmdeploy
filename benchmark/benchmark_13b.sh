@@ -60,9 +60,9 @@ benchmark_generation () {
     mkdir -p "${output_path}"
 
     python3 profile_generation.py \
-    ${turbomind_model_path} \
-    --concurrency 1 16 32 64 \
-    --csv ${output_path}/generation.csv
+        ${turbomind_model_path} \
+        --concurrency 1 16 32 64 \
+        --csv ${output_path}/generation.csv
 }
 
 ################################# BENCHMARK AFTER TUNING GEMM #################################
