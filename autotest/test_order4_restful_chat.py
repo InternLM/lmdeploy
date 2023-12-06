@@ -46,43 +46,19 @@ def prepare_environment(request, config):
     sleep(20)
     yield
     if pid > 0:
-        cmd = ['kill -9 ' + str(pid)]
         kill_log = os.path.join(log_path, 'kill_' + model + '.log')
 
         with open(kill_log, 'w') as f:
-            subprocess.run(['pwd'],
-                           stdout=f,
-                           stderr=f,
-                           shell=True,
-                           text=True,
-                           encoding=True)
-            f.writelines('commondLine: ' + ' '.join(cmd) + '\n')
+            convertRes.kill()
 
-            # convert
-            convertRes = subprocess.run(cmd,
-                                        stdout=f,
-                                        stderr=f,
-                                        shell=True,
-                                        text=True,
-                                        encoding=True)
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
-
-
-@pytest.fixture(scope='class', autouse=True)
-def case_config(request):
-    case_path = './autotest/restful_prompt_case.yaml'
-    print(case_path)
-    with open(case_path) as f:
-        case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        del case_config['session_len_error']
-    return case_config
 
 
 def getList():
     case_path = './autotest/restful_prompt_case.yaml'
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        del case_config["session_len_error"]
+        del case_config['session_len_error']
     return list(case_config.keys())
 
 
@@ -97,12 +73,13 @@ class Test_restful:
     }],
                              indirect=True)
     @pytest.mark.parametrize('usercase', getList())
-    def test_restful_internlm_chat_7b(self, config, case_config, usercase):
+    def test_restful_internlm_chat_7b(self, config, restful_case_config,
+                                      usercase):
         model = 'internlm-chat-7b'
         port = 60006
 
-        result = run_all_step(config, usercase, case_config.get(usercase),
-                              model, port)
+        result = run_all_step(config, usercase,
+                              restful_case_config.get(usercase), model, port)
 
         assert result.get('success'), result.get('msg')
 

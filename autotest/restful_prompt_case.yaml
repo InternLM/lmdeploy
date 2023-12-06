@@ -26,8 +26,6 @@ chinese_poem_case:
     - 给我一首中文打油诗，需要添加标点符号。和，Give me a Chinese poem in Chinese:
         - contain:
             - "，"
-            - 油
-        - contain:
             - "。"
             - 油
         - len_g:
