@@ -1,7 +1,7 @@
 import allure
 import pytest
 import yaml
-from utils.run_client_chat import commondLineTest
+from utils.run_client_chat import commandLineTest
 
 
 def getList():
@@ -148,7 +148,7 @@ class Test_command_chat:
 
 
 def run_command_line_test(config, case, case_info, model):
-    result, chat_log, msg = commondLineTest(config, case, case_info, model,
+    result, chat_log, msg = commandLineTest(config, case, case_info, model,
                                             'turbomind', None)
     allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
