@@ -213,6 +213,19 @@ void invokeCreateCausalMasks(
 template void invokeCreateCausalMasks(float* mask, const int*, const int*, int, int, int, cudaStream_t);
 template void invokeCreateCausalMasks(half* mask, const int*, const int*, int, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
+template<>
+__global__ void createCausalMasks<__nv_bfloat16>(__nv_bfloat16* mask, const int* q_lens, const int* k_lens, int max_q_len, int max_k_len)
+{
+    const auto q_len = q_lens[blockIdx.x];
+    const auto k_len = k_lens[blockIdx.x];
+    mask += blockIdx.x * max_q_len * max_k_len;
+    for (int i = threadIdx.x; i < max_q_len * max_k_len; i += blockDim.x) {
+        const int q        = i / max_k_len;  // [0, max_q_len)
+        const int k        = i % max_k_len;  // [0, max_k_len)
+        bool      is_valid = q < q_len && k < k_len && k <= q + (k_len - q_len);
+        mask[i]            = static_cast<__nv_bfloat16>(float(is_valid));
+    }
+}
 template void invokeCreateCausalMasks(__nv_bfloat16* mask, const int*, const int*, int, int, int, cudaStream_t);
 #endif
 
