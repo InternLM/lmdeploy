@@ -49,7 +49,7 @@ benchmark_rpm () {
             ShareGPT_V3_unfiltered_cleaned_split.json \
             ${turbomind_model_path} \
             --concurrency "$batch" \
-            --num_prompts 5000 \
+            --num_prompts 3000 \
             --csv ${output_path}/rpm_localhost_batch_"${batch}"_"${i}"th.csv
         done
     done
