@@ -117,7 +117,11 @@ struct ReluActivation<__nv_bfloat162> {
     static __device__ __forceinline__ __nv_bfloat162 apply(const __nv_bfloat162& val)
     {
         const __nv_bfloat16 zero_bf16 = static_cast<__nv_bfloat16>(0.0f);
-        return ::make_bfloat162(val.x > zero_bf16 ? val.x : zero_bf16, val.y > zero_bf16 ? val.y : zero_bf16);
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 800)
+        return turbomind::make_bfloat162(val.x > zero_bf16 ? val.x : zero_bf16, val.y > zero_bf16 ? val.y : zero_bf16);
+#else
+        return make_bfloat162(val.x > zero_bf16 ? val.x : zero_bf16, val.y > zero_bf16 ? val.y : zero_bf16);
+#endif
     }
 };
 #endif
