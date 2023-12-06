@@ -1,4 +1,4 @@
-##!/bin/bash
+#!/bin/bash
 if [ -z "$1" ]
 then
     echo "Error. Please input the model path of internlm-20b model"
