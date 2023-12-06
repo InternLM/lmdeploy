@@ -22,7 +22,8 @@ from lmdeploy.model import MODELS, BaseModel
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
-from .deploy.converter import get_model_format, supported_formats
+from .deploy.converter import (get_model_format, supported_formats,
+                               update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 from .utils import (ModelSource, check_tm_model_input, create_hf_download_args,
@@ -246,6 +247,12 @@ class TurboMind:
             output_format = 'w4'
             data_type = 'int4'
             assert group_size > 0, f'group_size: {group_size} should > 0'
+        else:
+            output_format = update_output_format(model_name,
+                                                 inferred_model_format,
+                                                 model_path, output_format)
+            data_type = output_format
+            update_config_weight_type(output_format, cfg)
 
         self.config = cfg
         self.model_name = model_name

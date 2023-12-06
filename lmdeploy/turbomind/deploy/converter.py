@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import fire
+import torch
 from huggingface_hub import snapshot_download
 
 from lmdeploy.model import MODELS
@@ -124,10 +125,18 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
         """_infer_output_format."""
         torch_dtype = getattr(config, 'torch_dtype', None)
         if torch_dtype:
-            return TORCH_DTYPE_MAP.get(torch_dtype, output_format)
+            updated_output_format = TORCH_DTYPE_MAP.get(
+                torch_dtype, output_format)
         else:
             # get model name prefix
-            return MODEL_NAME_MAP.get(model_name, output_format)
+            updated_output_format = MODEL_NAME_MAP.get(model_name,
+                                                       output_format)
+        if updated_output_format == 'bf16':
+            if not torch.cuda.is_bf16_supported():
+                # device does not support bf16
+                print('Device does not support bf16.')
+                updated_output_format = 'fp16'
+        return updated_output_format
 
     if model_format != 'hf':
         return MODEL_NAME_MAP.get(model_name, output_format)

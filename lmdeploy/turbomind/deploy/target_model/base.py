@@ -151,7 +151,7 @@ class BaseOutputModel(ABC):
         elif len(self.tm_params) > 0:
             tm_params = self.tm_params
             weight_type = self.cfg.weight_type
-            assert weight_type in ['fp16', 'fp32', 'int4']
+            assert weight_type in ['fp16', 'fp32', 'bf16', 'int4']
 
             # currently, the tensor type should in
             # [torch.float, torch.half, torch.bfloat16, torch.int32]
