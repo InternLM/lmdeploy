@@ -43,22 +43,6 @@ class APIClient:
             return self._available_models
         return None
 
-    @property
-    def service_available(self):
-        """"""
-        headers = {'content-type': 'application/json'}
-        try:
-            response = requests.post(self.completions_v1_url,
-                                     headers=headers,
-                                     json={},
-                                     stream=False)
-            if response.status_code == 422:
-                print('INFO: May ignore the above error. Service is available')
-                return True
-        except:  # noqa
-            pass
-        return False
-
     def chat_completions_v1(self,
                             model: str,
                             messages: Union[str, List[Dict[str, str]]],

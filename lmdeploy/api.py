@@ -106,8 +106,11 @@ def serve(model_path: str,
     client = APIClient(f'http://{server_name}:{server_port}')
     while True:
         time.sleep(1)
-        if client.service_available:
+        try:
+            client.available_models
             return client
+        except:  # noqa
+            pass
 
 
 def client(api_server_url: str = 'http://0.0.0.0:23333', **kwargs):
