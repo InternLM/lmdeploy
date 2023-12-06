@@ -24,12 +24,6 @@ using TensorMap = std::unordered_map<std::string, triton::Tensor>;
 PYBIND11_MAKE_OPAQUE(TensorMap);
 static const char kDlTensorCapsuleName[] = "dltensor";
 
-template<typename T>
-std::shared_ptr<T> make_shared_nodel(T data)
-{
-    return std::shared_ptr<T>(&data, [](T*) {});
-}
-
 DLDevice getDLDevice(triton::Tensor& tensor)
 {
     int device_id = 0;
@@ -47,6 +41,7 @@ DLDevice getDLDevice(triton::Tensor& tensor)
             break;
         case triton::MEMORY_CPU_PINNED:
             device.device_type = DLDeviceType::kDLCUDAHost;
+            break;
         case triton::MEMORY_GPU:
             device.device_type = DLDeviceType::kDLCUDA;
             break;
@@ -133,12 +128,11 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
 triton::MemoryType getMemoryType(DLDevice device)
 {
     switch (device.device_type) {
-        case DLDeviceType::kDLCPU:
-            return triton::MemoryType::MEMORY_CPU;
         case DLDeviceType::kDLCUDAHost:
             return triton::MemoryType::MEMORY_CPU_PINNED;
         case DLDeviceType::kDLCUDA:
             return triton::MemoryType::MEMORY_GPU;
+        case DLDeviceType::kDLCPU:
         default:
             return triton::MemoryType::MEMORY_CPU;
     }
