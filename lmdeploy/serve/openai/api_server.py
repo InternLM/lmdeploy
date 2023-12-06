@@ -428,7 +428,7 @@ async def chat_interactive_v1(request: GenerateRequest,
         request.session_id = random.randint(10087, 23333)
 
     async_engine = VariableInterface.async_engine
-    sequence_start = async_engine.steps.get(str(request.session_id), 0) == 0
+    sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
     sequence_end = not request.interactive_mode
 
     generation = async_engine.generate(
