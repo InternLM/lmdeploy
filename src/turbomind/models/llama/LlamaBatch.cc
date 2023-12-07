@@ -525,7 +525,7 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     // check if the last sequence is partial
     int partial     = 0;
     int partial_len = -1;
-    {
+    if (state_->active_size) {
         const int i = state_->active_size - 1;
         partial = state_->sequences[i]->cache_len + state_->sequences[i]->input_length != state_->h_context_length[i];
         if (partial) {
