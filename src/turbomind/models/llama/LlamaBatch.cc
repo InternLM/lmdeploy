@@ -273,7 +273,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             T*         image_embs      = r->inputs[rank_].getPtr<T>("image_embs");
             const int* h_image_offsets = r->inputs[rank_].getPtr<int>("image_offsets");
             const int  count           = model_->image_dim_ * model_->hidden_units_;
-            for (size_t i = 0; i < n_offsets && h_image_offsets[i] > 0; i++) {
+            for (size_t i = 0; i < n_offsets && h_image_offsets[i] >= 0; i++) {
                 seq.image_offsets.push_back(seq.tokens.size() + h_image_offsets[i]);
                 auto& emb = seq.image_embs.emplace_back();
                 emb.resize(count * sizeof(T));

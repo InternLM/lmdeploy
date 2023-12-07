@@ -478,6 +478,8 @@ class TurboMindInstance:
         Args:
             session_id (int): the id of a session
             input_ids (numpy.ndarray): the token ids of a prompt
+            image_embs (List[numpy.ndarray]): the image features
+            image_offsets (List[int]): image_embs offsets to input_ids
             request_output_len (int): the max number of to-be-generated tokens
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
