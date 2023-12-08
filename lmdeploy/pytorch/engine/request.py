@@ -67,6 +67,29 @@ class RequestSender:
         self.resp_que = Queue()
         self.resp_dict = dict()
 
+    def _push_resp(self, req_id: int, resp: Response):
+        """push response."""
+        self.resp_dict.setdefault(req_id, [])
+        self.resp_dict[req_id].append(resp)
+
+    def _pop_resp(self, req_id: int, default: Any = None):
+        """pop response."""
+        if req_id not in self.resp_dict:
+            return default
+        resps = self.resp_dict[req_id]
+        ret = resps.pop(0)
+        if len(resps) == 0:
+            self.resp_dict.pop(req_id)
+        return ret
+
+    def _prefetch_resps(self):
+        """prefetch from resp que."""
+        num_resps = self.resp_que.qsize()
+        for _ in range(num_resps):
+            resp: Response = self.resp_que.get()
+            req_id = resp.req_id
+            self._push_resp(req_id, resp)
+
     def batched_send_async(self, req_types: List[RequestType],
                            data: List[Any]) -> List[int]:
         """Batched send request asynchronize."""
@@ -95,31 +118,33 @@ class RequestSender:
     def recv_any(self, que_timeout: float = None) -> Response:
         """receive any response."""
         # check resp dict
-        for req_id, resps in self.resp_dict.items():
-            ret = resps.pop(0)
-            if len(resps) == 0:
-                self.resp_dict.pop(req_id)
-            return ret
+        self._prefetch_resps()
+        for req_id in self.resp_dict:
+            ret = self._pop_resp(req_id, default=None)
+            if ret is not None:
+                return ret
 
         # check resp que
         return self.resp_que.get(timeout=que_timeout)
 
+    def recv_all(self, req_id: int):
+        """revceive all response with req_id."""
+        self._prefetch_resps()
+        resps = self.resp_dict.pop(req_id, [])
+        return resps
+
     def recv(self, req_id: int, que_timeout: float = None) -> Response:
         """receive response of given request id."""
         # check resp dict
-        if req_id in self.resp_dict:
-            resps = self.resp_dict[req_id]
-            ret = resps.pop(0)
-            if len(resps) == 0:
-                self.resp_dict.pop(req_id)
+        ret = self._pop_resp(req_id, default=None)
+        if ret is not None:
             return ret
 
         # check resp que
         while True:
             resp: Response = self.resp_que.get(timeout=que_timeout)
             if resp.req_id != req_id:
-                self.resp_dict.setdefault(req_id, [])
-                self.resp_dict[req_id].append(resp)
+                self._push_resp(req_id, resp)
             else:
                 return resp
 
