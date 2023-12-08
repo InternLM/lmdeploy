@@ -558,10 +558,14 @@ class TurboMindInstance:
                 embedding_ends = [embedding_ends]
                 embeddings = [embeddings]
             # convert to lookup table type
-            # TODO bf16
             if self.tm_model.config.weight_type == 'fp32':
                 embeddings = [[x.astype(np.float32) for x in y]
                               for y in embeddings]
+            elif self.tm_model.config.weight_type == 'bf16':
+                embeddings = [[
+                    torch.from_numpy(x).bfloat16().view(torch.half).numpy()
+                    for x in y
+                ] for y in embeddings]
             else:
                 embeddings = [[x.astype(np.float16) for x in y]
                               for y in embeddings]
