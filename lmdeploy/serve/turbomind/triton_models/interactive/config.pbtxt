@@ -61,7 +61,7 @@ input [
   },
   {
     name: "embeddings"
-    data_type: TYPE_BYTES
+    data_type: TYPE_INT8
     dims: [ -1 ]
     optional: true
   },
@@ -72,7 +72,7 @@ input [
     reshape: { shape: [ ] }
     optional: true
   },
-    {
+  {
     name: "embedding_begins"
     data_type: TYPE_UINT32
     dims: [ -1 ]
