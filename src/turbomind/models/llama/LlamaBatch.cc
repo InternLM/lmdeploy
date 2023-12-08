@@ -60,6 +60,22 @@ void ClearState(BatchState& s)
     s.size = s.active_size = 0;
 }
 
+void DropEmbeddings(const Sequence& seq)
+{
+    int    seq_len = seq.tokens.size();
+    int    num_emb = seq.embeddings.size();
+    size_t sz      = num_emb;
+    for (; sz >= 1; sz--) {
+        if (seq.embedding_ends[sz - 1] <= seq_len) {
+            break;
+        }
+    }
+    // should we keep part of embedding?
+    seq.embeddings.resize(sz);
+    seq.embedding_begins.resize(sz);
+    seq.embedding_ends.resize(sz);
+}
+
 template<typename T>
 void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_reqs)
 {
@@ -234,6 +250,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             if (step <= seq.tokens.size()) {
                 seq.tokens.resize(step);
                 seq.cache_len = std::min(seq.cache_len, step);
+                DropEmbeddings(seq);
             }
             else if (rank_ == 0) {
                 TM_LOG_WARNING(
@@ -258,27 +275,50 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             output_ids = Copy(input_ids, input_length, output_ids);
         }
 
-        // copy image embeddings
-        if (model_->image_dim_ > 0 && r->inputs[rank_].isExist("image_embs")) {
-            auto       image_embs_tensor = r->inputs[rank_].at("image_embs");
-            const auto n_offsets         = r->inputs[rank_].at("image_offsets").shape.back();
-            if (image_embs_tensor.shape.size() != 4 || image_embs_tensor.shape[1] != n_offsets
-                || image_embs_tensor.shape[2] != model_->image_dim_) {
-                TM_LOG_WARNING("[ImageFeature] Invalid image feature, id = %ld, info = %s",
-                               (long)seq.id,
-                               image_embs_tensor.toString().c_str());
-                continue;
-            }
+        // copy embeddings
+        if (r->inputs[rank_].isExist("embedding_counts")) {
+            int        emb_count    = r->inputs[rank_].getVal<int>("embedding_counts");
+            const auto emb_tensor   = r->inputs[rank_].at("embeddings");
+            const auto begin_tensor = r->inputs[rank_].at("embedding_begins");
+            const auto end_tensor   = r->inputs[rank_].at("embedding_ends");
+            const int* begin        = begin_tensor.getPtr<int>();
+            const int* end          = end_tensor.getPtr<int>();
 
-            T*         image_embs      = r->inputs[rank_].getPtr<T>("image_embs");
-            const int* h_image_offsets = r->inputs[rank_].getPtr<int>("image_offsets");
-            const int  count           = model_->image_dim_ * model_->hidden_units_;
-            for (size_t i = 0; i < n_offsets && h_image_offsets[i] >= 0; i++) {
-                seq.image_offsets.push_back(seq.tokens.size() + h_image_offsets[i]);
-                auto& emb = seq.image_embs.emplace_back();
-                emb.resize(count * sizeof(T));
-                std::memcpy(emb.data(), image_embs, count * sizeof(T));
-                image_embs += count;
+            auto check_embeddings = [&]() {
+                if (emb_count <= 0 || begin_tensor.shape != end_tensor.shape || emb_tensor.shape.size() != 2) {
+                    return false;
+                }
+                int emb_len = 0;
+                for (size_t i = 0; i < emb_count; i++) {
+                    emb_len += (end[i] - begin[i]);
+                    if (begin[i] < 0 || end[i] < 0 || begin[i] >= end[i] || end[i] > input_length
+                        || emb_len > input_length
+                        || emb_len * model_->hidden_units_ * sizeof(T) > emb_tensor.shape[1]) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            if (!check_embeddings()) {
+                TM_LOG_WARNING("[ImageFeature] Skip invalid embeddings, id = %ld, input_length = %d, "
+                               "embeddings = %s, embedding_counts = %d, begins = %s, ends = %s",
+                               (long)seq.id,
+                               input_length,
+                               emb_tensor.toString().c_str(),
+                               emb_count,
+                               begin_tensor.toString().c_str(),
+                               end_tensor.toString().c_str());
+            }
+            else {
+                char* emb_tensor_ptr = emb_tensor.getPtr<char>();
+                for (size_t i = 0; i < emb_count; i++) {
+                    size_t count = (end[i] - begin[i]) * model_->hidden_units_ * sizeof(T);
+                    seq.embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
+                    seq.embedding_begins.emplace_back(begin[i] + seq.tokens.size());
+                    seq.embedding_ends.emplace_back(end[i] + seq.tokens.size());
+                    emb_tensor_ptr += count;
+                }
             }
         }
 
@@ -1510,7 +1550,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                                max_input_len,
                                max_context_cnts[p],
                                max_context_cnts[p],
-                               decode_lengths.data(),
+                               h_input_length_buf_ + first,
                                sequences.data());
 
         if (iter == 0) {

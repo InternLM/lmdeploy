@@ -33,9 +33,10 @@ struct Sequence {
 
     mutable float rope_theta = 0.f;
 
-    // image data
-    mutable std::vector<std::vector<std::byte>> image_embs{};
-    mutable std::vector<int>                    image_offsets{};
+    // embedding data
+    mutable std::vector<std::vector<std::byte>> embeddings;
+    mutable std::vector<int>                    embedding_begins;
+    mutable std::vector<int>                    embedding_ends;
 
     Sequence(uint64_t _id): id(_id) {}
 

@@ -58,7 +58,6 @@ public:
             size_t                       inter_size,
             size_t                       num_layer,
             size_t                       vocab_size,
-            size_t                       image_dim,
             float                        norm_eps,
             const LlamaAttentionParams&  attn_params,
             int                          start_id,
@@ -108,7 +107,7 @@ private:
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void updateImageEmbedding(T* decoder_input, const int bsz, const int* decode_lengths, const Sequence** sequences);
+    void updateEmbedding(T* decoder_input, const int bsz, const int* h_input_length, const Sequence** sequences);
 
     void forwardUnified(T*               out,
                         T*               decoder_output,
@@ -132,7 +131,7 @@ private:
                         int              pf_max_input_len,
                         int              pf_max_context_len,
                         int              pf_session_len,
-                        const int*       decode_lengths,
+                        const int*       h_input_length,
                         const Sequence** sequences);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
@@ -176,8 +175,6 @@ private:
     const size_t local_head_num_;
     const size_t local_kv_head_num_;
     NcclParam    tensor_para_;
-
-    const size_t image_dim_;
 
     cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;

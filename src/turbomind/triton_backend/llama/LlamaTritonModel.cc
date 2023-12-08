@@ -172,8 +172,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
     group_size_   = reader.GetInteger("llama", "group_size", 0);
 
-    image_dim_ = reader.GetInteger("llama", "image_dim", image_dim_);
-
     // rotary embedding parameters
     attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
     attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
@@ -275,7 +273,6 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   inter_size_,
                                                   num_layer_,
                                                   vocab_size_,
-                                                  image_dim_,
                                                   norm_eps_,
                                                   attn_params_,
                                                   start_id_,

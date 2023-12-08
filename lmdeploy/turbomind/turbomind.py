@@ -459,8 +459,9 @@ class TurboMindInstance:
     def stream_infer(self,
                      session_id,
                      input_ids,
-                     image_embs=None,
-                     image_offsets=None,
+                     embeddings=None,
+                     embedding_begins=None,
+                     embedding_ends=None,
                      request_output_len: int = 512,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
@@ -478,8 +479,9 @@ class TurboMindInstance:
         Args:
             session_id (int): the id of a session
             input_ids (numpy.ndarray): the token ids of a prompt
-            image_embs (List[numpy.ndarray]): the image features
-            image_offsets (List[int]): image_embs offsets to input_ids
+            embeddings (List[numpy.ndarray]): embeddings features
+            embedding_begins (List[int]): embeddings begin offset to input_ids
+            embedding_ends (List[int]): embeddings end offset to input_ids
             request_output_len (int): the max number of to-be-generated tokens
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
@@ -548,28 +550,38 @@ class TurboMindInstance:
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
 
-        if image_embs is not None:
-            assert len(image_offsets) == len(image_embs)
-            # image_embs     Union[List[np.array], List[List[np.array]]]
-            # image_offsets  Union[List[int], List[List[int]]]
-            if isinstance(image_offsets[0], int):
-                image_offsets = [image_offsets]
-                image_embs = [image_embs]
-            image_embs = [[
-                torch.from_numpy(x).squeeze().unsqueeze(0) for x in y
-            ] for y in image_embs]
-            image_embs = [torch.cat(x) for x in image_embs]
-            image_embs = pad_sequence(image_embs, batch_first=True)
-            image_offsets = [torch.IntTensor(x) for x in image_offsets]
-            image_offsets = pad_sequence(image_offsets,
-                                         batch_first=True,
-                                         padding_value=-1)
+        if embeddings is not None:
+            assert len(embeddings) == len(embedding_begins) == len(
+                embedding_ends)
+            if isinstance(embedding_begins[0], int):
+                embedding_begins = [embedding_begins]
+                embedding_ends = [embedding_ends]
+                embeddings = [embeddings]
+            # convert to lookup table type
+            # TODO bf16
             if self.tm_model.config.weight_type == 'fp32':
-                image_embs = image_embs.float()
+                embeddings = [[x.astype(np.float32) for x in y]
+                              for y in embeddings]
             else:
-                image_embs = image_embs.half()
-            inputs['image_embs'] = image_embs
-            inputs['image_offsets'] = image_offsets
+                embeddings = [[x.astype(np.float16) for x in y]
+                              for y in embeddings]
+
+            embedding_counts = torch.IntTensor(
+                [len(embs) for embs in embeddings])
+            embeddings = [[torch.from_numpy(x).squeeze() for x in y]
+                          for y in embeddings]
+            embeddings = [torch.cat(x) for x in embeddings]
+            embeddings = pad_sequence(embeddings, batch_first=True)
+            embeddings = embeddings.reshape(embeddings.shape[0],
+                                            -1).view(torch.int8)
+            embedding_begins = [torch.IntTensor(x) for x in embedding_begins]
+            embedding_begins = pad_sequence(embedding_begins, batch_first=True)
+            embedding_ends = [torch.IntTensor(x) for x in embedding_ends]
+            embedding_ends = pad_sequence(embedding_ends, batch_first=True)
+            inputs['embeddings'] = embeddings
+            inputs['embedding_counts'] = embedding_counts
+            inputs['embedding_begins'] = embedding_begins
+            inputs['embedding_ends'] = embedding_ends
 
         if ignore_eos:
             stop_words = None

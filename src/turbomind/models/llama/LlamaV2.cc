@@ -48,7 +48,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     size_t                       inter_size,
                     size_t                       num_layer,
                     size_t                       vocab_size,
-                    size_t                       image_dim,
                     float                        norm_eps,
                     const LlamaAttentionParams&  attn_params,
                     int                          start_id,
@@ -70,7 +69,6 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     inter_size_(inter_size),
     num_layer_(num_layer),
     vocab_size_(vocab_size),
-    image_dim_(image_dim),
     attn_params_(attn_params),
     vocab_size_padded_(vocab_size),
     rmsnorm_eps_(norm_eps),
@@ -168,34 +166,27 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::updateImageEmbedding(T*               decoder_input,
-                                      const int        bsz,
-                                      const int*       decode_lengths,
-                                      const Sequence** sequences)
+void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_input_length, const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    if (image_dim_ <= 0) {
-        return;
-    }
-
     for (int i = 0; i < bsz; i++) {
-        decoder_input += ((i > 0) ? decode_lengths[i - 1] : 0) * hidden_units_;
-        if (decode_lengths[i] == 1) {
-            continue;
-        }
-        const auto& seq = *sequences[i];
-        for (int j = 0; j < seq.image_offsets.size(); j++) {
-            if (seq.image_offsets[j] + image_dim_ <= seq.cache_len) {
-                continue;
+        const auto& seq        = *sequences[i];
+        const auto& embeddings = seq.embeddings;
+        const auto& begins     = seq.embedding_begins;
+        const auto& ends       = seq.embedding_ends;
+        for (int j = embeddings.size() - 1; j >= 0; j--) {
+            if (ends[j] <= seq.cache_len) {
+                break;
             }
-            int        off_dst = std::max(0, seq.image_offsets[j] - seq.cache_len);
-            int        off_src = std::max(0, seq.cache_len - seq.image_offsets[j]);
-            T*         dst_ptr = decoder_input + off_dst * hidden_units_;
-            std::byte* src_ptr = seq.image_embs[j].data() + off_src * hidden_units_;
-            size_t     count   = (image_dim_ - off_src) * hidden_units_ * sizeof(T);
-            cudaMemcpyAsync(dst_ptr, src_ptr, count, cudaMemcpyDefault, stream_);
+            int    off_dst   = std::max(0, begins[j] - seq.cache_len);
+            int    off_src   = std::max(0, seq.cache_len - begins[j]);
+            size_t byte_size = (ends[j] - begins[j]) * hidden_units_ * sizeof(T);
+            T*     dst_ptr   = decoder_input + off_dst * hidden_units_;
+            auto   src_ptr   = embeddings[j].data() + off_src * hidden_units_ * sizeof(T);
+            cudaMemcpyAsync(dst_ptr, src_ptr, byte_size, cudaMemcpyDefault, stream_);
         }
+        decoder_input += h_input_length[i] * hidden_units_;
     }
     sync_check_cuda_error();
 }
@@ -223,7 +214,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                 int              pf_max_input_len,
                                 int              pf_max_context_len,
                                 int              pf_session_len,
-                                const int*       decode_lengths,
+                                const int*       h_input_length,
                                 const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -241,7 +232,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                              hidden_units_,
                                              stream_);
 
-    updateImageEmbedding(decoder_input, dc_batch_size + pf_batch_size, decode_lengths, sequences);
+    updateEmbedding(decoder_input, dc_batch_size + pf_batch_size, h_input_length, sequences);
 
     sync_check_cuda_error();
 

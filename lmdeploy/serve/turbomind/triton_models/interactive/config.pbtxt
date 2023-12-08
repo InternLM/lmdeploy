@@ -60,14 +60,27 @@ input [
     dims: [ -1 ]
   },
   {
-    name: "image_embs"
-    data_type: TYPE_FP16
-    dims: [ -1, -1, -1 ]
+    name: "embeddings"
+    data_type: TYPE_BYTES
+    dims: [ -1 ]
     optional: true
   },
   {
-    name: "image_offsets"
-    data_type: TYPE_INT32
+    name: "embedding_counts"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    reshape: { shape: [ ] }
+    optional: true
+  },
+    {
+    name: "embedding_begins"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "embedding_ends"
+    data_type: TYPE_UINT32
     dims: [ -1 ]
     optional: true
   },
