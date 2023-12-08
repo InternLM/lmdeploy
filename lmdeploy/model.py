@@ -16,6 +16,7 @@ class SamplingParam:
     repetition_penalty: float = 1.0
 
 
+@MODELS.register_module(name='internlm2')
 @MODELS.register_module(name='internlm')
 @MODELS.register_module(name='llama')
 @MODELS.register_module(name='base')
