@@ -53,7 +53,7 @@ class TestScheduler:
         assert seq.status == MessageStatus.WAITING
         assert seq in scheduler.waiting
 
-        output = scheduler.schedule()
+        output = scheduler.schedule(is_prefill=True)
         block_tables = scheduler.get_block_tables(output.running)
 
         assert seq.status == MessageStatus.RUNNING
@@ -82,7 +82,7 @@ class TestScheduler:
         seq3 = session2.add_sequence(token_ids3)
         scheduler.add_sequence(seq3)
 
-        scheduler.schedule()
+        scheduler.schedule(is_prefill=True)
         assert seq1.status == MessageStatus.RUNNING
         assert seq2.status == MessageStatus.RUNNING
         assert seq3.status == MessageStatus.WAITING
@@ -132,7 +132,7 @@ class TestScheduler:
         token_ids3 = torch.tensor([0] * block_size * 3)
         seq3 = session.add_sequence(token_ids3)
         scheduler.add_sequence(seq3)
-        scheduler.schedule()
+        scheduler.schedule(is_prefill=True)
         # seq1: 1 running gpu
         # seq2: 2 running gpu
         # seq3: 3 waiting empty
@@ -148,7 +148,7 @@ class TestScheduler:
         assert len(scheduler.waiting) == 1
         assert len(scheduler.hanging) == 1
 
-        output = scheduler.schedule()
+        output = scheduler.schedule(is_prefill=True)
         # seq1: 1 running gpu
         # seq2: 2 hanging cpu
         # seq3: 3 waiting gpu
@@ -168,7 +168,7 @@ class TestScheduler:
         assert len(scheduler.waiting) == 1
         assert len(scheduler.hanging) == 0
 
-        output = scheduler.schedule()
+        output = scheduler.schedule(is_prefill=True)
         # seq1: 1 running gpu
         # seq2: 3 running gpu
         # seq3: 3 nan
@@ -183,8 +183,7 @@ class TestScheduler:
         seq2.update_token_ids(torch.tensor([1] * block_size))
         scheduler.update()
         assert len(scheduler.running) == 2
-
-        output = scheduler.schedule()
+        output = scheduler.schedule(is_prefill=False)
         # seq1: 1 waiting cpu
         # seq2: 4 running gpu
         # seq3: 3 nan

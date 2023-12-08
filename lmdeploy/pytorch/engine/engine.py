@@ -347,7 +347,7 @@ class Engine:
 
         batch_size = len(messages)
         input_ids = token_ids
-        input_ids = torch.cat(input_ids).to(device)
+        input_ids = torch.cat(input_ids)
 
         is_decoding = input_ids.size(0) == batch_size
         if not is_decoding:
@@ -355,6 +355,7 @@ class Engine:
             max_seq_len = max(seq_length)
             q_start_loc = torch.tensor(
                 [0] + seq_length, dtype=torch.long).cumsum(0)[:-1].to(device)
+            q_start_loc = q_start_loc
 
             attention_mask = torch.tensor([
                 seq_len * [1] + (max_seq_len - seq_len) * [0]
@@ -380,7 +381,7 @@ class Engine:
         # TODO: get block offsets is slow when block_size = 1
         block_offsets = self.scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets).to(device)
-
+        input_ids = input_ids.to(device)
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
@@ -494,7 +495,7 @@ class Engine:
             if self._stoping_criteria(msg, token):
                 msg.status = MessageStatus.STOPPED
 
-    def step(self, return_logits=False):
+    def step(self, is_prefill: bool, return_logits: bool = False):
         """one step inference. Used to perform streaming chat.
 
         Args:
@@ -505,7 +506,7 @@ class Engine:
         """
 
         # schedule
-        schedule_output = self.scheduler.schedule()
+        schedule_output = self.scheduler.schedule(is_prefill=is_prefill)
 
         running: List[SchedulerSequence] = schedule_output.running
         swap_in_map = schedule_output.swap_in_map
@@ -538,7 +539,7 @@ class Engine:
                 sender_id=msg.sender_id,
                 req_id=msg.req_id,
                 finish=(msg.status == MessageStatus.STOPPED),
-                token_ids=[next_id],
+                token_ids=[next_id.item()],
             )
             outputs[session_id] = out
 
@@ -656,7 +657,7 @@ class Engine:
             msgs.append(msg)
             self.scheduler.add_sequence(msg)
 
-        outputs = self.step(True)
+        outputs = self.step(return_logits=True)
 
         logits = dict((k, out.logits) for k, out in outputs.items())
 
@@ -677,6 +678,7 @@ class Engine:
         send_resp_que = Queue()
 
         def _send_resp():
+            """send response callback."""
             while True:
                 step_tokens = send_resp_que.get()
                 for _, out in step_tokens.items():
@@ -694,6 +696,8 @@ class Engine:
 
         send_thread = Thread(target=_send_resp, daemon=True)
         send_thread.start()
+        prefill_interval = self.scheduler_config.prefill_interval
+        prefill_counter = prefill_interval
 
         while True:
             if not self.req_manager.has_requests(
@@ -705,8 +709,14 @@ class Engine:
 
             # forward
             if self.scheduler.has_unfinished():
+                has_running = self.scheduler.has_running()
+                is_prefill = not prefill_counter or not has_running
+                if is_prefill:
+                    prefill_counter = prefill_interval
                 with torch.no_grad():
-                    step_tokens: Dict[int, InferOutput] = self.step()
+                    step_tokens: Dict[int, InferOutput] = self.step(
+                        is_prefill=is_prefill)
+                prefill_counter -= 1
 
                 # send response
                 send_resp_que.put(step_tokens)

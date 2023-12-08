@@ -100,10 +100,10 @@ def main(
                     sampling_param=sampling_param):
                 status, res, tokens = outputs
                 # decode res
-                response = tokenizer.decode(res)[response_size:]
+                response = tokenizer.decode(res, offset=response_size)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
-                response_size += len(response)
+                response_size = tokens
 
             # update step
             step += len(input_ids) + tokens

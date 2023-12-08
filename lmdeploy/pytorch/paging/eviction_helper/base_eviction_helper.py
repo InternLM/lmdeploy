@@ -28,9 +28,8 @@ class BaseEvictionHelper:
 
     def try_swap_out_seqs(self, seqs: SeqList, swap_out_map: Dict[int, int]):
         """try swap sequence out."""
-        for seq in seqs:
-            success = self.try_swap_out(seq, swap_out_map)
-            if success:
+        for seq in reversed(seqs):
+            if self.try_swap_out(seq, swap_out_map):
                 return True
         return False
 
