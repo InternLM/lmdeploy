@@ -505,11 +505,11 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
             FT_CHECK_WITH_INFO(h_cu_block_counts_[i + 1] <= sequence_manager_->max_block_count(),
                                std::to_string(h_cu_block_counts_[i + 1]));
 
-            k_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), k_ptrs, [&](auto p) {
-                return reinterpret_cast<uintptr_t>(sequence_manager_->OffsetKey(p->data));
+            k_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), k_ptrs, [&](int block_id) {
+                return reinterpret_cast<uintptr_t>(sequence_manager_->GetKeyPtr(block_id));
             });
-            v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](auto p) {
-                return reinterpret_cast<uintptr_t>(sequence_manager_->OffsetVal(p->data));
+            v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](int block_id) {
+                return reinterpret_cast<uintptr_t>(sequence_manager_->GetValPtr(block_id));
             });
         }
 

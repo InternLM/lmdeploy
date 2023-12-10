@@ -9,8 +9,7 @@ namespace turbomind {
 
 struct Sequence {
 
-    enum Status
-    {
+    enum Status {
         kCached = 0,
         kLocked,
         kActive
@@ -19,8 +18,8 @@ struct Sequence {
     uint64_t id;
     Status   status = kCached;
 
-    std::vector<const Block*> blocks;
-    std::vector<uint64_t>     block_unique_ids;
+    BlockIds  blocks;
+    UniqueIds block_unique_ids;
 
     int input_length = 0;
 
@@ -33,7 +32,7 @@ struct Sequence {
 
     mutable float rope_theta = 0.f;
 
-    Sequence(uint64_t _id): id(_id) {}
+    explicit Sequence(uint64_t _id): id(_id) {}
 
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
 };
@@ -87,14 +86,14 @@ public:
                                       int                          step_length,
                                       AdjustInputCount             adjust);
 
-    void* OffsetKey(void* block_ptr)
+    [[nodiscard]] void* GetKeyPtr(int block_id)
     {
-        return block_ptr;
+        return block_manager_->block(block_id).data;
     }
 
-    void* OffsetVal(void* block_ptr)
+    [[nodiscard]] void* GetValPtr(int block_id)
     {
-        return (std::byte*)block_ptr + val_offset_;
+        return (std::byte*)GetKeyPtr(block_id) + val_offset_;
     }
 
     int max_block_count() const noexcept
@@ -103,6 +102,8 @@ public:
     }
 
 private:
+    void Erase(std::map<uint64_t, Sequence>::iterator it);
+
     void CommitUnlockAndFree();
 
     void VerifyAndLockCached(const Sequences& sequences);
@@ -115,9 +116,10 @@ private:
                                std::vector<int>&            context_lengths,
                                const std::vector<uint64_t>& priorities);
 
-    static void AssignAndActivate(const Sequences&                 sequences,  //
-                                  const std::vector<int>&          block_counts,
-                                  const std::vector<const Block*>& blocks);
+    static void AssignAndActivate(const Sequences&        sequences,  //
+                                  const std::vector<int>& counts,
+                                  const BlockIds&         blocks,
+                                  const UniqueIds&        unique_ids);
 
 private:
     int    block_seq_len_;
@@ -131,8 +133,8 @@ private:
 
     std::unique_ptr<BlockManager> block_manager_;
 
-    std::vector<const Block*> unlocked_;
-    std::vector<const Block*> freed_;
+    BlockIds unlocked_;
+    BlockIds freed_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const SequenceManager::Outcome& oc)
