@@ -46,6 +46,8 @@ protected:
 
     const DataType dtype_;
 
+    bool need_causal_mask_{false};
+
     using WeightType = LlamaDecoderLayerWeight<T>;
 
     void forwardSelfAttn(T*                             attn_io,
@@ -88,6 +90,13 @@ public:
         tensor_para_(tensor_para),
         dtype_(getTensorType<T>())
     {
+#ifdef _MSC_VER
+        // Both unfused MHA and flash attention 1 need causal mask
+        need_causal_mask_ = true;
+#endif
+        if (!use_fmha) {
+            need_causal_mask_ = true;
+        }
         initialize(attn_params, kv_head_num, use_fmha, cache_block_seq_len, quant_policy);
     }
 
