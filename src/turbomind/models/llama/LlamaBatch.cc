@@ -894,6 +894,8 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
         session_len_ = max_session_len;
     }
 
+    FT_CHECK(max_context_token_num_ >= session_len_);
+
     for (auto& s : states_) {
         s.requests.resize(max_batch_size_);
         s.sequences.resize(max_batch_size_);
