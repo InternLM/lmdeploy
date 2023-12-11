@@ -3,10 +3,10 @@ import os
 from typing import Optional
 
 
-def pipeline(model_path,
+def pipeline(model_path: str,
              model_name: Optional[str] = None,
-             instance_num=32,
-             tp=1,
+             instance_num: int = 32,
+             tp: int = 1,
              log_level='ERROR',
              **kwargs):
     """

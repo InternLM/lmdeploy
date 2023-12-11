@@ -41,10 +41,10 @@ class AsyncEngine:
     """
 
     def __init__(self,
-                 model_path,
+                 model_path: str,
                  model_name: Optional[str] = None,
-                 instance_num=32,
-                 tp=1,
+                 instance_num: int = 32,
+                 tp: int = 1,
                  **kwargs) -> None:
         from lmdeploy import turbomind as tm
         self.tm_model = tm.TurboMind.from_pretrained(model_path,
