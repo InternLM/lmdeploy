@@ -381,20 +381,26 @@ def main():
         with open(args.csv, 'w') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow([
-                'batch', 'prompt_tokens', 'completion_tokens',
-                '1st_token_latency(min)(s)', '1st_token_latency(max)(s)',
-                '1st_token_latency(ave)(s)', 'percentile50(s)',
-                'percentile75(s)', 'percentile95(s)', 'percentile99(s)',
-                'throughput(token/s)', 'mem_per_proc(GB)', 'mem_per_gpu(GB)'
+                'batch',
+                'prompt_tokens',
+                'completion_tokens',
+                'throughput(out tok/s)',
+                'mem(GB)'
+                'FTL(ave)(s)',
+                'FTL(min)(s)',
+                'FTL(max)(s)',
+                '50%(s)',
+                '75%(s)',
+                '95%(s)',
+                '99%(s)',
             ])
             for re in results:
                 writer.writerow([
                     re.batch, re.prompt_tokens, re.completion_tokens,
-                    re.first_token_latency[0], re.first_token_latency[1],
-                    re.first_token_latency[2], re.percentiles[0],
-                    re.percentiles[1], re.percentiles[2], re.percentiles[3],
-                    f'{re.throughput_per_proc:.2f}', f'{re.mem_per_proc:.2f}',
-                    f'{re.mem_per_gpu:.2f}'
+                    f'{re.throughput_per_proc:.2f}', f'{re.mem_per_gpu:.2f}',
+                    re.first_token_latency[2], re.first_token_latency[0],
+                    re.first_token_latency[1], re.percentiles[0],
+                    re.percentiles[1], re.percentiles[2], re.percentiles[3]
                 ])
 
 
