@@ -1,7 +1,7 @@
 import pytest
 
-from lmdeploy.pytorch_poc.engine.request import (RequestManager, RequestType,
-                                                 ResponseType)
+from lmdeploy.pytorch.engine.request import (RequestManager, RequestType,
+                                             ResponseType)
 
 
 class TestRequestHander:
@@ -14,7 +14,7 @@ class TestRequestHander:
         raise RuntimeError('stop_engine')
 
     def test_bind(self, manager):
-        sender = manager.create_sender()
+        sender = manager.build_sender()
 
         # test not bind
         req_id = sender.send_async(RequestType.STOP_ENGINE, None)

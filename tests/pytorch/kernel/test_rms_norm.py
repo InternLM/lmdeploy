@@ -32,7 +32,7 @@ class TestRMSNorm:
                              [torch.bfloat16, torch.float16, torch.float32],
                              indirect=True)
     def test_rms_norm(self, input, weight, eps, gt):
-        from lmdeploy.pytorch_poc.kernels import rms_norm
+        from lmdeploy.pytorch.kernels import rms_norm
 
         out = rms_norm(input, weight, eps)
         torch.testing.assert_close(out, gt)

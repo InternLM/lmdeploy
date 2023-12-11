@@ -1,4 +1,4 @@
-from lmdeploy.pytorch.utils import BasicStreamer, TerminalIO
+from lmdeploy.legacy.pytorch.utils import BasicStreamer, TerminalIO
 
 
 def test_terminal_io(monkeypatch):

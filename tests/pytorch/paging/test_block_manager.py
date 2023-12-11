@@ -1,9 +1,8 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch_poc.messages import SchedulerSession
-from lmdeploy.pytorch_poc.paging.block_manager import (BlockAllocator,
-                                                       BlockManager)
+from lmdeploy.pytorch.messages import SchedulerSession
+from lmdeploy.pytorch.paging.block_manager import BlockAllocator, BlockManager
 
 
 class TestAllocator:

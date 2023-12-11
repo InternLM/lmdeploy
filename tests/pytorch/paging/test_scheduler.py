@@ -1,9 +1,9 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch_poc.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch_poc.messages import MessageStatus
-from lmdeploy.pytorch_poc.paging.scheduler import Scheduler
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+from lmdeploy.pytorch.messages import MessageStatus
+from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
 class TestScheduler:

@@ -195,7 +195,7 @@ class TestPagedAttention:
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets,
                              start_loc, seq_lens, history_lens, block_size,
                              conti_gt):
-        from lmdeploy.pytorch_poc.kernels import paged_attention_fwd
+        from lmdeploy.pytorch.kernels import paged_attention_fwd
         kv_seq_lens = seq_lens + history_lens
         max_seq_len = seq_lens.max().item()
 
@@ -223,7 +223,7 @@ class TestPagedAttention:
     def test_biased_paged_attention(self, conti_q, blocked_kv, block_offsets,
                                     start_loc, seq_lens, history_lens,
                                     block_size, mask, conti_gt):
-        from lmdeploy.pytorch_poc.kernels import biased_paged_attention_fwd
+        from lmdeploy.pytorch.kernels import biased_paged_attention_fwd
         kv_seq_lens = seq_lens + history_lens
         max_seq_len = seq_lens.max().item()
 

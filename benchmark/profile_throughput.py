@@ -56,8 +56,8 @@ def sample_requests(
 class Engine:
 
     def __init__(self, model_path: str, tp: int = 1):
-        from lmdeploy.pytorch_poc.engine import Engine
-        from lmdeploy.pytorch_poc.messages import SamplingParam
+        from lmdeploy.pytorch.engine import Engine
+        from lmdeploy.pytorch.messages import SamplingParam
         tokenizer_model_path = osp.join(model_path, 'triton_models',
                                         'tokenizer')
         if os.path.exists(tokenizer_model_path):

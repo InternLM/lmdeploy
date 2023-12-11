@@ -182,8 +182,8 @@ def check_awq_supported(layer_type):
 
 def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
     """Quantize the weights of the target model's linear layers."""
+    from lmdeploy.legacy.pytorch.modules import WeightOnlyQLinear
     from lmdeploy.lite.quantization import WeightQuantizer
-    from lmdeploy.pytorch.modules import WeightOnlyQLinear
     for name, fc in fcs.items():
         fc.to(device)
         quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
