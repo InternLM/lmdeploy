@@ -85,7 +85,9 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator flash-attn transformers==4.33.0
+          # manually install flash attn
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
@@ -94,7 +96,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
-          pytest autotest -m 'not Qwen_14B_Chat and not Qwen_7B_Chat' ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
+          pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
