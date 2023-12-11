@@ -142,7 +142,7 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
         return MODEL_NAME_MAP.get(model_name, output_format)
     else:
         from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(model_path)
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         return _infer_output_format(config)
 
 
