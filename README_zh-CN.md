@@ -20,6 +20,8 @@ ______________________________________________________________________
 
 ## 更新 🎉
 
+- \[2023/11\] Turbomind 支持直接读取 Huggingface 模型。点击[这里](./docs/en/load_hf.md)查看使用方法
+- \[2023/11\] TurboMind 重磅升级。包括：Paged Attention、更快的且不受序列最大长度限制的 attention kernel、2+倍快的 KV8 kernels、Split-K decoding (Flash Decoding) 和 支持 sm_75 架构的 W4A16
 - \[2023/09\] TurboMind 支持 Qwen-14B
 - \[2023/09\] TurboMind 支持 InternLM-20B 模型
 - \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
@@ -53,7 +55,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 ## 支持的模型
 
-`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端
+`LMDeploy` 支持 `TurboMind` 和 `Pytorch` 两种推理后端。运行`lmdeploy list`可查看支持模型列表
 
 ### TurboMind
 
@@ -64,12 +66,13 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 | :----------: | :------: | :--: | :-----: | :---: | :--: |
 |    Llama     |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |    Llama2    |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|    SOLAR     |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | InternLM-20B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-|   QWen-7B    |   Yes    | Yes  |   Yes   |  No   |  No  |
-|   QWen-14B   |   Yes    | Yes  |   Yes   |  No   |  No  |
+|   QWen-7B    |   Yes    | Yes  |   Yes   |  Yes  |  No  |
+|   QWen-14B   |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 | Baichuan-7B  |   Yes    | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan2-7B |   Yes    | Yes  |   No    |  No   |  No  |
+| Baichuan2-7B |   Yes    | Yes  |   Yes   |  Yes  |  No  |
 |  Code Llama  |   Yes    | Yes  |   No    |  No   |  No  |
 
 ### Pytorch
@@ -103,31 +106,26 @@ TurboMind 的 output token throughput 超过 2000 token/s, 整体比 DeepSpeed �
 pip install lmdeploy
 ```
 
+> **Note**<br />
+> `pip install lmdeploy`默认安装runtime依赖包，使用lmdeploy的lite和serve功能时，用户需要安装额外依赖包。例如: `pip install lmdeploy[lite]` 会额外安装`lmdeploy.lite`模块的依赖包
+>
+> - `all`: 安装`lmdeploy`所有依赖包，具体可查看`requirements.txt`
+> - `lite`: 额外安装`lmdeploy.lite`模块的依赖包，具体可查看`requirements/lite.txt`
+> - `serve`: 额外安装`lmdeploy.serve`模块的依赖包，具体可查看`requirements/serve.txt`
+
 ### 部署 InternLM
 
-#### 获取 InternLM 模型
+使用 TurboMind 推理模型需要先将模型转化为 TurboMind 的格式，目前支持在线转换和离线转换两种形式。在线转换可以直接加载 Huggingface 模型，离线转换需需要先保存模型再加载。
 
-```shell
-# 1. 下载 InternLM 模型
-
-# Make sure you have git-lfs installed (https://git-lfs.com)
-git lfs install
-git clone https://huggingface.co/internlm/internlm-chat-7b-v1_1 /path/to/internlm-chat-7b
-
-# if you want to clone without large files – just their pointers
-# prepend your git clone with the following env var:
-GIT_LFS_SKIP_SMUDGE=1
-
-# 2. 转换为 trubomind 要求的格式。默认存放路径为 ./workspace
-python3 -m lmdeploy.serve.turbomind.deploy internlm-chat-7b /path/to/internlm-chat-7b
-
-```
+下面以 [internlm/internlm-chat-7b-v1_1](https://huggingface.co/internlm/internlm-chat-7b-v1_1) 为例，展示在线转换的使用方式。其他方式可参考[load_hf.md](docs/zh_cn/load_hf.md)
 
 #### 使用 turbomind 推理
 
 ```shell
-python3 -m lmdeploy.turbomind.chat ./workspace
+lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
 ```
+
+> **Note**<br /> internlm/internlm-chat-7b-v1_1 会自动下载到 `.cache` 文件夹，这里也可以传下载好的路径。
 
 > **Note**<br />
 > turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。<br />
@@ -139,7 +137,10 @@ python3 -m lmdeploy.turbomind.chat ./workspace
 #### 启动 gradio server
 
 ```shell
-python3 -m lmdeploy.serve.gradio.app ./workspace
+# 安装lmdeploy额外依赖
+pip install lmdeploy[serve]
+
+lmdeploy serve gradio internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -149,48 +150,29 @@ python3 -m lmdeploy.serve.gradio.app ./workspace
 使用下面的命令启动推理服务：
 
 ```shell
-python3 -m lmdeploy.serve.openai.api_server ./workspace server_ip server_port --instance_num 32 --tp 1
+# 安装lmdeploy额外依赖
+pip install lmdeploy[serve]
+
+lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --instance_num 32 --tp 1
 ```
 
 你可以通过命令行方式与推理服务进行对话：
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-python -m lmdeploy.serve.openai.api_client restful_api_url
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
+lmdeploy serve api_client api_server_url
 ```
 
 也可以通过 WebUI 方式来对话：
 
 ```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: python -m lmdeploy.serve.gradio.app http://localhost:23333 localhost 6006 --restful_api True
-python -m lmdeploy.serve.gradio.app restful_api_url server_ip --restful_api True
+# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
+lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
 更多详情可以查阅 [restful_api.md](docs/zh_cn/restful_api.md)。
-
-#### 通过容器部署推理服务
-
-使用下面的命令启动推理服务：
-
-```shell
-bash workspace/service_docker_up.sh
-```
-
-你可以通过命令行方式与推理服务进行对话：
-
-```shell
-python3 -m lmdeploy.serve.client {server_ip_addresss}:33337
-```
-
-也可以通过 WebUI 方式来对话：
-
-```shell
-python3 -m lmdeploy.serve.gradio.app {server_ip_addresss}:33337
-```
-
-其他模型的部署方式，比如 LLaMA，LLaMA-2，vicuna等等，请参考[这里](docs/zh_cn/serving.md)
 
 ### 基于 PyTorch 的推理
 
@@ -203,7 +185,7 @@ pip install deepspeed
 #### 单个 GPU
 
 ```shell
-python3 -m lmdeploy.pytorch.chat $NAME_OR_PATH_TO_HF_MODEL\
+lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL\
     --max_new_tokens 64 \
     --temperture 0.8 \
     --top_p 0.95 \

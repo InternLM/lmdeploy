@@ -48,8 +48,6 @@ private:
 
     using BaseSamplingLayer<T>::sampling_workspace_size_;
     using BaseSamplingLayer<T>::sampling_workspace_;
-    using BaseSamplingLayer<T>::curandstate_buf_;
-    using BaseSamplingLayer<T>::random_seeds_buf_;
     using BaseSamplingLayer<T>::skip_decode_buf_;
     using BaseSamplingLayer<T>::skip_decode_;
     using BaseSamplingLayer<T>::skip_any_;

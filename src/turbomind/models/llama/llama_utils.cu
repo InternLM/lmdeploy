@@ -157,4 +157,13 @@ bool isDebug()
     return is_debug;
 }
 
+int64_t& gSequenceIds(int batch_idx)
+{
+    thread_local std::vector<int64_t> ids{};
+    if (batch_idx >= ids.size()) {
+        ids.resize(batch_idx + 1, -1);
+    }
+    return ids.at(batch_idx);
+}
+
 }  // namespace turbomind

@@ -27,6 +27,18 @@ body:
     required: true
 - type: textarea
   attributes:
+    label: Environment
+    description: |
+      1. Please run `lmdeploy check_env` to collect necessary environment information and paste it here.
+      2. You may add addition that may be helpful for locating the problem, such as
+         - How you installed PyTorch \[e.g., pip, conda, source\]
+         - Other environment variables that may be related (such as `$PATH`, `$LD_LIBRARY_PATH`, `$PYTHONPATH`, etc.)
+    placeholder: Environment here.
+    render: Shell
+  validations:
+    required: true
+- type: textarea
+  attributes:
     label: Error traceback
     description: |
       If applicable, paste the error trackback here.

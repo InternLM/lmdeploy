@@ -40,7 +40,8 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     LlamaTritonModel(size_t      tensor_para_size,
                      size_t      pipeline_para_size,
                      int         enable_custom_all_reduce,
-                     std::string model_dir);
+                     std::string model_dir,
+                     std::string config = "");
 
     ~LlamaTritonModel() = default;
 
@@ -52,6 +53,8 @@ struct LlamaTritonModel: public AbstractTransformerModel {
                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr) override;
 
     void createSharedWeights(int deviceId, int rank) override;
+
+    TensorMap getParams(int deviceId, int rank) override;
 
     void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
                            int                                                   world_size) override;
@@ -86,15 +89,11 @@ private:
     size_t                          num_layer_;
     size_t                          vocab_size_;
     turbomind::LlamaAttentionParams attn_params_;
+    turbomind::EngineParams         engine_params_;
     float                           norm_eps_;
-    int                             max_batch_size_;
-    int                             max_context_token_num_;
-    int                             session_len_;
-    int                             step_length_;
     int                             start_id_;
     int                             end_id_;
-    int                             cache_max_entry_count_;
-    int                             cache_chunk_size_;
+    int                             cache_block_seq_len_;
     int                             use_context_fmha_;
     size_t                          tensor_para_size_;
     size_t                          pipeline_para_size_;

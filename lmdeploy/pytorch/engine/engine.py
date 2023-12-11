@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 import torch
 from transformers import AutoConfig
 
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig, SchedulerConfig
@@ -157,10 +158,12 @@ class Engine:
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None,
                  tp: int = 1,
+                 model_name: str = None,
                  trust_remote_code=True) -> None:
 
         self.tp = tp
         self.gpu_count = tp
+        self.model_name = model_name
 
         scheduler_config = scheduler_config or SchedulerConfig(
             max_batches=64, max_session_len=4096, max_request_output_len=512)
@@ -198,6 +201,8 @@ class Engine:
 
         # create main thread
         self._start_loop()
+
+        self.tokenizer = Tokenizer(model_path)
 
     def _bind_request_manager(self):
         """bind request manager."""

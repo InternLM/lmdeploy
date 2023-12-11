@@ -132,7 +132,7 @@ void TopPSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
                           topp_id_vals_buf_,
                           topp_offset_buf_,
                           begin_topp_offset_buf_,
-                          curandstate_buf_,
+                          nullptr,  // not used when workspace is null
                           batch_size,
                           vocab_size_padded_,
                           nullptr,
@@ -267,6 +267,7 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
 
     * output_tensors:
     *   \param  output_ids [max_seq_len, batch_size]
+    *   \param  curand_state [local_batch_size]
     *   \param  finished [local_batch_size], optional
     *   \param  sequence_length [local_batch_size], optional
     *   \param  cum_log_probs [batch_size], must be float*, optional
@@ -319,7 +320,7 @@ void TopPSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* inp
         topp_id_vals_buf_,
         topp_offset_buf_,
         begin_topp_offset_buf_,
-        curandstate_buf_ + ite * local_batch_size,
+        output_tensors->at("curand_state").getPtr<curandState_t>() + ite * local_batch_size,
         local_batch_size,
         vocab_size_padded_,
         input_tensors->at("end_id").getPtr<int>(),

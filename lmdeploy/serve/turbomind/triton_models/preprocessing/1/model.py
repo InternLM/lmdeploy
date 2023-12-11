@@ -42,9 +42,7 @@ class TritonPythonModel:
         self.model_config = model_config = json.loads(args['model_config'])
 
         # Parse model output configs and convert Triton types to numpy types
-        input_names = [
-            'INPUT_ID', 'REQUEST_INPUT_LEN', 'BAD_WORDS_IDS', 'STOP_WORDS_IDS'
-        ]
+        input_names = ['INPUT_ID', 'REQUEST_INPUT_LEN']
         for input_name in input_names:
             setattr(
                 self,
@@ -89,8 +87,6 @@ class TritonPythonModel:
             # Get input tensors
             query = pb_utils.get_input_tensor_by_name(request,
                                                       'QUERY').as_numpy()
-            request_output_len = pb_utils.get_input_tensor_by_name(
-                request, 'REQUEST_OUTPUT_LEN').as_numpy()
 
             # Preprocessing input data.
             input_id, request_input_len = self._create_request(query)
@@ -104,8 +100,6 @@ class TritonPythonModel:
                 'REQUEST_INPUT_LEN',
                 np.array(request_input_len).astype(
                     self.request_input_len_dtype))
-            request_output_len_tensor = pb_utils.Tensor(
-                'REQUEST_OUTPUT_LEN', request_output_len)
 
             # Create InferenceResponse. You can set an error here in case
             # there was a problem with handling this inference request.
@@ -114,10 +108,8 @@ class TritonPythonModel:
             #
             # pb_utils.InferenceResponse(
             #    output_tensors=..., TritonError("An error occurred"))
-            inference_response = pb_utils.InferenceResponse(output_tensors=[
-                input_id_tensor, request_input_len_tensor,
-                request_output_len_tensor
-            ])
+            inference_response = pb_utils.InferenceResponse(
+                output_tensors=[input_id_tensor, request_input_len_tensor])
             responses.append(inference_response)
 
         # You should return a list of pb_utils.InferenceResponse. Length
@@ -140,10 +132,18 @@ class TritonPythonModel:
         Returns:
             tuple: token ids and their length
         """
-        start_ids = [
-            torch.IntTensor(self.tokenizer.encode(s[0].decode()))
-            for s in query
-        ]
+        start_ids = []
+        for s in query:
+            _s = s[0].decode()
+            if _s == '<BOS>':
+                start_id = [self.start_id
+                            ] if self.start_id is not None else [-1]
+            elif _s == '<EOS>':
+                start_id = [self.end_id] if self.end_id is not None else [-1]
+            else:
+                start_id = self.tokenizer.encode(_s)
+            start_ids.append(torch.IntTensor(start_id))
+
         start_lengths = torch.IntTensor([[len(ids)] for ids in start_ids])
         start_ids = pad_sequence(start_ids,
                                  batch_first=True,

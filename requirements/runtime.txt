@@ -1,0 +1,9 @@
+fire
+mmengine-lite
+numpy
+pycuda
+safetensors
+sentencepiece
+tiktoken
+torch
+transformers>=4.33.0

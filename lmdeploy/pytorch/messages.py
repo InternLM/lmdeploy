@@ -16,8 +16,8 @@ class SamplingParam:
 
     def __init__(
         self,
-        top_p: float = 0.8,
-        top_k: int = None,
+        top_p: float = 1.0,
+        top_k: int = 1,
         temperature: float = 0.8,
         repetition_penalty: float = 1.0,
         ignore_eos: bool = False,

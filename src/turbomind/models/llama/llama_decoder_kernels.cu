@@ -101,6 +101,8 @@ __device__ T blockReduceSum(const cg::thread_block& block, T value)
     return cg::reduce(tile, value, cg::plus<float>{});
 }
 
+// r' = r + x
+// x' = norm(r') * scales
 template<typename T>
 __global__ void fusedAddBiasResidualNorm(T* __restrict__ r_data,
                                          T* __restrict__ x_data,

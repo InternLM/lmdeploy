@@ -109,6 +109,35 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
     }
 }
 
+template<typename T>
+TensorMap LlamaWeight<T>::getParams()
+{
+    TensorMap output;
+
+    output.insert(
+        "tok_embeddings.weight",
+        Tensor{MEMORY_GPU, getTensorType<T>(), {vocab_size_ * hidden_units_ * sizeof(T)}, pre_decoder_embedding_table});
+
+    output.insert("norm.weight",
+                  Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, output_norm_weight});
+
+    output.insert(
+        "output.weight",
+        Tensor{
+            MEMORY_GPU, getTensorType<T>(), {hidden_units_ * vocab_size_ * sizeof(T)}, post_decoder_embedding_kernel});
+
+    // transformer layers
+    for (size_t i = 0; i < num_layer_; i++) {
+        std::string prefix = fmtstr("layers.%d", i);
+        TensorMap   layeri = decoder_layer_weights[i]->getParams(prefix);
+        for (auto [name, tensor] : layeri) {
+            output.insert(name, tensor);
+        }
+    }
+
+    return output;
+}
+
 template struct LlamaWeight<float>;
 template struct LlamaWeight<half>;
 

@@ -77,7 +77,7 @@ def smooth_ln_fcs(ln: torch.nn.Module,
     w_scales = get_weight_scale(concat_w, group_size)
 
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales.pow(1 - alpha)).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     ln.weight.div_(scales)
@@ -124,10 +124,10 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     w_scales = get_weight_scale(concat_w, group_size)
 
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales.pow(1 - alpha)).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
-    # (for qwen) pre_fc is packed QKV, only V needs to scale
+    # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
     if size_pre_fc > size_a and size_pre_fc % size_a == 0 \
             and size_pre_fc // size_a == 3:
 

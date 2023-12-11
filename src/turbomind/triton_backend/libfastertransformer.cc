@@ -1715,7 +1715,7 @@ void ModelInstanceState::ReadOutputTensors(size_t                               
                                 output_dtype,
                                 batchn_shape,
                                 output_buffer,
-                                TRITONSERVER_MEMORY_GPU,
+                                TRITONSERVER_MEMORY_CPU,
                                 model_instance_device_id_start_);
     }
 

@@ -25,7 +25,11 @@ permissions:
   contents: read
 
 jobs:
-  cuda-118:
+  build:
+    strategy:
+      matrix:
+        cudaver: [11.8, 12.1]
+    name: cuda-${{ matrix.cudaver }}
     runs-on: ubuntu-latest
     steps:
       - name: Free disk space
@@ -45,12 +49,12 @@ jobs:
       - name: Build
         uses: addnab/docker-run-action@v3
         with:
-          image: openmmlab/lmdeploy-builder:cuda11.8
-          options: -v ${{ github.workspace }}:/work --cpus=1.8
+          image: openmmlab/lmdeploy-builder:cuda${{ matrix.cudaver }}
+          options: -v ${{ github.workspace }}:/work
           run: |
             cd /work
             source /opt/conda/bin/activate
             conda activate py38
             mkdir build && cd build
-            bash ../generate.sh
+            bash ../generate.sh make
             make -j$(nproc) && make install
