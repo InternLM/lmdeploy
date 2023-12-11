@@ -37,29 +37,20 @@ SequenceManager::SequenceManager(size_t      layer_num,
 const Sequence* SequenceManager::Create(uint64_t id)
 {
     Sequence sequence{id};
-
-    auto it = sequences_.find(id);
+    auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
             TM_LOG_WARNING("[SequenceManager][Create] Removing conflicting ID %ld", (long)id);
         }
-        auto& seq = it->second;
-        if (seq.status != Sequence::kCached) {
-            unlocked_.insert(unlocked_.end(), seq.blocks.begin(), seq.blocks.end());
-        }
-        seq = std::move(sequence);
+        Erase(it);
     }
-    else {
-        it = sequences_.emplace_hint(it, id, std::move(sequence));
-    }
-
+    it = sequences_.emplace_hint(it, id, std::move(sequence));
     return &it->second;
 }
 
 const Sequence* SequenceManager::Get(uint64_t id)
 {
     if (auto it = sequences_.find(id); it != sequences_.end()) {
-        auto& sequence = it->second;
         return &it->second;
     }
     return nullptr;
@@ -70,23 +61,24 @@ bool SequenceManager::Contains(uint64_t id)
     return sequences_.find(id) != sequences_.end();
 }
 
+void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
+{
+    auto& seq = it->second;
+    if (seq.status == Sequence::kCached) {
+        const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
+        seq.blocks.resize(count);
+    }
+    else {
+        UpdateAndSetUnlock(seq);
+    }
+    freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
+    sequences_.erase(it);
+}
+
 bool SequenceManager::Erase(uint64_t id)
 {
     if (auto it = sequences_.find(id); it != sequences_.end()) {
-        auto& seq = it->second;
-        if (seq.status != Sequence::kCached) {
-            unlocked_.insert(unlocked_.end(), seq.blocks.begin(), seq.blocks.end());
-            freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
-        }
-        else {
-            for (int i = 0; i < seq.blocks.size(); ++i) {
-                // filter invalidated blocks
-                if (seq.blocks[i]->unique_id == seq.block_unique_ids[i]) {
-                    freed_.push_back(seq.blocks[i]);
-                }
-            }
-        }
-        sequences_.erase(it);
+        Erase(it);
         return true;
     }
     return false;
@@ -94,7 +86,7 @@ bool SequenceManager::Erase(uint64_t id)
 
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
 {
-    std::vector<const Block*> blocks;
+    BlockIds blocks;
     for (const auto& p : sequences) {
         auto& seq = const_cast<Sequence&>(*p);
         if (seq.status != Sequence::kCached) {
@@ -102,13 +94,9 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
         }
         FT_CHECK(seq.blocks.size() == seq.block_unique_ids.size());
         if (need_verify_) {
-            for (int i = 0; i < seq.blocks.size(); ++i) {
-                if (seq.blocks[i]->unique_id != seq.block_unique_ids[i]) {
-                    seq.blocks.resize(i);
-                    seq.block_unique_ids.resize(i);
-                    break;
-                }
-            }
+            const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
+            seq.blocks.resize(count);
+            seq.block_unique_ids.resize(count);
         }
         blocks.insert(blocks.end(), seq.blocks.begin(), seq.blocks.end());
         seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_seq_len_);
@@ -177,8 +165,8 @@ struct Schedule {
         while (vidx < it_) {
             const auto& blocks = seqs[--it_]->blocks;
             int         count  = 0;
-            for (const auto& p : blocks) {
-                count += static_cast<int>(--use_count_[p->id] == 0);
+            for (const auto& bid : blocks) {
+                count += static_cast<int>(--use_count_[bid] == 0);
             }
             unlocked_[it_] = count;
         }
@@ -354,21 +342,20 @@ std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        se
     return required;
 }
 
-void SequenceManager::AssignAndActivate(const Sequences&                 sequences,  //
-                                        const std::vector<int>&          counts,
-                                        const std::vector<const Block*>& blocks)
+void SequenceManager::AssignAndActivate(const Sequences&        sequences,  //
+                                        const std::vector<int>& counts,
+                                        const BlockIds&         blocks,
+                                        const UniqueIds&        unique_ids)
 {
     FT_CHECK(sequences.size() == counts.size());
-    auto first = blocks.begin();
+    int first = 0;
     for (int i = 0; i < sequences.size(); ++i) {
         auto& s     = const_cast<Sequence&>(*sequences[i]);
         auto  count = counts[i];
-        // dbg(count);
-        auto last = first + count;
-        std::for_each(first, last, [&](const Block* b) {
-            s.blocks.push_back(b);
-            s.block_unique_ids.push_back(b->unique_id);
-        });
+        int   last  = first + count;
+        FT_CHECK(last <= blocks.size());
+        s.blocks.insert(s.blocks.end(), blocks.begin() + first, blocks.begin() + last);
+        s.block_unique_ids.insert(s.block_unique_ids.end(), unique_ids.begin() + first, unique_ids.begin() + last);
         s.status = Sequence::kActive;
         first    = last;
     }
@@ -453,11 +440,12 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     // allocate & assign blocks
     {
-        std::vector<const Block*> blocks;
+        BlockIds  block_ids;
+        UniqueIds unique_ids;
         if (schedule.allocate) {
-            blocks = block_manager_->Allocate(schedule.allocate);
+            std::tie(block_ids, unique_ids) = block_manager_->Allocate(schedule.allocate);
         }
-        AssignAndActivate(schedule.active, schedule.block_counts, blocks);
+        AssignAndActivate(schedule.active, schedule.block_counts, block_ids, unique_ids);
     }
 
     // active -> locked
@@ -466,6 +454,11 @@ auto SequenceManager::Materialize(Sequences                    sequences,
             const_cast<Sequence*>(p)->status = Sequence::kLocked;
         }
     }
+
+    // TM_LOG_ERROR("active: %4d, cached: %4d, free: %4d",
+    //              block_manager_->active_count(),
+    //              block_manager_->cached_count(),
+    //              block_manager_->free_count());
 
     return outcome;
 }
