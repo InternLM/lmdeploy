@@ -117,7 +117,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
 def update_output_format(model_name: str, model_format: str, model_path: str,
                          output_format: str):
     """Update output format according to model info."""
-    TORCH_DTYPE_MAP = {'bfloat16': 'bf16'}
+    TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16'}
     MODEL_NAME_MAP = {'qwen': 'bf16'}
     model_name = model_name.split('-')[0]
 
