@@ -127,8 +127,6 @@ private:
     int    rank_;
     size_t val_offset_{};
 
-    bool need_verify_{};
-
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;
 
