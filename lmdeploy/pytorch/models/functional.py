@@ -88,7 +88,7 @@ def get_alibi_biases(n_heads: int, mask: torch.Tensor):
     return distance * m[None, :, None, None]
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def attention_forward_with_paged_attention(
     hidden_states: Tensor,
     history_lengths: Sequence,

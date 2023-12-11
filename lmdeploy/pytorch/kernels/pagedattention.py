@@ -317,7 +317,7 @@ def _fwd_kernel(
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def paged_attention_fwd(
     q: Tensor,
     k: Tensor,

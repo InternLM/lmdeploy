@@ -186,6 +186,7 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
                                     block_offsets, history_lengths, device)
 
 
+@torch.inference_mode()
 def fill_kv_cache(k_states: Tensor,
                   v_states: Tensor,
                   k_caches: Tensor,

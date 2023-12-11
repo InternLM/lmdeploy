@@ -107,6 +107,7 @@ def apply_rotary_pos_emb_qk_kernel(
     tl.store(K_EMB + k_offset_h, k_emb_h, mask=pos_mask)
 
 
+@torch.inference_mode()
 def apply_rotary_pos_emb(q: Tensor,
                          k: Tensor,
                          cos: Tensor,
