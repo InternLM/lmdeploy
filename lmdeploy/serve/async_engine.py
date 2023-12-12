@@ -204,7 +204,7 @@ class AsyncEngine:
         if do_preprocess:
             prompt = self.model.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
-        finish_reason = 'stop' if stop else None
+        finish_reason = None
         if self.id2step[str(session_id)] + len(
                 input_ids) + request_output_len >= self.tm_model.session_len:
             finish_reason = 'length'
@@ -247,11 +247,14 @@ class AsyncEngine:
                                  len(input_ids), tokens, finish_reason)
                     response_size = tokens
 
+                finish_reason = 'length' \
+                    if tokens >= request_output_len else 'stop'
                 # `response_size` might be note updated since
                 # ` if response.endswith('�')`
-                if response_size != tokens:
-                    yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason)
+                if response_size == tokens:
+                    response = ''  # avaid returning the last response twice
+                yield GenOut(response, self.id2step[str(session_id)],
+                             len(input_ids), tokens, finish_reason)
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
                 if sequence_end or stop:
