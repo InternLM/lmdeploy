@@ -385,7 +385,7 @@ def main():
                 'prompt_tokens',
                 'completion_tokens',
                 'throughput(out tok/s)',
-                'mem(GB)'
+                'mem(GB)',
                 'FTL(ave)(s)',
                 'FTL(min)(s)',
                 'FTL(max)(s)',
