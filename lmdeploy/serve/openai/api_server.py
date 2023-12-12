@@ -136,7 +136,10 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos)
+        ignore_eos=request.ignore_eos,
+        do_preprocess=not isinstance(request.messages,
+                                     str),  # text completion for string input
+    )
 
     def create_stream_response_json(
         index: int,
@@ -424,7 +427,7 @@ async def chat_interactive_v1(request: GenerateRequest,
         request.session_id = random.randint(10087, 23333)
 
     async_engine = VariableInterface.async_engine
-    sequence_start = async_engine.steps.get(str(request.session_id), 0) == 0
+    sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
     sequence_end = not request.interactive_mode
 
     generation = async_engine.generate(

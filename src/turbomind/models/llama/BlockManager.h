@@ -11,6 +11,7 @@
 #include <iterator>
 #include <numeric>
 #include <queue>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -22,28 +23,37 @@ namespace turbomind {
 
 struct Block {
     int      id;         // fixed linear id in the pool
-    int      ref_count;  // all sequences referencing the block
     int      use_count;  // active sequences using the block
     uint64_t unique_id;  // unique for every block allocation
     uint64_t timestamp;
     void*    data;
 
     friend std::ostream& operator<<(std::ostream& os, const Block& block);
+    friend std::string   to_string(const Block& b)
+    {
+        std::stringstream ss;
+        ss << b;
+        return ss.str();
+    }
 };
+
+using BlockIds  = std::vector<int>;
+using UniqueIds = std::vector<uint64_t>;
 
 inline bool is_active(const Block& block)
 {
-    return block.ref_count > 0 && block.use_count > 0;
+    // timestamp may be 0 for newly allocated block that has not been written
+    return block.use_count > 0;
 }
 
 inline bool is_cached(const Block& block)
 {
-    return block.ref_count > 0 && block.use_count == 0;
+    return block.use_count == 0 && block.timestamp != 0;
 }
 
 inline bool is_free(const Block& block)
 {
-    return block.ref_count == 0 && block.use_count == 0 && block.timestamp == 0;
+    return block.use_count == 0 && block.timestamp == 0;
 }
 
 struct Snapshot {
@@ -60,22 +70,24 @@ public:
     ~BlockManager();
 
     // free -> active (use_count = 1, ref_count = 1)
-    [[nodiscard]] std::vector<const Block*> Allocate(int count);
+    [[nodiscard]] std::pair<BlockIds, UniqueIds> Allocate(int count);
 
     // cached -> active (use_count += 1)
-    [[maybe_unused]] int Lock(const std::vector<const Block*>& bs);
+    [[maybe_unused]] int Lock(const BlockIds& ids);
 
     // active -> cached (use_count -= 1)
-    [[maybe_unused]] int Unlock(const std::vector<const Block*>& bs);
+    [[maybe_unused]] int Unlock(const BlockIds& ids);
 
     // cached -> free (ref_count = 0)
     void Evict(int count);
 
     // cached -> free (ref_count -= 1)
-    [[maybe_unused]] int Free(const std::vector<const Block*>& bs);
+    void Free(BlockIds bs);
 
     // increase timestamp in reversed order
-    void Touch(const std::vector<const Block*>& bs);
+    void Touch(const BlockIds& bs);
+
+    [[nodiscard]] int Verify(const BlockIds& block_ids, const UniqueIds& unique_ids);
 
     Snapshot TakeSnapshot();
 
@@ -99,13 +111,23 @@ public:
         return (max_block_count_ - blocks_.size()) + free_ids_.size();
     }
 
+    Block& block(int idx)
+    {
+        return blocks_[idx];
+    }
+
+    int unique_id(int idx)
+    {
+        return blocks_[idx].unique_id;
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const BlockManager&);
 
 private:
     static size_t GetBlockCount(size_t block_size, double ratio);
 
     // move indices between sets
-    static void Move(std::vector<int>& src, const std::vector<int>& delta, std::vector<int>& dst);
+    static void Move(BlockIds& src, const BlockIds& delta, BlockIds& dst);
 
     // allocate a chunk of blocks
     bool Malloc();
@@ -118,13 +140,12 @@ private:
 
     std::vector<void*> chunks_;
 
-    std::vector<int> active_ids_;
-    std::vector<int> cached_ids_;
-    std::vector<int> free_ids_;
+    BlockIds active_ids_;
+    BlockIds cached_ids_;
+    BlockIds free_ids_;
 
     std::vector<Block> blocks_;  // < 100k
 
-    // uint64_t unique_id_{1UL << 63};
     uint64_t unique_id_{1};
     uint64_t timestamp_{1};
 };

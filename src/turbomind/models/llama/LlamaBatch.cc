@@ -569,11 +569,11 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
             FT_CHECK_WITH_INFO(h_cu_block_counts_[i + 1] <= sequence_manager_->max_block_count(),
                                std::to_string(h_cu_block_counts_[i + 1]));
 
-            k_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), k_ptrs, [&](auto p) {
-                return reinterpret_cast<uintptr_t>(sequence_manager_->OffsetKey(p->data));
+            k_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), k_ptrs, [&](int block_id) {
+                return reinterpret_cast<uintptr_t>(sequence_manager_->GetKeyPtr(block_id));
             });
-            v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](auto p) {
-                return reinterpret_cast<uintptr_t>(sequence_manager_->OffsetVal(p->data));
+            v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](int block_id) {
+                return reinterpret_cast<uintptr_t>(sequence_manager_->GetValPtr(block_id));
             });
         }
 
@@ -589,7 +589,7 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     // check if the last sequence is partial
     int partial     = 0;
     int partial_len = -1;
-    {
+    if (state_->active_size) {
         const int i = state_->active_size - 1;
         partial = state_->sequences[i]->cache_len + state_->sequences[i]->input_length != state_->h_context_length[i];
         if (partial) {
@@ -957,6 +957,8 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
         }
         session_len_ = max_session_len;
     }
+
+    FT_CHECK(max_context_token_num_ >= session_len_);
 
     for (auto& s : states_) {
         s.requests.resize(max_batch_size_);

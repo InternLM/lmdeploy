@@ -446,10 +446,16 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
     dim3   grid(local_batch_size);
     size_t smem_size = step * (sizeof(float) + sizeof(int));
     if (penalty_type == RepetitionPenaltyType::Additive) {
+        check_cuda_error(cudaFuncSetAttribute(batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive>,
+                                              cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                              smem_size));
         batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive><<<grid, block, smem_size, stream>>>(
             logits, penalties, output_ids, batch_size, vocab_size, input_lengths, max_input_length, step);
     }
     else if (penalty_type == RepetitionPenaltyType::Multiplicative) {
+        check_cuda_error(cudaFuncSetAttribute(batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Multiplicative>,
+                                              cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                              smem_size));
         batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Multiplicative><<<grid, block, smem_size, stream>>>(
             logits, penalties, output_ids, batch_size, vocab_size, input_lengths, max_input_length, step);
     }

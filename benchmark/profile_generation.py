@@ -29,14 +29,14 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
     for _ in range(test_round):
         token_latency_stats = [0] * (output_seqlen + 1)
         prev = time.perf_counter()
-        n_pre_token = 0
+        n_prev_token = 0
         """
         The iterator provided by `stream_infer` denotes the number of generated tokens so far,
         which is represented by the variable `n_token`.
         Please note that `n_token` is not a continuous value. In other words, during the iteration,
         its value might be 5, 7, 8, 16, and so on, rather than 1, 2, 3, 4, etc.
         So, it is quite difficult to get the latency of each generated token.
-        As a work-around, we set the latency `new-prev` of each iteration to the first token of
+        As a work-around, we set the latency `now-prev` of each iteration to the first token of
         the new generated tokens, and leave the latency of the rest tokens being 0.
         For example, in the first iteration, 5 tokens are generated.
         The time elapsing in this iteration `now-prev` is set to the latency of first token of
@@ -54,9 +54,9 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
                                             temperature=temperature):
             _, n_token = outputs[0]
             now = time.perf_counter()
-            if n_pre_token != n_token:
-                token_latency_stats[n_pre_token] = np.round(now - prev, 3)
-                n_pre_token = n_token
+            if n_prev_token != n_token:
+                token_latency_stats[n_prev_token] = np.round(now - prev, 3)
+                n_prev_token = n_token
             prev = now
         if session_id == 1:
             pbar.update(1)
