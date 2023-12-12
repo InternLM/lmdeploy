@@ -643,7 +643,6 @@ class TurboMindInstance:
         input_ids = pad_sequence(input_ids,
                                  batch_first=True,
                                  padding_value=self.eos_id)
-        print(f'input_ids.shape: {input_ids.shape}')
         steps = torch.IntTensor([step for step in steps])
 
         inputs = dict(input_ids=input_ids,
@@ -664,7 +663,6 @@ class TurboMindInstance:
 
         outputs = _tm_dict_to_torch_dict(tm_outputs)
         logits = outputs['logits']
-        print(f'logits.shape: {logits.shape}')
 
         return logits[:, :-1, :]
 
@@ -680,29 +678,13 @@ class TurboMindInstance:
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
 
-        def _get_ppl(logits, input_ids):
-            shift_logits = logits.contiguous().float()
-            shift_labels = torch.tensor(input_ids).to(shift_logits.device)
-
-            # loss_fct = torch.nn.CrossEntropyLoss(
-            #     reduction='none', ignore_index=self.tokenizer.pad_token_id)
-            loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
-
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
-                            shift_labels.view(-1)).view(shift_labels.size())
-            ce_loss = loss.sum(-1).cpu().detach().numpy() / len(input_ids)
-            return ce_loss
-
-        batch_size = len(input_ids)
         max_input_len = 16 * 1024
         # max_input_len = 16
         n_max_iter = np.ceil(
             max([len(input_id)
                  for input_id in input_ids]) / max_input_len).astype(int)
 
-        device = 'cuda'
-        if n_max_iter > 0:
-            device = 'cpu'
+        device = 'cpu' if n_max_iter > 0 else 'cuda'
 
         index_range_starts = []
         index_range_ends = []
@@ -723,8 +705,6 @@ class TurboMindInstance:
                 input_id[start[i]:end[i]] for input_id, start, end in zip(
                     input_ids, index_range_starts, index_range_ends)
             ]
-            print(f'the {i}-th: len {len(input_ids)}, {input_ids}')
-
             _logits = self.decode(_input_ids,
                                   steps,
                                   sequence_start=(i == 0),
@@ -732,10 +712,36 @@ class TurboMindInstance:
             _logits = _logits.to(device=device)
             logits.append(_logits)
 
+        # concat logits. Shape is [bsz, seq_len, vocab_size]
         logits = torch.cat(logits, dim=1)
-        logits = torch.chunk(logits, chunks=batch_size, dim=0)
-        ppls = []
-        for _logits, _input_ids in zip(logits, input_ids):
-            ppl = _get_ppl(_logits.squeeze(0), _input_ids)
-            ppls.append(ppl)
-        return ppls
+
+        # get target ids
+        padding_token_id = -100
+        target_ids = [(_input_ids + [padding_token_id])[1:]
+                      for _input_ids in input_ids]
+        target_ids = [
+            torch.Tensor(torch.LongTensor(_target_ids))
+            for _target_ids in target_ids
+        ]
+        target_ids = pad_sequence(target_ids,
+                                  batch_first=True,
+                                  padding_value=padding_token_id)
+        target_ids = target_ids.to(logits.device)
+        target_mask = target_ids != padding_token_id
+        target_count = torch.sum(target_mask, dim=-1)
+
+        # compute cross entropy loss
+        bsz, seq_len, vocab_size = logits.shape
+        flat_logits = logits.contiguous().view(-1, vocab_size)
+        flat_target_ids = target_ids.contiguous().view(-1)
+        flat_loss_matrix = torch.nn.functional.cross_entropy(
+            flat_logits,
+            flat_target_ids,
+            reduction='none',
+            ignore_index=padding_token_id)
+
+        loss_matrix = flat_loss_matrix.view(bsz, seq_len)
+        loss_sum = torch.sum(loss_matrix * target_mask, dim=1)
+        loss_avg = loss_sum / target_count
+        loss_avg = loss_avg.cpu().numpy()
+        return loss_avg
