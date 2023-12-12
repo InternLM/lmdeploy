@@ -158,8 +158,8 @@ class Engine:
         prompt_tokens = total_tokens - completion_tokens
         completion_token_throughput = completion_tokens / elapsed_time
         total_token_throughput = total_tokens / elapsed_time
-        rqs = len(requests) / elapsed_time
-        rqm = rqs * 60
+        rps = len(requests) / elapsed_time
+        rpm = rps * 60
 
         if (np.abs(stats[:, 1] - stats[:, 2]) <= 1).min() is False:
             print(f'Did not generate requested number of tokens. '
@@ -178,8 +178,8 @@ class Engine:
             f'number of completion tokens: {completion_tokens:.0f}\n'
             f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
             f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
-            f'RPS (request per second): {rqs:.3f} req/s\n'
-            f'RPM (request per minute): {rqm:.3f} req/min\n'
+            f'RPS (request per second): {rps:.3f} req/s\n'
+            f'RPM (request per minute): {rpm:.3f} req/min\n'
             f'{"-" * 50}\n')
 
         if self.csv:
@@ -190,7 +190,7 @@ class Engine:
                     'completion_tokens', '1st_token_latency(min)(s)',
                     '1st_token_latency(max)(s)', '1st_token_latency(ave)(s)',
                     'output token thr(tokens/s', 'total token thr(token/s)',
-                    'RPM'
+                    'RPS', 'RPM'
                 ])
                 writer.writerow([
                     concurrency,
@@ -199,7 +199,7 @@ class Engine:
                     f'{first_token_latency_max:.3f}' if stream_output else '-',
                     f'{first_token_latency_ave:.3f}' if stream_output else '-',
                     f'{completion_token_throughput:.3f}',
-                    f'{total_token_throughput:.3f}', f'{rqm:.3f}'
+                    f'{total_token_throughput:.3f}', f'{rps:.3f}', f'{rpm:.3f}'
                 ])
 
 

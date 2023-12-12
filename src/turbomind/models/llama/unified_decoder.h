@@ -5,6 +5,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
@@ -45,6 +46,8 @@ protected:
     LlamaFfnLayer<T>*         ffn_layer_{};
 
     const DataType dtype_;
+
+    bool need_causal_mask_{false};
 
     using WeightType = LlamaDecoderLayerWeight<T>;
 
@@ -88,6 +91,14 @@ public:
         tensor_para_(tensor_para),
         dtype_(getTensorType<T>())
     {
+#ifdef _MSC_VER
+        // Both unfused MHA and flash attention 1 need causal mask
+        need_causal_mask_ = true;
+#endif
+        // attention mask is not used for FA-1 (which requires sm80+ and half/bf16 data type)
+        if (!use_fmha || (getSMVersion() < 80 || sizeof(T) != 2)) {
+            need_causal_mask_ = true;
+        }
         initialize(attn_params, kv_head_num, use_fmha, cache_block_seq_len, quant_policy);
     }
 
