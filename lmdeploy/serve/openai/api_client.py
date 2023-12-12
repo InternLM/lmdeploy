@@ -28,6 +28,7 @@ class APIClient:
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
         self.models_v1_url = f'{api_server_url}/v1/models'
+        self.encode_v1_url = f'{api_server_url}/v1/encode'
         self._available_models = None
 
     @property
@@ -42,6 +43,32 @@ class APIClient:
             self._available_models = [item['id'] for item in model_list]
             return self._available_models
         return None
+
+    def encode(self,
+               input: Union[str, List[str]],
+               do_preprocess: Optional[bool] = False,
+               add_bos: Optional[bool] = True,
+               **kwargs):
+        """Encode prompts.
+
+        Args:
+            input: the prompt to be encoded. In str or List[str] format.
+            do_preprocess: whether do preprocess or not. Default to False.
+            add_bos: True when it is the beginning of a conversation. False
+                when it is not. Default to True.
+        Return: (input_ids, length)
+        """
+        headers = {'content-type': 'application/json'}
+        response = requests.post(self.encode_v1_url,
+                                 headers=headers,
+                                 json=dict(input=input,
+                                           do_preprocess=do_preprocess,
+                                           add_bos=add_bos),
+                                 stream=False)
+        if hasattr(response, 'text'):
+            output = json.loads(response.text)
+            return output['input_ids'], output['length']
+        return None, None
 
     def chat_completions_v1(self,
                             model: str,
