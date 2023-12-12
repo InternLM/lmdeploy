@@ -34,7 +34,7 @@ struct Sequence {
     mutable float rope_theta = 0.f;
 
     // embedding data
-    mutable std::vector<std::vector<std::byte>> embeddings;
+    mutable std::vector<std::vector<std::byte>> input_embeddings;
     mutable std::vector<int>                    embedding_begins;
     mutable std::vector<int>                    embedding_ends;
 

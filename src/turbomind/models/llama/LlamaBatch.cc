@@ -63,7 +63,7 @@ void ClearState(BatchState& s)
 void DropEmbeddings(const Sequence& seq)
 {
     int    seq_len = seq.tokens.size();
-    int    num_emb = seq.embeddings.size();
+    int    num_emb = seq.input_embeddings.size();
     size_t sz      = num_emb;
     for (; sz >= 1; sz--) {
         if (seq.embedding_ends[sz - 1] <= seq_len) {
@@ -71,7 +71,7 @@ void DropEmbeddings(const Sequence& seq)
         }
     }
     // should we keep part of embedding?
-    seq.embeddings.resize(sz);
+    seq.input_embeddings.resize(sz);
     seq.embedding_begins.resize(sz);
     seq.embedding_ends.resize(sz);
 }
@@ -275,10 +275,10 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             output_ids = Copy(input_ids, input_length, output_ids);
         }
 
-        // copy embeddings
+        // copy input embeddings
         if (r->inputs[rank_].isExist("embedding_counts")) {
             int        emb_count    = r->inputs[rank_].getVal<int>("embedding_counts");
-            const auto emb_tensor   = r->inputs[rank_].at("embeddings");
+            const auto emb_tensor   = r->inputs[rank_].at("input_embeddings");
             const auto begin_tensor = r->inputs[rank_].at("embedding_begins");
             const auto end_tensor   = r->inputs[rank_].at("embedding_ends");
             const int* begin        = begin_tensor.getPtr<int>();
@@ -301,8 +301,8 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             };
 
             if (!check_embeddings()) {
-                TM_LOG_WARNING("[ImageFeature] Skip invalid embeddings, id = %ld, input_length = %d, "
-                               "embeddings = %s, embedding_counts = %d, begins = %s, ends = %s",
+                TM_LOG_WARNING("[ImageFeature] Skip invalid input embeddings, id = %ld, input_length = %d, "
+                               "input embeddings = %s, embedding_counts = %d, begins = %s, ends = %s",
                                (long)seq.id,
                                input_length,
                                emb_tensor.toString().c_str(),
@@ -314,7 +314,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
                 char* emb_tensor_ptr = emb_tensor.getPtr<char>();
                 for (size_t i = 0; i < emb_count; i++) {
                     size_t count = (end[i] - begin[i]) * model_->hidden_units_ * sizeof(T);
-                    seq.embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
+                    seq.input_embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
                     seq.embedding_begins.emplace_back(begin[i] + seq.tokens.size());
                     seq.embedding_ends.emplace_back(end[i] + seq.tokens.size());
                     emb_tensor_ptr += count;

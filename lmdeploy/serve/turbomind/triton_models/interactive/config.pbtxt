@@ -60,7 +60,7 @@ input [
     dims: [ -1 ]
   },
   {
-    name: "embeddings"
+    name: "input_embeddings"
     data_type: TYPE_INT8
     dims: [ -1 ]
     optional: true

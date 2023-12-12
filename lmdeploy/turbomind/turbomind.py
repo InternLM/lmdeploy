@@ -459,7 +459,7 @@ class TurboMindInstance:
     def stream_infer(self,
                      session_id,
                      input_ids,
-                     embeddings=None,
+                     input_embeddings=None,
                      embedding_begins=None,
                      embedding_ends=None,
                      request_output_len: int = 512,
@@ -479,9 +479,9 @@ class TurboMindInstance:
         Args:
             session_id (int): the id of a session
             input_ids (numpy.ndarray): the token ids of a prompt
-            embeddings (List[numpy.ndarray]): embeddings features
-            embedding_begins (List[int]): embeddings begin offset to input_ids
-            embedding_ends (List[int]): embeddings end offset to input_ids
+            input_embeddings (List[numpy.ndarray]): embeddings features
+            embedding_begins (List[int]): the begin offsets of input_embeddings
+            embedding_ends (List[int]): the end offset of input_embeddings
             request_output_len (int): the max number of to-be-generated tokens
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
@@ -550,39 +550,39 @@ class TurboMindInstance:
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
 
-        if embeddings is not None:
-            assert len(embeddings) == len(embedding_begins) == len(
+        if input_embeddings is not None:
+            assert len(input_embeddings) == len(embedding_begins) == len(
                 embedding_ends)
             if isinstance(embedding_begins[0], int):
                 embedding_begins = [embedding_begins]
                 embedding_ends = [embedding_ends]
-                embeddings = [embeddings]
+                input_embeddings = [input_embeddings]
             # convert to lookup table type
             if self.tm_model.config.weight_type == 'fp32':
-                embeddings = [[x.astype(np.float32) for x in y]
-                              for y in embeddings]
+                input_embeddings = [[x.astype(np.float32) for x in y]
+                                    for y in input_embeddings]
             elif self.tm_model.config.weight_type == 'bf16':
-                embeddings = [[
+                input_embeddings = [[
                     torch.from_numpy(x).bfloat16().view(torch.half).numpy()
                     for x in y
-                ] for y in embeddings]
+                ] for y in input_embeddings]
             else:
-                embeddings = [[x.astype(np.float16) for x in y]
-                              for y in embeddings]
+                input_embeddings = [[x.astype(np.float16) for x in y]
+                                    for y in input_embeddings]
 
             embedding_counts = torch.IntTensor(
-                [len(embs) for embs in embeddings])
-            embeddings = [[torch.from_numpy(x).squeeze() for x in y]
-                          for y in embeddings]
-            embeddings = [torch.cat(x) for x in embeddings]
-            embeddings = pad_sequence(embeddings, batch_first=True)
-            embeddings = embeddings.reshape(embeddings.shape[0],
-                                            -1).view(torch.int8)
+                [len(embs) for embs in input_embeddings])
+            input_embeddings = [[torch.from_numpy(x).squeeze() for x in y]
+                                for y in input_embeddings]
+            input_embeddings = [torch.cat(x) for x in input_embeddings]
+            input_embeddings = pad_sequence(input_embeddings, batch_first=True)
+            input_embeddings = input_embeddings.reshape(
+                input_embeddings.shape[0], -1).view(torch.int8)
             embedding_begins = [torch.IntTensor(x) for x in embedding_begins]
             embedding_begins = pad_sequence(embedding_begins, batch_first=True)
             embedding_ends = [torch.IntTensor(x) for x in embedding_ends]
             embedding_ends = pad_sequence(embedding_ends, batch_first=True)
-            inputs['embeddings'] = embeddings
+            inputs['input_embeddings'] = input_embeddings
             inputs['embedding_counts'] = embedding_counts
             inputs['embedding_begins'] = embedding_begins
             inputs['embedding_ends'] = embedding_ends

@@ -172,7 +172,7 @@ void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_i
 
     for (int i = 0; i < bsz; i++) {
         const auto& seq        = *sequences[i];
-        const auto& embeddings = seq.embeddings;
+        const auto& embeddings = seq.input_embeddings;
         const auto& begins     = seq.embedding_begins;
         const auto& ends       = seq.embedding_ends;
         for (int j = embeddings.size() - 1; j >= 0; j--) {
