@@ -117,15 +117,15 @@ pip install lmdeploy
 
 使用 TurboMind 推理模型需要先将模型转化为 TurboMind 的格式，目前支持在线转换和离线转换两种形式。在线转换可以直接加载 Huggingface 模型，离线转换需需要先保存模型再加载。
 
-下面以 [internlm/internlm-chat-7b-v1_1](https://huggingface.co/internlm/internlm-chat-7b-v1_1) 为例，展示在线转换的使用方式。其他方式可参考[load_hf.md](docs/zh_cn/load_hf.md)
+下面以 [internlm/internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) 为例，展示在线转换的使用方式。其他方式可参考[load_hf.md](docs/zh_cn/load_hf.md)
 
 #### 使用 turbomind 推理
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
+lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
 ```
 
-> **Note**<br /> internlm/internlm-chat-7b-v1_1 会自动下载到 `.cache` 文件夹，这里也可以传下载好的路径。
+> **Note**<br /> internlm/internlm-chat-7b 会自动下载到 `.cache` 文件夹，这里也可以传下载好的路径。
 
 > **Note**<br />
 > turbomind 在使用 FP16 精度推理 InternLM-7B 模型时，显存开销至少需要 15.7G。建议使用 3090, V100，A100等型号的显卡。<br />
@@ -140,7 +140,7 @@ lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-cha
 # 安装lmdeploy额外依赖
 pip install lmdeploy[serve]
 
-lmdeploy serve gradio internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
+lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -153,7 +153,7 @@ lmdeploy serve gradio internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-
 # 安装lmdeploy额外依赖
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b --model-name internlm-chat-7b --instance_num 32 --tp 1
 ```
 
 你可以通过命令行方式与推理服务进行对话：
