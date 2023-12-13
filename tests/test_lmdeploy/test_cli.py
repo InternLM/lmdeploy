@@ -43,7 +43,7 @@ def test_subcli_serve():
     from lmdeploy.serve.client import main as run_triton_client
     from lmdeploy.serve.gradio.app import run as run_gradio
     from lmdeploy.serve.openai.api_client import main as run_api_client
-    from lmdeploy.serve.openai.api_server import main as run_api_server
+    from lmdeploy.serve.openai.api_server import serve as run_api_server
 
     compare_func(SubCliServe.gradio, run_gradio)
     compare_func(SubCliServe.api_server, run_api_server)

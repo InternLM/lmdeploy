@@ -3,7 +3,7 @@ import asyncio
 import dataclasses
 import random
 from contextlib import contextmanager
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 
 @dataclasses.dataclass
@@ -20,14 +20,35 @@ class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
     Args:
-        model_path (str): the path of the deployed model
+        model_path (str): the path of a model.
+            It could be one of the following options:
+                - i) A local directory path of a turbomind model which is
+                    converted by `lmdeploy convert` command or download from
+                    ii) and iii).
+                - ii) The model_id of a lmdeploy-quantized model hosted
+                    inside a model repo on huggingface.co, such as
+                    "InternLM/internlm-chat-20b-4bit",
+                    "lmdeploy/llama2-chat-70b-4bit", etc.
+                - iii) The model_id of a model hosted inside a model repo
+                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    and so on.
+        model_name (str): needed when model_path is a pytorch model on
+            huggingface.co, such as "InternLM/internlm-chat-7b",
+            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
     """
 
-    def __init__(self, model_path, instance_num=32, tp=1, **kwargs) -> None:
+    def __init__(self,
+                 model_path: str,
+                 model_name: Optional[str] = None,
+                 instance_num: int = 32,
+                 tp: int = 1,
+                 **kwargs) -> None:
         from lmdeploy import turbomind as tm
         self.tm_model = tm.TurboMind.from_pretrained(model_path,
+                                                     model_name=model_name,
                                                      tp=tp,
                                                      **kwargs)
         self.tokenizer = self.tm_model.tokenizer
@@ -40,6 +61,42 @@ class AsyncEngine:
         self.gens_set = set()
         for i in range(instance_num):
             self.gens_set.add(self.tm_model.create_instance())
+
+    def __call__(self,
+                 prompts: List[str],
+                 request_output_len=512,
+                 top_k=40,
+                 top_p=0.8,
+                 temperature=0.8,
+                 repetition_penalty=1.0,
+                 ignore_eos=False,
+                 do_preprocess=True,
+                 **kwargs):
+        """Inference a batch of prompts.
+
+        Args:
+            prompts (List[str]): a batch of prompts
+            request_output_len (int): output token nums
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+            are kept for generation.
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+              1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+            do_preprocess (bool): whether pre-process the messages.
+        """
+        return self.batch_infer(prompts,
+                                request_output_len=request_output_len,
+                                top_k=top_k,
+                                top_p=top_p,
+                                temperature=temperature,
+                                repetition_penalty=repetition_penalty,
+                                ignore_eos=ignore_eos,
+                                do_preprocess=do_preprocess,
+                                **kwargs)
 
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -100,7 +157,7 @@ class AsyncEngine:
         return self.gens_set.pop()
 
     def batch_infer(self,
-                    prompts: List[str],
+                    prompts: Union[List[str], str],
                     request_output_len=512,
                     top_k=40,
                     top_p=0.8,
@@ -112,7 +169,7 @@ class AsyncEngine:
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str]): a batch of prompts
+            prompts (List[str] | str): a batch of prompts
             request_output_len (int): output token nums
             top_k (int): The number of the highest probability vocabulary
               tokens to keep for top-k-filtering
@@ -125,6 +182,8 @@ class AsyncEngine:
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages.
         """
+        input_str = isinstance(prompts, str)
+        prompts = [prompts] if input_str else prompts
         assert isinstance(prompts, List), 'prompts should be a list'
         batch_size = len(prompts)
         outputs = [''] * batch_size
@@ -154,6 +213,7 @@ class AsyncEngine:
                 *[_inner_call(i, generators[i]) for i in range(batch_size)])
 
         self.loop.run_until_complete(gather())
+        outputs = outputs[0] if input_str else outputs
         return outputs
 
     async def generate(
