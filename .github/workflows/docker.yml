@@ -34,7 +34,6 @@ jobs:
     env:
       TAG_PREFIX: "openmmlab/lmdeploy"
       TAG: "openmmlab/lmdeploy:latest"
-      REPO_REF: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
