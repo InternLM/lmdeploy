@@ -18,8 +18,9 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
     CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
-    EmbeddingsRequest, ErrorResponse, GenerateRequest, GenerateResponse,
-    ModelCard, ModelList, ModelPermission, UsageInfo)
+    EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
+    GenerateRequest, GenerateResponse, ModelCard, ModelList, ModelPermission,
+    UsageInfo)
 
 
 class VariableInterface:
@@ -391,6 +392,37 @@ async def create_embeddings(request: EmbeddingsRequest,
     """Creates embeddings for the text."""
     return create_error_response(HTTPStatus.BAD_REQUEST,
                                  'Unsupported by turbomind.')
+
+
+@app.post('/v1/encode')
+async def encode(request: EncodeRequest, raw_request: Request = None):
+    """Encode prompts.
+
+    The request should be a JSON object with the following fields:
+    - input: the prompt to be encoded. In str or List[str] format.
+    - do_preprocess: whether do preprocess or not. Default to False.
+    - add_bos: True when it is the beginning of a conversation. False when it
+        is not. Default to True.
+    """
+
+    def encode(prompt: str, do_preprocess: bool, add_bos: bool):
+        if do_preprocess:
+            prompt = VariableInterface.async_engine.model.get_prompt(
+                prompt, sequence_start=add_bos)
+        input_ids = VariableInterface.async_engine.tokenizer.encode(
+            prompt, add_bos=add_bos)
+        return input_ids
+
+    if isinstance(request.input, str):
+        encoded = encode(request.input, request.do_preprocess, request.add_bos)
+        return EncodeResponse(input_ids=encoded, length=len(encoded))
+    else:
+        encoded, length = [], []
+        for prompt in request.input:
+            ids = encode(prompt, request.do_preprocess, request.add_bos)
+            encoded.append(ids)
+            length.append(len(ids))
+        return EncodeResponse(input_ids=encoded, length=length)
 
 
 @app.post('/generate',
