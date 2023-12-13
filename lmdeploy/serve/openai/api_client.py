@@ -47,8 +47,7 @@ class APIClient:
     def encode(self,
                input: Union[str, List[str]],
                do_preprocess: Optional[bool] = False,
-               add_bos: Optional[bool] = True,
-               **kwargs):
+               add_bos: Optional[bool] = True):
         """Encode prompts.
 
         Args:
