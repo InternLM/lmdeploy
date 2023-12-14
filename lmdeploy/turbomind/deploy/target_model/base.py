@@ -144,7 +144,10 @@ class BaseOutputModel(ABC):
             tensor.contiguous().cpu().numpy().tofile(path)
 
         if self.to_file:
+            weight_type = self.cfg.weight_type
             if param.dtype in [torch.float]:
+                param = param.half()
+            if weight_type == 'fp16' and param.dtype == torch.bfloat16:
                 param = param.half()
             tprint(name, param.shape)
             _tofile(param, osp.join(self.out_dir, name))

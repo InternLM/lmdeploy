@@ -121,6 +121,15 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
     MODEL_NAME_MAP = {'qwen': 'bf16'}
     model_name = model_name.split('-')[0]
 
+    def _fix_device_support(output_format):
+        """fix device support."""
+        if output_format == 'bf16':
+            if not torch.cuda.is_bf16_supported():
+                # device does not support bf16
+                print('Device does not support bf16.')
+                output_format = 'fp16'
+        return output_format
+
     def _infer_output_format(config):
         """_infer_output_format."""
         torch_dtype = getattr(config, 'torch_dtype', None)
@@ -131,15 +140,11 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
             # get model name prefix
             updated_output_format = MODEL_NAME_MAP.get(model_name,
                                                        output_format)
-        if updated_output_format == 'bf16':
-            if not torch.cuda.is_bf16_supported():
-                # device does not support bf16
-                print('Device does not support bf16.')
-                updated_output_format = 'fp16'
-        return updated_output_format
+        return _fix_device_support(updated_output_format)
 
     if model_format != 'hf':
-        return MODEL_NAME_MAP.get(model_name, output_format)
+        updated_output_format = MODEL_NAME_MAP.get(model_name, output_format)
+        return _fix_device_support(updated_output_format)
     else:
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
