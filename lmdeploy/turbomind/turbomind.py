@@ -18,7 +18,7 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -115,7 +115,7 @@ class TurboMind:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
                                             'tokenizer')
             self.tokenizer = Tokenizer(tokenizer_model_path)
-            self.model_comm = self._from_workspace(model_path)
+            self.model_comm = self._from_workspace(model_path, **kwargs)
         else:
             self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
@@ -258,6 +258,7 @@ class TurboMind:
             input_model=input_model, cfg=cfg, to_file=False, out_dir='')
 
         config = copy.deepcopy(output_model.cfg.__dict__)
+        config.update(kwargs)  # runtime arguments has higher priority
         logger.warning(f'model_config:\n{json.dumps(config, indent=2)}')
         parser = ConfigParser()
         parser['llama'] = config
@@ -287,7 +288,7 @@ class TurboMind:
 
         return model_comm
 
-    def _from_workspace(self, model_path: str):
+    def _from_workspace(self, model_path: str, **kwargs):
         """Load model which is converted by `lmdeploy convert`"""
         ini_path = osp.join(model_path, 'triton_models', 'weights',
                             'config.ini')
@@ -309,8 +310,17 @@ class TurboMind:
 
         # create model
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
+        parser = ConfigParser()
+        parser.read(osp.join(weight_dir, 'config.ini'))
+        for key, value in kwargs.items():
+            parser.set('llama', key, str(value))  # runtime has higher priority
+        with io.StringIO() as ss:
+            parser.write(ss)
+            ss.seek(0)
+            config = ss.read()
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             weight_dir,
+            config,
             tensor_para_size=self.gpu_count,
             data_type=self.data_type)
 
@@ -350,6 +360,14 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
+        if model_name is None:  # try fuzzy matching to get a model_name
+            potential_names = best_match_model(pretrained_model_name_or_path)
+            if potential_names is None and \
+                    model_source == ModelSource.HF_MODEL:
+                logger.warning('Please input a model_name')
+            else:
+                model_name = potential_names[0]
+                logger.warning(f'model_name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
