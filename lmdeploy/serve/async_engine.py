@@ -36,7 +36,6 @@ class AsyncEngine:
         self.id2step = {}
         self.id2generator = {}
         self.loop = asyncio.get_event_loop()
-        self.special_gen = self.tm_model.create_instance()
         self.gens_set = set()
         for i in range(instance_num):
             self.gens_set.add(self.tm_model.create_instance())
@@ -44,8 +43,7 @@ class AsyncEngine:
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         input_ids = [self.tm_model.eos_id]
-        stop_generator = self.id2generator.get(str(session_id),
-                                               self.special_gen)
+        stop_generator = self.tm_model.create_instance()
         for outputs in stop_generator.stream_infer(session_id,
                                                    input_ids,
                                                    request_output_len=0,
@@ -60,8 +58,7 @@ class AsyncEngine:
     def end_session(self, session_id: int):
         """Clear a session by a session_id."""
         input_ids = [self.tm_model.eos_id]
-        end_generator = self.id2generator.get(str(session_id),
-                                              self.special_gen)
+        end_generator = self.tm_model.create_instance()
         for outputs in end_generator.stream_infer(session_id,
                                                   input_ids,
                                                   request_output_len=0,
@@ -94,10 +91,12 @@ class AsyncEngine:
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
         if stop:
-            return self.id2generator.get(str(session_id), self.special_gen)
+            return self.tm_model.create_instance()
         while self.gens_set == set():
             await asyncio.sleep(0)
-        return self.gens_set.pop()
+        generator = self.gens_set.pop()
+        self.id2generator[str(session_id)] = generator
+        return generator
 
     def batch_infer(self,
                     prompts: List[str],
@@ -214,7 +213,6 @@ class AsyncEngine:
                 self.end_session(session_id)
         else:
             generator = await self.get_generator(stop, session_id)
-            self.id2generator[str(session_id)] = generator
             with self.safe_run(session_id):
                 response_size = 0
                 async for outputs in generator.async_stream_infer(
