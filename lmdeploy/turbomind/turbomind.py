@@ -570,8 +570,6 @@ class TurboMindInstance:
                 input_embeddings = [[x.astype(np.float16) for x in y]
                                     for y in input_embeddings]
 
-            embedding_counts = torch.IntTensor(
-                [len(embs) for embs in input_embeddings])
             input_embeddings = [[torch.from_numpy(x).squeeze() for x in y]
                                 for y in input_embeddings]
             input_embeddings = [torch.cat(x) for x in input_embeddings]
@@ -579,13 +577,17 @@ class TurboMindInstance:
             input_embeddings = input_embeddings.reshape(
                 input_embeddings.shape[0], -1).view(torch.int8)
             embedding_begins = [torch.IntTensor(x) for x in embedding_begins]
-            embedding_begins = pad_sequence(embedding_begins, batch_first=True)
+            embedding_begins = pad_sequence(embedding_begins,
+                                            batch_first=True,
+                                            padding_value=-1)
             embedding_ends = [torch.IntTensor(x) for x in embedding_ends]
-            embedding_ends = pad_sequence(embedding_ends, batch_first=True)
+            embedding_ends = pad_sequence(embedding_ends,
+                                          batch_first=True,
+                                          padding_value=-1)
+            input_embedding_ranges = torch.stack(
+                [embedding_begins, embedding_ends], dim=2)
             inputs['input_embeddings'] = input_embeddings
-            inputs['embedding_counts'] = embedding_counts
-            inputs['embedding_begins'] = embedding_begins
-            inputs['embedding_ends'] = embedding_ends
+            inputs['input_embedding_ranges'] = input_embedding_ranges
 
         if ignore_eos:
             stop_words = None

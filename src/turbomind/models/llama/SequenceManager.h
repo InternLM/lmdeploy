@@ -35,8 +35,7 @@ struct Sequence {
 
     // embedding data
     mutable std::vector<std::vector<std::byte>> input_embeddings;
-    mutable std::vector<int>                    embedding_begins;
-    mutable std::vector<int>                    embedding_ends;
+    mutable std::vector<std::pair<int, int>>    input_embedding_ranges;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 

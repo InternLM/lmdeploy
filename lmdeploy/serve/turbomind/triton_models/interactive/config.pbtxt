@@ -66,22 +66,9 @@ input [
     optional: true
   },
   {
-    name: "embedding_counts"
+    name: "input_embedding_ranges"
     data_type: TYPE_UINT32
-    dims: [ 1 ]
-    reshape: { shape: [ ] }
-    optional: true
-  },
-  {
-    name: "embedding_begins"
-    data_type: TYPE_UINT32
-    dims: [ -1 ]
-    optional: true
-  },
-  {
-    name: "embedding_ends"
-    data_type: TYPE_UINT32
-    dims: [ -1 ]
+    dims: [ -1, 2 ]
     optional: true
   },
   {

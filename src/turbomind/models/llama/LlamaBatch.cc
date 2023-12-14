@@ -66,14 +66,13 @@ void DropEmbeddings(const Sequence& seq)
     int    num_emb = seq.input_embeddings.size();
     size_t sz      = num_emb;
     for (; sz >= 1; sz--) {
-        if (seq.embedding_ends[sz - 1] <= seq_len) {
+        if (seq.input_embedding_ranges[sz - 1].second <= seq_len) {
             break;
         }
     }
     // should we keep part of embedding?
     seq.input_embeddings.resize(sz);
-    seq.embedding_begins.resize(sz);
-    seq.embedding_ends.resize(sz);
+    seq.input_embedding_ranges.resize(sz);
 }
 
 template<typename T>
@@ -276,47 +275,53 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         }
 
         // copy input embeddings
-        if (r->inputs[rank_].isExist("embedding_counts")) {
-            int        emb_count    = r->inputs[rank_].getVal<int>("embedding_counts");
+        if (r->inputs[rank_].isExist("input_embedding_ranges")) {
+            const auto range_tensor = r->inputs[rank_].at("input_embedding_ranges");
             const auto emb_tensor   = r->inputs[rank_].at("input_embeddings");
-            const auto begin_tensor = r->inputs[rank_].at("embedding_begins");
-            const auto end_tensor   = r->inputs[rank_].at("embedding_ends");
-            const int* begin        = begin_tensor.getPtr<int>();
-            const int* end          = end_tensor.getPtr<int>();
+            const int* ranges       = range_tensor.getPtr<int>();
 
-            auto check_embeddings = [&]() {
-                if (emb_count <= 0 || begin_tensor.shape != end_tensor.shape || emb_tensor.shape.size() != 2) {
+            auto check_embeddings = [&](int& num_valid_embeddings) {
+                if (range_tensor.shape.size() != 3 || range_tensor.shape[2] % 2 != 0) {
                     return false;
                 }
-                int emb_len = 0;
-                for (size_t i = 0; i < emb_count; i++) {
-                    emb_len += (end[i] - begin[i]);
-                    if (begin[i] < 0 || end[i] < 0 || begin[i] >= end[i] || end[i] > input_length
-                        || emb_len > input_length
-                        || emb_len * model_->hidden_units_ * sizeof(T) > emb_tensor.shape[1]) {
+                int embedding_count  = range_tensor.shape[1];
+                int embedding_length = 0;
+                int pre_end          = -1;
+
+                for (size_t i = 0; i < embedding_count; i++) {
+                    int begin = ranges[i * 2];
+                    int end   = ranges[i * 2 + 1];
+                    embedding_length += (end - begin);
+                    if (begin < 0 || end < 0) {
+                        break;
+                    }
+                    if (begin >= end || end > input_length || begin < pre_end
+                        || embedding_length * model_->hidden_units_ * sizeof(T) > emb_tensor.shape[1]) {
                         return false;
                     }
+                    pre_end              = end;
+                    num_valid_embeddings = i + 1;
                 }
                 return true;
             };
 
-            if (!check_embeddings()) {
+            int num_valid_embeddings = 0;
+            if (!check_embeddings(num_valid_embeddings)) {
                 TM_LOG_WARNING("[ImageFeature] Skip invalid input embeddings, id = %ld, input_length = %d, "
-                               "input embeddings = %s, embedding_counts = %d, begins = %s, ends = %s",
+                               "input embeddings = %s, range_tensor = %s",
                                (long)seq.id,
                                input_length,
                                emb_tensor.toString().c_str(),
-                               emb_count,
-                               begin_tensor.toString().c_str(),
-                               end_tensor.toString().c_str());
+                               range_tensor.toString().c_str());
             }
             else {
                 char* emb_tensor_ptr = emb_tensor.getPtr<char>();
-                for (size_t i = 0; i < emb_count; i++) {
-                    size_t count = (end[i] - begin[i]) * model_->hidden_units_ * sizeof(T);
+                for (size_t i = 0; i < num_valid_embeddings; i++) {
+                    int    begin = ranges[i * 2];
+                    int    end   = ranges[i * 2 + 1];
+                    size_t count = (end - begin) * model_->hidden_units_ * sizeof(T);
                     seq.input_embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
-                    seq.embedding_begins.emplace_back(begin[i] + seq.tokens.size());
-                    seq.embedding_ends.emplace_back(end[i] + seq.tokens.size());
+                    seq.input_embedding_ranges.emplace_back(begin + seq.tokens.size(), end + seq.tokens.size());
                     emb_tensor_ptr += count;
                 }
             }
