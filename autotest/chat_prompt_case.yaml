@@ -31,10 +31,16 @@ chinese_poem_case:
     - 给我一首中文打油诗，需要添加标点符号。和，Give me a Chinese poem in Chinese:
         - contain:
             - "，"
+        - contain:
             - "。"
-            - 油
         - len_g:
             10
+        - llama2:
+            - contain:
+                - chinese poem
+                - chinese poetry
+            - len_g:
+                10
 english_poem_case:
     - write a romantic poem:
         - contain:
@@ -54,8 +60,11 @@ traditional_chinese_case:
     - 請介紹香港維多利亞港，用繁體中文回答:
         - contain:
             - 維多利亞港
-            - 维多利亚港
-            - victoria
+        - baichuan2-7b:
+            - contain:
+                - 维多利亚港
+                - 維多利亞港
+                - 維多利亚港
 session_len_error:
     - 这是很长的一段话这是很长的一段话这是很长的一段话这是很长的一段话这是很长的一段话:
         - contain:

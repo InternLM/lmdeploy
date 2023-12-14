@@ -10,52 +10,43 @@ import pytest
 @pytest.mark.CodeLlama_7b_Instruct_hf
 @allure.story('CodeLlama-7b-Instruct-hf')
 def future_test_quantization_CodeLlama_7b_Instruct_hf(config):
-    result = quantization(config, 'CodeLlama-7b-Instruct-hf-inner-w4',
-                          'CodeLlama-7b-Instruct-hf')
-    assert result.get('success'), result.get('msg')
+    quantization(config, 'CodeLlama-7b-Instruct-hf-inner-w4',
+                 'CodeLlama-7b-Instruct-hf')
 
 
 @pytest.mark.quantization
 @pytest.mark.llama_2_7b_chat
 @allure.story('llama-2-7b-chat')
 def test_quantization_llama_2_7b_chat(config):
-    result = quantization(config, 'llama-2-7b-chat-inner-w4',
-                          'llama-2-7b-chat')
-    assert result.get('success'), result.get('msg')
+    quantization(config, 'llama-2-7b-chat-inner-w4', 'llama-2-7b-chat')
 
 
 @pytest.mark.quantization
 @pytest.mark.internlm_chat_20b
 @allure.story('internlm-chat-20b')
 def test_quantization_internlm_chat_20b(config):
-    result = quantization(config, 'internlm-chat-20b-inner-w4',
-                          'internlm-chat-20b')
-    assert result.get('success'), result.get('msg')
+    quantization(config, 'internlm-chat-20b-inner-w4', 'internlm-chat-20b')
 
 
 @pytest.mark.quantization
 @pytest.mark.Qwen_14B_Chat
 @allure.story('Qwen-14B-Chat')
 def test_quantization_Qwen_14B_Chat(config):
-    result = quantization(config, 'Qwen-14B-Chat-inner-w4', 'Qwen-14B-Chat')
-    assert result.get('success'), result.get('msg')
+    quantization(config, 'Qwen-14B-Chat-inner-w4', 'Qwen-14B-Chat')
 
 
 @pytest.mark.quantization
 @pytest.mark.Baichuan2_7B_Chat
 @allure.story('Baichuan2-7B-Chat')
 def test_quantization_Baichuan2_7B_Chat(config):
-    result = quantization(config, 'Baichuan2-7B-Chat-inner-w4',
-                          'Baichuan2-7B-Chat')
-    assert result.get('success'), result.get('msg')
+    quantization(config, 'Baichuan2-7B-Chat-inner-w4', 'Baichuan2-7B-Chat')
 
 
 @pytest.mark.quantization
 @pytest.mark.Qwen_7B_Chat
 @allure.story('Qwen-7B-Chat')
 def test_quantization_Qwen_7B_Chat(config):
-    result = quantization(config, 'Qwen-7B-Chat-inner-w4', 'Qwen-7B-Chat')
-    assert result.get('success'), result.get('msg')
+    quantization(config, 'Qwen-7B-Chat-inner-w4', 'Qwen-7B-Chat')
 
 
 def quantization(config, w4_model_name, origin_model_name):
@@ -122,4 +113,4 @@ def quantization(config, w4_model_name, origin_model_name):
 
     allure.attach.file(quantization_log,
                        attachment_type=allure.attachment_type.TEXT)
-    return {'success': result, 'msg': getParamsRes.stderr}
+    assert result, getParamsRes.stderr

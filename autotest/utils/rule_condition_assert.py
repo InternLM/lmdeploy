@@ -1,8 +1,15 @@
-def assert_result(input, rule_condition):
+def assert_result(input, rule_condition, model_name):
     input = input.lower()
     for dict in rule_condition:
         if dict is None:
             return True, ''
+
+        for rule in dict:
+            operator = list(rule.keys())[0]
+            value = list(rule.values())[0]
+            if model_name == operator:
+                dict = value
+
         for rule in dict:
             operator = list(rule.keys())[0]
             value = list(rule.values())[0]

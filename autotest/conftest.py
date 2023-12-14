@@ -33,10 +33,19 @@ def restful_case_config(request):
     return case_config
 
 
-@pytest.fixture(scope='session')
-def get_restful_case_List(request, case_config):
-    case_path = os.path.join(request.config.rootdir, 'chat_prompt_case.yaml')
-    print(case_path)
+def _init_case_list():
+    case_path = os.path.join('autotest/chat_prompt_case.yaml')
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-    return case_config
+
+    global global_case_List
+    global_case_List = list(case_config.keys())
+
+
+def _init_restful_case_list():
+    case_path = os.path.join('autotest/chat_prompt_case.yaml')
+    with open(case_path) as f:
+        case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+
+    global global_restful_case_List
+    global_restful_case_List = list(case_config.keys())

@@ -8,13 +8,13 @@ def commandLineTest(config, case, case_info, model, type, extra):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
-        cmd = ['lmdeploy serve api_client ' + extra + ' --temperture 0.5']
+        cmd = ['lmdeploy serve api_client ' + extra + ' --temperature 0']
     elif type == 'triton_client':
-        cmd = ['lmdeploy serve triton_client ' + extra + ' --temperture 0.5']
+        cmd = ['lmdeploy serve triton_client ' + extra + ' --temperature 0']
     else:
         cmd = [
-            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model +
-            ' --temperture 0.5'
+            'CUDA_VISIBLE_DEVICES=6 lmdeploy chat turbomind ' + dst_path +
+            '/workspace_' + model + ' --temperature 0'
         ]
 
     if case == 'session_len_error':
@@ -27,7 +27,7 @@ def hfCommandLineTest(config, case, case_info, model_case, model_name):
 
     cmd = [
         'lmdeploy chat turbomind ' + model_path + '/' + model_case +
-        ' --model-name ' + model_name + ' --temperture 0.5'
+        ' --model-name ' + model_name + ' --temperature 0'
     ]
 
     if case == 'session_len_error':
@@ -40,7 +40,7 @@ def pytorchCommandLineTest(config, case, case_info, model_case):
 
     cmd = [
         'lmdeploy chat torch ' + model_path + '/' + model_case +
-        ' --max_new_tokens 2048 --temperture 0.5 --top_p 0.95 --seed 0'
+        ' --max_new_tokens 2048 --temperature 0 --top_p 0.95 --seed 0'
     ]
 
     if case == 'session_len_error':
@@ -54,7 +54,7 @@ def deepspeedCommandLineTest(config, case, case_info, model_case):
     cmd = [
         'deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat ' + model_path +
         '/' + model_case +
-        ' --max_new_tokens 64 --temperture 0.8 --top_p 0.95 --seed 0'
+        ' --max_new_tokens 64 --temperature 0 --top_p 0.95 --seed 0'
     ]
 
     if case == 'session_len_error':
@@ -64,6 +64,8 @@ def deepspeedCommandLineTest(config, case, case_info, model_case):
 
 def commandTest(config, cmd, model, case_info, need_extract_output):
     log_path = config.get('log_path')
+    model_map = config.get('model_map')
+    model_name = model_map.get(model)
 
     chat_log = os.path.join(log_path, 'chat_' + model + '.log')
 
@@ -73,6 +75,7 @@ def commandTest(config, cmd, model, case_info, need_extract_output):
     result = True
 
     file.writelines('commondLine: ' + ' '.join(cmd) + '\n')
+    file.writelines('model_name: ' + model_name)
 
     spliter = '\n\n'
     if model == 'CodeLlama-7b-Instruct-hf':
@@ -111,7 +114,8 @@ def commandTest(config, cmd, model, case_info, need_extract_output):
                 output = extract_output(outputDialogs[index], model)
             else:
                 output = outputDialogs[index]
-            case_result, reason = assert_result(output, prompt_detail.values())
+            case_result, reason = assert_result(output, prompt_detail.values(),
+                                                model_name)
             file.writelines('prompt:' + list(prompt_detail.keys())[0] + '\n')
             file.writelines('output:' + output + '\n')
             file.writelines('result:' + str(case_result) + ',reason:' +

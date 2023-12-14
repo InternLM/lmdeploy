@@ -3,8 +3,8 @@ import subprocess
 from time import sleep
 
 import allure
+import conftest
 import pytest
-import yaml
 from utils.run_client_chat import commandLineTest
 from utils.run_restful_chat import interactiveTest, openAiChatTest
 
@@ -54,12 +54,12 @@ def prepare_environment(request, config):
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 
 
-def getList():
-    case_path = './autotest/restful_prompt_case.yaml'
-    with open(case_path) as f:
-        case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        del case_config['session_len_error']
-    return list(case_config.keys())
+conftest._init_restful_case_list()
+case_list = conftest.global_restful_case_List
+
+
+def getCaseList():
+    return case_list
 
 
 @pytest.mark.restful_api
@@ -72,16 +72,14 @@ class Test_restful:
         'port': 60006
     }],
                              indirect=True)
-    @pytest.mark.parametrize('usercase', getList())
+    @pytest.mark.parametrize('usercase', getCaseList())
     def test_restful_internlm_chat_7b(self, config, restful_case_config,
                                       usercase):
         model = 'internlm-chat-7b'
         port = 60006
 
-        result = run_all_step(config, usercase,
-                              restful_case_config.get(usercase), model, port)
-
-        assert result.get('success'), result.get('msg')
+        run_all_step(config, usercase, restful_case_config.get(usercase),
+                     model, port)
 
 
 def run_all_step(config, case, case_info, model, port):
@@ -114,4 +112,4 @@ def run_all_step(config, case, case_info, model, port):
     allure.attach.file(interactive_log,
                        attachment_type=allure.attachment_type.TEXT)
 
-    return {'success': result, 'msg': msg}
+    assert result, msg

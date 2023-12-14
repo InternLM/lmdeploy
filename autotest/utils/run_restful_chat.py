@@ -36,7 +36,8 @@ def openAiChatTest(config, case_info, model, url):
             file.writelines('output:' + output_content + '\n')
 
             case_result, reason = assert_result(output_content,
-                                                prompt_detail.values())
+                                                prompt_detail.values(),
+                                                model_name)
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
             if result is False:
@@ -80,7 +81,7 @@ def interactiveTest(config, case_info, model, url):
             file.writelines('output:' + output_content + '\n')
 
             case_result, reason = assert_result(output_content,
-                                                prompt_detail.values())
+                                                prompt_detail.values(), model)
             file.writelines('result:' + str(case_result) + ',reason:' +
                             reason + '\n')
             if result is False:
