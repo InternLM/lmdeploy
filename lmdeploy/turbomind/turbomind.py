@@ -360,11 +360,11 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
-        if model_name is None:  # try fuzzy matching to get a model_name
+        # try fuzzy matching to get a model_name
+        if model_name is None and model_source == ModelSource.HF_MODEL:
             potential_names = best_match_model(pretrained_model_name_or_path)
-            if potential_names is None and \
-                    model_source == ModelSource.HF_MODEL:
-                logger.warning('Please input a model_name')
+            if potential_names is None:
+                logger.warning(f'Please input a model_name for {model_source}')
             else:
                 model_name = potential_names[0]
                 logger.warning(f'model_name: {model_name}')
