@@ -9,10 +9,10 @@ The user can open the http url print by the following command in a browser.
 - **Please check the http url for the detailed api usage!!!**
 
 ```shell
-lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
 ```
 
-We provide four restful api in total. Three of them are in OpenAI format.
+We provide some RESTful APIs. Three of them are in OpenAI format.
 
 - /v1/chat/completions
 - /v1/models

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
+from typing import List, Optional
 
 
 class SubCliServe(object):
@@ -46,9 +46,10 @@ class SubCliServe(object):
 
     def api_server(self,
                    model_path: str,
+                   model_name: Optional[str] = None,
                    server_name: str = '0.0.0.0',
                    server_port: int = 23333,
-                   instance_num: int = 32,
+                   instance_num: int = 64,
                    tp: int = 1,
                    allow_origins: List[str] = ['*'],
                    allow_credentials: bool = True,
@@ -58,7 +59,21 @@ class SubCliServe(object):
         """Serve LLMs with restful api using fastapi.
 
         Args:
-            model_path (str): the path of the deployed model
+            model_path (str): the path of a model.
+                It could be one of the following options:
+                    - i) A local directory path of a turbomind model which is
+                        converted by `lmdeploy convert` command or
+                        download from ii) and iii).
+                    - ii) The model_id of a lmdeploy-quantized model hosted
+                        inside a model repo on huggingface.co, such as
+                        "InternLM/internlm-chat-20b-4bit",
+                        "lmdeploy/llama2-chat-70b-4bit", etc.
+                    - iii) The model_id of a model hosted inside a model repo
+                        on huggingface.co, such as "InternLM/internlm-chat-7b",
+                        "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                        and so on.
+            model_name (str): needed when model_path is a pytorch model on
+                huggingface.co, such as "InternLM/internlm-chat-7b"
             server_name (str): host ip for serving
             server_port (int): server port
             instance_num (int): number of instances of turbomind model
@@ -69,9 +84,10 @@ class SubCliServe(object):
             allow_headers (List[str]): a list of allowed HTTP headers for CORS
             kwargs (dict) extra params to init api server
         """
-        from lmdeploy.serve.openai.api_server import main as run_api_server
+        from lmdeploy.serve.openai.api_server import serve as run_api_server
 
         run_api_server(model_path,
+                       model_name=model_name,
                        server_name=server_name,
                        server_port=server_port,
                        instance_num=instance_num,

@@ -9,16 +9,13 @@ find_package(CUDAToolkit REQUIRED)
 add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
-        LlamaCacheManager.cc
         BlockManager.cc
         SequenceManager.cc
-        LlamaContextDecoder.cc
-        LlamaContextAttentionLayer.cc
-        LlamaDecoderSelfAttentionLayer.cc
-        LlamaDecoder.cc
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
+        unified_decoder.cc
+        unified_attention_layer.cc
         llama_kernels.cu
         llama_decoder_kernels.cu
         llama_utils.cu)

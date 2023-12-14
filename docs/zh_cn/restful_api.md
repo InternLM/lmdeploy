@@ -9,10 +9,10 @@
 重要的事情说三遍。
 
 ```shell
-lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
 ```
 
-我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。
+我们提供的 restful api，其中三个仿照 OpenAI 的形式。
 
 - /v1/chat/completions
 - /v1/models

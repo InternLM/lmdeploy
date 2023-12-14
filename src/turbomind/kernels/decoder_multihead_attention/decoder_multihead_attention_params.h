@@ -20,13 +20,11 @@ struct DecoderMultiHeadAttentionParams {
     T* __restrict__ v_bias;
 
     // sequence-level buffers
-    const int* __restrict__ per_sample_length;
+    const int* __restrict__ context_length;
     const bool* __restrict__ finished;
     const float* __restrict__ rope_theta;
 
     // kv cache
-    void** __restrict__ per_sample_k_cache;  // [H, S, D]
-    void** __restrict__ per_sample_v_cache;  // [H, S, D]
     size_t layer_offset;
 
     /// cache layout M,[N,H,x,D]

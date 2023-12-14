@@ -23,13 +23,15 @@ class CLI(object):
                 dst_path: str = './workspace',
                 tp: int = 1,
                 quant_path: str = None,
-                group_size: int = 0):
+                group_size: int = 0,
+                **kwargs):
         """Convert LLMs to lmdeploy format.
 
         Args:
             model_name (str): The name of the to-be-deployed model, such as
                 llama-7b, llama-13b, vicuna-7b and etc.
-            model_path (str): The directory path of the model
+            model_path (str): The directory path of the model or huggingface
+                repo_id like 'internlm/internlm-chat-20b'
             model_format (str): the format of the model, should choose from
                 ['llama', 'hf', 'awq', None]. 'llama' stands for META's llama
                 format, 'hf' means huggingface llama format, and 'awq' means
@@ -43,6 +45,7 @@ class CLI(object):
             quant_path (str): Path of the quantized model, which can be None.
             group_size (int): A parameter used in AWQ to quantize fp16 weights
                 to 4 bits.
+            kwargs (dict): other params for convert
         """
         from lmdeploy.turbomind.deploy.converter import main as convert
 
@@ -53,7 +56,8 @@ class CLI(object):
                 dst_path=dst_path,
                 tp=tp,
                 quant_path=quant_path,
-                group_size=group_size)
+                group_size=group_size,
+                **kwargs)
 
     def list(self, engine: str = 'turbomind'):
         """List supported model names.

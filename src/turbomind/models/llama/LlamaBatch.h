@@ -9,6 +9,7 @@
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -28,7 +29,6 @@ struct BatchState {
     float* h_rope_theta;
 
     std::vector<int> seq_len_limit;
-    std::vector<int> is_swap_in;
 
     std::vector<const Sequence*>          sequences;
     std::vector<std::shared_ptr<Request>> requests;
@@ -41,6 +41,26 @@ struct BatchState {
 
 template<typename T>
 class LlamaV2;
+
+struct GenerationState {
+    int max_init_ctx_len;
+    int step;
+
+    int sum_seq_len;
+    int max_seq_len;
+
+    int partial;
+    int partial_context_legnth;
+
+    std::vector<uint64_t> unique_ids;
+
+    int max_input_count1;
+    int max_input_count2;
+
+    std::deque<int> min_input_count;
+
+    int finished_count;
+};
 
 template<typename T>
 class LlamaBatch {
@@ -58,35 +78,24 @@ public:
 
     void ProcessInferRequests(const Requests& requests);
 
-    [[nodiscard]] bool Initialize();
+    void AdjustMaxInputCount(GenerationState&                    g,
+                             const std::vector<const Sequence*>& sequences,
+                             const std::vector<int>&             context_length);
 
-    void ContextDecode();
+    void Initialize(GenerationState& g);
 
-    struct GenerationState {
-        int max_init_ctx_len;
-        int step;
-        int sum_seq_len;
-        int max_seq_len;
-    };
+    void InitializeSampling(const GenerationState& g);
 
-    void InitializeSampling();
+    [[nodiscard]] bool Forward(GenerationState& g, int iter);
 
-    GenerationState InitializeGeneration();
-
-    [[nodiscard]] bool Generate(GenerationState& g);
-
-    [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
+    [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
     void
     OutputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
 
-    explicit LlamaBatch(int                              max_batch_size,
-                        int                              max_context_token_num,
-                        int                              session_len,
-                        std::unique_ptr<SequenceManager> sequence_manager,
-                        LlamaV2<T>*                      llama);
+    explicit LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model);
 
     ~LlamaBatch()
     {
@@ -177,7 +186,7 @@ private:
 private:
     const int  max_batch_size_;
     const int  max_context_token_num_;
-    const int  session_len_;
+    int        session_len_;
     const int  rank_;
     const bool debug_;
     const int  step_length_;
@@ -201,6 +210,7 @@ private:
     // lengths
     int* input_length_buf_{};    // input + cache missed length
     int* context_length_buf_{};  // history length + input_length
+    int* init_context_length_{};
     // temp buffers used for block->linear kv-cache conversion
     T*     tmp_k_cache_buf_{};
     T*     tmp_v_cache_buf_{};
@@ -227,13 +237,6 @@ private:
     uint32_t* seq_limit_len_{};
     int*      h_end_ids_buf_{};
     int*      d_end_ids_buf_{};
-
-    int** request_output_ids_ptrs_{};
-    int*  request_output_ids_lens_{};
-    int** request_seqlen_ptrs_{};
-    int** h_request_output_ids_ptrs_{};
-    int*  h_request_output_ids_lens_{};
-    int** h_request_seqlen_ptrs_{};
 
     // pinned buffers
     int*       h_input_ids_buf_{};
@@ -293,6 +296,10 @@ private:
     bool                    output_stop_token_{false};
 
     int* h_output_ids_{};
+
+    const int num_tokens_per_iter_;
+    const int extra_tokens_per_iter_;
+    const int max_prefill_iters_;
 };
 
 }  // namespace turbomind
