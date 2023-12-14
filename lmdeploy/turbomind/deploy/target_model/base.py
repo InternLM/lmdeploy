@@ -83,6 +83,16 @@ class TurbomindModelConfig:
         return True
 
 
+_WEIGHT_DTYPE_MAP = dict(
+    w4=torch.float16,
+    int4=torch.float16,
+    half=torch.float16,
+    fp16=torch.float16,
+    fp32=torch.float16,
+    bf16=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+)
+
+
 class BaseOutputModel(ABC):
     """Base output model."""
 
@@ -144,11 +154,9 @@ class BaseOutputModel(ABC):
             tensor.contiguous().cpu().numpy().tofile(path)
 
         if self.to_file:
-            weight_type = self.cfg.weight_type
-            if param.dtype in [torch.float]:
-                param = param.half()
-            if weight_type == 'fp16' and param.dtype == torch.bfloat16:
-                param = param.half()
+            torch_type = _WEIGHT_DTYPE_MAP.get(self.cfg.weight_type,
+                                               torch.float16)
+            param = param.to(torch_type)
             tprint(name, param.shape)
             _tofile(param, osp.join(self.out_dir, name))
         elif len(self.tm_params) > 0:

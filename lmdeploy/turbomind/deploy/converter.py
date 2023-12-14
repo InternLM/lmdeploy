@@ -118,7 +118,7 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
                          output_format: str):
     """Update output format according to model info."""
     TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16'}
-    MODEL_NAME_MAP = {'qwen': 'bf16'}
+    MODEL_NAME_MAP = {'qwen': 'bf16', 'llama': 'half'}
     model_name = model_name.split('-')[0]
 
     def _fix_device_support(output_format):
@@ -142,7 +142,7 @@ def update_output_format(model_name: str, model_format: str, model_path: str,
                                                        output_format)
         return _fix_device_support(updated_output_format)
 
-    if model_format != 'hf':
+    if model_format in MODEL_NAME_MAP:
         updated_output_format = MODEL_NAME_MAP.get(model_name, output_format)
         return _fix_device_support(updated_output_format)
     else:
