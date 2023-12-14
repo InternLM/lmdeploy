@@ -126,7 +126,11 @@ public:
 
         fwd_params.blockmask = reinterpret_cast<void*>(params.mask);
 
+#ifdef ENABLE_BF16
         fwd_params.is_bf16   = std::is_same<T, __nv_bfloat16>::value;
+#else
+        fwd_params.is_bf16   = false;
+#endif
         fwd_params.is_causal = true;
 
         fwd_params.q_enable_seqlen = params.layout_q.use_seqlens;

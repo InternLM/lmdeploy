@@ -379,7 +379,7 @@ PYBIND11_MODULE(_turbomind, m)
                     model->setFfiLock(gil_control);
                     return model;
                 }
-                if (data_type == "bf16") {
+                else if (data_type == "bf16") {
 #ifdef ENABLE_BF16
                     auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
