@@ -17,18 +17,25 @@ def openAiChatTest(config, case_info, model, url):
     result = True
 
     api_client = APIClient(url)
-    model_name = model
+    model_name = api_client.available_models[0]
 
     messages = []
     msg = ''
     for prompt_detail in case_info:
+        if result is False:
+            break
         prompt = list(prompt_detail.keys())[0]
-        new_prompt = {'role': 'user', 'content': prompt}
-        messages.append(new_prompt)
+        messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
         for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=messages):
+                                                     messages=messages,
+                                                     temperature=0.0):
+            if output.get('code') is not None and output.get('code') != 0:
+                file.writelines('output error:' + output.get('message') + '\n')
+                msg = output.get('message')
+                result = False
+                break
             output_message = output.get('choices')[0].get('message')
             messages.append(output_message)
 
@@ -60,10 +67,8 @@ def interactiveTest(config, case_info, model, url):
     file.writelines('available_models:' +
                     ','.join(api_client.available_models) + '\n')
 
-    # 定义包含所有可能字符的字符集合
+    # Randomly generate 6 characters and concatenate them into a string.
     characters = string.digits
-
-    # 随机生成6个字符并拼接成字符串
     random_chars = ''.join(random.choice(characters) for i in range(6))
 
     messages = []
@@ -76,7 +81,8 @@ def interactiveTest(config, case_info, model, url):
 
         for output in api_client.chat_interactive_v1(prompt=prompt,
                                                      interactive_mode=True,
-                                                     session_id=random_chars):
+                                                     session_id=random_chars,
+                                                     temperature=0.0):
             output_content = output.get('text')
             file.writelines('output:' + output_content + '\n')
 
@@ -89,9 +95,3 @@ def interactiveTest(config, case_info, model, url):
             result = result & case_result
     file.close()
     return result, interactive_log, msg
-
-
-if __name__ == '__main__':
-    url = 'http://7:60006'
-    config = {'log_path': '/home/zhulin'}
-    openAiChatTest(config, 'test', url)

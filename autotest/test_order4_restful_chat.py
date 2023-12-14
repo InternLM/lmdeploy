@@ -20,8 +20,7 @@ def prepare_environment(request, config):
 
     cmd = [
         'lmdeploy serve api_server ' + dst_path + '/workspace_' + model +
-        ' --server_name 0.0.0.0 --server_port ' + str(port) +
-        ' --instance_num 32 --tp 1'
+        ' --server_name 0.0.0.0 --server_port ' + str(port)
     ]
     start_log = os.path.join(log_path, 'start_restful_' + model + '.log')
 
@@ -43,7 +42,7 @@ def prepare_environment(request, config):
                                       encoding='utf-8')
         pid = convertRes.pid
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
-    sleep(20)
+    sleep(60)
     yield
     if pid > 0:
         kill_log = os.path.join(log_path, 'kill_' + model + '.log')

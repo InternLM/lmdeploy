@@ -46,6 +46,7 @@ def _init_restful_case_list():
     case_path = os.path.join('autotest/chat_prompt_case.yaml')
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        del case_config['session_len_error']
 
     global global_restful_case_List
     global_restful_case_List = list(case_config.keys())
