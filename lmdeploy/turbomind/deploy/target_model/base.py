@@ -84,9 +84,7 @@ class TurbomindModelConfig:
 
 
 _WEIGHT_DTYPE_MAP = dict(
-    w4=torch.float16,
     int4=torch.float16,
-    half=torch.float16,
     fp16=torch.float16,
     fp32=torch.float16,
     bf16=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
