@@ -54,7 +54,6 @@ lmdeploy lite kv_qparams \
 
 - quant_policy 设置为 4。表示打开 kv_cache int8
 
-
 ### **第四步**
 
 测试聊天效果
