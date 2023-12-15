@@ -11,6 +11,7 @@
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include <stdexcept>
 
 namespace py = pybind11;
 namespace ft = turbomind;
@@ -22,12 +23,6 @@ PYBIND11_MAKE_OPAQUE(TensorVector);
 using TensorMap = std::unordered_map<std::string, triton::Tensor>;
 PYBIND11_MAKE_OPAQUE(TensorMap);
 static const char kDlTensorCapsuleName[] = "dltensor";
-
-template<typename T>
-std::shared_ptr<T> make_shared_nodel(T data)
-{
-    return std::shared_ptr<T>(&data, [](T*) {});
-}
 
 DLDevice getDLDevice(triton::Tensor& tensor)
 {
@@ -46,6 +41,7 @@ DLDevice getDLDevice(triton::Tensor& tensor)
             break;
         case triton::MEMORY_CPU_PINNED:
             device.device_type = DLDeviceType::kDLCUDAHost;
+            break;
         case triton::MEMORY_GPU:
             device.device_type = DLDeviceType::kDLCUDA;
             break;
@@ -132,12 +128,11 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
 triton::MemoryType getMemoryType(DLDevice device)
 {
     switch (device.device_type) {
-        case DLDeviceType::kDLCPU:
-            return triton::MemoryType::MEMORY_CPU;
         case DLDeviceType::kDLCUDAHost:
             return triton::MemoryType::MEMORY_CPU_PINNED;
         case DLDeviceType::kDLCUDA:
             return triton::MemoryType::MEMORY_GPU;
+        case DLDeviceType::kDLCPU:
         default:
             return triton::MemoryType::MEMORY_CPU;
     }
@@ -289,17 +284,21 @@ PYBIND11_MODULE(_turbomind, m)
                 DLManagedTensor* dlmt =
                     static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
                 auto src = DLManagedTensorToTritonTensor(dlmt);
-                if (self->type == triton::TYPE_FP16 || self->type == triton::TYPE_FP32
-                    || self->type == triton::TYPE_INT32) {
-                    auto num_element =
-                        std::accumulate(src->shape.begin(), src->shape.end(), 1LL, std::multiplies<int64_t>());
-                    auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
-                    ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
-                    cudaMemcpy(
-                        const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
-                }
-                else {
-                    ft::FT_CHECK(0);
+                switch (self->type) {
+                    case triton::TYPE_FP16:
+                    case triton::TYPE_FP32:
+                    case triton::TYPE_INT32:
+                    case triton::TYPE_BF16: {
+                        auto num_element =
+                            std::accumulate(src->shape.begin(), src->shape.end(), 1LL, std::multiplies<int64_t>());
+                        auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
+                        ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
+                        cudaMemcpy(
+                            const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
+                        break;
+                    }
+                    default:
+                        ft::FT_CHECK(0);
                 }
             },
             "tensor"_a)
@@ -379,6 +378,16 @@ PYBIND11_MODULE(_turbomind, m)
                         tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
                     model->setFfiLock(gil_control);
                     return model;
+                }
+                else if (data_type == "bf16") {
+#ifdef ENABLE_BF16
+                    auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
+                    model->setFfiLock(gil_control);
+                    return model;
+#else
+                    throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
+#endif
                 }
                 else {
                     auto model = std::make_shared<LlamaTritonModel<float>>(

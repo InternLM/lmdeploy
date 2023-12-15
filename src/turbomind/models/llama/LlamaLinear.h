@@ -31,6 +31,7 @@ public:
         switch (weight.type) {
             case WeightType::kFP16:
             case WeightType::kFP32:
+            case WeightType::kBF16:
                 forwardFp(output_data, input_data, batch_size, weight, type);
                 break;
             case WeightType::kINT4:
