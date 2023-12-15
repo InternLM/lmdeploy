@@ -42,7 +42,7 @@ If you want to create a test environment, you need to prepare the above content 
 
 The test cases cover the following functionalities:
 
-![image](https://github.com/InternLM/lmdeploy/assets/145004780/15a5e50f-4776-4440-8be1-330fca50620e)
+![image](https://github.com/InternLM/lmdeploy/assets/145004780/19737e19-5798-4be0-b809-119da4cc65e5)
 
 The relationship between functionalities and test cases is as follows:
 
@@ -55,15 +55,15 @@ The relationship between functionalities and test cases is as follows:
 
 The modules and models currently covered by the test cases are listed below:
 
-| Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat |
-| -------------------------------------------------------------------------- | ------------------ | ------- | ---------------- | ---------------- |
-| [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)     | No                 | Yes     | No               | Yes              |
-| [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)       | No                 | Yes     | Yes              | Yes              |
-| [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)     | Yes                | Yes     | Yes              | No               |
-| [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)                   | Yes                | Yes     | Yes              | No               |
-| [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)                 | Yes                | Yes     | Yes              | No               |
-| [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) | Yes                | Yes     | Yes              | No               |
-| [llama_2_7b_chat](https://huggingface.co/meta-llama/Llama-2-7b-chat)       | Yes                | Yes     | Yes              | No               |
+| Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat | cli command chat |
+| -------------------------------------------------------------------------- | ------------------ | ------- | ---------------- | ---------------- | ---------------- |
+| [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)     | No                 | Yes     | Yes              | No               | Yes              |
+| [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)       | No                 | Yes     | Yes              | No               | Yes              |
+| [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)     | Yes                | Yes     | Yes              | No               | Yes              |
+| [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)                   | Yes                | Yes     | Yes              | No               | Yes              |
+| [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)                 | Yes                | Yes     | Yes              | No               | Yes              |
+| [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) | Yes                | Yes     | Yes              | No               | Yes              |
+| [llama_2_7b_chat](https://huggingface.co/meta-llama/Llama-2-7b-chat)       | Yes                | Yes     | Yes              | No               | Yes              |
 
 ## How to add a testcase
 

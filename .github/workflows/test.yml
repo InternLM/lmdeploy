@@ -85,7 +85,9 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator flash-attn transformers==4.33.0
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0
+          wget  https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          pip install ./flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
