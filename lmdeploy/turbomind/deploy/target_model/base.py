@@ -152,9 +152,10 @@ class BaseOutputModel(ABC):
             tensor.contiguous().cpu().numpy().tofile(path)
 
         if self.to_file:
-            torch_type = _WEIGHT_DTYPE_MAP.get(self.cfg.weight_type,
-                                               torch.float16)
-            param = param.to(torch_type)
+            if torch.is_floating_point(param):
+                torch_type = _WEIGHT_DTYPE_MAP.get(self.cfg.weight_type,
+                                                   torch.float16)
+                param = param.to(torch_type)
             tprint(name, param.shape)
             _tofile(param, osp.join(self.out_dir, name))
         elif len(self.tm_params) > 0:
