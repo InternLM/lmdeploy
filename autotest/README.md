@@ -46,25 +46,25 @@ The test cases cover the following functionalities:
 
 The relationship between functionalities and test cases is as follows:
 
-| Function           | Test Case File              |
-| ------------------ | --------------------------- |
-| w4a16 quantization | test_order1_w4_quantization |
-| convert            | test_order2_convert         |
-| cli command chat   | test_order3_command_chat    |
-| hf command chat    | test_order3_hf_command_chat.py    |
-| restful_api chat   | test_order4_restful_chat    |
+| Function           | Test Case File                 |
+| ------------------ | ------------------------------ |
+| w4a16 quantization | test_order1_w4_quantization    |
+| convert            | test_order2_convert            |
+| cli command chat   | test_order3_command_chat       |
+| hf command chat    | test_order3_hf_command_chat.py |
+| restful_api chat   | test_order4_restful_chat       |
 
 The modules and models currently covered by the test cases are listed below:
 
-| Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat | hf command chat  |
-| -------------------------------------------------------------------------- | ------------------ | ------- | ---------------- | ---------------- | ---------------- |
-| [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)     | No                 | Yes     | Yes              | No               | Yes              |
-| [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)       | No                 | Yes     | Yes              | No               | Yes              |
-| [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)     | Yes                | Yes     | Yes              | No               | Yes              |
-| [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)                   | Yes                | Yes     | Yes              | No               | Yes              |
-| [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)                 | Yes                | Yes     | Yes              | No               | Yes              |
-| [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) | Yes                | Yes     | Yes              | No               | Yes              |
-| [llama_2_7b_chat](https://huggingface.co/meta-llama/Llama-2-7b-chat)       | Yes                | Yes     | Yes              | No               | Yes              |
+| Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat | hf command chat |
+| -------------------------------------------------------------------------- | ------------------ | ------- | ---------------- | ---------------- | --------------- |
+| [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)     | No                 | Yes     | Yes              | No               | Yes             |
+| [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)       | No                 | Yes     | Yes              | No               | Yes             |
+| [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)     | Yes                | Yes     | Yes              | No               | Yes             |
+| [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)                   | Yes                | Yes     | Yes              | No               | Yes             |
+| [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)                 | Yes                | Yes     | Yes              | No               | Yes             |
+| [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) | Yes                | Yes     | Yes              | No               | Yes             |
+| [llama_2_7b_chat](https://huggingface.co/meta-llama/Llama-2-7b-chat)       | Yes                | Yes     | Yes              | No               | Yes             |
 
 ## How to add a testcase
 
