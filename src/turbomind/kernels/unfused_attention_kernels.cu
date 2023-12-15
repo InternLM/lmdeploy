@@ -942,8 +942,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     if (rope_theta) {
         rotary_embedding_base = rope_theta[batch_idx];
     }
-
-    RotaryEmbedding<vec_size> rotary_emb(rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0});
+    // This whole kernel is no longer used, add `0.0f` to pass the complilation
+    RotaryEmbedding<vec_size> rotary_emb(rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0}, 0.0f);
     rotary_emb.apply((Array<T, vec_size>&)q);
 
     if (head_idx < kv_head_num) {

@@ -428,9 +428,9 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.rotary_embedding_dim    = size_per_head_;
     params.rotary_embedding_base   = params_.rotary_embedding_base;
     params.max_position_embeddings = params_.max_position_embeddings;
-    params.use_dynamic_ntk = params_.use_dynamic_ntk;
     // when dynamic_ntk is false, `rope_scaling_factor` refers to the linear scaling factor if it is not 0
-    params.scaling_factor = params_.rope_scaling_factor;
+    if (!params_.use_dynamic_ntk)
+        params.scaling_factor = params_.rope_scaling_factor;
     params.use_logn_attn = params_.use_logn_attn;
 
     params.partial_O = dc_workspace_;
