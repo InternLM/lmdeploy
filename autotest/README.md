@@ -16,15 +16,22 @@ Run pytest command line with case filtering through -m flag. eg: `-m internlm_ch
 pytest autotest -m internlm_chat_7b --clean-alluredir --alluredir=allure-results
 ```
 
-After the test cases are executed, you can generate the test report by using the following command. The generated report will be stored in `allure-reports`.
+If you need to generate reports and display report features, you need to install allure according to the [install documentation of allure](https://allurereport.org/docs/gettingstarted-installation/#install-via-the-system-package-manager-for-linux). You can also install it directly using the following command:
+
+
+
+```bash
+wget https://github.com/allure-framework/allure2/releases/download/2.25.0/allure_2.24.1-1_all.deb
+
+sudo apt-get install -y openjdk-8-jre-headless
+sudo dpkg -i ./allure_2.24.1-1_all.deb
+```
+
+Then generate the test report and view the corresponding HTML page by using the following command. The generated report will be stored in `allure-reports`.
 
 ```bash
 allure generate -c -o allure-reports
-```
 
-You can open the report and view the corresponding HTML page using the following command:
-
-```bash
 allure open ./allure-reports
 ```
 
@@ -47,7 +54,7 @@ The test cases cover the following functionalities:
 The relationship between functionalities and test cases is as follows:
 
 | Function           | Test Case File                 |
-| ------------------ | ------------------------------ |
+| :------------------: | :------------------------------: |
 | w4a16 quantization | test_order1_w4_quantization    |
 | convert            | test_order2_convert            |
 | cli command chat   | test_order3_command_chat       |
@@ -57,7 +64,7 @@ The relationship between functionalities and test cases is as follows:
 The modules and models currently covered by the test cases are listed below:
 
 | Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat | hf command chat |
-| -------------------------------------------------------------------------- | ------------------ | ------- | ---------------- | ---------------- | --------------- |
+| :--------------------------------------------------------------------------: | :------------------: | :-------: | :----------------: | :----------------: | :---------------: |
 | [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)     | No                 | Yes     | Yes              | No               | Yes             |
 | [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)       | No                 | Yes     | Yes              | No               | Yes             |
 | [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)     | Yes                | Yes     | Yes              | No               | Yes             |
