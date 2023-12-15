@@ -510,5 +510,8 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
 
 template class LlamaV2<half>;
 template class LlamaV2<float>;
+#ifdef ENABLE_BF16
+template class LlamaV2<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

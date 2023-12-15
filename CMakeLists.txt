@@ -17,10 +17,10 @@ project(TurboMind LANGUAGES CXX CUDA)
 
 find_package(CUDA 10.2 REQUIRED)
 
-# if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
-#   add_definitions("-DENABLE_BF16")
-#   message("CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
-# endif()
+if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
+  add_definitions("-DENABLE_BF16")
+  message("CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
+endif()
 
 # if((${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11" AND ${CUDA_VERSION_MINOR} VERSION_GREATER_EQUAL "8") OR (${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "12"))
 #   add_definitions("-DENABLE_FP8")

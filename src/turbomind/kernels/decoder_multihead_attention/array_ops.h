@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include <cfloat>
 #include <limits>
 
@@ -487,4 +488,34 @@ struct ConvertKvCache<int8_t, half> {
     }
 };
 
+#ifdef ENABLE_BF16
+template<>
+struct ConvertKvCache<int8_t, __nv_bfloat16> {
+
+    float scale_;
+    float zero_;
+
+    __device__ __host__ ConvertKvCache(float scale, float zero): scale_(scale), zero_(zero)
+    {
+        zero_ = zero_ - 32896.f * scale_;
+    }
+
+    template<int N>
+    inline __device__ auto operator()(const Array<int8_t, N>& vi) const -> Array<__nv_bfloat16, N>
+    {
+        Array<__nv_bfloat16, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 4) {
+            auto& vec = (Array<__nv_bfloat16, 4>&)vo[i];
+            auto  tmp = fast_i2f_f32_s8((const Array<int8_t, 4>&)vi[i]);
+            PRAGMA_UNROLL
+            for (int j = 0; j < 4; ++j) {
+                vec[j] = __nv_bfloat16(tmp[j] * scale_ + zero_);
+                // vec[j] = half(tmp[j] * scale_ + (zero_ - 32896.f * scale_));
+            }
+        }
+        return vo;
+    }
+};
+#endif  // ENABLE_BF16
 }  // namespace turbomind

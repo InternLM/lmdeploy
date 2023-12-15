@@ -1631,5 +1631,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
 template class LlamaBatch<half>;
 template class LlamaBatch<float>;
+#ifdef ENABLE_BF16
+template class LlamaBatch<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind
