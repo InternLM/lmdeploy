@@ -51,11 +51,12 @@ The relationship between functionalities and test cases is as follows:
 | w4a16 quantization | test_order1_w4_quantization |
 | convert            | test_order2_convert         |
 | cli command chat   | test_order3_command_chat    |
+| hf command chat    | test_order3_hf_command_chat.py    |
 | restful_api chat   | test_order4_restful_chat    |
 
 The modules and models currently covered by the test cases are listed below:
 
-| Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat | cli command chat |
+| Models                                                                     | w4a16 quantization | convert | cli command chat | restful_api chat | hf command chat  |
 | -------------------------------------------------------------------------- | ------------------ | ------- | ---------------- | ---------------- | ---------------- |
 | [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)     | No                 | Yes     | Yes              | No               | Yes              |
 | [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)       | No                 | Yes     | Yes              | No               | Yes              |
