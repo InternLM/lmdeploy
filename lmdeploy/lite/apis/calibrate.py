@@ -179,6 +179,8 @@ def calibrate(model: str,
     work_dir.mkdir(parents=True, exist_ok=True)
     calib_ctx.export(work_dir)
 
+    return model, tokenizer, work_dir
+
 
 if __name__ == '__main__':
     import fire
