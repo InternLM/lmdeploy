@@ -195,4 +195,4 @@ class LlamaModel(BaseInputModel):
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
-                    use_dynamic_ntk=int(repo_scaling))
+                    rope_scaling_factor=int(repo_scaling))
