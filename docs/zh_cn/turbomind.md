@@ -39,7 +39,7 @@ TurboMind 的 [KV 缓存管理器](https://github.com/InternLM/lmdeploy/blob/mai
 
 - KV 缓存由管理器分配。管理器会根据预先配置好的 slot 数量开辟空间。每个 slot 对应于一个 sequence 所需的 KV 缓存。分配的内存块大小可通过配置来实现预分配或者按需分配（或介于两者之间）。
 - 当有新的请求，但是缓存池中没有空闲 slot时，根据 LRU 机制，管理器会踢除最近使用最少的 sequence，把它占据的 slot 分给新的请求。不仅仅如此，
-- sequence获取到了slot，类似缓存命中。它在缓存中的历史KV会被直接返回，而不用在进行context decoding 。
+- sequence获取到了slot，类似缓存命中。它在缓存中的历史KV会被直接返回，而不用再进行context decoding 。
 - 被踢除的 sequences 不会被完全的删除，而是会被转换成最简洁的形式，例如 token IDs 。当之后获取到相同的 sequence id 时 (即 _cache-miss_ 状态)，这些 token IDs 将被 FMHA 的 context decoder 解码并被转回 KV 缓存。
 - 踢除和转换均由 TurboMind 内部自动管理所以对用户来说是透明的。__从用户的使用角度来看，使用了 TurboMind 的系统就像是可以访问无限的设备内存__。
 
