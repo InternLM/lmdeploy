@@ -459,6 +459,8 @@ class TurboMindInstance:
     def stream_infer(self,
                      session_id,
                      input_ids,
+                     input_embeddings=None,
+                     input_embedding_ranges=None,
                      request_output_len: int = 512,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
@@ -476,6 +478,9 @@ class TurboMindInstance:
         Args:
             session_id (int): the id of a session
             input_ids (numpy.ndarray): the token ids of a prompt
+            input_embeddings (List[numpy.ndarray]): embeddings features
+            input_embedding_ranges (List[Tuple[int,int]]): the begin/end
+              offsets of input_embeddings to input_ids
             request_output_len (int): the max number of to-be-generated tokens
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
@@ -543,6 +548,44 @@ class TurboMindInstance:
             END=_broadcast_np((1 if sequence_end else 0), np.int32),
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
+
+        if input_embeddings is not None:
+            assert len(input_embeddings) == len(input_embedding_ranges)
+            if isinstance(input_embeddings[0], np.ndarray):
+                input_embeddings = [input_embeddings]
+                input_embedding_ranges = [input_embedding_ranges]
+            # convert to lookup table type
+            if self.tm_model.config.weight_type == 'fp32':
+                input_embeddings = [[x.astype(np.float32) for x in y]
+                                    for y in input_embeddings]
+            elif self.tm_model.config.weight_type == 'bf16':
+                input_embeddings = [[
+                    torch.from_numpy(x).bfloat16().view(torch.half).numpy()
+                    for x in y
+                ] for y in input_embeddings]
+            else:
+                input_embeddings = [[x.astype(np.float16) for x in y]
+                                    for y in input_embeddings]
+
+            input_embeddings = [[torch.from_numpy(x).squeeze() for x in y]
+                                for y in input_embeddings]
+            input_embeddings = [torch.cat(x) for x in input_embeddings]
+            input_embeddings = pad_sequence(input_embeddings, batch_first=True)
+            input_embeddings = input_embeddings.reshape(
+                input_embeddings.shape[0], -1).view(torch.int8)
+
+            _input_embedding_ranges = []
+            for x in input_embedding_ranges:
+                if x is not None and len(x) != 0:
+                    _input_embedding_ranges.append(torch.IntTensor(x))
+                else:
+                    _input_embedding_ranges.append(torch.IntTensor(size=(0,
+                                                                         2)))
+            input_embedding_ranges = pad_sequence(_input_embedding_ranges,
+                                                  batch_first=True,
+                                                  padding_value=-1)
+            inputs['input_embeddings'] = input_embeddings
+            inputs['input_embedding_ranges'] = input_embedding_ranges
 
         if ignore_eos:
             stop_words = None

@@ -33,6 +33,10 @@ struct Sequence {
 
     mutable float rope_theta = 0.f;
 
+    // embedding data
+    mutable std::vector<std::vector<std::byte>> input_embeddings;
+    mutable std::vector<std::pair<int, int>>    input_embedding_ranges;
+
     explicit Sequence(uint64_t _id): id(_id) {}
 
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
