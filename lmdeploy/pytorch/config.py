@@ -10,7 +10,7 @@ class SchedulerConfig:
     max_session_len: int
     max_request_output_len: int
     eviction_type: str = 'copy'
-    prefill_interval: int = 64
+    prefill_interval: int = 16
 
 
 @dataclass

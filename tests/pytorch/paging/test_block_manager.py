@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.messages import SchedulerSession
-from lmdeploy.pytorch.paging.block_manager import (BlockManager, DeviceType,
+from lmdeploy.pytorch.paging.block_manager import (BlockManager,
                                                    LogicalAllocator)
 
 
@@ -24,15 +24,15 @@ class TestAllocator:
 
         # initialize
         num_blocks = num_cpu_blocks + num_gpu_blocks
-        gpu_allocator = allocator.get_phy_allocator(DeviceType.GPU)
-        cpu_allocator = allocator.get_phy_allocator(DeviceType.CPU)
+        gpu_allocator = allocator.get_phy_allocator('gpu')
+        cpu_allocator = allocator.get_phy_allocator('cpu')
         assert allocator.get_num_free_blocks() == num_blocks
         assert cpu_allocator.get_num_free_blocks() == num_cpu_blocks
         assert gpu_allocator.get_num_free_blocks() == num_gpu_blocks
 
         # test allocate
         block_size = 4
-        blocks = allocator.allocate(block_size, DeviceType.GPU)
+        blocks = allocator.allocate(block_size, 'gpu')
         assert len(blocks) == block_size
         assert allocator.get_num_free_blocks() == num_blocks - block_size
         assert gpu_allocator.get_num_free_blocks(
@@ -50,18 +50,18 @@ class TestAllocator:
     def test_full(self, allocator, num_cpu_blocks, num_gpu_blocks):
 
         num_blocks = num_cpu_blocks + num_gpu_blocks
-        gpu_allocator = allocator.get_phy_allocator(DeviceType.GPU)
-        cpu_allocator = allocator.get_phy_allocator(DeviceType.CPU)
+        gpu_allocator = allocator.get_phy_allocator('gpu')
+        cpu_allocator = allocator.get_phy_allocator('cpu')
 
         # no free blocks
         gpu_block_size = num_gpu_blocks
-        gpu_blocks = allocator.allocate(gpu_block_size, DeviceType.GPU)
+        gpu_blocks = allocator.allocate(gpu_block_size, 'gpu')
         cpu_block_size = num_cpu_blocks
-        cpu_blocks = allocator.allocate(cpu_block_size, DeviceType.CPU)
+        cpu_blocks = allocator.allocate(cpu_block_size, 'cpu')
         assert cpu_allocator.get_num_free_blocks() == 0
         assert gpu_allocator.get_num_free_blocks() == 0
         with pytest.raises(MemoryError):
-            allocator.allocate(1, DeviceType.GPU)
+            allocator.allocate(1, 'gpu')
         allocator.free(gpu_blocks)
         allocator.free(cpu_blocks)
         assert allocator.get_num_free_blocks() == num_blocks
@@ -181,7 +181,7 @@ class TestBlockManager:
         for block_id in old_phy_blocks:
             assert block_id in swap_map
         for block_id in new_phy_blocks:
-            assert block_id in swap_map.values()
+            assert block_id - num_gpu_blocks in swap_map.values()
 
         old_phy_blocks = block_mgr.get_block_table(msg)
         success, swap_map = block_mgr.try_swap_in(msg)
@@ -190,7 +190,7 @@ class TestBlockManager:
         assert block_mgr.get_num_free_cpu_blocks() == num_gpu_blocks
         assert len(swap_map) == 2
         for block_id in old_phy_blocks:
-            assert block_id in swap_map
+            assert block_id - num_gpu_blocks in swap_map
         for block_id in new_phy_blocks:
             assert block_id in swap_map.values()
 

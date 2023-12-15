@@ -35,8 +35,8 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config (CacheConfig): The config of the cache info.
         gpu_id (int): The GPU id to use.
     """
-    GPU_MEM_PERCENT = 0.8
-    SWAP_SPACE = 4 * (1 << 30)
+    GPU_MEM_PERCENT = 0.7
+    SWAP_SPACE = 8 * (1 << 30)
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
     gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
     cpu_mem = SWAP_SPACE
@@ -73,6 +73,17 @@ class ModelInputs:
     history_lengths: List[int]
     is_decoding: bool
     meta: Any
+
+    def to_device(self, device: str):
+        """to device."""
+        input_dict = asdict(self)
+        out_dict = dict()
+        for k, v in input_dict.items():
+            if isinstance(v, torch.Tensor):
+                v = v.to(device)
+            out_dict[k] = v
+
+        return ModelInputs(**out_dict)
 
 
 class StepContext:
@@ -186,8 +197,9 @@ def model_forward(
 ):
     """perform model forward."""
     stream = stream or torch.cuda.current_stream()
-    with torch.no_grad(), torch.cuda.stream(stream):
+    with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
+        inputs = inputs.to_device('cuda')
         context = StepContext(
             inputs=inputs,
             world_size=world_size,

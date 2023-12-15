@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from lmdeploy.pytorch.kernels.mbgmm import mbgmm
+from lmdeploy.pytorch.kernels.mbgmm import mbgmm_a, mbgmm_b
 
 
 class TestMBGMM:
@@ -99,15 +99,24 @@ class TestMBGMM:
         max_seq_len = max(seq_lens).item()
         max_rank = page_table.size(-1)
 
-        output = mbgmm(input,
-                       paged_lora_a,
-                       paged_lora_b[..., :out_head_size],
-                       b_start_loc=start_loc,
-                       b_seq_lens=seq_lens,
-                       b_rank_ids=rank_ids,
-                       rank_page_table=page_table,
-                       ranks=ranks,
-                       max_seq_len=max_seq_len,
-                       max_rank=max_rank)
+        xa = mbgmm_a(input,
+                     paged_lora_a,
+                     b_start_loc=start_loc,
+                     b_seq_lens=seq_lens,
+                     b_rank_ids=rank_ids,
+                     rank_page_table=page_table,
+                     ranks=ranks,
+                     max_seq_len=max_seq_len,
+                     max_rank=max_rank)
+
+        output = mbgmm_b(xa,
+                         paged_lora_b[..., :out_head_size],
+                         b_start_loc=start_loc,
+                         b_seq_lens=seq_lens,
+                         b_rank_ids=rank_ids,
+                         rank_page_table=page_table,
+                         ranks=ranks,
+                         max_seq_len=max_seq_len,
+                         max_rank=max_rank)
 
         torch.testing.assert_close(gt, output)

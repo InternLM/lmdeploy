@@ -106,13 +106,13 @@ class Scheduler:
     def _schedule_prefill(self):
         """Schedule for prefilling."""
 
-        max_batches = self.scheduler_config.max_batches
+        max_batches = self.scheduler_config.max_batches - len(self.running)
         block_manager = self.block_manager
         eviction_helper = self.eviction_helper
         swap_out_map: Dict[int, int] = dict()
         swap_in_map: Dict[int, int] = dict()
         copy_map: Dict[int, int] = dict()
-        running: SeqList = self.running
+        running: SeqList = []
 
         def _to_running(seq: SchedulerSequence):
             """to running."""
@@ -152,7 +152,7 @@ class Scheduler:
             self.waiting.pop(0)
             _to_running(seq)
 
-        self.running = running
+        self.running += running
         return running, swap_in_map, swap_out_map, copy_map
 
     def _schedule_decoding(self):
@@ -173,6 +173,9 @@ class Scheduler:
 
         def _try_append_slot(seq):
             """try append slot."""
+            if seq.num_required_blocks() == 0:
+                _to_running(seq)
+                return True
             if block_manager.can_append_slot(seq):
                 block_manager.append_slot(seq)
                 _to_running(seq)

@@ -11,23 +11,44 @@ def _next_pow_of_2(x):
 
 
 @triton.jit
-def _x_a_mm(
+def _x_a_mm_kernel(
     X,
     LoRA_A,
-    start_m,
-    start_loc,
-    seq_len,
-    rank,
-    page_table,
+    XA,
+    B_start_loc,
+    B_seq_lens,
+    B_rank_id,
+    Rank_page_table,
+    Ranks,
     stride_xs,
     stride_xh,
     stride_las,
     stride_lah,
+    stride_xas,
+    stride_xar,
+    stride_ptb,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
 ):
+    """xa mm kernel."""
+    cur_batch = tl.program_id(0)
+    start_m = tl.program_id(1)
+
+    r_off = tl.arange(0, BLOCK_R)
+
+    seq_len = tl.load(B_seq_lens + cur_batch)
+    if start_m * BLOCK_M >= seq_len:
+        return
+
+    start_loc = tl.load(B_start_loc + cur_batch)
+    rank_id = tl.load(B_rank_id + cur_batch)
+    rank = tl.load(Ranks + rank_id)
+
+    page_table_off = rank_id * stride_ptb + r_off
+    rank_mask = r_off < rank
+    page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     m_off = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     r_off = tl.arange(0, BLOCK_R)
@@ -61,31 +82,55 @@ def _x_a_mm(
         # compute
         acc += tl.dot(x, la)
 
-    return acc
+    acc = acc.to(X.dtype.element_ty)
+    xa_off = (start_loc + m_off) * stride_xas
+    xas_mask = xs_mask
+    xa_mask = xas_mask[:, None] and rank_mask[None, :]
+    tl.store(XA + xa_off[:, None] + r_off[None, :] * stride_xar,
+             acc,
+             mask=xa_mask)
 
 
 @triton.jit
-def _acc_b_mm(
-    acc,
+def _acc_b_mm_kernel(
+    XA,
     LoRA_B,
     Out,
-    start_m,
-    start_loc,
-    seq_len,
-    rank,
-    page_table,
+    B_start_loc,
+    B_seq_lens,
+    B_rank_id,
+    Rank_page_table,
+    Ranks,
+    stride_xas,
+    stride_xar,
     stride_os,
     stride_oh,
     stride_lbs,
     stride_lbh,
+    stride_ptb,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
     BLOCK_HO: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
 ):
+    cur_batch = tl.program_id(0)
+    start_m = tl.program_id(1)
+
+    r_off = tl.arange(0, BLOCK_R)
+
+    seq_len = tl.load(B_seq_lens + cur_batch)
+    if start_m * BLOCK_M >= seq_len:
+        return
+
+    start_loc = tl.load(B_start_loc + cur_batch)
+    rank_id = tl.load(B_rank_id + cur_batch)
+    rank = tl.load(Ranks + rank_id)
+
+    page_table_off = rank_id * stride_ptb + r_off
+    rank_mask = r_off < rank
+    page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     m_off = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    r_off = tl.arange(0, BLOCK_R)
     dm_off = tl.arange(0, BLOCK_DMODEL)
     rank_mask = r_off < rank
     lb_page_off = page_table * stride_lbs
@@ -94,6 +139,11 @@ def _acc_b_mm(
     o_off = (start_loc + m_off) * stride_os
     os_mask = xs_mask
 
+    xa_off = (start_loc + m_off) * stride_xas
+    xa_mask = xs_mask[:, None] and rank_mask[None, :]
+    acc = tl.load(XA + xa_off[:, None] + r_off[None, :] * stride_xar,
+                  mask=xa_mask,
+                  other=0.0)
     acc = acc.to(LoRA_B.dtype.element_ty)
 
     # compute output
@@ -118,53 +168,16 @@ def _acc_b_mm(
         tl.store(Out + o_off[:, None] + oh_off[None, :], out, mask=o_mask)
 
 
-@triton.jit
-def _mbgmm_kernel(X, LoRA_A, LoRA_B, Out, B_start_loc, B_seq_lens, B_rank_id,
-                  Rank_page_table, Ranks, stride_xs, stride_xh, stride_las,
-                  stride_lah, stride_lbs, stride_lbh, stride_os, stride_oh,
-                  stride_ptb, BLOCK_M: tl.constexpr, BLOCK_R: tl.constexpr,
-                  BLOCK_H: tl.constexpr, BLOCK_HO: tl.constexpr,
-                  BLOCK_DMODEL: tl.constexpr):
-    """mbgmm kernel."""
-    cur_batch = tl.program_id(0)
-    start_m = tl.program_id(1)
-
-    r_off = tl.arange(0, BLOCK_R)
-
-    seq_len = tl.load(B_seq_lens + cur_batch)
-    if start_m * BLOCK_M >= seq_len:
-        return
-
-    start_loc = tl.load(B_start_loc + cur_batch)
-    rank_id = tl.load(B_rank_id + cur_batch)
-    rank = tl.load(Ranks + rank_id)
-
-    page_table_off = rank_id * stride_ptb + r_off
-    rank_mask = r_off < rank
-    page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
-
-    acc = _x_a_mm(X, LoRA_A, start_m, start_loc, seq_len, rank, page_table,
-                  stride_xs, stride_xh, stride_las, stride_lah, BLOCK_M,
-                  BLOCK_R, BLOCK_H, BLOCK_DMODEL)
-
-    _acc_b_mm(acc, LoRA_B, Out, start_m, start_loc, seq_len, rank, page_table,
-              stride_os, stride_oh, stride_lbs, stride_lbh, BLOCK_M, BLOCK_R,
-              BLOCK_HO, BLOCK_DMODEL)
-
-
 @torch.inference_mode()
-def mbgmm(x: Tensor, lora_a: Tensor, lora_b: Tensor, b_start_loc: Tensor,
-          b_seq_lens: Tensor, b_rank_ids: Tensor, rank_page_table: Tensor,
-          ranks: Tensor, max_seq_len: int, max_rank: int):
-    """mbgmm."""
-
+def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
+            b_rank_ids: Tensor, rank_page_table: Tensor, ranks: Tensor,
+            max_seq_len: int, max_rank: int):
+    """mbgmm_a."""
     assert x.dim() == 2
     assert lora_a.dim() == 2
-    assert lora_b.dim() == 2
     assert rank_page_table.dim() == 2
 
     head_size = x.size(-1)
-    head_o_size = lora_b.size(-1)
     batch_size = len(b_seq_lens)
 
     BLOCK_M = 32
@@ -172,17 +185,15 @@ def mbgmm(x: Tensor, lora_a: Tensor, lora_b: Tensor, b_start_loc: Tensor,
     if BLOCK_R < 16:
         BLOCK_R = 16
     BLOCK_H = head_size
-    BLOCK_HO = head_o_size
     BLOCK_DMODEL = 64
 
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
-    output = x.new_empty((x.size(0), BLOCK_HO))
-    _mbgmm_kernel[grid](
+    xa = x.new_empty((x.size(0), BLOCK_R))
+    _x_a_mm_kernel[grid](
         x,
         lora_a,
-        lora_b,
-        output,
+        xa,
         b_start_loc,
         b_seq_lens,
         b_rank_ids,
@@ -192,14 +203,61 @@ def mbgmm(x: Tensor, lora_a: Tensor, lora_b: Tensor, b_start_loc: Tensor,
         stride_xh=x.stride(1),
         stride_las=lora_a.stride(0),
         stride_lah=lora_a.stride(1),
-        stride_lbs=lora_b.stride(0),
-        stride_lbh=lora_b.stride(1),
-        stride_os=output.stride(0),
-        stride_oh=output.stride(1),
+        stride_xas=xa.stride(0),
+        stride_xar=xa.stride(1),
         stride_ptb=rank_page_table.stride(0),
         BLOCK_M=BLOCK_M,
         BLOCK_R=BLOCK_R,
         BLOCK_H=BLOCK_H,
+        BLOCK_DMODEL=BLOCK_DMODEL,
+        num_warps=num_warps,
+        num_stages=1,
+    )
+    return xa
+
+
+@torch.inference_mode()
+def mbgmm_b(xa: Tensor, lora_b: Tensor, b_start_loc: Tensor,
+            b_seq_lens: Tensor, b_rank_ids: Tensor, rank_page_table: Tensor,
+            ranks: Tensor, max_seq_len: int, max_rank: int):
+    """mbgmm_b."""
+
+    assert xa.dim() == 2
+    assert lora_b.dim() == 2
+    assert rank_page_table.dim() == 2
+
+    head_o_size = lora_b.size(-1)
+    batch_size = len(b_seq_lens)
+
+    BLOCK_M = 32
+    BLOCK_R = _next_pow_of_2(max_rank)
+    if BLOCK_R < 16:
+        BLOCK_R = 16
+    BLOCK_HO = head_o_size
+    BLOCK_DMODEL = 64
+
+    num_warps = 4
+    grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
+    output = xa.new_empty((xa.size(0), BLOCK_HO))
+
+    _acc_b_mm_kernel[grid](
+        xa,
+        lora_b,
+        output,
+        b_start_loc,
+        b_seq_lens,
+        b_rank_ids,
+        Rank_page_table=rank_page_table,
+        Ranks=ranks,
+        stride_xas=xa.stride(0),
+        stride_xar=xa.stride(1),
+        stride_os=output.stride(0),
+        stride_oh=output.stride(1),
+        stride_lbs=lora_b.stride(0),
+        stride_lbh=lora_b.stride(1),
+        stride_ptb=rank_page_table.stride(0),
+        BLOCK_M=BLOCK_M,
+        BLOCK_R=BLOCK_R,
         BLOCK_HO=BLOCK_HO,
         BLOCK_DMODEL=BLOCK_DMODEL,
         num_warps=num_warps,

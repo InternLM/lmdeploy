@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from lmdeploy.pytorch.kernels.mbgmv import mbgmv
+from lmdeploy.pytorch.kernels.mbgmv import mbgmv_a, mbgmv_b
 
 
 class TestMBGMV:
@@ -96,12 +96,17 @@ class TestMBGMV:
                    rank_ids, page_table, ranks, gt):
         max_rank = page_table.size(-1)
 
-        output = mbgmv(input,
-                       paged_lora_a,
-                       paged_lora_b[..., :out_head_size],
-                       b_rank_ids=rank_ids,
-                       rank_page_table=page_table,
-                       ranks=ranks,
-                       max_rank=max_rank)
+        xa = mbgmv_a(input,
+                     paged_lora_a,
+                     b_rank_ids=rank_ids,
+                     rank_page_table=page_table,
+                     ranks=ranks,
+                     max_rank=max_rank)
 
+        output = mbgmv_b(xa,
+                         paged_lora_b[..., :out_head_size],
+                         b_rank_ids=rank_ids,
+                         rank_page_table=page_table,
+                         ranks=ranks,
+                         max_rank=max_rank)
         torch.testing.assert_close(gt, output, atol=1e-3, rtol=1e-5)

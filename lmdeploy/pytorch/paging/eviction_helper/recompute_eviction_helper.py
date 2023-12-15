@@ -29,10 +29,16 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
     def try_swap_out(self, seq: SchedulerSequence, swap_out_map: Dict[int,
                                                                       int]):
         """try swap out."""
-        self.swap_out(seq, swap_out_map)
-        return True
+        if seq.history_len > 0:
+            self.swap_out(seq, swap_out_map)
+            return True
+        else:
+            return False
 
     def try_swap_in(self, seq: SchedulerSequence, swap_in_map: Dict[int, int]):
         """try swap in."""
-        self.swap_in(seq, swap_in_map)
-        return True
+        if self.block_manager.can_allocate(seq):
+            self.swap_in(seq, swap_in_map)
+            return True
+        else:
+            return False

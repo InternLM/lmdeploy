@@ -65,11 +65,11 @@ class SchedulerSession:
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: Dict[int, SchedulerSequence] = dict()
 
-    def add_sequence(
-            self,
-            token_ids: Tensor,
-            max_output_len: int = 512,
-            sampling_param: SamplingParam = None) -> 'SchedulerSequence':
+    def add_sequence(self,
+                     token_ids: Tensor,
+                     max_output_len: int = 512,
+                     sampling_param: SamplingParam = None,
+                     adapter_id: int = -1) -> 'SchedulerSequence':
         """Add a new message."""
         if not isinstance(token_ids, Tensor):
             token_ids = torch.tensor(token_ids)
@@ -85,6 +85,7 @@ class SchedulerSession:
                                 status=MessageStatus.WAITING,
                                 remain_output_len=max_output_len,
                                 sampling_param=sampling_param,
+                                adapter_id=adapter_id,
                                 arrive_time=time.time())
         self.sequences[seq.seq_id] = seq
         return seq
@@ -110,10 +111,11 @@ class SchedulerSession:
             session=self,
             block_size=self.block_size,
             history_token_ids=seq.history_token_ids.copy(),
-            status=seq.status,
             remain_output_len=max_output_len,
-            logical_blocks=seq.logical_blocks.clone(),
             sampling_param=sampling_param,
+            status=seq.status,
+            logical_blocks=seq.logical_blocks.clone(),
+            adapter_id=seq.adapter_id,
             arrive_time=time.time(),
             meta=deepcopy(seq.meta))
 
@@ -135,6 +137,7 @@ class SchedulerSequence:
     logical_blocks: LogicalTokenBlocks = None
     sender_id: int = -1
     req_id: int = -1
+    adapter_id: int = -1
     arrive_time: float = 0.0
     meta: Any = None
 
@@ -184,9 +187,10 @@ class SchedulerSequence:
 
     def set_step(self, step: int):
         """set step."""
-        assert step < self.history_len
-        history_token_ids = torch.cat(self.history_token_ids)
-        new_history_ids = [history_token_ids[:step]]
+        assert step <= self.history_len
+        history_token_ids = torch.tensor(self.history_token_ids,
+                                         dtype=torch.long)
+        new_history_ids = self.history_token_ids[:step]
         new_token_ids = torch.cat([history_token_ids[step:], self.token_ids])
         self.history_token_ids = new_history_ids
         self.token_ids = new_token_ids

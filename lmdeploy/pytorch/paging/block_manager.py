@@ -352,7 +352,7 @@ class BlockManager:
             new_blocks = cpu_allocator.allocate(len(logical_blocks))
 
             old_blocks = phy_blocks
-            swap_map = dict(zip(old_blocks, new_blocks))
+            swap_map = dict(zip(old_blocks, new_blocks - self.num_gpu_blocks))
 
             gpu_allocator.free(old_blocks)
             self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
@@ -399,7 +399,7 @@ class BlockManager:
             new_blocks = gpu_allocator.allocate(len(logical_blocks))
 
             old_blocks = phy_blocks
-            swap_map = dict(zip(old_blocks, new_blocks))
+            swap_map = dict(zip(old_blocks - self.num_gpu_blocks, new_blocks))
 
             cpu_allocator.free(old_blocks)
             self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
