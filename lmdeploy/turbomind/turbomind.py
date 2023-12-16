@@ -647,6 +647,8 @@ class TurboMindInstance:
 
         # generator
         while True:
+            # Thanks for https://github.com/frankxyy and his issue
+            # https://github.com/InternLM/lmdeploy/issues/832
             while self.que.qsize() == 0:
                 await asyncio.sleep(0)
             while self.que.qsize() > 1:
