@@ -82,6 +82,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     const int    rotary_embedding_dim,
                                     float        rotary_embedding_base,
                                     int          max_position_embeddings,
+                                    float        scaling_factor,
                                     bool         use_dynamic_ntk,
                                     bool         use_logn_attn,
                                     cudaStream_t stream);

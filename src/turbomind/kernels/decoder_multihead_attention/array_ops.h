@@ -109,18 +109,18 @@ struct RotaryEmbedding {
 
     __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset, float scaling_factor)
     {
+        scale_ = scaling_factor == 0.f ? 1.f : scaling_factor;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
             const float2 tmp = get_coefficient(offset.x + i, dims, base, timestep);
             cs_[i]           = tmp.x;
             cs_[i + 1]       = tmp.y;
         }
-        scale_ = scaling_factor == 0.f ? 1 : 1.0 / scaling_factor;
     }
 
-    static __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
+    __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
     {
-        const float inv_freq = timestep / powf(base, idx / (float)dims);
+        const float inv_freq = timestep / (powf(base, idx / (float)dims) * scale_);
         float2      cs;
         sincosf(inv_freq, &cs.y, &cs.x);
         return cs;
@@ -131,8 +131,8 @@ struct RotaryEmbedding {
     {
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1] * scale_;
-            float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i] * scale_;
+            float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1];
+            float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
             x[i]       = (T)tmp0;
             x[i + 1]   = (T)tmp1;
         }

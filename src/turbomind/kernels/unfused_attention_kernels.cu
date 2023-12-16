@@ -866,6 +866,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                    int          rotary_embedding_dim,
                                                    float        rotary_embedding_base,
                                                    int          max_position_embeddings,
+                                                   float        scaling_factor,
                                                    bool         use_dynamic_ntk,
                                                    bool         use_logn_attn)
 {
@@ -942,8 +943,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     if (rope_theta) {
         rotary_embedding_base = rope_theta[batch_idx];
     }
-    // This whole kernel is no longer used, add `0.0f` to pass the complilation
-    RotaryEmbedding<vec_size> rotary_emb(rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0}, 0.0f);
+
+    RotaryEmbedding<vec_size> rotary_emb(rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0}, scaling_factor);
     rotary_emb.apply((Array<T, vec_size>&)q);
 
     if (head_idx < kv_head_num) {
@@ -997,6 +998,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                                                              rotary_embedding_dim,     \
                                                                                              rotary_embedding_base,    \
                                                                                              max_position_embeddings,  \
+                                                                                             scaling_factor,           \
                                                                                              use_dynamic_ntk,          \
                                                                                              use_logn_attn);
 
@@ -1019,6 +1021,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     const int    rotary_embedding_dim,
                                     float        rotary_embedding_base,
                                     int          max_position_embeddings,
+                                    float        scaling_factor,
                                     bool         use_dynamic_ntk,
                                     bool         use_logn_attn,
                                     cudaStream_t stream)
@@ -1050,6 +1053,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                                  const int    rotary_embedding_dim,                                    \
                                                  float        rotary_embedding_base,                                   \
                                                  int          max_position_embeddings,                                 \
+                                                 float        scaling_factor,                                          \
                                                  bool         use_dynamic_ntk,                                         \
                                                  bool         use_logn_attn,                                           \
                                                  cudaStream_t stream)
