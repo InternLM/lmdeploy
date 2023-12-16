@@ -120,8 +120,7 @@ class AsyncEngine:
                                                   input_ids,
                                                   request_output_len=0,
                                                   sequence_start=False,
-                                                  sequence_end=True,
-                                                  stop=True):
+                                                  sequence_end=True):
             pass
         self.id2step[str(session_id)] = 0
         if str(session_id) in self.id2generator and self.id2generator[str(
@@ -135,6 +134,7 @@ class AsyncEngine:
             yield
         except (Exception, asyncio.CancelledError) as e:  # noqa
             self.stop_session(session_id)
+            raise e
         if str(session_id) in self.id2generator and self.id2generator[str(
                 session_id)] not in self.gens_set:
             self.gens_set.add(self.id2generator[str(session_id)])
