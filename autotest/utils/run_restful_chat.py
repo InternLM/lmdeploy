@@ -7,7 +7,7 @@ from utils.rule_condition_assert import assert_result
 from lmdeploy.serve.openai.api_client import APIClient
 
 
-def openAiChatTest(config, case_info, model, url):
+def open_chat_test(config, case_info, model, url):
     log_path = config.get('log_path')
 
     restful_log = os.path.join(log_path, 'restful_' + model + '.log')
@@ -54,7 +54,7 @@ def openAiChatTest(config, case_info, model, url):
     return result, restful_log, msg
 
 
-def interactiveTest(config, case_info, model, url):
+def interactive_test(config, case_info, model, url):
     log_path = config.get('log_path')
 
     interactive_log = os.path.join(log_path, 'interactive_' + model + '.log')

@@ -1,7 +1,7 @@
 import allure
 import conftest
 import pytest
-from utils.run_client_chat import commandLineTest
+from utils.run_client_chat import command_line_test
 
 conftest._init_case_list()
 case_list = conftest.global_case_List
@@ -13,7 +13,7 @@ def getCaseList():
 
 @pytest.mark.usefixtures('case_config')
 @pytest.mark.command_chat
-class Test_command_chat:
+class TestCommandChat:
 
     @pytest.mark.llama2_chat_7b_w4
     @allure.story('llama2-chat-7b-w4')
@@ -120,7 +120,7 @@ class Test_command_chat:
 
 
 def run_command_line_test(config, case, case_info, model):
-    result, chat_log, msg = commandLineTest(config, case, case_info, model,
-                                            'turbomind', None)
+    result, chat_log, msg = command_line_test(config, case, case_info, model,
+                                              'turbomind', None)
     allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
     assert result, msg

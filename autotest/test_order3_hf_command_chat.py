@@ -1,7 +1,7 @@
 import allure
 import conftest
 import pytest
-from utils.run_client_chat import hfCommandLineTest
+from utils.run_client_chat import hf_command_line_test
 
 conftest._init_case_list()
 case_list = conftest.global_case_List
@@ -13,7 +13,7 @@ def getCaseList():
 
 @pytest.mark.usefixtures('case_config')
 @pytest.mark.hf_command_chat
-class Test_command_chat:
+class TestCommandChat:
 
     @pytest.mark.llama2_chat_7b_w4
     @allure.story('llama2-chat-7b-w4')
@@ -110,8 +110,8 @@ def run_command_line_test(config, case, case_info, model_case):
         return {'success': False, 'msg': 'the model is incorrect'}
     model_name = model_map.get(model_case)
 
-    result, chat_log, msg = hfCommandLineTest(config, case, case_info,
-                                              model_case, model_name)
+    result, chat_log, msg = hf_command_line_test(config, case, case_info,
+                                                 model_case, model_name)
     allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg

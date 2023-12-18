@@ -4,7 +4,7 @@ from subprocess import PIPE, Popen
 from utils.rule_condition_assert import assert_result
 
 
-def commandLineTest(config, case, case_info, model, type, extra):
+def command_line_test(config, case, case_info, model, type, extra):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
@@ -19,10 +19,10 @@ def commandLineTest(config, case, case_info, model, type, extra):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commandTest(config, cmd, model, case_info, type == 'turbomind')
+    return command_test(config, cmd, model, case_info, type == 'turbomind')
 
 
-def hfCommandLineTest(config, case, case_info, model_case, model_name):
+def hf_command_line_test(config, case, case_info, model_case, model_name):
     model_path = config.get('model_path')
 
     cmd = [
@@ -32,10 +32,10 @@ def hfCommandLineTest(config, case, case_info, model_case, model_name):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commandTest(config, cmd, model_case, case_info, True)
+    return command_test(config, cmd, model_case, case_info, True)
 
 
-def pytorchCommandLineTest(config, case, case_info, model_case):
+def pytorch_command_line_test(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
     cmd = [
@@ -45,10 +45,10 @@ def pytorchCommandLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commandTest(config, cmd, model_case, case_info, False)
+    return command_test(config, cmd, model_case, case_info, False)
 
 
-def deepspeedCommandLineTest(config, case, case_info, model_case):
+def deepspeed_command_line_test(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
     cmd = [
@@ -59,10 +59,10 @@ def deepspeedCommandLineTest(config, case, case_info, model_case):
 
     if case == 'session_len_error':
         cmd[0] = cmd[0] + ' --session_len 20'
-    return commandTest(config, cmd, model_case, case_info, False)
+    return command_test(config, cmd, model_case, case_info, False)
 
 
-def commandTest(config, cmd, model, case_info, need_extract_output):
+def command_test(config, cmd, model, case_info, need_extract_output):
     log_path = config.get('log_path')
     model_map = config.get('model_map')
     model_name = model_map.get(model)
