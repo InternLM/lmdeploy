@@ -13,7 +13,7 @@ from lmdeploy.lite.quantization import CalibrationContext
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders
-from lmdeploy.pytorch_poc.models import QLinear, QRMSNorm
+from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -29,11 +29,9 @@ NORM_TYPE_MAP = {
 }
 
 MODEL_PATH_MAP = {
-    'InternLMForCausalLM':
-    './lmdeploy/pytorch_poc/modeling/modeling_internlm.py',
-    'LlamaForCausalLM': './lmdeploy/pytorch_poc/modeling/modeling_llama.py',
-    'BaiChuanForCausalLM':
-    './lmdeploy/pytorch_poc/modeling/modeling_baichuan.py'
+    'InternLMForCausalLM': './lmdeploy/pytorch/modeling/modeling_internlm.py',
+    'LlamaForCausalLM': './lmdeploy/pytorch/modeling/modeling_llama.py',
+    'BaiChuanForCausalLM': './lmdeploy/pytorch/modeling/modeling_baichuan.py'
 }
 
 AUTO_MAP = {

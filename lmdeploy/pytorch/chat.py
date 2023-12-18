@@ -2,6 +2,7 @@
 
 import os
 import random
+from typing import List
 
 import fire
 
@@ -29,6 +30,21 @@ def valid_str(string, coding='utf-8'):
         bstr = bstr.replace(invalid_char, b'')
     ret = bstr.decode(encoding=coding, errors='ignore')
     return ret
+
+
+def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
+    """Return a list of token ids corresponding to stop-words."""
+    if stop_words is None:
+        return None
+    assert isinstance(stop_words, List) and \
+        all(isinstance(elem, str) for elem in stop_words), \
+        f'stop_words must be a list but got {type(stop_words)}'
+    stop_words = [
+        tokenizer.encode(stop_word, False)[-1] for stop_word in stop_words
+    ]
+    assert isinstance(stop_words, List) and all(
+        isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
+    return stop_words
 
 
 def main(
@@ -63,6 +79,7 @@ def main(
     step = 0
     seed = random.getrandbits(64)
     model = MODELS.get(model_name)()
+    stop_words = _stop_words(model.stop_words, tokenizer)
 
     while True:
         prompt = input_prompt()
@@ -91,7 +108,7 @@ def main(
                 repetition_penalty=repetition_penalty,
                 ignore_eos=False,
                 random_seed=seed,
-                stop_words=model.stop_words)
+                stop_words=stop_words)
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=input_ids,
