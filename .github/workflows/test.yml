@@ -151,7 +151,7 @@ jobs:
           echo "CONTAINER_ID=$CONTAINER_ID"  >> $GITHUB_ENV
       - name: Build lmdeploy from source
         run: |
-          docker exec $CONTAINER_ID cp -r ../../build build
+          docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
