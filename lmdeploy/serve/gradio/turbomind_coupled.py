@@ -90,15 +90,8 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
         reset_btn (gr.Button): the reset button
         session_id (int): the session id
     """
-    yield (state_chatbot, disable_btn, enable_btn)
-    async for out in InterFace.async_engine.generate('',
-                                                     session_id,
-                                                     request_output_len=0,
-                                                     stream_response=True,
-                                                     sequence_start=False,
-                                                     sequence_end=False,
-                                                     stop=True):
-        pass
+    yield (state_chatbot, disable_btn, disable_btn)
+    InterFace.async_engine.end_session(session_id)
     messages = []
     for qa in state_chatbot:
         messages.append(dict(role='user', content=qa[0]))
