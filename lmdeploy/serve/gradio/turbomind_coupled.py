@@ -69,13 +69,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     """
     state_chatbot = []
     # end the session
-    async for out in InterFace.async_engine.generate('',
-                                                     session_id,
-                                                     request_output_len=1,
-                                                     stream_response=True,
-                                                     sequence_start=False,
-                                                     sequence_end=True):
-        pass
+    InterFace.async_engine.end_session(session_id)
     return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
 
 
