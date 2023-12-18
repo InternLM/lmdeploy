@@ -61,7 +61,7 @@ The interactive mode can be controlled by the `interactive_mode` boolean paramet
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
-for item in api_client.generate(prompt='hi'):
+for item in api_client.chat_interactive_v1(prompt='hi'):
     print(item)
 ```
 
