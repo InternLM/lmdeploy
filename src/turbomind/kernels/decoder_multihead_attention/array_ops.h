@@ -105,7 +105,7 @@ struct RotaryEmbedding {
     static_assert(N % 2 == 0);
 
     Array<float, N> cs_;
-    float scale_;
+    float           scale_;
 
     __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset, float scaling_factor)
     {

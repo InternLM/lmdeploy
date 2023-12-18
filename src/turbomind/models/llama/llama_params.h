@@ -10,7 +10,7 @@ struct LlamaAttentionParams {
     int   max_position_embeddings;
     float rope_scaling_factor;
     bool  use_dynamic_ntk;
-    bool use_logn_attn;
+    bool  use_logn_attn;
 };
 
 struct EngineParams {

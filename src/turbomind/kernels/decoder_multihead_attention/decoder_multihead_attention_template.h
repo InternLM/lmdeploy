@@ -241,7 +241,8 @@ struct DecoderMultiHeadAttentionKernel {
             params_.rope_theta ? params_.rope_theta[batch_idx_] : params_.rotary_embedding_base;
 
         // Apply rotary embedding
-        RotaryEmbedding<kVecQSize> rotary_emb(rotary_embedding_base, params_.rotary_embedding_dim, timestep_, offset, params_.scaling_factor);
+        RotaryEmbedding<kVecQSize> rotary_emb(
+            rotary_embedding_base, params_.rotary_embedding_dim, timestep_, offset, params_.scaling_factor);
 
         PRAGMA_UNROLL
         for (int s = 0; s < kQHeadPerThread; ++s) {
