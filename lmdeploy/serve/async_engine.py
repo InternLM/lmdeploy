@@ -295,7 +295,6 @@ class AsyncEngine:
                         ignore_eos=ignore_eos,
                         random_seed=seed if sequence_start else None):
                     res, tokens = outputs[0]
-                    print(res.tolist()[response_size:], response_size)
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),
                                                      offset=response_size)
