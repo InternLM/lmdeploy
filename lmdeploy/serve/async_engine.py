@@ -120,7 +120,8 @@ class AsyncEngine:
                                                   input_ids,
                                                   request_output_len=0,
                                                   sequence_start=False,
-                                                  sequence_end=True):
+                                                  sequence_end=True,
+                                                  stop=True):
             pass
         self.id2step[str(session_id)] = 0
         if str(session_id) in self.id2generator and self.id2generator[str(
