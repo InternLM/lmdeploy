@@ -16,7 +16,9 @@ class InterFace:
 
 
 def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
-                cancel_btn: gr.Button, reset_btn: gr.Button, session_id: int):
+                cancel_btn: gr.Button, reset_btn: gr.Button, 
+                session_id: int, top_p: float, temperature: float,
+                request_output_len: int):
     """Chat with AI assistant.
 
     Args:
@@ -30,7 +32,10 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
     instruction = state_chatbot[-1][0]
 
     bot_response = llama_chatbot.stream_infer(
-        session_id, instruction, f'{session_id}-{len(state_chatbot)}')
+        session_id, instruction, f'{session_id}-{len(state_chatbot)}', 
+        request_output_len=request_output_len,
+        top_p=top_p, 
+        temperature=temperature)
 
     for status, tokens, _ in bot_response:
         state_chatbot[-1] = (state_chatbot[-1][0], tokens)
@@ -108,12 +113,24 @@ def run_triton_server(triton_server_addr: str,
             with gr.Row():
                 cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
+            with gr.Row():
+                request_output_len = gr.Slider(1,
+                                               2048,
+                                               value=512,
+                                               step=1,
+                                               label='Maximum new tokens')
+                top_p = gr.Slider(0.01, 1, value=0.8, step=0.01, label='Top_p')
+                temperature = gr.Slider(0.01,
+                                        1.5,
+                                        value=0.7,
+                                        step=0.01,
+                                        label='Temperature')
 
         send_event = instruction_txtbox.submit(
             add_instruction, [instruction_txtbox, state_chatbot],
             [instruction_txtbox, state_chatbot]).then(chat_stream, [
                 state_chatbot, llama_chatbot, cancel_btn, reset_btn,
-                state_session_id
+                state_session_id, top_p, temperature, request_output_len
             ], [state_chatbot, chatbot, cancel_btn, reset_btn])
 
         cancel_btn.click(cancel_func,
