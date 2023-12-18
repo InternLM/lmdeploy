@@ -4,8 +4,8 @@ import torch
 from accelerate import infer_auto_device_map, init_empty_weights
 from transformers import AutoConfig, AutoModelForCausalLM
 
+from lmdeploy.legacy.pytorch.model import LoadWoInit
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.model import LoadWoInit
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
