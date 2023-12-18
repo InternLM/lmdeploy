@@ -135,6 +135,7 @@ class AsyncEngine:
             yield
         except (Exception, asyncio.CancelledError) as e:  # noqa
             self.stop_session(session_id)
+            raise e
         if str(session_id) in self.id2generator and self.id2generator[str(
                 session_id)] not in self.gens_set:
             self.gens_set.add(self.id2generator[str(session_id)])
