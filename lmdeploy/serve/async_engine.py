@@ -120,8 +120,7 @@ class AsyncEngine:
                                                   input_ids,
                                                   request_output_len=0,
                                                   sequence_start=False,
-                                                  sequence_end=True,
-                                                  stop=True):
+                                                  sequence_end=True):
             pass
         self.id2step[str(session_id)] = 0
         if str(session_id) in self.id2generator and self.id2generator[str(
@@ -265,17 +264,17 @@ class AsyncEngine:
             prompt = self.model.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
-        if self.id2step[str(session_id)] + len(
+        if stop is True:
+            self.stop_session(session_id)
+            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
+                         finish_reason)
+        elif self.id2step[str(session_id)] + len(
                 input_ids) + request_output_len >= self.tm_model.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
             if sequence_end is True and sequence_start is False:
                 self.end_session(session_id)
-        elif stop is True:
-            self.stop_session(session_id)
-            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
-                         finish_reason)
         else:
             generator = await self.get_generator(stop, session_id)
             with self.safe_run(session_id):
@@ -296,6 +295,7 @@ class AsyncEngine:
                         ignore_eos=ignore_eos,
                         random_seed=seed if sequence_start else None):
                     res, tokens = outputs[0]
+                    print(res.tolist()[response_size:], response_size)
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),
                                                      offset=response_size)

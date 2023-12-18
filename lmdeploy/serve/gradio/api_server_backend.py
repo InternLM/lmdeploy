@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import time
 from threading import Lock
 from typing import Sequence
 
@@ -89,16 +88,24 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
         session_id (int): the session id
     """
     yield (state_chatbot, disable_btn, disable_btn)
-    # end the session
+    # stop the session
     for out in get_streaming_response(
             '',
             f'{InterFace.api_server_url}/v1/chat/interactive',
             session_id=session_id,
             request_output_len=0,
             stop=True,
+            interactive_mode=True):
+        pass
+    # end the session
+    for out in get_streaming_response(
+            '',
+            f'{InterFace.api_server_url}/v1/chat/interactive',
+            session_id=session_id,
+            request_output_len=0,
             interactive_mode=False):
         pass
-    time.sleep(0.5)
+    # resume the session
     messages = []
     for qa in state_chatbot:
         messages.append(dict(role='user', content=qa[0]))
