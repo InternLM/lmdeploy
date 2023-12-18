@@ -272,6 +272,10 @@ class AsyncEngine:
                          finish_reason)
             if sequence_end is True and sequence_start is False:
                 self.end_session(session_id)
+        elif stop is True:
+            self.stop_session(session_id)
+            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
+                         finish_reason)
         else:
             generator = await self.get_generator(stop, session_id)
             with self.safe_run(session_id):

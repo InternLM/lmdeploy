@@ -95,7 +95,8 @@ def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button,
             f'{InterFace.api_server_url}/v1/chat/interactive',
             session_id=session_id,
             request_output_len=0,
-            stop=True):
+            stop=True,
+            interactive_mode=False):
         pass
     time.sleep(0.5)
     messages = []
