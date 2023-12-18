@@ -36,7 +36,7 @@ def _update_cache_config(model_config: ModelConfig,
         gpu_id (int): The GPU id to use.
     """
     GPU_MEM_PERCENT = 0.7
-    SWAP_SPACE = 4 * (1 << 30)
+    SWAP_SPACE = 8 * (1 << 30)
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
     gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
     cpu_mem = SWAP_SPACE
@@ -74,6 +74,17 @@ class ModelInputs:
     is_decoding: bool
     meta: Any
 
+    def to_device(self, device: str):
+        """to device."""
+        input_dict = asdict(self)
+        out_dict = dict()
+        for k, v in input_dict.items():
+            if isinstance(v, torch.Tensor):
+                v = v.to(device)
+            out_dict[k] = v
+
+        return ModelInputs(**out_dict)
+
 
 class StepContext:
     """context of Model.
@@ -95,7 +106,7 @@ class StepContext:
         json_config: dict = None,
     ):
         self.inputs = inputs
-        self.block_offsets_list = inputs.block_offsets
+        self.block_offsets = inputs.block_offsets
         self.position_ids = inputs.position_ids
         self.q_start_loc = inputs.q_start_loc
         self.history_lengths = inputs.history_lengths
@@ -107,8 +118,6 @@ class StepContext:
         # seq_len + history_length
         self.kv_seq_length = self.position_ids[..., -1] + 1
 
-        self.block_offsets = self.tensorlize_block_offsets(
-            self.block_offsets_list, device)
         self.position_ids_1d = self.get_position_ids_1d(
             self.position_ids, self.seq_length, device)
 
@@ -117,15 +126,18 @@ class StepContext:
     @classmethod
     def tensorlize_block_offsets(cls, block_offsets, device):
         """tensorlize block_offsets."""
-        # padding zero
-        # torch.nn.utils.rnn.pad_sequence is slower than manually concate
+        import numpy as np
         offset_len = [len(offset) for offset in block_offsets]
         max_offsets_len = max(offset_len)
-        pad_block_offsets = [
-            offset + [0] * (max_offsets_len - off_len)
-            for offset, off_len in zip(block_offsets, offset_len)
-        ]
-        block_offsets = torch.tensor(pad_block_offsets).to(device)
+        batch_size = len(offset_len)
+        pad_block_offsets = np.zeros((batch_size, max_offsets_len),
+                                     dtype=np.int64)
+
+        for pad_offset, offset, off_len in zip(pad_block_offsets,
+                                               block_offsets, offset_len):
+            pad_offset[:off_len] = offset
+
+        block_offsets = torch.from_numpy(pad_block_offsets).to(device)
         return block_offsets
 
     @classmethod
@@ -185,8 +197,9 @@ def model_forward(
 ):
     """perform model forward."""
     stream = stream or torch.cuda.current_stream()
-    with torch.no_grad(), torch.cuda.stream(stream):
+    with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
+        inputs = inputs.to_device('cuda')
         context = StepContext(
             inputs=inputs,
             world_size=world_size,
@@ -319,6 +332,29 @@ def _tp_build_model(
     patched_model = None
     cache_engine = None
 
+    def _broadcast_config(cache_config):
+        """broadcast cache config, use minimum cache."""
+        if rank == 0:
+            gathered_configs = [None] * world_size
+            dist.gather_object(cache_config, gathered_configs)
+            num_gpu_blocks_list = [
+                config.num_gpu_blocks for config in gathered_configs
+            ]
+            num_cpu_blocks_list = [
+                config.num_cpu_blocks for config in gathered_configs
+            ]
+            min_num_gpu_blocks = min(num_gpu_blocks_list)
+            min_num_cpu_blocks = min(num_cpu_blocks_list)
+            cache_config.num_cpu_blocks = min_num_cpu_blocks
+            cache_config.num_gpu_blocks = min_num_gpu_blocks
+            config_list = [cache_config]
+        else:
+            gathered_configs = None
+            dist.gather_object(cache_config, gathered_configs)
+            config_list = [None]
+        dist.broadcast_object_list(config_list)
+        return config_list[0]
+
     try:
         config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
@@ -341,6 +377,7 @@ def _tp_build_model(
         )
 
         _update_cache_config(model_config, cache_config)
+        cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
                                    rank=rank,

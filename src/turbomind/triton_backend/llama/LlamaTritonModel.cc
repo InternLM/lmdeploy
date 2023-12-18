@@ -64,36 +64,59 @@ void LlamaTritonModel<T>::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `kv_head_num` is not set, default to `head_num` (%d).", (int)kv_head_num_);
     }
 
-    if (!max_batch_size_) {
-        max_batch_size_ = 32;
-        TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.", (int)max_batch_size_);
+    if (!attn_params_.max_position_embeddings) {
+        attn_params_.max_position_embeddings = 2048;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
+                       (int)attn_params_.max_position_embeddings);
     }
 
-    if (!session_len_) {
-        session_len_ = 2160;
-        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)session_len_);
+    if (!engine_params_.max_batch_size) {
+        engine_params_.max_batch_size = 64;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_batch_size` is not set, default to %d.",
+                       (int)engine_params_.max_batch_size);
     }
 
-    if (!max_context_token_num_) {
-        max_context_token_num_ = (int)std::sqrt(max_batch_size_);
+    if (!engine_params_.session_len) {
+        engine_params_.session_len = attn_params_.max_position_embeddings;
+        TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_params_.session_len);
+    }
+
+    if (!engine_params_.max_context_token_num) {
+        engine_params_.max_context_token_num = engine_params_.session_len;
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
-                       (int)max_context_token_num_);
+                       (int)engine_params_.max_context_token_num);
     }
 
-    if (!step_length_) {
-        step_length_ = 1;
-        TM_LOG_WARNING("[LlamaTritonModel] `step_length` is not set, default to %d.", (int)step_length_);
+    if (engine_params_.max_context_token_num <= engine_params_.max_batch_size) {
+        engine_params_.max_context_token_num *= engine_params_.session_len;
+        TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` = %d.", (int)engine_params_.max_context_token_num);
     }
 
-    if (!cache_max_entry_count_) {
-        cache_max_entry_count_ = 32;
-        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %d.",
-                       (int)cache_max_entry_count_);
+    if (!engine_params_.step_length) {
+        engine_params_.step_length = 1;
     }
 
-    if (!cache_chunk_size_) {
-        cache_chunk_size_ = cache_max_entry_count_;
-        TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.", (int)cache_chunk_size_);
+    if (!engine_params_.cache_max_block_count) {
+        engine_params_.cache_max_block_count = .95f;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_max_entry_count` is not set, default to %f.",
+                       engine_params_.cache_max_block_count);
+    }
+
+    if (!cache_block_seq_len_) {
+        cache_block_seq_len_ = 128;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_block_seq_len` is not set, default to %d.", cache_block_seq_len_);
+    }
+
+    if (!engine_params_.cache_chunk_size) {
+        engine_params_.cache_chunk_size = engine_params_.cache_max_block_count;
+        TM_LOG_WARNING("[LlamaTritonModel] `cache_chunk_size` is not set, default to %d.",
+                       (int)engine_params_.cache_chunk_size);
+    }
+
+    if (!engine_params_.num_tokens_per_iter) {
+        engine_params_.num_tokens_per_iter = engine_params_.max_context_token_num;
+        TM_LOG_WARNING("[LlamaTritonModel] `num_tokens_per_iter` is not set, default to `max_context_token_num` (%d).",
+                       (int)engine_params_.num_tokens_per_iter);
     }
 }
 
@@ -101,52 +124,75 @@ template<typename T>
 LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
                                       size_t      pipeline_para_size,
                                       int         enable_custom_all_reduce,
-                                      std::string model_dir):
+                                      std::string model_dir,
+                                      std::string config):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     shared_weights_(std::vector<std::shared_ptr<ft::LlamaWeight<T>>>(ft::getDeviceCount())),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
-    model_dir_ = model_dir;
-    const std::string inifile{model_dir + "/config.ini"};
-    INIReader         reader = INIReader(inifile);
-    if (reader.ParseError() < 0) {
-        std::cout << "[ERROR] Can't load '" << inifile << "'\n";
-        ft::FT_CHECK(false);
+    INIReader reader;
+    FT_CHECK_WITH_INFO((config.empty() ^ model_dir.empty()), "invalid init options");
+
+    if (!config.empty()) {
+        std::FILE* tmpf = std::tmpfile();
+        std::fputs(config.c_str(), tmpf);
+        std::rewind(tmpf);
+        reader = INIReader(tmpf);
+        if (reader.ParseError() < 0) {
+            TM_LOG_ERROR("[ERROR] Can't init with config %s", config.c_str());
+            ft::FT_CHECK(false);
+        }
     }
 
-    model_name_            = reader.Get("llama", "model_name");
-    head_num_              = reader.GetInteger("llama", "head_num");
-    kv_head_num_           = reader.GetInteger("llama", "kv_head_num", 0);
-    size_per_head_         = reader.GetInteger("llama", "size_per_head");
-    inter_size_            = reader.GetInteger("llama", "inter_size");
-    num_layer_             = reader.GetInteger("llama", "num_layer");
-    vocab_size_            = reader.GetInteger("llama", "vocab_size");
-    norm_eps_              = reader.GetFloat("llama", "norm_eps");
-    start_id_              = reader.GetInteger("llama", "start_id");
-    end_id_                = reader.GetInteger("llama", "end_id");
-    max_batch_size_        = reader.GetInteger("llama", "max_batch_size", 0);
-    max_context_token_num_ = reader.GetInteger("llama", "max_context_token_num", 0);
-    session_len_           = reader.GetInteger("llama", "session_len", 0);
-    step_length_           = reader.GetInteger("llama", "step_length", 0);
-    cache_max_entry_count_ = reader.GetInteger("llama", "cache_max_entry_count", 0);
-    use_context_fmha_      = reader.GetInteger("llama", "use_context_fmha", 1);
-    cache_chunk_size_      = reader.GetInteger("llama", "cache_chunk_size", 0);
-    attn_bias_             = reader.GetInteger("llama", "attn_bias", 0);
-    quant_policy_          = reader.GetInteger("llama", "quant_policy", 0);
-    group_size_            = reader.GetInteger("llama", "group_size", 0);
+    if (!model_dir.empty()) {
+        model_dir_ = model_dir;
+        const std::string inifile{model_dir + "/config.ini"};
+        reader = INIReader(inifile);
+        if (reader.ParseError() < 0) {
+            TM_LOG_ERROR("[ERROR] Can't load %s", inifile.c_str());
+            ft::FT_CHECK(false);
+        }
+    }
 
-    attn_params_.rotray_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
+    model_name_          = reader.Get("llama", "model_name");
+    head_num_            = reader.GetInteger("llama", "head_num");
+    kv_head_num_         = reader.GetInteger("llama", "kv_head_num", 0);
+    size_per_head_       = reader.GetInteger("llama", "size_per_head");
+    inter_size_          = reader.GetInteger("llama", "inter_size");
+    num_layer_           = reader.GetInteger("llama", "num_layer");
+    vocab_size_          = reader.GetInteger("llama", "vocab_size");
+    norm_eps_            = reader.GetFloat("llama", "norm_eps");
+    start_id_            = reader.GetInteger("llama", "start_id");
+    end_id_              = reader.GetInteger("llama", "end_id");
+    use_context_fmha_    = reader.GetInteger("llama", "use_context_fmha", 1);
+    cache_block_seq_len_ = reader.GetInteger("llama", "cache_block_seq_len", 0);
+
+    attn_bias_    = reader.GetInteger("llama", "attn_bias", 0);
+    quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
+    group_size_   = reader.GetInteger("llama", "group_size", 0);
+
+    // rotary embedding parameters
+    attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
     attn_params_.rotary_embedding_base   = reader.GetFloat("llama", "rope_theta", 10000.0f);
+    attn_params_.rope_scaling_factor     = reader.GetFloat("llama", "rope_scaling_factor", 0.f);
     attn_params_.max_position_embeddings = reader.GetInteger("llama", "max_position_embeddings", 0);
-    attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
-    attn_params_.use_logn_attn           = reader.GetInteger("llama", "use_logn_attn", 0);
+    // attn_params_.use_dynamic_ntk         = reader.GetInteger("llama", "use_dynamic_ntk", 0);
+    attn_params_.use_logn_attn = reader.GetInteger("llama", "use_logn_attn", 0);
+
+    engine_params_.max_batch_size        = reader.GetInteger("llama", "max_batch_size", 0);
+    engine_params_.max_context_token_num = reader.GetInteger("llama", "max_context_token_num", 0);
+    engine_params_.session_len           = reader.GetInteger("llama", "session_len", 0);
+    engine_params_.step_length           = reader.GetInteger("llama", "step_length", 0);
+
+    engine_params_.cache_max_block_count = reader.GetFloat("llama", "cache_max_entry_count", 0);
+    engine_params_.cache_chunk_size      = reader.GetInteger("llama", "cache_chunk_size", 0);
+
+    engine_params_.num_tokens_per_iter   = reader.GetInteger("llama", "num_tokens_per_iter", 0);
+    engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
+    engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
     handleMissingParams();
-
-    if (max_context_token_num_ <= max_batch_size_) {
-        max_context_token_num_ *= session_len_;
-    }
 
     shared_state_          = std::make_shared<typename ft::LlamaV2<T>::SharedState>();
     shared_state_->barrier = std::make_shared<ft::Barrier>(tensor_para_size);
@@ -219,7 +265,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
 
     ft::FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
-    ft::FT_CHECK(pipeline_para.world_size_ = pipeline_para_size_);
+    ft::FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
 
     auto llama = std::make_unique<ft::LlamaV2<T>>(head_num_,
                                                   kv_head_num_,
@@ -227,18 +273,14 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   inter_size_,
                                                   num_layer_,
                                                   vocab_size_,
-                                                  attn_params_,
                                                   norm_eps_,
-                                                  max_batch_size_,
-                                                  max_context_token_num_,
-                                                  session_len_,
-                                                  step_length_,
+                                                  attn_params_,
                                                   start_id_,
                                                   end_id_,
-                                                  cache_max_entry_count_,
-                                                  cache_chunk_size_,
+                                                  cache_block_seq_len_,
                                                   quant_policy_,
                                                   use_context_fmha_,
+                                                  engine_params_,
                                                   shared_state_,
                                                   shared_weights_[device_id].get(),
                                                   tensor_para,
@@ -256,7 +298,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                           std::move(cuda_device_prop_ptr),
                                           shared_weights_[device_id],
                                           std::move(llama),
-                                          session_len_});
+                                          engine_params_.session_len});
 }
 
 template<typename T>
@@ -307,8 +349,25 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       group_size_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
-    shared_weights_[device_id]->loadModel(model_dir_);
+    // model inited with model_dir
+    if (model_dir_ != "") {
+        shared_weights_[device_id]->loadModel(model_dir_);
+    }
     return;
+}
+
+template<typename T>
+TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
+{
+    ft::check_cuda_error(cudaSetDevice(deviceId));
+    // shared_weight should be created before getParams
+    ft::FT_CHECK(shared_weights_[deviceId] != nullptr);
+    ft::TensorMap output = shared_weights_[deviceId]->getParams();
+    TensorMap     result;
+    for (auto [name, tensor] : output) {
+        result.emplace(name, triton::Tensor{tensor.where, tensor.type, tensor.shape, tensor.data});
+    }
+    return result;
 }
 
 template<typename T>
@@ -318,14 +377,16 @@ std::string LlamaTritonModel<T>::toString()
     ss << "Model: "
        << "\nhead_num: " << head_num_ << "\nkv_head_num: " << kv_head_num_ << "\nsize_per_head: " << size_per_head_
        << "\ninter_size: " << inter_size_ << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_
-       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << max_batch_size_
-       << "\nmax_context_token_num: " << max_context_token_num_ << "\nsession_len: " << session_len_
-       << "\nstep_length: " << step_length_ << "\ncache_max_entry_count: " << cache_max_entry_count_
-       << "\ncache_chunk_size: " << cache_chunk_size_ << "\nuse_context_fmha: " << use_context_fmha_
-       << "\nstart_id: " << start_id_ << "\ntensor_para_size: " << tensor_para_size_
-       << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
-       << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_
-       << "\ngroup_size: " << group_size_ << std::endl;
+       << "\nattn_bias: " << attn_bias_ << "\nmax_batch_size: " << engine_params_.max_batch_size
+       << "\nmax_context_token_num: " << engine_params_.max_context_token_num
+       << "\nsession_len: " << engine_params_.session_len << "\nstep_length: " << engine_params_.step_length
+       << "\ncache_max_entry_count: " << engine_params_.cache_max_block_count
+       << "\ncache_block_seq_len: " << cache_block_seq_len_ << "\ncache_chunk_size: " << engine_params_.cache_chunk_size
+       << "\nuse_context_fmha: " << use_context_fmha_ << "\nstart_id: " << start_id_
+       << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
+       << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
+       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << "\ngroup_size: " << group_size_
+       << std::endl;
 
     return ss.str();
 }

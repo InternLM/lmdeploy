@@ -14,7 +14,13 @@
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_even_N, bool Is_even_K, bool Return_softmax>
 __global__ void flash_fwd_kernel(Flash_fwd_params params)
 {
+
+#if __CUDA_ARCH__ >= 800
     flash::compute_attn<Kernel_traits, Is_dropout, Is_causal, Is_even_N, Is_even_K, Return_softmax>(params);
+#else
+    // TODO: support flash attention2 on sm<80
+    assert(false);
+#endif
 }
 
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal>
@@ -57,6 +63,7 @@ void run_flash_fwd(Flash_fwd_params& params, cudaStream_t stream)
     });
 }
 
+#if 0
 template<typename T>
 void run_mha_fwd_hdim32(Flash_fwd_params& params, cudaStream_t stream)
 {
@@ -94,6 +101,7 @@ void run_mha_fwd_hdim64(Flash_fwd_params& params, cudaStream_t stream)
         }
     });
 }
+#endif
 
 template<typename T>
 void run_mha_fwd_hdim128(Flash_fwd_params& params, cudaStream_t stream)
@@ -139,6 +147,7 @@ void run_mha_fwd_hdim128(Flash_fwd_params& params, cudaStream_t stream)
     });
 }
 
+#if 0
 template<typename T>
 void run_mha_fwd_hdim256(Flash_fwd_params& params, cudaStream_t stream)
 {
@@ -168,3 +177,4 @@ void run_mha_fwd_hdim256(Flash_fwd_params& params, cudaStream_t stream)
         // Is_causal>(params, stream);
     });
 }
+#endif

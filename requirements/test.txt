@@ -1,0 +1,5 @@
+allure-pytest
+coverage
+pynvml
+pytest
+pyyaml

@@ -121,26 +121,36 @@ def parse_requirements(fname='requirements.txt', with_version=True):
 
 if __name__ == '__main__':
     lmdeploy_package_data = ['lmdeploy/bin/llama_gemm']
-    setup(name='lmdeploy',
-          version=get_version(),
-          description='A toolset for compressing, deploying and serving LLM',
-          long_description=readme(),
-          long_description_content_type='text/markdown',
-          author='OpenMMLab',
-          author_email='openmmlab@gmail.com',
-          packages=find_packages(exclude=()),
-          package_data={
-              'lmdeploy': lmdeploy_package_data,
-          },
-          include_package_data=True,
-          install_requires=parse_requirements('requirements.txt'),
-          has_ext_modules=check_ext_modules,
-          classifiers=[
-              'Programming Language :: Python :: 3.8',
-              'Programming Language :: Python :: 3.9',
-              'Programming Language :: Python :: 3.10',
-              'Programming Language :: Python :: 3.11',
-              'Intended Audience :: Developers',
-              'Intended Audience :: Education',
-              'Intended Audience :: Science/Research',
-          ])
+    setup(
+        name='lmdeploy',
+        version=get_version(),
+        description='A toolset for compressing, deploying and serving LLM',
+        long_description=readme(),
+        long_description_content_type='text/markdown',
+        author='OpenMMLab',
+        author_email='openmmlab@gmail.com',
+        packages=find_packages(exclude=()),
+        package_data={
+            'lmdeploy': lmdeploy_package_data,
+        },
+        include_package_data=True,
+        setup_requires=parse_requirements('requirements/build.txt'),
+        tests_require=parse_requirements('requirements/test.txt'),
+        install_requires=parse_requirements('requirements/runtime.txt'),
+        extras_require={
+            'all': parse_requirements('requirements.txt'),
+            'lite': parse_requirements('requirements/lite.txt'),
+            'serve': parse_requirements('requirements/serve.txt')
+        },
+        has_ext_modules=check_ext_modules,
+        classifiers=[
+            'Programming Language :: Python :: 3.8',
+            'Programming Language :: Python :: 3.9',
+            'Programming Language :: Python :: 3.10',
+            'Programming Language :: Python :: 3.11',
+            'Intended Audience :: Developers',
+            'Intended Audience :: Education',
+            'Intended Audience :: Science/Research',
+        ],
+        entry_points={'console_scripts': ['lmdeploy = lmdeploy.cli:run']},
+    )

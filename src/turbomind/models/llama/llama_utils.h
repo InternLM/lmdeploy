@@ -2,6 +2,7 @@
 
 #pragma once
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/nvtx_utils.h"
 #include <cuda_runtime.h>
 #include <sstream>
 #include <string>
@@ -65,5 +66,19 @@ std::string format(const std::pair<std::string, Tensor>& p);
 size_t curandStateGetSize();
 
 bool isDebug();
+
+struct NvtxScope {
+    explicit NvtxScope(const std::string& name)
+    {
+        PUSH_RANGE(name.c_str());
+    }
+
+    ~NvtxScope()
+    {
+        POP_RANGE;
+    }
+};
+
+int64_t& gSequenceIds(int batch_idx);
 
 }  // namespace turbomind

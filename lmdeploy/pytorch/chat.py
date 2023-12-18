@@ -53,7 +53,7 @@ def main(
         stream_output (bool): indicator for streaming output or not
     """
     # tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(model_path, trust_remote_code)
+    tokenizer = Tokenizer(model_path)
     tm_model = tm.Engine(model_path,
                          tp=tp,
                          trust_remote_code=trust_remote_code)
@@ -100,10 +100,10 @@ def main(
                     sampling_param=sampling_param):
                 status, res, tokens = outputs
                 # decode res
-                response = tokenizer.decode(res)[response_size:]
+                response = tokenizer.decode(res, offset=response_size)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
-                response_size += len(response)
+                response_size = tokens
 
             # update step
             step += len(input_ids) + tokens

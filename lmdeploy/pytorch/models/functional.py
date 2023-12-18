@@ -88,7 +88,7 @@ def get_alibi_biases(n_heads: int, mask: torch.Tensor):
     return distance * m[None, :, None, None]
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def attention_forward_with_paged_attention(
     hidden_states: Tensor,
     history_lengths: Sequence,
@@ -198,7 +198,6 @@ def attention_forward_with_paged_attention(
             b_seq_len=q_seq_length,
             b_kv_seq_len=kv_seq_length,
             max_input_len=max_seq_len,
-            BLOCK=block_size,
         )
     else:
         if bias_type == 'alibi':

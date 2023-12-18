@@ -3,12 +3,12 @@ import enum
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List
 
 import torch
 from torch import Tensor
 
-from .block import LogicalTokenBlock
+from .block import LogicalTokenBlocks
 
 
 class SamplingParam:
@@ -16,8 +16,8 @@ class SamplingParam:
 
     def __init__(
         self,
-        top_p: float = 0.8,
-        top_k: int = None,
+        top_p: float = 1.0,
+        top_k: int = 1,
         temperature: float = 0.8,
         repetition_penalty: float = 1.0,
         ignore_eos: bool = False,
@@ -59,16 +59,17 @@ def _new_msg_id():
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int) -> None:
+    def __init__(self, session_id: int, block_size: int) -> None:
         self.session_id = session_id
+        self.block_size = block_size
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: Dict[int, SchedulerSequence] = dict()
 
-    def add_sequence(
-            self,
-            token_ids: Tensor,
-            max_output_len: int = 512,
-            sampling_param: SamplingParam = None) -> 'SchedulerSequence':
+    def add_sequence(self,
+                     token_ids: Tensor,
+                     max_output_len: int = 512,
+                     sampling_param: SamplingParam = None,
+                     adapter_id: int = -1) -> 'SchedulerSequence':
         """Add a new message."""
         if not isinstance(token_ids, Tensor):
             token_ids = torch.tensor(token_ids)
@@ -80,9 +81,11 @@ class SchedulerSession:
         seq = SchedulerSequence(seq_id=_new_msg_id(),
                                 token_ids=token_ids,
                                 session=self,
+                                block_size=self.block_size,
                                 status=MessageStatus.WAITING,
                                 remain_output_len=max_output_len,
                                 sampling_param=sampling_param,
+                                adapter_id=adapter_id,
                                 arrive_time=time.time())
         self.sequences[seq.seq_id] = seq
         return seq
@@ -106,11 +109,13 @@ class SchedulerSession:
             seq_id=_new_msg_id(),
             token_ids=token_ids,
             session=self,
+            block_size=self.block_size,
             history_token_ids=seq.history_token_ids.copy(),
-            status=seq.status,
             remain_output_len=max_output_len,
-            logical_blocks=deepcopy(seq.logical_blocks),
             sampling_param=sampling_param,
+            status=seq.status,
+            logical_blocks=seq.logical_blocks.clone(),
+            adapter_id=seq.adapter_id,
             arrive_time=time.time(),
             meta=deepcopy(seq.meta))
 
@@ -124,15 +129,21 @@ class SchedulerSequence:
     seq_id: int
     token_ids: Tensor
     session: SchedulerSession
+    block_size: int
     history_token_ids: list = field(default_factory=list)
     remain_output_len: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     status: MessageStatus = MessageStatus.WAITING
-    logical_blocks: Sequence[LogicalTokenBlock] = field(default_factory=list)
+    logical_blocks: LogicalTokenBlocks = None
     sender_id: int = -1
     req_id: int = -1
+    adapter_id: int = -1
     arrive_time: float = 0.0
     meta: Any = None
+
+    def __post_init__(self):
+        self.logical_blocks = self.logical_blocks or LogicalTokenBlocks(
+            self.block_size)
 
     @property
     def history_len(self) -> int:
@@ -146,46 +157,27 @@ class SchedulerSequence:
 
     def num_logical_tokens(self) -> int:
         """num logitcal tokens."""
-        if len(self.logical_blocks) == 0:
-            return 0
-        else:
-            return sum(block.num_tokens for block in self.logical_blocks)
+        return self.logical_blocks.num_tokens()
+
+    def num_all_tokens(self) -> int:
+        """num all tokens."""
+        return len(self.token_ids) + self.history_len
 
     def num_required_tokens(self) -> int:
         """num required tokens."""
-        num_all_tokens = len(self.token_ids) + self.history_len
+        num_all_tokens = self.num_all_tokens()
         num_logical_tokens = self.num_logical_tokens()
         return num_all_tokens - num_logical_tokens
 
-    def append_tokens(self, num_tokens: int, block_size: int):
-        """Append new tokens, update logical blocks.
+    def num_required_blocks(self) -> int:
+        """num required blocks."""
+        return self.logical_blocks.num_required_blocks(
+            self.num_required_tokens())
 
-        Args:
-            num_tokens (int): Number of tokens.
-            block_size (int): Size of block.
-        """
-        if len(self.logical_blocks) == 0:
-            remain_num_tokens = num_tokens
-            next_block_id = 0
-        else:
-            last_block = self.logical_blocks[-1]
-            num_empty_slots = last_block.get_num_empty_slots()
-            num_append_slots = min(num_tokens, num_empty_slots)
-            last_block.append_tokens(num_append_slots)
-            remain_num_tokens = num_tokens - num_append_slots
-            next_block_id = last_block.block_id + 1
-
-        for block_id_offset, msg_offset in enumerate(
-                range(0, remain_num_tokens, block_size)):
-            num_tokens = min(remain_num_tokens - msg_offset, block_size)
-            logical_block = LogicalTokenBlock(next_block_id + block_id_offset,
-                                              block_size)
-            logical_block.append_tokens(num_tokens=num_tokens)
-            self.logical_blocks.append(logical_block)
-
-    def update_token_ids(self, token_ids: Tensor):
+    def update_token_ids(self, token_ids: Tensor, update_history: bool = True):
         """Update token ids, old token ids will be added to history."""
-        self.history_token_ids += self.token_ids.tolist()
+        if update_history:
+            self.history_token_ids += self.token_ids.tolist()
         if not isinstance(token_ids, Tensor):
             token_ids = self.token_ids.new_tensor(token_ids)
         if token_ids.dim() == 0:
@@ -195,9 +187,10 @@ class SchedulerSequence:
 
     def set_step(self, step: int):
         """set step."""
-        assert step < self.history_len
-        history_token_ids = torch.cat(self.history_token_ids)
-        new_history_ids = [history_token_ids[:step]]
+        assert step <= self.history_len
+        history_token_ids = torch.tensor(self.history_token_ids,
+                                         dtype=torch.long)
+        new_history_ids = self.history_token_ids[:step]
         new_token_ids = torch.cat([history_token_ids[step:], self.token_ids])
         self.history_token_ids = new_history_ids
         self.token_ids = new_token_ids

@@ -53,15 +53,6 @@ protected:
     int* h_pinned_finished_sum_ = nullptr;
 
 public:
-    curandState_t* topk_curandstate_buf()
-    {
-        return static_cast<BaseSamplingLayer<T>*>(topk_decode_)->curandstate_buf();
-    }
-    curandState_t* topp_curandstate_buf()
-    {
-        return static_cast<BaseSamplingLayer<T>*>(topp_decode_)->curandstate_buf();
-    }
-
     DynamicDecodeLayer(size_t           vocab_size,
                        size_t           vocab_size_padded,
                        int              end_id,

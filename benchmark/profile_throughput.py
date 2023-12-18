@@ -1,6 +1,7 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import csv
 import json
 import os
-import os.path as osp
 import random
 import time
 from queue import Queue
@@ -8,6 +9,8 @@ from threading import Thread
 from typing import List, Tuple
 
 import fire
+import numpy as np
+from tqdm import tqdm
 
 from lmdeploy.tokenizer import Tokenizer
 
@@ -55,44 +58,66 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int = 1):
+    def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
+        # avoid turbomind checking chat template name by setting
+        # `model_name='llama'`
         from lmdeploy.pytorch.engine import Engine
-        from lmdeploy.pytorch.messages import SamplingParam
-        tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                        'tokenizer')
+        tokenizer_model_path = os.path.join(model_path, 'triton_models',
+                                            'tokenizer')
         if os.path.exists(tokenizer_model_path):
             from lmdeploy.turbomind import TurboMind
-            tokenizer = Tokenizer(tokenizer_model_path)
-            tm_model = TurboMind(model_path=model_path, tp=tp)
+            tm_model = TurboMind(model_path=model_path,
+                                 model_name='llama',
+                                 tp=tp,
+                                 **kwargs)
         else:
-            tokenizer = Tokenizer(model_path)
-            tm_model = Engine(model_path, tp=tp)
-
-        self.sampling_param = SamplingParam(
-            top_k=40,
-            top_p=0.8,
-            temperature=0.8,
-            repetition_penalty=1.0,
-            ignore_eos=True,
-            random_seed=random.getrandbits(64),
-        )
-
+            tm_model = Engine(model_path, tp=tp, model_name='llama')
         self.tm_model = tm_model
-        self.tokenizer = tokenizer
+        self.tokenizer = tm_model.tokenizer
+        self.csv = csv
+        self.pbar = None
 
-    def _inference(self, queue, session_id: int):
-
+    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
+                   stream_output: bool):
+        from lmdeploy.pytorch.engine import Engine
+        from lmdeploy.pytorch.messages import SamplingParam
         model_inst = self.tm_model.create_instance()
-        while True:
-            request = queue.get()
-            if request is None:
-                # stop signal
-                queue.put(None)
-                return
-            else:
-                prompt, _, output_seqlen = request
-                input_ids = self.tokenizer.encode(prompt)
+        stats = []
+        # get each generated token's latency
+        per_token_latency_stats = []
+        for prompt, input_seqlen, output_seqlen in iter(
+                req_queue.get, [None, None, None]):
+            _per_token_latency_stats = [0] * (output_seqlen + 1)
+            offset = 0
+            prev = time.perf_counter()
+            n_prev_token = 0
 
+            input_ids = self.tokenizer(prompt).input_ids
+            # TODO: share same stream infer
+            if isinstance(self.tm_model, Engine):
+                sampling_param = SamplingParam(top_k=1,
+                                               top_p=1.0,
+                                               temperature=1.0,
+                                               ignore_eos=True)
+                for outputs in model_inst.stream_infer(
+                        session_id,
+                        input_ids=input_ids,
+                        request_output_len=output_seqlen,
+                        sampling_param=sampling_param):
+                    if len(outputs) > 1:
+                        res, n_token = outputs[-2:]
+                    else:
+                        res, n_token = outputs[0]
+                    self.tokenizer.decode(res, offset)
+                    offset = n_token
+                    now = time.perf_counter()
+                    if n_prev_token != n_token:
+                        _per_token_latency_stats[n_prev_token] = np.round(
+                            now - prev, 3)
+                        n_prev_token = n_token
+                    prev = now
+                model_inst.end(session_id)
+            else:
                 for outputs in model_inst.stream_infer(
                         session_id,
                         input_ids=input_ids,
@@ -102,66 +127,185 @@ class Engine:
                         sequence_start=True,
                         sequence_end=True,
                         ignore_eos=True,
-                        sampling_param=self.sampling_param):
-                    if len(outputs) > 1:
-                        res, tokens = outputs[-2:]
-                    else:
-                        res, tokens = outputs[0]
-                    self.tokenizer.decode(res)
+                        stream_output=stream_output):
+                    res, n_token = outputs[0]
+                    self.tokenizer.decode(res, offset)
+                    offset = n_token
+                    now = time.perf_counter()
+                    if n_prev_token != n_token:
+                        _per_token_latency_stats[n_prev_token] = np.round(
+                            now - prev, 3)
+                        n_prev_token = n_token
+                    prev = now
 
-                # for pytorch engine to restart a session
-                if hasattr(model_inst, 'end'):
-                    model_inst.end(session_id)
+            assert output_seqlen <= n_token <= output_seqlen + 1, \
+                f'Error. session_id({session_id}) request {output_seqlen} ' \
+                f'tokens, but generate {n_token} tokens.\n' \
+                f'prompt: {prompt}'
 
-    def process_request(self, requests, concurrency: int = 1):
-        q = Queue()
+            first_token_latency = _per_token_latency_stats[0]
+            completion_tokens = n_token
+            total_tokens = n_token + input_seqlen
+            stats.append([
+                first_token_latency, completion_tokens, output_seqlen,
+                total_tokens
+            ])
+            # skip the first token latency
+            per_token_latency_stats.append(_per_token_latency_stats[1:])
+            self.pbar.update(1)
+        res_queue.put((session_id, stats, per_token_latency_stats))
+
+    def process_request(self,
+                        requests,
+                        concurrency: int = 1,
+                        stream_output: bool = True):
+        res_queue = Queue()
+        req_queue = Queue()
         threads = []
+
+        self.pbar = tqdm(total=len(requests))
+
+        # feed request to q
+        for req in requests:
+            req_queue.put(req)
+        for i in range(concurrency):
+            req_queue.put([None, None, None])
 
         start = time.time()
 
         # start threads
         for i in range(concurrency):
-            t = Thread(target=self._inference, args=(q, i))
+            t = Thread(target=self._inference,
+                       args=(req_queue, res_queue, i, stream_output))
             t.start()
             threads.append(t)
-
-        # feed request to q
-        for req in requests:
-            q.put(req)
-
-        q.put(None)
 
         # wait for finish
         for t in threads:
             t.join()
 
-        end = time.time()
+        elapsed_time = time.time() - start
 
-        return end - start
+        stats = []
+        per_token_latency_stats = []
+        while not res_queue.empty():
+            session_id, _stats, _per_token_latency_stats = res_queue.get()
+            stats.append(np.array(_stats))
+            per_token_latency_stats += [
+                item for sublist in _per_token_latency_stats
+                for item in sublist
+            ]
+        stats = np.concatenate(stats).reshape(-1, 4)
+
+        first_token_latency_min = np.min(stats[:, 0], axis=0)
+        first_token_latency_max = np.max(stats[:, 0], axis=0)
+        first_token_latency_ave = np.mean(stats[:, 0], axis=0)
+        completion_tokens = np.sum(stats[:, 1], axis=0)
+        total_tokens = np.sum(stats[:, 3], axis=0)
+        prompt_tokens = total_tokens - completion_tokens
+        completion_token_throughput = completion_tokens / elapsed_time
+        total_token_throughput = total_tokens / elapsed_time
+        rps = len(requests) / elapsed_time
+        rpm = rps * 60
+
+        per_token_latency_stats.sort()
+        percentiles = [
+            np.round(
+                per_token_latency_stats[int(percent *
+                                            len(per_token_latency_stats))], 3)
+            for percent in [0.5, 0.75, 0.95, 0.99]
+        ]
+
+        print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
+              f'elapsed_time: {elapsed_time:.3f}s\n')
+        if stream_output:
+            print(f'first token latency(s)(min, max, ave): '
+                  f'{first_token_latency_min:.3f}, '
+                  f'{first_token_latency_max:.3f}, '
+                  f'{first_token_latency_ave:.3f}')
+            print(f'per-token latency(s) percentile(50, 75, 95, 99): '
+                  f'{percentiles}\n')
+        print(
+            f'number of prompt tokens: {prompt_tokens:.0f}\n'
+            f'number of completion tokens: {completion_tokens:.0f}\n'
+            f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
+            f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
+            f'RPS (request per second): {rps:.3f} req/s\n'
+            f'RPM (request per minute): {rpm:.3f} req/min\n'
+            f'{"-" * 50}\n')
+
+        if self.csv:
+            with open(self.csv, 'w') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow([
+                    'batch', 'num_promts', 'prompt_tokens',
+                    'completion_tokens', '1st_token_latency(min)(s)',
+                    '1st_token_latency(max)(s)', '1st_token_latency(ave)(s)',
+                    'percentile50(s)', 'percentile75(s)', 'percentile95(s)',
+                    'percentile99(s)', 'output token thr(tokens/s)',
+                    'total token thr(token/s)', 'RPS', 'RPM'
+                ])
+                writer.writerow([
+                    concurrency,
+                    len(requests), prompt_tokens, completion_tokens,
+                    f'{first_token_latency_min:.3f}' if stream_output else '-',
+                    f'{first_token_latency_max:.3f}' if stream_output else '-',
+                    f'{first_token_latency_ave:.3f}' if stream_output else '-',
+                    f'{percentiles[0]:.3f}' if stream_output else '-',
+                    f'{percentiles[1]:.3f}' if stream_output else '-',
+                    f'{percentiles[2]:.3f}' if stream_output else '-',
+                    f'{percentiles[3]:.3f}' if stream_output else '-',
+                    f'{completion_token_throughput:.3f}',
+                    f'{total_token_throughput:.3f}', f'{rps:.3f}', f'{rpm:.3f}'
+                ])
 
 
 def main(dataset: str,
          model_path: str,
-         concurrency: int = 1,
-         num_prompts: int = 1000,
-         tp: int = 1):
+         concurrency: int = 64,
+         num_prompts: int = 2000,
+         tp: int = 1,
+         top_k: int = 1,
+         top_p: float = 1.0,
+         temperature: float = 1.0,
+         stream_output: bool = True,
+         csv: str = './profile_throughput.csv',
+         log_level: str = 'ERROR',
+         seed: int = 0):
+    """Benchmark the request throughput of lmdeploy in localhost.
 
-    engine = Engine(model_path, tp=tp)
-    tokenizer = engine.tokenizer
+    Args:
+        dataset (str): Path to the dataset
+        model_path (str): Path to a model in localhost or a model_repo_id in huggingface.co
+        concurrency (int, optional): Number of working threads to process the sampled prompts.
+            Defaults to 64.
+        num_prompts (int, optional): Number of prompts to process. Defaults to 2000.
+        tp (int, optional): Number of GPUs for tensor parallel. Defaults to 1.
+        top_k (int, optional): The number of highest probability vocabulary tokens
+            to keep for top-k-filtering. Defaults to 1.
+        top_p (float, optional): the set of most probable tokens with
+            probabilities that add up to top_p or higher
+            are kept for generation. Defaults to 1.0.
+        temperature (float, optional): The value used to modulate the next token probabilities.
+            Defaults to 1.0.
+        stream_output (bool, optional): Indicator for streaming output. Defaults to True.
+        csv (str, optional): The path to save the result.
+        log_level(str, optional): The log level. Defaults to INFO
+        seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
+    """    # noqa
+    random.seed(seed)
+    os.environ['TM_LOG_LEVEL'] = log_level
 
-    requests = sample_requests(dataset, num_prompts, tokenizer)
+    engine = Engine(model_path,
+                    tp=tp,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                    csv=csv)
 
-    elapsed_time = engine.process_request(requests, concurrency)
-    total_num_tokens = sum(prompt_len + output_len
-                           for _, prompt_len, output_len in requests)
-    total_num_out_tokens = sum(output_len for _, _, output_len in requests)
-    print(f'Throughput requests: {len(requests) / elapsed_time:.2f} req/s')
-    print(
-        f'Throughput requests: {len(requests) * 60 / elapsed_time:.2f} req/min'
-    )
-    print(f'Throughput tokens: {total_num_tokens / elapsed_time:.2f} tokens/s')
-    print('Throughput tokens(output only):'
-          f'{total_num_out_tokens / elapsed_time:.2f} tokens/s')
+    requests = sample_requests(dataset, num_prompts, engine.tokenizer)
+
+    engine.process_request(requests, concurrency, stream_output)
 
 
 if __name__ == '__main__':

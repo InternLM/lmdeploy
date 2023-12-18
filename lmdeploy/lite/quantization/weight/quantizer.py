@@ -8,7 +8,7 @@ from lmdeploy.lite.utils import (QParams, cal_qparams_per_channel_absmax,
                                  cal_qparams_per_group_absmax,
                                  cal_qparams_per_group_minmax,
                                  cal_qparams_per_tensor_absmax,
-                                 cal_qparams_per_tensor_minmax)
+                                 cal_qparams_per_tensor_minmax, precise_round)
 from lmdeploy.lite.utils.global_avail import GlobalAvailMixin
 
 
@@ -119,8 +119,10 @@ class WeightQuantizer(GlobalAvailMixin):
             torch.Tensor: The fake quantized weight tensor.
         """
 
+        float_w = weight.float()
+
         if qparams is None:
-            qparams = self.calculate_qparams(weight)
+            qparams = self.calculate_qparams(float_w)
 
         scales = qparams.scales
         zero_points = qparams.zero_points
@@ -133,17 +135,18 @@ class WeightQuantizer(GlobalAvailMixin):
         # per group scales shape: [out_c, in_c//group_size, 1]
         if len(scales.shape) > 2:
             # scales shape: [out_c, in_c//group_size, 1]
-            weight = weight.reshape(out_c, scales.shape[1], -1)
+            float_w = float_w.reshape(out_c, scales.shape[1], -1)
 
         if zero_points is None:
             assert self.symmetry
-            real_qweight = (weight / scales).round()
+            real_qweight = (float_w / scales).round()
             fake_qweight = real_qweight * scales
 
         else:
             assert not self.symmetry
 
-            real_qweight = (weight / scales).round() + zero_points
+            real_qweight = precise_round(
+                (float_w - float_w.min(-1, keepdim=True)[0]) / scales)
             fake_qweight = (real_qweight - zero_points) * scales
 
         if len(scales.shape) > 2:
@@ -153,4 +156,4 @@ class WeightQuantizer(GlobalAvailMixin):
         if real:
             return real_qweight.to(torch.int32)
         else:
-            return fake_qweight
+            return fake_qweight.to(weight.dtype)

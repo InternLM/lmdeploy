@@ -6,7 +6,6 @@ from typing import Dict, List
 
 from lmdeploy.utils import get_logger
 
-from ..block import PhysicalTokenBlock
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession
 from .block_manager import BlockManager
@@ -14,7 +13,6 @@ from .block_manager import BlockManager
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
-BlockTable = List[PhysicalTokenBlock]
 
 
 def _find_seq_with_session_id(group: SeqList, session_id: int):
@@ -29,7 +27,6 @@ class SchedulerOutput:
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
     copy_map: Dict[int, int]
-    block_tables: List[BlockTable]
 
 
 class Scheduler:
@@ -48,11 +45,9 @@ class Scheduler:
         self.waiting: SeqList = []
         self.running: SeqList = []
         self.hanging: SeqList = []
-        self.aborted: SeqList = []
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = BlockManager(
-            cache_config.block_size,
             cache_config.num_gpu_blocks,
             cache_config.num_cpu_blocks,
         )
@@ -88,7 +83,7 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id)
+        session = SchedulerSession(session_id, self.cache_config.block_size)
         self.sessions[session_id] = session
         return session
 
@@ -108,46 +103,97 @@ class Scheduler:
                 self.scheduler_config.max_request_output_len
         self.waiting.append(seq)
 
-    def _schedule(self):
-        """Schedule next step.
+    def _schedule_prefill(self):
+        """Schedule for prefilling."""
 
-        Running is the messages to perform inference. Swap in/swap out is the
-        table used to perform memory paging (between host and device)
-
-        The schedule follow steps:
-        1. Try allocate resources for all running sequence. If there are no
-            enough resources, try `swap out` caches of hanging and waiting
-            sequence. If there are still no enough resources, move the sequence
-            to waiting.
-        2. Check if sequence in the waiting list can be moved to running
-        """
-        running: SeqList = []
-        swap_out_map: Dict[int, int] = {}
-        swap_in_map: Dict[int, int] = {}
-        copy_map: Dict[int, int] = {}
+        max_batches = self.scheduler_config.max_batches - len(self.running)
         block_manager = self.block_manager
         eviction_helper = self.eviction_helper
+        swap_out_map: Dict[int, int] = dict()
+        swap_in_map: Dict[int, int] = dict()
+        copy_map: Dict[int, int] = dict()
+        running: SeqList = []
 
         def _to_running(seq: SchedulerSequence):
+            """to running."""
+            self._set_message_status(seq, MessageStatus.RUNNING)
+            running.append(seq)
+
+        def _evict_until_can_append(seq: SchedulerSequence):
+            """evict until can append."""
+            while eviction_helper.try_swap_out_unused(self.hanging,
+                                                      self.waiting[1:],
+                                                      swap_out_map):
+                if block_manager.can_append_slot(seq):
+                    return True
+            return False
+
+        def _reorder_waiting():
+            """reorder waiting."""
+            self.waiting = sorted(self.waiting,
+                                  key=lambda seq: seq.arrive_time)
+
+        if len(running) >= max_batches or len(self.waiting) == 0:
+            return running, swap_in_map, swap_out_map, copy_map
+
+        _reorder_waiting()
+        while len(self.waiting) > 0 and len(running) < max_batches:
+            seq = self.waiting[0]
+
+            if not block_manager.can_allocate(seq):
+                if not _evict_until_can_append(seq):
+                    break
+
+            if eviction_helper.need_swap_in(seq):
+                if not eviction_helper.try_swap_in(seq, swap_in_map):
+                    break
+            # allocate session memory
+            block_manager.allocate(seq)
+            self.waiting.pop(0)
+            _to_running(seq)
+
+        self.running += running
+        return running, swap_in_map, swap_out_map, copy_map
+
+    def _schedule_decoding(self):
+        """schedule decoding."""
+        assert len(self.running) != 0
+
+        block_manager = self.block_manager
+        eviction_helper = self.eviction_helper
+        swap_out_map: Dict[int, int] = dict()
+        swap_in_map: Dict[int, int] = dict()
+        copy_map: Dict[int, int] = dict()
+        running: SeqList = []
+
+        def _to_running(seq: SchedulerSequence):
+            """to running."""
             self._set_message_status(seq, MessageStatus.RUNNING)
             running.append(seq)
 
         def _try_append_slot(seq):
             """try append slot."""
-            if self.block_manager.can_append_slot(seq):
-                self.block_manager.append_slot(seq)
+            if seq.num_required_blocks() == 0:
                 _to_running(seq)
                 return True
-            else:
-                return False
+            if block_manager.can_append_slot(seq):
+                block_manager.append_slot(seq)
+                _to_running(seq)
+                return True
+            return False
 
-        block_size = self.cache_config.block_size
+        def _evict_until_can_append(seq: SchedulerSequence):
+            """evict until can append."""
+            while eviction_helper.try_swap_out_unused(self.hanging,
+                                                      self.waiting,
+                                                      swap_out_map):
+                if block_manager.can_append_slot(seq):
+                    return True
+            return False
 
         # 1. running
         for seq in self.running:
             # token + 1
-            num_required_tokens = seq.num_required_tokens()
-            seq.append_tokens(num_required_tokens, block_size)
 
             if len(seq.logical_blocks) > self.block_manager.num_gpu_blocks:
                 # Reach max gpu cache size.
@@ -156,89 +202,32 @@ class Scheduler:
                                'reach max gpu size.')
                 self._set_message_status(seq, MessageStatus.ABORTED)
                 self.block_manager.free(seq)
-                self.aborted.append(seq)
 
             if not _try_append_slot(seq):
-                # try free unused cache from hanging and waiting
-                do_running = False
-                while eviction_helper.try_swap_out(self.hanging, self.waiting,
-                                                   swap_out_map):
-                    if _try_append_slot(seq):
-                        do_running = True
-                        break
-                if not do_running:
+                # try free unused cache from waiting
+                if _evict_until_can_append(seq):
+                    _try_append_slot(seq)
+                else:
                     # move to waiting
                     self._set_message_status(seq, MessageStatus.WAITING)
-                    self.waiting.append(seq)
-
-        max_batches = self.scheduler_config.max_batches
-
-        # 2. waiting
-        self.waiting = sorted(self.waiting, key=lambda seq: seq.arrive_time)
-        while len(self.waiting) > 0 and len(running) < max_batches:
-            seq = self.waiting[0]
-            num_required_tokens = seq.num_required_tokens()
-            seq.append_tokens(num_required_tokens, block_size)
-
-            block_table = block_manager.get_block_table(seq)
-            if block_table is not None:
-                if not block_manager.can_append_slot(seq):
-                    can_append = False
-                    while eviction_helper.try_swap_out_seqs(
-                            self.hanging, swap_out_map):
-                        if block_manager.can_append_slot(seq):
-                            can_append = True
-                            break
-                    if not can_append:
-                        break
-                if eviction_helper.need_swap_in(seq):
-                    if eviction_helper.can_swap_in(seq):
-                        eviction_helper.swap_in(seq, swap_in_map)
-                    else:
-                        break
-                block_manager.append_slot(seq)
-                self.waiting.pop(0)
-                _to_running(seq)
-            else:
-                if not block_manager.can_allocate(seq):
-                    can_alloc = False
-                    while eviction_helper.try_swap_out_seqs(
-                            self.hanging, swap_out_map):
-                        if block_manager.can_allocate(seq):
-                            can_alloc = True
-                            break
-                    if not can_alloc:
-                        break
-                # allocate session memory
-                block_manager.allocate(seq)
-                self.waiting.pop(0)
-                _to_running(seq)
+                    self.waiting.insert(0, seq)
 
         self.running = running
-
-        running = [
-            msg for msg in self.running if msg.status == MessageStatus.RUNNING
-        ]
-        if len(running) == 0:
-            logger.warning('No enough resources. Free gpu blocks: '
-                           f'{self.block_manager.get_num_free_gpu_blocks()}, '
-                           'Please end sessions.')
         return running, swap_in_map, swap_out_map, copy_map
 
-    def schedule(self):
+    def schedule(self, is_prefill: bool):
         """Schedule inputs for next steps."""
-        running, swap_in_map, swap_out_map, copy_map = self._schedule()
-
-        block_tables = [
-            self.block_manager.get_block_table(seq) for seq in running
-        ]
+        if is_prefill:
+            output = self._schedule_prefill()
+        else:
+            output = self._schedule_decoding()
+        running, swap_in_map, swap_out_map, copy_map = output
 
         return SchedulerOutput(
             running=running,
             swap_in_map=swap_in_map,
             swap_out_map=swap_out_map,
             copy_map=copy_map,
-            block_tables=block_tables,
         )
 
     def _set_session_status(self, session_id: int, status: MessageStatus):
@@ -277,6 +266,9 @@ class Scheduler:
     def has_unfinished(self):
         """Check if there are any unfinished message."""
         return self.waiting or self.running
+
+    def has_running(self):
+        return len(self.running) > 0
 
     def _remove_sequence(self, seq: SchedulerSequence):
         """Remove sequence(unsafe)

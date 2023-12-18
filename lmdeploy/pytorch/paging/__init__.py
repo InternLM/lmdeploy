@@ -1,4 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .scheduler import BlockTable, Scheduler
+from .scheduler import Scheduler
 
-__all__ = ['Scheduler', 'BlockTable']
+__all__ = ['Scheduler']

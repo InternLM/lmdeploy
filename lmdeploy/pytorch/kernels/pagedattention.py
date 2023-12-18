@@ -10,6 +10,16 @@ assert triton.__version__ >= '2.1.0'
 
 
 @triton.jit
+def _load_block_offsets(offset_ptr, block_id, is_unified_paging: tl.constexpr,
+                        BLOCK: tl.constexpr):
+    offs_n = tl.arange(0, BLOCK)
+    if is_unified_paging:
+        return tl.load(offset_ptr + block_id * BLOCK + offs_n)
+    else:
+        return tl.load(offset_ptr + block_id) * BLOCK + offs_n
+
+
+@triton.jit
 def _fwd_split_kernel(
     Q,
     K,
@@ -34,6 +44,7 @@ def _fwd_split_kernel(
     stride_boffb,
     kv_group_num,
     block_per_cta,
+    is_unified_paging: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -53,10 +64,8 @@ def _fwd_split_kernel(
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = (cur_batch * stride_qbs + cur_head * stride_qh +
              offs_d * stride_qd)
-    off_k = (offs_n[:, None] * stride_kbs + cur_kv_head * stride_kh +
-             offs_d[None, :] * stride_kd)
-    off_v = (offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh +
-             offs_d[None, :] * stride_vd)
+    off_k = (cur_kv_head * stride_kh + offs_d[None, :] * stride_kd)
+    off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
 
     q = tl.load(Q + off_q).to(tl.float32)
 
@@ -76,7 +85,8 @@ def _fwd_split_kernel(
 
     # load block offset
     start_block_id = loop_start // BLOCK_N
-    b_offset = tl.load(block_offset_ptrs + start_block_id)
+    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
+                                   is_unified_paging, BLOCK_N)
 
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -85,13 +95,13 @@ def _fwd_split_kernel(
 
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset * BLOCK_N * stride_kbs,
+            k_ptrs + b_offset[:, None] * stride_kbs,
             mask=mask,
             other=0.0,
         )
 
         v = tl.load(
-            v_ptrs + b_offset * BLOCK_N * stride_vbs,
+            v_ptrs + b_offset[:, None] * stride_vbs,
             mask=mask,
             other=0.0,
         )
@@ -99,7 +109,8 @@ def _fwd_split_kernel(
         # prefetch b_offset
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
-            b_offset = tl.load(block_offset_ptrs + start_block_id)
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
+                                           is_unified_paging, BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -208,6 +219,7 @@ def _fwd_kernel(
     stride_od,
     stride_boffb,
     kv_group_num,
+    is_unified_paging: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -232,10 +244,8 @@ def _fwd_kernel(
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
              cur_head * stride_qh + offs_d[None, :] * stride_qd)
-    off_k = (offs_n[None, :] * stride_kbs + cur_kv_head * stride_kh +
-             offs_d[:, None] * stride_kd)
-    off_v = (offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh +
-             offs_d[None, :] * stride_vd)
+    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
+    off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
@@ -251,25 +261,27 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    b_offset = tl.load(block_offset_ptrs)
+    b_offset = _load_block_offsets(block_offset_ptrs, 0, is_unified_paging,
+                                   BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset * BLOCK_N * stride_kbs,
+            k_ptrs + b_offset[None, :] * stride_kbs,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
 
         v = tl.load(
-            v_ptrs + b_offset * BLOCK_N * stride_vbs,
+            v_ptrs + b_offset[:, None] * stride_vbs,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
             other=0.0,
         )
         if start_n + BLOCK_N < cur_batch_kv_len:
             start_block_id = start_n // BLOCK_N + 1
-            b_offset = tl.load(block_offset_ptrs + start_block_id)
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
+                                           is_unified_paging, BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -305,7 +317,7 @@ def _fwd_kernel(
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def paged_attention_fwd(
     q: Tensor,
     k: Tensor,
@@ -316,7 +328,6 @@ def paged_attention_fwd(
     b_seq_len: Tensor,
     b_kv_seq_len: Tensor,
     max_input_len: int,
-    BLOCK: int = 64,
 ):
     """Paged Attention forward.
 
@@ -333,6 +344,13 @@ def paged_attention_fwd(
         BLOCK (int): The kernel block size.
     """
 
+    def _kernel_meta():
+        device = q.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
     assert Lq == Lk and Lk == Lv
@@ -344,10 +362,10 @@ def paged_attention_fwd(
 
     num_warps = 4 if Lk <= 64 else 8
 
-    device = q.device
-    device_idx = device.index
-    device_type = device.type
-    stream = get_cuda_stream(device_idx)
+    is_unified_paging = k.size(1) == 1
+    BLOCK = 64 if is_unified_paging else k.size(1)
+
+    kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == b_seq_len.size(0)
     if not is_decoding:
         grid = (batch, head, triton.cdiv(max_input_len, BLOCK))
@@ -374,14 +392,13 @@ def paged_attention_fwd(
                           o.stride(-1),
                           block_offsets.stride(0),
                           kv_group_num=kv_group_num,
+                          is_unified_paging=is_unified_paging,
                           BLOCK_M=BLOCK,
                           BLOCK_DMODEL=Lk,
                           BLOCK_N=BLOCK,
                           num_warps=num_warps,
                           num_stages=1,
-                          stream=stream,
-                          device=device_idx,
-                          device_type=device_type)
+                          **kernel_meta)
     else:
         SPLIT_K = 4
         grid = (batch, head, SPLIT_K)
@@ -410,13 +427,12 @@ def paged_attention_fwd(
                                 stride_boffb=block_offsets.stride(0),
                                 kv_group_num=kv_group_num,
                                 block_per_cta=block_per_cta,
+                                is_unified_paging=is_unified_paging,
                                 BLOCK_DMODEL=Lk,
                                 BLOCK_N=BLOCK,
                                 num_warps=4,
                                 num_stages=1,
-                                stream=stream,
-                                device=device_idx,
-                                device_type=device_type)
+                                **kernel_meta)
 
         grid = (batch, head)
         _reduce_split_kernel[grid](acc,
@@ -432,6 +448,4 @@ def paged_attention_fwd(
                                    BLOCK_DMODEL=Lk,
                                    num_warps=num_warps,
                                    num_stages=1,
-                                   stream=stream,
-                                   device=device_idx,
-                                   device_type=device_type)
+                                   **kernel_meta)

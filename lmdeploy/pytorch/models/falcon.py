@@ -287,8 +287,7 @@ class PatchedFalconAttention(nn.Module):
                                 b_start_loc=q_start_loc,
                                 b_seq_len=q_seq_length,
                                 b_kv_seq_len=kv_seq_length,
-                                max_input_len=max_seq_len,
-                                BLOCK=block_size)
+                                max_input_len=max_seq_len)
 
         else:
             alibi_paged_attention_fwd(q=query_layer,

@@ -43,6 +43,12 @@
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// cudaFuncAttributes attr{};                                                                                         \
+// cudaFuncGetAttributes(&attr, func);                                                                                \
+// std::cout << "static_smem_sz: " << attr.sharedSizeBytes << std::endl;                                              \
+// std::cout << "max_dynamic_smem: " << attr.maxDynamicSharedSizeBytes << std::endl;                                  \
+// std::cout << "dynamic_smem_sz: " << smem_sz << std::endl;                                                          \
+
 template<typename T, int Dh, int Dh_MAX, typename KERNEL_PARAMS_TYPE>
 void mmha_launch_kernel(const KERNEL_PARAMS_TYPE& params, const cudaStream_t& stream)
 {

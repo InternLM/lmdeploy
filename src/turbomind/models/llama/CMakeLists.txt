@@ -9,14 +9,13 @@ find_package(CUDAToolkit REQUIRED)
 add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
-        LlamaCacheManager.cc
-        LlamaContextDecoder.cc
-        LlamaContextAttentionLayer.cc
-        LlamaDecoderSelfAttentionLayer.cc
-        LlamaDecoder.cc
+        BlockManager.cc
+        SequenceManager.cc
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
+        unified_decoder.cc
+        unified_attention_layer.cc
         llama_kernels.cu
         llama_decoder_kernels.cu
         llama_utils.cu)
@@ -28,6 +27,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         DynamicDecodeLayer
         activation_kernels
         decoder_masked_multihead_attention
+        decoder_multihead_attention
         bert_preprocess_kernels
         decoding_kernels
         unfused_attention_kernels
@@ -48,4 +48,11 @@ endif()
 
 add_executable(llama_gemm llama_gemm.cc)
 target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)
+
 install(TARGETS llama_gemm DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/bin)
+
+find_package(Catch2 3 QUIET)
+if (Catch2_FOUND)
+        add_executable(test_cache_manager test_cache_manager.cc)
+        target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
+endif ()

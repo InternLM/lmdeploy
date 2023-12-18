@@ -95,8 +95,8 @@ class TestPagedAttention:
         yield request.param
 
     @pytest.fixture
-    def block_size(self):
-        yield 16
+    def block_size(self, request):
+        yield request.param
 
     @pytest.fixture
     def seq_lens(self, request):
@@ -192,6 +192,7 @@ class TestPagedAttention:
                              [([30, 50, 70, 90], [50, 40, 30, 20]),
                               ([1, 1, 1, 1], [50, 40, 30, 20])],
                              indirect=True)
+    @pytest.mark.parametrize('block_size', [1, 16], indirect=True)
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets,
                              start_loc, seq_lens, history_lens, block_size,
                              conti_gt):
@@ -210,9 +211,7 @@ class TestPagedAttention:
                             b_start_loc=start_loc,
                             b_seq_len=seq_lens,
                             b_kv_seq_len=kv_seq_lens,
-                            max_input_len=max_seq_len,
-                            BLOCK=block_size)
-
+                            max_input_len=max_seq_len)
         torch.testing.assert_close(out, conti_gt, atol=5e-4, rtol=1e-5)
 
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
@@ -220,6 +219,7 @@ class TestPagedAttention:
     @pytest.mark.parametrize(['seq_lens', 'history_lens'],
                              [([30, 50, 70, 90], [50, 40, 30, 20])],
                              indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
     def test_biased_paged_attention(self, conti_q, blocked_kv, block_offsets,
                                     start_loc, seq_lens, history_lens,
                                     block_size, mask, conti_gt):

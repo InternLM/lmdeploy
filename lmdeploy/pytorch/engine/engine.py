@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 import torch
 from transformers import AutoConfig
 
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig, SchedulerConfig
@@ -126,6 +127,14 @@ def _build_model_agent(model_path: str,
     return model_agent
 
 
+def _tensorlize_block_offsets(block_offsets):
+    """tensorlize block_offsets."""
+    from torch.nn.utils.rnn import pad_sequence
+    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = pad_sequence(block_offsets, batch_first=True)
+    return block_offsets
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -141,14 +150,20 @@ class Engine:
                  scheduler_config: SchedulerConfig = None,
                  cache_config: CacheConfig = None,
                  tp: int = 1,
+                 model_name: str = None,
                  trust_remote_code=True) -> None:
 
         self.tp = tp
         self.gpu_count = tp
+        self.model_name = model_name
 
         scheduler_config = scheduler_config or SchedulerConfig(
-            max_batches=64, max_session_len=4096, max_request_output_len=512)
+            max_batches=128,
+            max_session_len=4096,
+            max_request_output_len=512,
+            eviction_type='recompute')
 
+        # block_size = 1 to enable unified paging
         cache_config = cache_config or CacheConfig(
             block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
 
@@ -181,6 +196,18 @@ class Engine:
 
         # create main thread
         self._start_loop()
+
+        self._create_buffers()
+        self.tokenizer = Tokenizer(model_path)
+
+    def _create_buffers(self):
+        scheduler_config = self.scheduler_config
+        max_batches = scheduler_config.max_batches
+
+        # buffers to create inputs
+        self._q_start_loc_buf = torch.arange(max_batches)
+        self._attention_mask_buf = torch.ones(max_batches, 1, dtype=torch.long)
+        self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
 
     def _bind_request_manager(self):
         """bind request manager."""
@@ -218,12 +245,12 @@ class Engine:
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.stop_session(session_id)
-                self.scheduler.update()
                 resp_type = ResponseType.SUCCESS
             self.req_manager.response(
                 Response(type=resp_type,
                          sender_id=req.sender_id,
                          req_id=req.req_id))
+        self.scheduler.update()
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
@@ -232,12 +259,12 @@ class Engine:
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.end_session(session_id)
-                self.scheduler.update()
                 resp_type = ResponseType.SUCCESS
             self.req_manager.response(
                 Response(type=resp_type,
                          sender_id=req.sender_id,
                          req_id=req.req_id))
+        self.scheduler.update()
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
@@ -265,10 +292,10 @@ class Engine:
                 msg.remain_output_len = req.data['max_request_output_len']
                 msg.sampling_param = req.data['sampling_param']
                 msg.status = MessageStatus.WAITING
-                self.scheduler.update()
 
             msg.sender_id = req.sender_id
             msg.req_id = req.req_id
+        self.scheduler.update()
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -310,14 +337,12 @@ class Engine:
                                       f'Error: {resp.type}.')):
             self.owned_sessions.remove(session_id)
 
-    def create_model_inputs(self,
-                            messages: List[SchedulerSequence],
-                            device: str = 'cuda'):
+    @torch.inference_mode()
+    def create_model_inputs(self, messages: List[SchedulerSequence]):
         """create model inputs from messages.
 
         Args:
             messages (List[SchedulerSequence]): The input messages.
-            device (str): Device name.
         """
         history_lengths = [msg.history_len for msg in messages]
 
@@ -329,39 +354,29 @@ class Engine:
             token_ids = [token_ids]
 
         batch_size = len(messages)
-        input_ids = token_ids
-        input_ids = torch.cat(input_ids).to(device)
+        input_ids = torch.cat(token_ids)
 
         is_decoding = input_ids.size(0) == batch_size
         if not is_decoding:
             seq_length = [tokens.size(0) for tokens in token_ids]
+            seq_length = torch.tensor(seq_length, dtype=torch.long)
             max_seq_len = max(seq_length)
-            q_start_loc = torch.tensor([0] +
-                                       seq_length).cumsum(0)[:-1].to(device)
-
-            attention_mask = torch.tensor([
-                seq_len * [1] + (max_seq_len - seq_len) * [0]
-                for seq_len in seq_length
-            ]).to(device)
+            q_start_loc = seq_length.cumsum(0) - seq_length
+            mask_range = torch.arange(max_seq_len)[None, :]
+            attention_mask = (mask_range < seq_length[:, None]).long()
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids += position_ids.new_tensor(history_lengths).unsqueeze(
                 -1)
-            seq_length = torch.tensor(seq_length).to(device)
         else:
-            q_start_loc = torch.arange(batch_size, device=device)
-            attention_mask = torch.ones(batch_size,
-                                        1,
-                                        dtype=torch.long,
-                                        device=device)
+            q_start_loc = self._q_start_loc_buf[:batch_size]
+            attention_mask = self._attention_mask_buf[:batch_size]
+            seq_length = self._seq_length_buf[:batch_size]
             position_ids = q_start_loc.new_tensor(history_lengths).unsqueeze(
                 -1)
-            seq_length = torch.ones(batch_size,
-                                    dtype=torch.long,
-                                    device=device)
 
-        block_tables = self.scheduler.get_block_tables(messages)
-        block_offsets = [[block.block_id for block in block_table]
-                         for block_table in block_tables]
+        # TODO: get block offsets is slow when block_size = 1
+        block_offsets = self.scheduler.get_block_tables(messages)
+        block_offsets = _tensorlize_block_offsets(block_offsets)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -401,7 +416,7 @@ class Engine:
             return msg.remain_output_len <= 0
 
         def _check_session_len(msg, max_session_len):
-            session_len = sum(block.num_tokens for block in msg.logical_blocks)
+            session_len = msg.logical_blocks.num_tokens()
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
@@ -445,8 +460,7 @@ class Engine:
                 new_logits = split_logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
                 argmax_ids = new_logits.argmax(-1).cpu()
-                for i, next_ids in zip(idx, argmax_ids):
-                    next_token_ids[i] = next_ids
+                next_token_ids[idx] = argmax_ids
             return next_token_ids
 
         logits = logits.cuda()
@@ -476,7 +490,7 @@ class Engine:
             if self._stoping_criteria(msg, token):
                 msg.status = MessageStatus.STOPPED
 
-    def step(self, return_logits=False):
+    def step(self, is_prefill: bool, return_logits: bool = False):
         """one step inference. Used to perform streaming chat.
 
         Args:
@@ -487,7 +501,7 @@ class Engine:
         """
 
         # schedule
-        schedule_output = self.scheduler.schedule()
+        schedule_output = self.scheduler.schedule(is_prefill=is_prefill)
 
         running: List[SchedulerSequence] = schedule_output.running
         swap_in_map = schedule_output.swap_in_map
@@ -520,7 +534,7 @@ class Engine:
                 sender_id=msg.sender_id,
                 req_id=msg.req_id,
                 finish=(msg.status == MessageStatus.STOPPED),
-                token_ids=[next_id],
+                token_ids=[next_id.item()],
             )
             outputs[session_id] = out
 
@@ -638,7 +652,7 @@ class Engine:
             msgs.append(msg)
             self.scheduler.add_sequence(msg)
 
-        outputs = self.step(True)
+        outputs = self.step(return_logits=True)
 
         logits = dict((k, out.logits) for k, out in outputs.items())
 
@@ -659,6 +673,7 @@ class Engine:
         send_resp_que = Queue()
 
         def _send_resp():
+            """send response callback."""
             while True:
                 step_tokens = send_resp_que.get()
                 for _, out in step_tokens.items():
@@ -676,6 +691,8 @@ class Engine:
 
         send_thread = Thread(target=_send_resp, daemon=True)
         send_thread.start()
+        prefill_interval = self.scheduler_config.prefill_interval
+        prefill_counter = prefill_interval
 
         while True:
             if not self.req_manager.has_requests(
@@ -687,8 +704,14 @@ class Engine:
 
             # forward
             if self.scheduler.has_unfinished():
-                with torch.no_grad():
-                    step_tokens: Dict[int, InferOutput] = self.step()
+                has_running = self.scheduler.has_running()
+                is_prefill = not prefill_counter or not has_running
+                if is_prefill:
+                    prefill_counter = prefill_interval
+                with torch.inference_mode():
+                    step_tokens: Dict[int, InferOutput] = self.step(
+                        is_prefill=is_prefill)
+                prefill_counter -= 1
 
                 # send response
                 send_resp_que.put(step_tokens)
