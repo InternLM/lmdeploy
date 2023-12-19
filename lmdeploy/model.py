@@ -267,38 +267,48 @@ class InternLMBaseModel20B(BaseModel):
                          **kwargs)
 
 
-@MODELS.register_module(name='baichuan')
-class Baichuan(BaseModel):
+@MODELS.register_module(name='baichuan-7b')
+class Baichuan7B(BaseModel):
+    """Generation parameters of Baichuan-7B base model."""
 
     def __init__(self, repetition_penalty=1.1, **kwargs):
         super().__init__(**kwargs)
         self.repetition_penalty = repetition_penalty
 
 
-@MODELS.register_module(name='baichuan-chat')
-class BaichuanChat(BaseModel):
+@MODELS.register_module(name='baichuan2-7b')
+class Baichuan2_7B(BaseModel):
+    """Chat template and generation parameters of Baichuan2-7B-Base and
+    Baichuan2-7B-Chat models."""
 
     def __init__(self,
-                 repetition_penalty=1.1,
-                 user_token='<reserved_102>',
-                 assistant_token='<reserved_103>',
                  temperature=0.3,
                  top_k=5,
                  top_p=0.85,
+                 repetition_penalty=1.05,
                  **kwargs):
-        super().__init__(**kwargs)
-        self.repetition_penalty = repetition_penalty
-        self.user_token = user_token
-        self.assistant_token = assistant_token
-        self.temperature = temperature
-        self.top_k = top_k
-        self.top_p = top_p
+        super().__init__(temperature=temperature,
+                         top_k=top_k,
+                         top_p=top_p,
+                         repetition_penalty=repetition_penalty,
+                         **kwargs)
+        self.user_token = '<reserved_106>'  # id = 195
+        self.assistant_token = '<reserved_107>'  # id = 196
 
-    def get_prompt(self, prompt, sequence_start=True):
-        if sequence_start:
-            return f'{self.user_token}{prompt}{self.assistant_token}'
-        else:
-            return f'{self.user_token}{prompt}{self.assistant_token}'
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        return f'{self.user_token}{prompt}{self.assistant_token}'
 
     def messages2prompt(self, messages, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -306,42 +316,18 @@ class BaichuanChat(BaseModel):
 
         Args:
             messages (str | List): user's input prompt
-            sequence_start (bool): flag to start the sequence
         Returns:
             str: the concatenated prompt
         """
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        system = '' if not system else system
-        ret = f'{system}'
+        ret = ''
         for user, assistant in zip(users, assistants):
+            ret += f'{self.user_token}{user}{self.assistant_token}'
             if assistant:
-                ret += f'{self.user_token}{user}{self.assistant_token}' \
-                       f'{assistant}'
-            else:
-                ret += f'{self.user_token}{user}{self.assistant_token}'
+                ret += f'{assistant}'
         return ret
-
-
-@MODELS.register_module(name='baichuan2-chat')
-class Baichuan2Chat(BaichuanChat):
-
-    def __init__(self,
-                 repetition_penalty=1.1,
-                 user_token='<reserved_106>',
-                 assistant_token='<reserved_107>',
-                 temperature=0.3,
-                 top_k=5,
-                 top_p=0.85,
-                 **kwargs):
-        super().__init__(**kwargs)
-        self.repetition_penalty = repetition_penalty
-        self.user_token = user_token
-        self.assistant_token = assistant_token
-        self.temperature = temperature
-        self.top_k = top_k
-        self.top_p = top_p
 
 
 @MODELS.register_module(name='puyu')
