@@ -139,6 +139,7 @@ class CompletionRequest(BaseModel):
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
+    top_k: Optional[int] = 40  # for opencompass
 
 
 class CompletionResponseChoice(BaseModel):
