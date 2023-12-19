@@ -107,9 +107,26 @@ void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>&
             invokeDecoderMultiheadAttention<T, T, HeadDim, 1>(params);
         }
     }
+
+#ifdef ENABLE_BF16
+    if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+        int group_size = params.num_heads / params.num_kv_heads;
+        if (group_size % 4 == 0) {
+            invokeDecoderMultiheadAttention<T, T, HeadDim, 4>(params);
+        }
+        else if (group_size % 2 == 0) {
+            invokeDecoderMultiheadAttention<T, T, HeadDim, 2>(params);
+        }
+        else {
+            invokeDecoderMultiheadAttention<T, T, HeadDim, 1>(params);
+        }
+    }
+#endif  // ENABLE_BF16
 }
 
 template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<half>& params);
 template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<float>& params);
-
+#ifdef ENABLE_BF16
+template void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<__nv_bfloat16>& params);
+#endif  // ENABLE_BF16
 }  // namespace turbomind

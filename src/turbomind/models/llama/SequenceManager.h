@@ -33,6 +33,10 @@ struct Sequence {
 
     mutable float rope_theta = 0.f;
 
+    // embedding data
+    mutable std::vector<std::vector<std::byte>> input_embeddings;
+    mutable std::vector<std::pair<int, int>>    input_embedding_ranges;
+
     explicit Sequence(uint64_t _id): id(_id) {}
 
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
@@ -103,7 +107,7 @@ public:
     }
 
 private:
-    void Erase(std::map<uint64_t, Sequence>::iterator it);
+    void Erase(std::map<uint64_t, Sequence>::iterator& it);
 
     void CommitUnlockAndFree();
 
@@ -126,8 +130,6 @@ private:
     int    block_seq_len_;
     int    rank_;
     size_t val_offset_{};
-
-    bool need_verify_{};
 
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;

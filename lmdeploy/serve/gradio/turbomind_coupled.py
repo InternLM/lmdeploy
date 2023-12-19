@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from threading import Lock
-from typing import Sequence
+from typing import Optional, Sequence
 
 import gradio as gr
 
@@ -69,13 +69,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     """
     state_chatbot = []
     # end the session
-    async for out in InterFace.async_engine.generate('',
-                                                     session_id,
-                                                     request_output_len=1,
-                                                     stream_response=True,
-                                                     sequence_start=False,
-                                                     sequence_end=True):
-        pass
+    InterFace.async_engine.end_session(session_id)
     return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
 
 
@@ -90,15 +84,9 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
         reset_btn (gr.Button): the reset button
         session_id (int): the session id
     """
-    yield (state_chatbot, disable_btn, enable_btn)
-    async for out in InterFace.async_engine.generate('',
-                                                     session_id,
-                                                     request_output_len=0,
-                                                     stream_response=True,
-                                                     sequence_start=False,
-                                                     sequence_end=False,
-                                                     stop=True):
-        pass
+    yield (state_chatbot, disable_btn, disable_btn)
+    InterFace.async_engine.stop_session(session_id)
+    InterFace.async_engine.end_session(session_id)
     messages = []
     for qa in state_chatbot:
         messages.append(dict(role='user', content=qa[0]))
@@ -115,6 +103,7 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
 
 
 def run_local(model_path: str,
+              model_name: Optional[str] = None,
               server_name: str = 'localhost',
               server_port: int = 6006,
               batch_size: int = 4,
@@ -123,13 +112,29 @@ def run_local(model_path: str,
     """chat with AI assistant through web ui.
 
     Args:
-        model_path (str): the path of the deployed model
+        model_path (str): the path of a model.
+            It could be one of the following options:
+                - i) A local directory path of a turbomind model which is
+                    converted by `lmdeploy convert` command or download from
+                    ii) and iii).
+                - ii) The model_id of a lmdeploy-quantized model hosted
+                    inside a model repo on huggingface.co, such as
+                    "InternLM/internlm-chat-20b-4bit",
+                    "lmdeploy/llama2-chat-70b-4bit", etc.
+                - iii) The model_id of a model hosted inside a model repo
+                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    and so on.
+        model_name (str): needed when model_path is a pytorch model on
+            huggingface.co, such as "InternLM/internlm-chat-7b",
+            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
         tp (int): tensor parallel for Turbomind
     """
     InterFace.async_engine = AsyncEngine(model_path=model_path,
+                                         model_name=model_name,
                                          instance_num=batch_size,
                                          tp=tp,
                                          **kwargs)

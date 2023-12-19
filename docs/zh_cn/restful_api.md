@@ -12,7 +12,7 @@
 lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
 ```
 
-我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。
+我们提供的 restful api，其中三个仿照 OpenAI 的形式。
 
 - /v1/chat/completions
 - /v1/models
@@ -56,7 +56,7 @@ LMDeploy 的 `/v1/chat/interactive` api 支持将对话内容管理在服务端�
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
-for item in api_client.generate(prompt='hi'):
+for item in api_client.chat_interactive_v1(prompt='hi'):
     print(item)
 ```
 

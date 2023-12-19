@@ -9,10 +9,12 @@ RUN python3 -m pip install --no-cache-dir cmake packaging
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
-ARG VERSION=main
+# Should be in the lmdeploy root directory when building docker image
+COPY . /opt/lmdeploy
 
-RUN git clone --depth=1 --branch=${VERSION} https://github.com/InternLM/lmdeploy.git &&\
-    cd lmdeploy &&\
+WORKDIR /opt/lmdeploy
+
+RUN cd /opt/lmdeploy &&\
     python3 -m pip install --no-cache-dir -r requirements.txt &&\
     mkdir -p build && cd build &&\
     cmake .. \

@@ -626,5 +626,8 @@ void UnifiedAttentionLayer<T>::unfusedMultiHeadAttention(T*           output,
 
 template class UnifiedAttentionLayer<float>;
 template class UnifiedAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class UnifiedAttentionLayer<__nv_bfloat16>;
+#endif // ENABLE_BF16
 
 }  // namespace turbomind

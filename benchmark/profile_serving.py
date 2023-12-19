@@ -191,20 +191,18 @@ class Engine:
             with open(self.csv, 'w') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([
-                    'batch', 'num_prompts', 'prompt_tokens',
-                    'completion_tokens', '1st_token_latency(min)(s)',
-                    '1st_token_latency(max)(s)', '1st_token_latency(ave)(s)',
-                    'output token thr(tokens/s', 'total token thr(token/s)',
-                    'RPS', 'RPM'
+                    'batch', 'num_prompts', 'RPS', 'RPM', 'FTL(ave)(s)',
+                    'FTL(min)(s)', 'FTL(max)(s)', 'throughput(out tok/s)',
+                    'throughput(total tok/s)'
                 ])
                 writer.writerow([
                     concurrency,
-                    len(requests), prompt_tokens, completion_tokens,
+                    len(requests), f'{rps:.3f}', f'{rpm:.3f}',
+                    f'{first_token_latency_ave:.3f}' if stream_output else '-',
                     f'{first_token_latency_min:.3f}' if stream_output else '-',
                     f'{first_token_latency_max:.3f}' if stream_output else '-',
-                    f'{first_token_latency_ave:.3f}' if stream_output else '-',
                     f'{completion_token_throughput:.3f}',
-                    f'{total_token_throughput:.3f}', f'{rps:.3f}', f'{rpm:.3f}'
+                    f'{total_token_throughput:.3f}'
                 ])
 
 

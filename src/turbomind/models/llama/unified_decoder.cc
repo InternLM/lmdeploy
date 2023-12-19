@@ -15,8 +15,14 @@ void UnifiedDecoder<T>::allocateBuffer(size_t num_token, size_t pf_batch_size, s
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     if (pf_batch_size) {
-        attention_mask_ =
-            (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * pf_batch_size * pf_max_q_len * pf_max_k_len, false);
+        if (need_causal_mask_) {
+            attention_mask_ = (T*)allocator_->reMalloc(
+                attention_mask_, sizeof(T) * pf_batch_size * pf_max_q_len * pf_max_k_len, false);
+        }
+        else {
+            // just to avoid nullptr
+            attention_mask_ = (T*)allocator_->reMalloc(attention_mask_, sizeof(T), false);
+        }
         padding_offset_ =
             (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * pf_batch_size * pf_max_q_len, false);
         cu_seqlens_ = (int*)allocator_->reMalloc(cu_seqlens_, sizeof(int) * (pf_batch_size + 1), false);
@@ -162,14 +168,16 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         FT_CHECK(tmp_token_num == token_num - dc_batch_size);
 
-        invokeCreateCausalMasks(attention_mask_,
-                                input_length + pf_offset,
-                                context_length + pf_offset,
-                                pf_max_q_len,
-                                pf_max_k_len,
-                                pf_batch_size,
-                                stream_);
-        sync_check_cuda_error();
+        if (need_causal_mask_) {
+            invokeCreateCausalMasks(attention_mask_,
+                                    input_length + pf_offset,
+                                    context_length + pf_offset,
+                                    pf_max_q_len,
+                                    pf_max_k_len,
+                                    pf_batch_size,
+                                    stream_);
+            sync_check_cuda_error();
+        }
     }
 
     /////////////////////////////////////////////
@@ -253,5 +261,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
 template class UnifiedDecoder<float>;
 template class UnifiedDecoder<half>;
+#ifdef ENABLE_BF16
+template class UnifiedDecoder<__nv_bfloat16>;
+#endif // ENABLE_BF16
 
 }  // namespace turbomind

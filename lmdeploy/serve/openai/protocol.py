@@ -191,6 +191,19 @@ class EmbeddingsResponse(BaseModel):
     usage: UsageInfo
 
 
+class EncodeRequest(BaseModel):
+    """Encode request."""
+    input: Union[str, List[str]]
+    do_preprocess: Optional[bool] = False
+    add_bos: Optional[bool] = True
+
+
+class EncodeResponse(BaseModel):
+    """Encode response."""
+    input_ids: Union[List[int], List[List[int]]]
+    length: Union[int, List[int]]
+
+
 class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: Union[str, List[Dict[str, str]]]

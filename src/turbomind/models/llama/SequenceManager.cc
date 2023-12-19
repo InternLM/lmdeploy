@@ -61,7 +61,7 @@ bool SequenceManager::Contains(uint64_t id)
     return sequences_.find(id) != sequences_.end();
 }
 
-void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
+void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
 {
     auto& seq = it->second;
     if (seq.status == Sequence::kCached) {
@@ -72,7 +72,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
         UpdateAndSetUnlock(seq);
     }
     freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
-    sequences_.erase(it);
+    it = sequences_.erase(it);
 }
 
 bool SequenceManager::Erase(uint64_t id)
@@ -93,17 +93,16 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
             continue;
         }
         FT_CHECK(seq.blocks.size() == seq.block_unique_ids.size());
-        if (need_verify_) {
-            const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
-            seq.blocks.resize(count);
-            seq.block_unique_ids.resize(count);
-        }
+        // Verify cache blocks that may be invalidated
+        const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
+        seq.blocks.resize(count);
+        seq.block_unique_ids.resize(count);
+
         blocks.insert(blocks.end(), seq.blocks.begin(), seq.blocks.end());
         seq.cache_len = std::min<int>(seq.cache_len, seq.blocks.size() * block_seq_len_);
         seq.status    = Sequence::kLocked;
     }
     block_manager_->Lock(blocks);
-    need_verify_ = false;
 }
 
 void SequenceManager::CommitUnlockAndFree()
@@ -435,7 +434,6 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // evict cached blocks -> free
     if (schedule.evict) {
         block_manager_->Evict(schedule.evict);
-        need_verify_ = true;
     }
 
     // allocate & assign blocks

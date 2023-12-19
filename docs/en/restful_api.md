@@ -12,7 +12,7 @@ The user can open the http url print by the following command in a browser.
 lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
 ```
 
-We provide four restful api in total. Three of them are in OpenAI format.
+We provide some RESTful APIs. Three of them are in OpenAI format.
 
 - /v1/chat/completions
 - /v1/models
@@ -61,7 +61,7 @@ The interactive mode can be controlled by the `interactive_mode` boolean paramet
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
-for item in api_client.generate(prompt='hi'):
+for item in api_client.chat_interactive_v1(prompt='hi'):
     print(item)
 ```
 
