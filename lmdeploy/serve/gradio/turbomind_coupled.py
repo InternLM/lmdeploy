@@ -14,16 +14,10 @@ class InterFace:
     lock = Lock()
 
 
-async def chat_stream_local(
-    instruction: str,
-    state_chatbot: Sequence,
-    cancel_btn: gr.Button,
-    reset_btn: gr.Button,
-    session_id: int,
-    top_p: float, 
-    temperature: float,
-    request_output_len: int
-):
+async def chat_stream_local(instruction: str, state_chatbot: Sequence,
+                            cancel_btn: gr.Button, reset_btn: gr.Button,
+                            session_id: int, top_p: float, temperature: float,
+                            request_output_len: int):
     """Chat with AI assistant.
 
     Args:

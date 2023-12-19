@@ -16,9 +16,8 @@ class InterFace:
 
 
 def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
-                cancel_btn: gr.Button, reset_btn: gr.Button, 
-                session_id: int, top_p: float, temperature: float,
-                request_output_len: int):
+                cancel_btn: gr.Button, reset_btn: gr.Button, session_id: int,
+                top_p: float, temperature: float, request_output_len: int):
     """Chat with AI assistant.
 
     Args:
@@ -32,9 +31,11 @@ def chat_stream(state_chatbot: Sequence, llama_chatbot: Chatbot,
     instruction = state_chatbot[-1][0]
 
     bot_response = llama_chatbot.stream_infer(
-        session_id, instruction, f'{session_id}-{len(state_chatbot)}', 
+        session_id,
+        instruction,
+        f'{session_id}-{len(state_chatbot)}',
         request_output_len=request_output_len,
-        top_p=top_p, 
+        top_p=top_p,
         temperature=temperature)
 
     for status, tokens, _ in bot_response:
