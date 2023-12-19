@@ -155,6 +155,8 @@ jobs:
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
+            --env HTTP_PROXY=${{secrets.PROXY}} \
+            --env HTTPS_PROXY=${{secrets.PROXY}} \
             $CONTAINER_ID  cmake .. \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
@@ -174,12 +176,18 @@ jobs:
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
             $CONTAINER_ID python3 -m pip install tritonclient[grpc]
+
           docker exec \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
             $CONTAINER_ID python3 -m pip install -r requirements/test.txt
-          docker exec $CONTAINER_ID python3 -m pip install .
-          # docker exec $CONTAINER_ID check_env
+
+          docker exec \
+            --env http_proxy=${{secrets.PROXY}} \
+            --env https_proxy=${{secrets.PROXY}} \
+            $CONTAINER_ID python3 -m pip install .
+
+          docker exec $CONTAINER_ID lmdeploy check_env
       - name: Convert to turbomind model
         run: |
           docker exec $CONTAINER_ID \
@@ -203,7 +211,7 @@ jobs:
       - name: Test triton server
         run: |
           docker exec \
-            --env no_proxy=localhost,127.0.0.1 \
+            --env no_proxy="localhost,127.0.0.1,0.0.0.0" \
             $CONTAINER_ID python3 .github/scripts/test_triton_server.py --port ${GRPC_PORT}
       - name: Clear workfile
         if: always()
