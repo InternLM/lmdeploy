@@ -4,8 +4,8 @@ import torch
 from accelerate import infer_auto_device_map, init_empty_weights
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from lmdeploy.legacy.pytorch.model import LoadWoInit
 from lmdeploy.lite.utils import collect_target_modules
+from lmdeploy.pytorch.accel import LoadNoInit
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -44,7 +44,7 @@ def load_hf_from_pretrained(pretrained_model_name_or_path, **kwargs):
             device_map[name] = 0
     if 'device_map' in kwargs:
         kwargs.pop('device_map')
-    with LoadWoInit():
+    with LoadNoInit():
         model = AutoModelForCausalLM.from_pretrained(
             pretrained_model_name_or_path,
             device_map=device_map,
