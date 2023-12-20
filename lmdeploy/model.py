@@ -16,7 +16,6 @@ class SamplingParam:
     repetition_penalty: float = 1.0
 
 
-@MODELS.register_module(name='internlm2')
 @MODELS.register_module(name='internlm')
 @MODELS.register_module(name='llama')
 @MODELS.register_module(name='base')
@@ -262,6 +261,25 @@ class InternLMBaseModel20B(BaseModel):
         super().__init__(session_len=session_len,
                          capability=capability,
                          **kwargs)
+
+
+@MODELS.register_module(name='internlm2-7b')
+class InternLM2BaseModel7B(BaseModel):
+    """Generation parameters of InternLM2-7B-Base model."""
+
+    def __init__(self, session_len=32768, capability='completion', **kwargs):
+        super().__init__(session_len=session_len,
+                         capability=capability,
+                         **kwargs)
+
+
+@MODELS.register_module(name='internlm2-chat-7b')
+class InternLM2Chat7B(InternLMChat7B):
+    """Chat template and generation parameters of InternLM2-Chat-7B."""
+
+    def __init__(self, session_len=32768, **kwargs):
+        super(InternLM2Chat7B, self).__init__(**kwargs)
+        self.session_len = session_len
 
 
 @MODELS.register_module(name='baichuan-7b')

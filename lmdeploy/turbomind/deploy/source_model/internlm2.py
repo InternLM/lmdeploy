@@ -19,10 +19,14 @@ class InternLM2Reader(LlamaReader):
     def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
         """Get q, k, v, o kind for layer i."""
         qkv = self.params[f'model.layers.{i}.attention.wqkv.{kind}']
-        q, k, v = torch.split(qkv, qkv.size(size_dim) // 3, dim=dim)
-        o = self.params.get(f'model.layers.{i}.attention.wo.{kind}', None)
-        if o is None:
-            o = torch.zeros_like(q)
+        gs = 4
+        qkv = qkv.view(8, gs + 2, 128, -1)
+        hidden_dim = qkv.shape[-1]
+        q, k, v = torch.split(qkv, [gs, 1, 1], dim=1)
+        q = q.reshape(-1, hidden_dim)
+        k = k.reshape(-1, hidden_dim)
+        v = v.reshape(-1, hidden_dim)
+        o = self.params.get(f'model.layers.{i}.attention.wo.{kind}')
         return q, k, v, o
 
     def attn(self, i: int):
@@ -47,7 +51,7 @@ class InternLM2Reader(LlamaReader):
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         result = []
-        for key in ['w1', 'w3', 'w2']:
+        for key in ['w1', 'w2', 'w3']:
             tensor = self.params[f'model.layers.{i}.feed_forward.{key}.{kind}']
             result.append(tensor)
         return (*result, )
