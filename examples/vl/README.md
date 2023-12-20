@@ -30,5 +30,5 @@ A chatbot demo with image input.
 
 ## Limitations
 
-- this demo the code in their repo to extract image features that might not very efficiency.
-- this demo only contains the chat function. If you want to use localization ability in Qwen-VL-Chat or article generation function in InternLM-XComposer, you need implement these pre/post process. The difference compared to chat is how to build prompts and use the output of model.
+- this demo uses the code in their repo to extract image features that might not very efficiency.
+- this demo only contains the chat function. If you want to use localization ability in Qwen-VL-Chat or article generation function in InternLM-XComposer, you need implement these pre/post processes. The difference compared to chat is how to build prompts and use the output of model.
