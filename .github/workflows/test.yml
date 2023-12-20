@@ -211,7 +211,7 @@ jobs:
       - name: Test triton server
         run: |
           docker exec \
-            --env no_proxy="localhost,127.0.0.1,0.0.0.0" \
+            --env no_proxy="localhost,127.0.0.1" \
             $CONTAINER_ID python3 .github/scripts/test_triton_server.py --port ${GRPC_PORT}
       - name: Clear workfile
         if: always()
