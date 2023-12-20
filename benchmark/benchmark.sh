@@ -7,8 +7,6 @@ benchmark_rpm () {
     dataset_path=$2
     output_path=$3
 
-    mkdir -p "${output_path}"
-
     batches=(64 128)
     for batch in "${batches[@]}"
     do
@@ -29,8 +27,6 @@ benchmark_generation () {
     turbomind_model_path=$1
     output_path=$2
 
-    mkdir -p "${output_path}"
-
     python3 profile_generation.py \
         ${turbomind_model_path} \
         --concurrency 1 16 32 64 \
@@ -41,8 +37,6 @@ tune_gemm () {
     echo "start to tune gemm..."
     turbomind_config_path=$1
     output_path=$2
-
-    mkdir -p "${output_path}"
 
     head_num=$(crudini --get "${turbomind_config_path}" llama head_num)
     size_per_head=$(crudini --get "${turbomind_config_path}" llama size_per_head)
@@ -129,6 +123,7 @@ else
 fi
 
 output_path="${workspace_dir}/workspace/output/${model_foldername}-tp${tp}"
+mkdir -p ${output_path}
 cp ${config_path} ${output_path}
 
 # update engine config to config.ini
