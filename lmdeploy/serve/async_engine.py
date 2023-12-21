@@ -120,8 +120,7 @@ class AsyncEngine:
                                                   input_ids,
                                                   request_output_len=0,
                                                   sequence_start=False,
-                                                  sequence_end=True,
-                                                  stop=True):
+                                                  sequence_end=True):
             pass
         self.id2step[str(session_id)] = 0
         if str(session_id) in self.id2generator and self.id2generator[str(
@@ -135,6 +134,7 @@ class AsyncEngine:
             yield
         except (Exception, asyncio.CancelledError) as e:  # noqa
             self.stop_session(session_id)
+            raise e
         if str(session_id) in self.id2generator and self.id2generator[str(
                 session_id)] not in self.gens_set:
             self.gens_set.add(self.id2generator[str(session_id)])
@@ -264,7 +264,11 @@ class AsyncEngine:
             prompt = self.model.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
-        if self.id2step[str(session_id)] + len(
+        if stop is True:
+            self.stop_session(session_id)
+            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
+                         finish_reason)
+        elif self.id2step[str(session_id)] + len(
                 input_ids) + request_output_len >= self.tm_model.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
