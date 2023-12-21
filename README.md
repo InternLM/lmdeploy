@@ -20,6 +20,7 @@ ______________________________________________________________________
 
 ## News 🎉
 
+- \[2023/12\] Turbomind supports multimodal input. [Gradio Demo](./examples/vl/README.md)
 - \[2023/11\] Turbomind supports loading hf model directly. Click [here](./docs/en/load_hf.md) for details.
 - \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B

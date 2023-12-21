@@ -180,7 +180,9 @@ def launch_demo(args, preprocessor, model):
 
     def reset(session):
         stop(session)
-        return [], Session(), enable_btn
+        session._step = 0
+        session._message = []
+        return [], session, enable_btn
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         with gr.Column(elem_id='container'):
