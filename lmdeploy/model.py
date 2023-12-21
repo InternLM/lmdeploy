@@ -110,10 +110,6 @@ class BaseModel:
                              temperature=self.temperature,
                              repetition_penalty=self.repetition_penalty)
 
-    def update_input_ids(self, input_ids: List[int]):
-        """Further modify input ids of the prompt."""
-        return input_ids
-
 
 @MODELS.register_module(name='wizardlM')
 @MODELS.register_module(name='vicuna')
@@ -591,11 +587,11 @@ class Falcon(BaseModel):
     def __init__(self):
         super().__init__()
 
-    def update_input_ids(self, input_ids: List):
-        if len(input_ids) == 0:
-            # avoid empty input to model
-            input_ids = [11]
-        return input_ids
+    def get_prompt(self, prompt, sequence_start=True):
+        prompt = super().get_prompt(prompt, sequence_start)
+        if len(prompt) == 0:
+            return '<|endoftext|>'
+        return prompt
 
 
 @MODELS.register_module(name='chatglm2-6b')
@@ -611,10 +607,6 @@ class ChatGLM2(BaseModel):
         # [64790, 64792] to be prepended
         self.count += 1
         return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
-
-    def update_input_ids(self, input_ids: List):
-        input_ids = [64790, 64792] + input_ids
-        return input_ids
 
 
 @MODELS.register_module(name='solar')

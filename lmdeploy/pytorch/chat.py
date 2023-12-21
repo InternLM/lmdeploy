@@ -4,21 +4,22 @@ import os
 import random
 from typing import List
 
-import fire
-
 from lmdeploy.model import MODELS
 from lmdeploy.tokenizer import Tokenizer
 
-from . import engine as tm
 from .messages import SamplingParam
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-def input_prompt():
+def input_prompt(model_name):
     """Input a prompt in the consolo interface."""
-    print('\ndouble enter to end input >>> ', end='')
-    sentinel = ''  # ends when this string is seen
+    if model_name == 'codellama':
+        print('\nenter !! to end the input >>>\n', end='')
+        sentinel = '!!'
+    else:
+        print('\ndouble enter to end input >>> ', end='')
+        sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
 
@@ -68,11 +69,11 @@ def main(
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
     """
-    # tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-    tokenizer = Tokenizer(model_path)
+    from . import engine as tm
     tm_model = tm.Engine(model_path,
                          tp=tp,
                          trust_remote_code=trust_remote_code)
+    tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
 
     nth_round = 1
@@ -82,7 +83,7 @@ def main(
     stop_words = _stop_words(model.stop_words, tokenizer)
 
     while True:
-        prompt = input_prompt()
+        prompt = input_prompt(model_name)
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
@@ -91,14 +92,13 @@ def main(
             step = 0
             seed = random.getrandbits(64)
         else:
-            print(f'session {session_id}')
+            prompt = model.get_prompt(prompt, nth_round == 1)
+            input_ids = tokenizer.encode(prompt, nth_round == 1)
             if step >= tm_model.session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
-            prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt)
-            input_ids = model.update_input_ids(input_ids)
+
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
             sampling_param = SamplingParam(
@@ -118,6 +118,11 @@ def main(
                 status, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res, offset=response_size)
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence, continue to concate it with the next
+                # sequence and decode them together
+                if response.endswith('�'):
+                    continue
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
                 response_size = tokens
@@ -130,4 +135,6 @@ def main(
 
 
 if __name__ == '__main__':
+    import fire
+
     fire.Fire(main)

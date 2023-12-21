@@ -16,12 +16,13 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
-from lmdeploy.turbomind import TurboMind
+from lmdeploy.pytorch.messages import SamplingParam
 
 
 def infer(model, session_id: int, input_ids: List, output_seqlen: int,
           top_k: int, top_p: float, temperature: float, test_round: int,
           que: Queue):
+
     if session_id == 1:
         pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
@@ -30,6 +31,7 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         token_latency_stats = [0] * (output_seqlen + 1)
         prev = time.perf_counter()
         n_prev_token = 0
+
         """
         The iterator provided by `stream_infer` denotes the number of generated tokens so far,
         which is represented by the variable `n_token`.
@@ -42,22 +44,25 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         The time elapsing in this iteration `now-prev` is set to the latency of first token of
         the 5 tokens, i.e. `token_latency_stats[0]`, and `token_latency_stats[1:4]` is set 0`
         """   # noqa: E501
+        # TODO: use same inference interface
+        sampling_param = SamplingParam(top_k=top_k,
+                                       top_p=top_p,
+                                       temperature=temperature,
+                                       ignore_eos=True)
         for outputs in chatbot.stream_infer(session_id,
-                                            input_ids,
+                                            input_ids=input_ids,
                                             request_output_len=output_seqlen,
-                                            sequence_start=True,
-                                            sequence_end=True,
-                                            ignore_eos=True,
-                                            stream_output=True,
-                                            top_k=top_k,
-                                            top_p=top_p,
-                                            temperature=temperature):
-            _, n_token = outputs[0]
+                                            sampling_param=sampling_param):
+            if len(outputs) > 1:
+                _, n_token = outputs[-2:]
+            else:
+                _, n_token = outputs[0]
             now = time.perf_counter()
             if n_prev_token != n_token:
                 token_latency_stats[n_prev_token] = np.round(now - prev, 3)
                 n_prev_token = n_token
             prev = now
+        chatbot.end(session_id)
         if session_id == 1:
             pbar.update(1)
 
@@ -78,16 +83,21 @@ def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
     def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
-            for _ in chatbot.stream_infer(session_id,
-                                          input_ids=input_ids,
-                                          request_output_len=output_seqlen,
-                                          sequence_start=True,
-                                          sequence_end=True,
-                                          ignore_eos=True,
-                                          top_k=1,
-                                          top_p=1.0,
-                                          temperature=1.0):
+            # TODO: use same inference interface
+            sampling_param = SamplingParam(top_k=1,
+                                           top_p=1.0,
+                                           temperature=0.8,
+                                           repetition_penalty=1.0,
+                                           ignore_eos=True)
+            generator = chatbot.stream_infer(session_id,
+                                             input_ids=input_ids,
+                                             request_output_len=output_seqlen,
+                                             sampling_param=sampling_param)
+            for _ in generator:
                 continue
+            # for pytorch engine to restart a session
+            if hasattr(chatbot, 'end'):
+                chatbot.end(session_id)
 
     _start = time.perf_counter()
     procs = []
@@ -113,11 +123,10 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
 
-    # avoid turbomind checking chat template name by setting `model_name='llama'` # noqa
-    tm_model = TurboMind(model_path=model_path,
-                         tp=tp,
-                         model_name='llama',
-                         **kwargs)
+    from lmdeploy.pytorch.engine import Engine
+
+    # tokenizer = Tokenizer(model_path)
+    tm_model = Engine(model_path, tp=tp, model_name='llama')
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
