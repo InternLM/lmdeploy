@@ -175,7 +175,7 @@ jobs:
           docker exec \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install tritonclient[grpc]
+            $CONTAINER_ID python3 -m pip install tritonclient[grpc] protobuf
 
           docker exec \
             --env http_proxy=${{secrets.PROXY}} \
