@@ -1,4 +1,4 @@
-import queue
+import collections
 import threading
 import logging
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class UserRequestQueue:
             total_quota += item["quota_pct"]
         for item in user_id_map:
             user_id = item["id"]
-            self.user_queue_map[user_id] = queue.Queue()
+            self.user_queue_map[user_id] = collections.deque()
             self.user_quota_map[user_id] = item["quota_pct"] / total_quota
 
         self.lock = threading.Lock()
@@ -29,28 +29,26 @@ class UserRequestQueue:
         Enqueue request to correspoding user queue.
         """
         if request_event[0].user_id in self.user_queue_map:
-            self.user_queue_map[request_event[0].user_id].put(request_event)
+            self.user_queue_map[request_event[0].user_id].append(request_event)
         else:
-            self.user_queue_map["default"].put(request_event)
+            self.user_queue_map["default"].append(request_event)
     
     def empty(self):
         """
         Whether all user queues are empty.
         """
-        with self.lock:
-            for _, user_queue in self.user_queue_map.items():
-                if not user_queue.empty():
-                    return False
+        for _, req_queue in self.user_queue_map.items():
+            if len(req_queue) != 0:
+                return False
         return True
     
     def dequeue(self, usage_stats):
         """
         Dequeue the request to serve.
         """
-        with self.lock:
-            uid_to_serve = self.user_to_serve(usage_stats)
-            if uid_to_serve in self.user_queue_map:
-                return self.user_queue_map[uid_to_serve].get()
+        uid_to_serve = self.user_to_serve(usage_stats)
+        if uid_to_serve in self.user_queue_map:
+            return self.user_queue_map[uid_to_serve].popleft()
         
         return None
 
@@ -62,7 +60,7 @@ class UserRequestQueue:
         min_usage = 100
         uid_to_serve = ""
         for uid, req_queue in self.user_queue_map.items():
-            if req_queue.empty():
+            if len(req_queue) == 0:
                 continue
 
             # TODO: include token length
@@ -72,7 +70,7 @@ class UserRequestQueue:
             due_share = self.user_quota_map[uid]
 
             # Serve the user with the relatively least usage share
-            curr_usage = actual_share / due_share
+            curr_usage = (actual_share / due_share) if due_share > 0 else 0
             if curr_usage == 0:
                 return uid
             if curr_usage < min_usage:

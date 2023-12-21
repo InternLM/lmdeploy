@@ -124,7 +124,8 @@ class QosEngine:
         # push (request,event) to queue
         event = asyncio.Event()
         request_event = (request,event)
-        self.qos_user_group.enqueue(request_event)
+        with self.lock:
+            self.qos_user_group.enqueue(request_event)
 
         await event.wait()
 
@@ -143,7 +144,6 @@ class QosEngine:
                 self.user_served_reqs[request.user_id] = 1
             else:
                 self.user_served_reqs[request.user_id] += 1
-            logger.debug(f"Available slot increase, now: {self.availSlots}")
 
         return result_generator
 
@@ -163,7 +163,7 @@ class QosEngine:
                             self.availSlots -= 1
                         request_event[1].set()
                         logger.debug(f"Available slot decrease, now: {self.availSlots}")
-            continue
+            time.sleep(0)
 
     def _dump_stats(self):
         ts = 0
