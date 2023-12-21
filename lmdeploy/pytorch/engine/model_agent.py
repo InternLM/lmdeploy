@@ -15,6 +15,7 @@ from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
+from ..adapter.adapter import AdapterWeightMap
 from ..config import CacheConfig, ModelConfig
 from ..models import patch
 from ..utils import get_gpu_memory
@@ -72,6 +73,8 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
+    adapter_ids: torch.LongTensor
+    adapter_offsets: torch.LongTensor
     meta: Any
 
     def to_device(self, device: str):
@@ -265,6 +268,18 @@ class BaseModelAgent:
             hf_model.config.use_cache = True
         patched_model = patch(hf_model, _PATCH_ARG_NAMES).cuda()
         return patched_model
+
+    def load_adapter(self, weight_map: AdapterWeightMap):
+        """load adapter."""
+        weight_map.load_adapter(self.patched_model)
+        lora_linears = weight_map.get_lora_linears(self.patched_model)
+        cpu_caches = self.cache_engine.cpu_cache
+        num_blocks = self.cache_engine.num_cpu_blocks
+        cpu_caches = [(kcache.view(num_blocks,
+                                   -1), vcache.view(num_blocks, -1))
+                      for kcache, vcache in cpu_caches]
+        weight_map.cache_adapter(lora_linears, cpu_caches)
+        weight_map.update_linears(lora_linears)
 
     def forward(self, inputs: ModelInputs, swap_in_map: Dict[int, int],
                 swap_out_map: Dict[int, int]):
@@ -598,6 +613,10 @@ class TPModelAgent:
             logger.error(f'Init tp model failed with error: {resp.error}')
             raise next(err for err in resp.error if err is not None)
         self.cache_config = resp.data
+
+    def load_adapter(self, weight_map: AdapterWeightMap):
+        """load adapter."""
+        raise NotImplementedError('TP lora is not supported for now.')
 
     def forward(self, inputs: Dict, swap_in_map: Dict[int, int],
                 swap_out_map: Dict[int, int]):

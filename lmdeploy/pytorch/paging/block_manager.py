@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict
+from typing import Dict, Union
 
 import numpy as np
 
+from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..messages import SchedulerSequence
 
 
@@ -17,6 +18,8 @@ class LogicalMemory:
 
     def get_physical_blocks(self, logical_address: np.ndarray):
         """get physical address."""
+        if len(logical_address) == 0:
+            return np.empty((0, ), dtype=np.int64)
         return self.phy_map[logical_address]
 
     def num_blocks(self):
@@ -233,7 +236,7 @@ class BlockManager:
 
         self.block_tables: Dict[int, BlockTable] = {}
 
-    def get_block_table(self, msg: SchedulerSequence):
+    def get_block_table(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
         """Get the block table of given msg.
 
         Args:
@@ -247,9 +250,12 @@ class BlockManager:
         """Return if physical block can be allocated for given message."""
         num_required_blocks = msg.num_required_blocks()
         num_free_phy = self.get_num_free_gpu_blocks()
+        if msg.adapter_name is not None:
+            adapter = ADAPTER_MANAGER.get_adapter(msg.adapter_name)
+            num_required_blocks += adapter.num_required_blocks()
         return num_required_blocks <= num_free_phy
 
-    def allocate(self, msg: SchedulerSequence):
+    def allocate_msg(self, msg: SchedulerSequence):
         """Allocate physical blocks for given message according to logical
         blocks."""
         logical_blocks = msg.logical_blocks
@@ -260,6 +266,22 @@ class BlockManager:
             blocks = self.allocator.allocate(num_required_blocks, 'gpu')
             logical_blocks.append(blocks)
             logical_blocks.add_tokens(num_required_tokens)
+
+    def allocate_adapter(self, adapter: SchedulerAdapter):
+        """Allocate cpu blocks for given adapter."""
+        num_required_blocks = adapter.num_required_blocks()
+        if num_required_blocks > 0:
+            blocks = self.allocator.allocate(num_required_blocks, 'cpu')
+            adapter.logical_blocks.append(blocks)
+
+    def allocate(self, data: Union[SchedulerSequence, SchedulerAdapter]):
+        """allocate stuff."""
+        if isinstance(data, SchedulerSequence):
+            return self.allocate_msg(data)
+        elif isinstance(data, SchedulerAdapter):
+            return self.allocate_adapter(data)
+        else:
+            raise TypeError(f'Unsupported allocate type: {type(data)}')
 
     def free(self, msg: SchedulerSequence):
         """Free all physical blocks allocated for the session."""
@@ -317,7 +339,7 @@ class BlockManager:
 
         return copy_map
 
-    def try_swap_out(self, msg: SchedulerSequence):
+    def try_swap_out(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
         """Try swap msg out."""
         swap_map = dict()
         logical_blocks = msg.logical_blocks
@@ -357,6 +379,8 @@ class BlockManager:
             gpu_allocator.free(old_blocks)
             self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
                                           new_blocks)
+            if isinstance(msg, SchedulerAdapter):
+                msg.active(False)
             return True, swap_map
 
         if not _can_swap():
@@ -364,7 +388,7 @@ class BlockManager:
         else:
             return _do_swap()
 
-    def try_swap_in(self, msg: SchedulerSequence):
+    def try_swap_in(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
         """Try swap msg in."""
         swap_map = dict()
         logical_blocks = msg.logical_blocks
@@ -404,6 +428,8 @@ class BlockManager:
             cpu_allocator.free(old_blocks)
             self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
                                           new_blocks)
+            if isinstance(msg, SchedulerAdapter):
+                msg.active(True)
             return True, swap_map
 
         if not _can_swap():

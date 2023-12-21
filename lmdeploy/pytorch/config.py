@@ -11,6 +11,7 @@ class SchedulerConfig:
     max_request_output_len: int
     eviction_type: str = 'copy'
     prefill_interval: int = 16
+    max_active_adapters: int = 64
 
 
 @dataclass

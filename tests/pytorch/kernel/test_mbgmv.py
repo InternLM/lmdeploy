@@ -34,7 +34,7 @@ class TestMBGMV:
         yield x
 
     @pytest.fixture
-    def rank_ids(self, batch_size, ranks):
+    def adapter_ids(self, batch_size, ranks):
         num_ranks = len(ranks)
         ret = torch.randint(0, num_ranks, (batch_size, )).cuda()
         yield ret
@@ -82,9 +82,9 @@ class TestMBGMV:
         yield cache
 
     @pytest.fixture
-    def gt(self, input, rank_ids, lora_a, lora_b):
+    def gt(self, input, adapter_ids, lora_a, lora_b):
         out = []
-        for inp, r_id in zip(input, rank_ids):
+        for inp, r_id in zip(input, adapter_ids):
             inp = inp.unsqueeze(0)
             l_a = lora_a[r_id]
             l_b = lora_b[r_id]
@@ -93,19 +93,19 @@ class TestMBGMV:
         yield torch.cat(out)
 
     def test_mbgmv(self, input, paged_lora_a, paged_lora_b, out_head_size,
-                   rank_ids, page_table, ranks, gt):
+                   adapter_ids, page_table, ranks, gt):
         max_rank = page_table.size(-1)
 
         xa = mbgmv_a(input,
                      paged_lora_a,
-                     b_rank_ids=rank_ids,
+                     b_adapter_ids=adapter_ids,
                      rank_page_table=page_table,
                      ranks=ranks,
                      max_rank=max_rank)
 
         output = mbgmv_b(xa,
                          paged_lora_b[..., :out_head_size],
-                         b_rank_ids=rank_ids,
+                         b_adapter_ids=adapter_ids,
                          rank_page_table=page_table,
                          ranks=ranks,
                          max_rank=max_rank)

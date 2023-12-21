@@ -11,6 +11,7 @@ from transformers import AutoConfig
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
+from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..config import CacheConfig, ModelConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
@@ -21,6 +22,9 @@ from .request import (Request, RequestManager, RequestType, Response,
                       ResponseType)
 
 logger = get_logger('lmdeploy')
+
+SeqList = List[SchedulerSequence]
+AdapterList = List[SchedulerAdapter]
 
 
 @dataclass
@@ -127,12 +131,33 @@ def _build_model_agent(model_path: str,
     return model_agent
 
 
+def _build_adapters(adapters: dict, model_agent: BaseModelAgent,
+                    scheduler: Scheduler):
+    adapters = adapters or dict()
+    if len(adapters) > 0:
+        assert scheduler.cache_config.block_size == 1, (
+            'Load adapter require block_size == 1.')
+    for name, path in adapters.items():
+        logger.info(f'load adapter <{name}> from "{path}".')
+        weight_map = scheduler.add_adapter(path, name)
+        weight_map.block_table = torch.tensor(weight_map.block_table)
+        model_agent.load_adapter(weight_map)
+
+
 def _tensorlize_block_offsets(block_offsets):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
     block_offsets = [torch.from_numpy(off) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
+
+
+def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
+    """get adapter ids."""
+    adapter_names_map = dict(
+        (ada.name, idx) for idx, ada in enumerate(adapters))
+    adapter_ids = [adapter_names_map[seq.adapter_name] for seq in seqs]
+    return adapter_ids
 
 
 class Engine:
@@ -151,7 +176,8 @@ class Engine:
                  cache_config: CacheConfig = None,
                  tp: int = 1,
                  model_name: str = None,
-                 trust_remote_code=True) -> None:
+                 trust_remote_code=True,
+                 adapters: dict = None) -> None:
 
         self.tp = tp
         self.gpu_count = tp
@@ -166,6 +192,10 @@ class Engine:
         # block_size = 1 to enable unified paging
         cache_config = cache_config or CacheConfig(
             block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
+        if adapters is not None:
+            if cache_config.block_size != 1:
+                logger.warning('Lora adapter require block size 1.')
+                cache_config.block_size = 1
 
         hf_config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
@@ -184,6 +214,10 @@ class Engine:
 
         cache_config = self.model_agent.cache_config
         self.scheduler = Scheduler(scheduler_config, cache_config)
+
+        _build_adapters(adapters,
+                        model_agent=self.model_agent,
+                        scheduler=self.scheduler)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -283,7 +317,8 @@ class Engine:
                 sess.add_sequence(
                     req.data['token_ids'],
                     max_output_len=req.data['max_request_output_len'],
-                    sampling_param=req.data['sampling_param'])
+                    sampling_param=req.data['sampling_param'],
+                    adapter_name=req.data['adapter_name'])
                 msg = next(iter(sess.sequences.values()))
                 self.scheduler.add_sequence(msg)
             else:
@@ -338,11 +373,12 @@ class Engine:
             self.owned_sessions.remove(session_id)
 
     @torch.inference_mode()
-    def create_model_inputs(self, messages: List[SchedulerSequence]):
+    def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
         """create model inputs from messages.
 
         Args:
-            messages (List[SchedulerSequence]): The input messages.
+            messages (SeqList): The input messages.
+            adapters (AdapterList): Adapters.
         """
         history_lengths = [msg.history_len for msg in messages]
 
@@ -378,6 +414,14 @@ class Engine:
         block_offsets = self.scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
+        adapter_ids = None
+        adapter_offsets = None
+        if ADAPTER_MANAGER.num_adapters() > 1:
+            adapter_ids = _get_adapter_ids(messages, adapters)
+            adapter_ids = seq_length.new_tensor(adapter_ids)
+            adapter_offsets = self.scheduler.get_block_tables(adapters)
+            adapter_offsets = _tensorlize_block_offsets(adapter_offsets)
+
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
@@ -390,6 +434,8 @@ class Engine:
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
                            is_decoding=is_decoding,
+                           adapter_ids=adapter_ids,
+                           adapter_offsets=adapter_offsets,
                            meta=meta)
 
     def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
@@ -431,8 +477,8 @@ class Engine:
             return True
         return False
 
-    def sampling_logits(self, logits: torch.Tensor,
-                        running: List[SchedulerSequence], inputs: ModelInputs):
+    def sampling_logits(self, logits: torch.Tensor, running: SeqList,
+                        inputs: ModelInputs):
         """sampling logits."""
 
         def _group_params(running):
@@ -480,8 +526,8 @@ class Engine:
 
         return next_token_ids, split_logits
 
-    def update_running(self, running: List[SchedulerSequence],
-                       next_token_ids: torch.Tensor, meta: Any):
+    def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
+                       meta: Any):
         """update scheduler."""
         for token, msg in zip(next_token_ids, running):
             msg.meta = meta
@@ -503,13 +549,14 @@ class Engine:
         # schedule
         schedule_output = self.scheduler.schedule(is_prefill=is_prefill)
 
-        running: List[SchedulerSequence] = schedule_output.running
+        running: SeqList = schedule_output.running
         swap_in_map = schedule_output.swap_in_map
         swap_out_map = schedule_output.swap_out_map
+        adapters = schedule_output.adapters
         if len(running) == 0:
             return dict()
 
-        inputs = self.create_model_inputs(running)
+        inputs = self.create_model_inputs(running, adapters)
 
         # inference
         output = self.model_agent.forward(inputs,
@@ -646,7 +693,7 @@ class Engine:
             sessions.append(sess)
             self.add_session(sess)
 
-        msgs: List[SchedulerSequence] = []
+        msgs: SeqList = []
         for token_ids, sess in zip(prompt_token_ids, sessions):
             msg = sess.add_sequence(token_ids=token_ids)
             msgs.append(msg)
@@ -753,6 +800,7 @@ class EngineInstance:
                      request_output_len: int = None,
                      step: int = 0,
                      sampling_param: SamplingParam = SamplingParam(),
+                     adapter_name: str = None,
                      **kwargs):
         """Send stream inference request.
 
@@ -774,6 +822,7 @@ class EngineInstance:
             session_id=session_id,
             max_request_output_len=request_output_len,
             sampling_param=sampling_param,
+            adapter_name=adapter_name,
         )
         req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 

@@ -72,6 +72,11 @@ class CacheEngine:
             f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     @property
+    def cpu_cache(self):
+        """gpu cache."""
+        return self.local_cpu_cache
+
+    @property
     def gpu_cache(self):
         """gpu cache."""
         return self.local_gpu_cache
