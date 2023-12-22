@@ -205,6 +205,7 @@ class APIClient:
             max_tokens: Optional[int] = 16,
             stream: Optional[bool] = False,
             top_p: Optional[float] = 1.0,
+            top_k: Optional[int] = 40,
             user: Optional[str] = None,
             # additional argument of lmdeploy
             repetition_penalty: Optional[float] = 1.0,
@@ -223,6 +224,8 @@ class APIClient:
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
                 higher are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+                tokens to keep for top-k-filtering
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
@@ -341,7 +344,9 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            interactive_mode: bool = False,
                            ignore_eos: bool = False,
-                           stop: bool = False) -> Iterable[List[str]]:
+                           stop: bool = False,
+                           top_p: float = 0.8,
+                           temperature: float = 0.7) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
     pload = {
         'prompt': prompt,
@@ -350,7 +355,9 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'interactive_mode': interactive_mode,
         'ignore_eos': ignore_eos,
-        'stop': stop
+        'stop': stop,
+        'top_p': top_p,
+        'temperature': temperature
     }
     response = requests.post(api_url,
                              headers=headers,

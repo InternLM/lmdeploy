@@ -61,7 +61,7 @@ bool SequenceManager::Contains(uint64_t id)
     return sequences_.find(id) != sequences_.end();
 }
 
-void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
+void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
 {
     auto& seq = it->second;
     if (seq.status == Sequence::kCached) {
@@ -72,7 +72,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
         UpdateAndSetUnlock(seq);
     }
     freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
-    sequences_.erase(it);
+    it = sequences_.erase(it);
 }
 
 bool SequenceManager::Erase(uint64_t id)

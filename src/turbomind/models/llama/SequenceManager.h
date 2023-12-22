@@ -107,7 +107,7 @@ public:
     }
 
 private:
-    void Erase(std::map<uint64_t, Sequence>::iterator it);
+    void Erase(std::map<uint64_t, Sequence>::iterator& it);
 
     void CommitUnlockAndFree();
 
