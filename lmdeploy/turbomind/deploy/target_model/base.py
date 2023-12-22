@@ -52,7 +52,10 @@ class TurbomindModelConfig:
     step_length: int = 1
     cache_max_entry_count: float = 0.5
     cache_block_seq_len: int = 128
-    cache_chunk_size: int = 1
+    cache_chunk_size: int = -1
+    num_tokens_per_iter: int = 0
+    max_prefill_iters: int = 1
+    extra_tokens_per_iter: int = 0
     use_context_fmha: int = 1
     quant_policy: int = 0
     max_position_embeddings: int = 0

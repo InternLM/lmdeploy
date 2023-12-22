@@ -257,6 +257,8 @@ async def completions_v1(request: CompletionRequest,
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
     - session_id (int): if not specified, will set random value
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
@@ -286,6 +288,7 @@ async def completions_v1(request: CompletionRequest,
             if request.max_tokens else 512,
             stop=False,
             top_p=request.top_p,
+            top_k=request.top_k,
             temperature=request.temperature,
             repetition_penalty=request.repetition_penalty,
             ignore_eos=request.ignore_eos,
