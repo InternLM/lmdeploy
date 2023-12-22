@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 def _next_pow_of_2(x):
@@ -55,7 +56,7 @@ def _x_a_mv_kernel(
         # load x
         xh_off = cur_dm_off * stride_xh
         x_mask = h_mask
-        x = tl.load(X + x_off + xh_off, mask=x_mask, other=0.0).to(tl.float32)
+        x = tl.load(X + x_off + xh_off, mask=x_mask, other=0.0)
 
         # load lora a
         lah_off = cur_dm_off * stride_lah
@@ -137,6 +138,13 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
             rank_page_table: Tensor, ranks: Tensor, max_rank: int):
     """mbgmv_a."""
 
+    def _kernel_meta():
+        device = x.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     assert x.dim() == 2
     assert lora_a.dim() == 2
     assert rank_page_table.dim() == 2
@@ -148,32 +156,31 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
     if BLOCK_R < 16:
         BLOCK_R = 16
     BLOCK_H = head_size
-    BLOCK_DMODEL = 64
+    BLOCK_DMODEL = 512
 
     num_warps = 4
     grid = [batch_size]
     xa = x.new_empty((x.size(0), BLOCK_R))
-
-    _x_a_mv_kernel[grid](
-        x,
-        lora_a,
-        xa,
-        b_adapter_ids,
-        Rank_page_table=rank_page_table,
-        Ranks=ranks,
-        stride_xs=x.stride(0),
-        stride_xh=x.stride(1),
-        stride_las=lora_a.stride(0),
-        stride_lah=lora_a.stride(1),
-        stride_xas=xa.stride(0),
-        stride_xar=xa.stride(1),
-        stride_ptb=rank_page_table.stride(0),
-        BLOCK_R=BLOCK_R,
-        BLOCK_H=BLOCK_H,
-        BLOCK_DMODEL=BLOCK_DMODEL,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    kernel_meta = _kernel_meta()
+    _x_a_mv_kernel[grid](x,
+                         lora_a,
+                         xa,
+                         b_adapter_ids,
+                         Rank_page_table=rank_page_table,
+                         Ranks=ranks,
+                         stride_xs=x.stride(0),
+                         stride_xh=x.stride(1),
+                         stride_las=lora_a.stride(0),
+                         stride_lah=lora_a.stride(1),
+                         stride_xas=xa.stride(0),
+                         stride_xar=xa.stride(1),
+                         stride_ptb=rank_page_table.stride(0),
+                         BLOCK_R=BLOCK_R,
+                         BLOCK_H=BLOCK_H,
+                         BLOCK_DMODEL=BLOCK_DMODEL,
+                         num_warps=num_warps,
+                         num_stages=1,
+                         **kernel_meta)
     return xa
 
 
@@ -181,6 +188,13 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
 def mbgmv_b(xa: Tensor, lora_b: Tensor, b_adapter_ids: Tensor,
             rank_page_table: Tensor, ranks: Tensor, max_rank: int):
     """mbgmv_b."""
+
+    def _kernel_meta():
+        device = xa.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
 
     assert xa.dim() == 2
     assert lora_b.dim() == 2
@@ -193,31 +207,30 @@ def mbgmv_b(xa: Tensor, lora_b: Tensor, b_adapter_ids: Tensor,
     if BLOCK_R < 16:
         BLOCK_R = 16
     BLOCK_HO = head_o_size
-    BLOCK_DMODEL = 64
+    BLOCK_DMODEL = 512
 
     num_warps = 4
     grid = [batch_size]
     output = xa.new_empty((xa.size(0), BLOCK_HO))
-
-    _acc_b_mv_kernel[grid](
-        xa,
-        lora_b,
-        output,
-        b_adapter_ids,
-        Rank_page_table=rank_page_table,
-        Ranks=ranks,
-        stride_xas=xa.stride(0),
-        stride_xar=xa.stride(1),
-        stride_lbs=lora_b.stride(0),
-        stride_lbh=lora_b.stride(1),
-        stride_os=output.stride(0),
-        stride_oh=output.stride(1),
-        stride_ptb=rank_page_table.stride(0),
-        BLOCK_R=BLOCK_R,
-        BLOCK_HO=BLOCK_HO,
-        BLOCK_DMODEL=BLOCK_DMODEL,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    kernel_meta = _kernel_meta()
+    _acc_b_mv_kernel[grid](xa,
+                           lora_b,
+                           output,
+                           b_adapter_ids,
+                           Rank_page_table=rank_page_table,
+                           Ranks=ranks,
+                           stride_xas=xa.stride(0),
+                           stride_xar=xa.stride(1),
+                           stride_lbs=lora_b.stride(0),
+                           stride_lbh=lora_b.stride(1),
+                           stride_os=output.stride(0),
+                           stride_oh=output.stride(1),
+                           stride_ptb=rank_page_table.stride(0),
+                           BLOCK_R=BLOCK_R,
+                           BLOCK_HO=BLOCK_HO,
+                           BLOCK_DMODEL=BLOCK_DMODEL,
+                           num_warps=num_warps,
+                           num_stages=1,
+                           **kernel_meta)
 
     return output

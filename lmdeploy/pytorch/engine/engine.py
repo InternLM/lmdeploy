@@ -115,14 +115,17 @@ def _build_model_agent(model_path: str,
                        model_config: ModelConfig,
                        cache_config: CacheConfig,
                        trust_remote_code: bool,
+                       adapters: Dict[str, str] = None,
                        tp: int = 1):
     """create model agent."""
     if tp == 1:
         model_agent = BaseModelAgent(model_path,
                                      model_config=model_config,
                                      cache_config=cache_config,
+                                     adapters=adapters,
                                      trust_remote_code=trust_remote_code)
     else:
+        assert not adapters, 'LoRA is not support on tp for now.'
         model_agent = TPModelAgent(model_path,
                                    model_config=model_config,
                                    cache_config=cache_config,
@@ -131,17 +134,16 @@ def _build_model_agent(model_path: str,
     return model_agent
 
 
-def _build_adapters(adapters: dict, model_agent: BaseModelAgent,
-                    scheduler: Scheduler):
+def _paging_adapters(adapters: dict, model_agent: BaseModelAgent,
+                     scheduler: Scheduler):
     adapters = adapters or dict()
     if len(adapters) > 0:
         assert scheduler.cache_config.block_size == 1, (
             'Load adapter require block_size == 1.')
     for name, path in adapters.items():
-        logger.info(f'load adapter <{name}> from "{path}".')
         weight_map = scheduler.add_adapter(path, name)
         weight_map.block_table = torch.tensor(weight_map.block_table)
-        model_agent.load_adapter(weight_map)
+        model_agent.paging_adapter(weight_map)
 
 
 def _tensorlize_block_offsets(block_offsets):
@@ -210,14 +212,15 @@ class Engine:
             model_config=model_config,
             cache_config=cache_config,
             trust_remote_code=trust_remote_code,
+            adapters=adapters,
             tp=tp)
 
         cache_config = self.model_agent.cache_config
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
-        _build_adapters(adapters,
-                        model_agent=self.model_agent,
-                        scheduler=self.scheduler)
+        _paging_adapters(adapters,
+                         model_agent=self.model_agent,
+                         scheduler=self.scheduler)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -416,11 +419,14 @@ class Engine:
 
         adapter_ids = None
         adapter_offsets = None
+        ranks = None
         if ADAPTER_MANAGER.num_adapters() > 1:
             adapter_ids = _get_adapter_ids(messages, adapters)
             adapter_ids = seq_length.new_tensor(adapter_ids)
             adapter_offsets = self.scheduler.get_block_tables(adapters)
             adapter_offsets = _tensorlize_block_offsets(adapter_offsets)
+            ranks = [ada.rank for ada in adapters]
+            ranks = seq_length.new_tensor(ranks)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -436,6 +442,7 @@ class Engine:
                            is_decoding=is_decoding,
                            adapter_ids=adapter_ids,
                            adapter_offsets=adapter_offsets,
+                           ranks=ranks,
                            meta=meta)
 
     def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
@@ -595,6 +602,7 @@ class Engine:
                       token_ids: List[List[int]] = None,
                       request_output_len: int = 512,
                       sampling_param: SamplingParam = SamplingParam(),
+                      adapter_names: List[str] = None,
                       keep_cache: bool = False):
         """Send inference request.
 
@@ -604,6 +612,7 @@ class Engine:
             request_output_len (int): The max output length of this request.
             step (int): No use for now.
             sampling_param (SamplingParam): The sampling param of the output.
+            adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
         Returns:
@@ -613,6 +622,10 @@ class Engine:
         """
         batch_size = len(token_ids)
         assert len(session_ids) == batch_size
+        if adapter_names is not None:
+            assert len(adapter_names) == batch_size
+        else:
+            adapter_names = [None for _ in range(batch_size)]
 
         def _add_sessions(session_ids, owned_sessions):
             for session_id in session_ids:
@@ -621,13 +634,13 @@ class Engine:
 
         def _add_messages(session_ids, token_ids):
             add_msgs = []
-            for session_id, token_id in zip(session_ids, token_ids):
-                msg = dict(
-                    token_ids=token_id,
-                    session_id=session_id,
-                    max_request_output_len=request_output_len,
-                    sampling_param=sampling_param,
-                )
+            for session_id, token_id, adapter_name in zip(
+                    session_ids, token_ids, adapter_names):
+                msg = dict(token_ids=token_id,
+                           session_id=session_id,
+                           max_request_output_len=request_output_len,
+                           sampling_param=sampling_param,
+                           adapter_name=adapter_name)
                 add_msgs.append(msg)
             req_types = [RequestType.ADD_MESSAGE] * batch_size
             req_ids = self.req_sender.batched_send_async(req_types,

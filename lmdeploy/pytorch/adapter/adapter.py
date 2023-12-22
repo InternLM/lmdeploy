@@ -55,10 +55,6 @@ class AdapterWeightMap:
     block_table: Tensor
     target_modules: List[str]
 
-    def load_adapter(self, model: torch.nn.Module):
-        """load adapter."""
-        model.load_adapter(self.adapter_path, self.adapter_name)
-
     def get_lora_linears(self, model: torch.nn.Module):
         """get all lora linears."""
         name = self.adapter_name
@@ -120,8 +116,8 @@ class AdapterWeightMap:
             for target in target_modules:
                 linear = lora_linear[target]
                 linear.layer_idx = idx
-                linear.lora_A.clear()
-                linear.lora_B.clear()
+                linear.lora_A.pop(self.adapter_name)
+                linear.lora_B.pop(self.adapter_name)
 
 
 class SchedulerAdapter:

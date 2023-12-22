@@ -184,7 +184,7 @@ class PatchedSelfAttention(nn.Module):
         if kv_cache is not None:
             cache_k, cache_v = kv_cache
             q_start_loc = context.q_start_loc
-            q_seq_length = context.q_seq_length
+            q_seq_length = context.seq_length
 
             q_start_loc: torch.Tensor
             history_lengths = q_seq_length.new_tensor(history_lengths)

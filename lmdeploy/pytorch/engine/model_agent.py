@@ -2,7 +2,7 @@
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Union
 
 import torch
@@ -75,6 +75,7 @@ class ModelInputs:
     is_decoding: bool
     adapter_ids: torch.LongTensor
     adapter_offsets: torch.LongTensor
+    ranks: torch.LongTensor
     meta: Any
 
     def to_device(self, device: str):
@@ -89,42 +90,84 @@ class ModelInputs:
         return ModelInputs(**out_dict)
 
 
+@dataclass
 class StepContext:
     """context of Model.
 
-    patched model might need extra information to perform inference.
-    This dataclass provide these infos and tools.
-
-    Args:
-        inputs (ModelInputs): packaged model inputs.
-        world_size (int): The distribution world size.
-        device (str): The device of the tensors.
+    patched model might need extra information to perform inference. This
+    dataclass provide these infos and tools.
     """
+    inputs: ModelInputs
+    block_offsets: torch.LongTensor
+    position_ids: torch.LongTensor
+    position_ids_1d: torch.LongTensor
+    q_start_loc: torch.LongTensor
+    history_lengths: torch.LongTensor
+    seq_length: torch.LongTensor
+    max_seq_length: int
+    kv_seq_length: torch.LongTensor
+    kv_caches: List
+    is_decoding: bool
+    world_size: int = 1
+    json_config: Dict = None
+    adapter_ids: torch.LongTensor = None
+    adapter_offsets: torch.LongTensor = None
+    ranks: torch.LongTensor = None
+    max_rank: int = 0
 
-    def __init__(
-        self,
+    _outputs: Dict = field(default_factory=dict)
+
+    @classmethod
+    def build(
+        cls,
         inputs: ModelInputs,
         world_size: int = 1,
         device: str = 'cuda',
         json_config: dict = None,
+        kv_caches: List = None,
     ):
-        self.inputs = inputs
-        self.block_offsets = inputs.block_offsets
-        self.position_ids = inputs.position_ids
-        self.q_start_loc = inputs.q_start_loc
-        self.history_lengths = inputs.history_lengths
-        self.seq_length = inputs.seq_length
-        self.q_seq_length = self.seq_length
-        self.world_size = world_size
-        self.json_config = json_config
+        """build step context.
+
+        Args:
+            inputs (ModelInputs): packaged model inputs.
+            world_size (int): The distribution world size.
+            device (str): The device of the tensors.
+        """
+
+        position_ids = inputs.position_ids
+        max_seq_length = position_ids.size(-1)
 
         # seq_len + history_length
-        self.kv_seq_length = self.position_ids[..., -1] + 1
+        kv_seq_length = position_ids[..., -1] + 1
 
-        self.position_ids_1d = self.get_position_ids_1d(
-            self.position_ids, self.seq_length, device)
+        seq_length = inputs.seq_length
+        position_ids_1d = cls.get_position_ids_1d(position_ids, seq_length,
+                                                  device)
 
-        self._outputs = dict()
+        # adapter
+        ranks = inputs.ranks
+        max_rank = 0
+        if ranks is not None and ranks.numel() > 0:
+            max_rank = max(ranks).item()
+
+        ret = StepContext(inputs=inputs,
+                          block_offsets=inputs.block_offsets,
+                          position_ids=inputs.position_ids,
+                          position_ids_1d=position_ids_1d,
+                          q_start_loc=inputs.q_start_loc,
+                          history_lengths=inputs.history_lengths,
+                          seq_length=inputs.seq_length,
+                          max_seq_length=max_seq_length,
+                          kv_seq_length=kv_seq_length,
+                          kv_caches=kv_caches,
+                          is_decoding=inputs.is_decoding,
+                          world_size=world_size,
+                          json_config=json_config,
+                          adapter_ids=inputs.adapter_ids,
+                          adapter_offsets=inputs.adapter_offsets,
+                          ranks=ranks,
+                          max_rank=max_rank)
+        return ret
 
     @classmethod
     def tensorlize_block_offsets(cls, block_offsets, device):
@@ -203,10 +246,11 @@ def model_forward(
     with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
         inputs = inputs.to_device('cuda')
-        context = StepContext(
+        context = StepContext.build(
             inputs=inputs,
             world_size=world_size,
             json_config=json_config,
+            kv_caches=cache_engine.gpu_cache,
         )
         output = patched_model(
             input_ids=inputs.input_ids,
@@ -221,6 +265,38 @@ def model_forward(
         )
     stream.synchronize()
     return dict(logits=output['logits'], custom_outputs=context._outputs)
+
+
+def _load_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
+    """load adapters."""
+    if not adapters:
+        return
+    for name, path in adapters.items():
+        logger.info(f'load adapter <{name}> from "{path}".')
+        hf_model.load_adapter(path, name, device_map='cpu')
+
+
+def _unparam_lora_weight(model: torch.nn.Module):
+    """unparam lora weight.
+
+    We don't want to move weight of lora to gpu.
+    """
+    from peft.tuners.lora import Linear as LoRALinear
+
+    def _tensorize_weight(linear):
+        """tensorize weight."""
+        w = linear.weight
+        del linear.weight
+        linear.weight = w.data
+
+    for _, mod in model.named_modules():
+        if isinstance(mod, LoRALinear):
+            lora_A = mod.lora_A
+            lora_B = mod.lora_B
+            for linear in lora_A.values():
+                _tensorize_weight(linear)
+            for linear in lora_B.values():
+                _tensorize_weight(linear)
 
 
 class BaseModelAgent:
@@ -239,6 +315,7 @@ class BaseModelAgent:
                  model_path: str,
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
+                 adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True):
         self.model_config = model_config
         self.cache_config = cache_config
@@ -247,6 +324,7 @@ class BaseModelAgent:
         self.patched_model = self._build_model(
             model_path,
             torch_dtype=torch_dtype,
+            adapters=adapters,
             trust_remote_code=trust_remote_code)
 
         _update_cache_config(model_config, cache_config)
@@ -257,6 +335,7 @@ class BaseModelAgent:
     def _build_model(self,
                      model_path: str,
                      torch_dtype: torch.dtype,
+                     adapters: Dict[str, str] = None,
                      trust_remote_code: bool = True):
         """build patched model."""
         with LoadNoInit():
@@ -266,12 +345,20 @@ class BaseModelAgent:
                 trust_remote_code=trust_remote_code)
             hf_model.eval()
             hf_model.config.use_cache = True
-        patched_model = patch(hf_model, _PATCH_ARG_NAMES).cuda()
+
+        if adapters:
+            _load_adapters(hf_model, adapters)
+
+        patched_model = patch(hf_model, _PATCH_ARG_NAMES)
+
+        if adapters:
+            _unparam_lora_weight(patched_model)
+
+        patched_model = patched_model.cuda()
         return patched_model
 
-    def load_adapter(self, weight_map: AdapterWeightMap):
+    def paging_adapter(self, weight_map: AdapterWeightMap):
         """load adapter."""
-        weight_map.load_adapter(self.patched_model)
         lora_linears = weight_map.get_lora_linears(self.patched_model)
         cpu_caches = self.cache_engine.cpu_cache
         num_blocks = self.cache_engine.num_cpu_blocks
@@ -614,7 +701,7 @@ class TPModelAgent:
             raise next(err for err in resp.error if err is not None)
         self.cache_config = resp.data
 
-    def load_adapter(self, weight_map: AdapterWeightMap):
+    def paging_adapter(self, weight_map: AdapterWeightMap):
         """load adapter."""
         raise NotImplementedError('TP lora is not supported for now.')
 

@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 def _next_pow_of_2(x):
@@ -173,6 +174,14 @@ def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
             b_adapter_ids: Tensor, rank_page_table: Tensor, ranks: Tensor,
             max_seq_len: int, max_rank: int):
     """mbgmm_a."""
+
+    def _kernel_meta():
+        device = x.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     assert x.dim() == 2
     assert lora_a.dim() == 2
     assert rank_page_table.dim() == 2
@@ -190,29 +199,29 @@ def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
     xa = x.new_empty((x.size(0), BLOCK_R))
-    _x_a_mm_kernel[grid](
-        x,
-        lora_a,
-        xa,
-        b_start_loc,
-        b_seq_lens,
-        b_adapter_ids,
-        Rank_page_table=rank_page_table,
-        Ranks=ranks,
-        stride_xs=x.stride(0),
-        stride_xh=x.stride(1),
-        stride_las=lora_a.stride(0),
-        stride_lah=lora_a.stride(1),
-        stride_xas=xa.stride(0),
-        stride_xar=xa.stride(1),
-        stride_ptb=rank_page_table.stride(0),
-        BLOCK_M=BLOCK_M,
-        BLOCK_R=BLOCK_R,
-        BLOCK_H=BLOCK_H,
-        BLOCK_DMODEL=BLOCK_DMODEL,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    kernel_meta = _kernel_meta()
+    _x_a_mm_kernel[grid](x,
+                         lora_a,
+                         xa,
+                         b_start_loc,
+                         b_seq_lens,
+                         b_adapter_ids,
+                         Rank_page_table=rank_page_table,
+                         Ranks=ranks,
+                         stride_xs=x.stride(0),
+                         stride_xh=x.stride(1),
+                         stride_las=lora_a.stride(0),
+                         stride_lah=lora_a.stride(1),
+                         stride_xas=xa.stride(0),
+                         stride_xar=xa.stride(1),
+                         stride_ptb=rank_page_table.stride(0),
+                         BLOCK_M=BLOCK_M,
+                         BLOCK_R=BLOCK_R,
+                         BLOCK_H=BLOCK_H,
+                         BLOCK_DMODEL=BLOCK_DMODEL,
+                         num_warps=num_warps,
+                         num_stages=1,
+                         **kernel_meta)
     return xa
 
 
@@ -221,6 +230,13 @@ def mbgmm_b(xa: Tensor, lora_b: Tensor, b_start_loc: Tensor,
             b_seq_lens: Tensor, b_adapter_ids: Tensor, rank_page_table: Tensor,
             ranks: Tensor, max_seq_len: int, max_rank: int):
     """mbgmm_b."""
+
+    def _kernel_meta():
+        device = xa.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
 
     assert xa.dim() == 2
     assert lora_b.dim() == 2
@@ -239,29 +255,28 @@ def mbgmm_b(xa: Tensor, lora_b: Tensor, b_start_loc: Tensor,
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
     output = xa.new_empty((xa.size(0), BLOCK_HO))
-
-    _acc_b_mm_kernel[grid](
-        xa,
-        lora_b,
-        output,
-        b_start_loc,
-        b_seq_lens,
-        b_adapter_ids,
-        Rank_page_table=rank_page_table,
-        Ranks=ranks,
-        stride_xas=xa.stride(0),
-        stride_xar=xa.stride(1),
-        stride_os=output.stride(0),
-        stride_oh=output.stride(1),
-        stride_lbs=lora_b.stride(0),
-        stride_lbh=lora_b.stride(1),
-        stride_ptb=rank_page_table.stride(0),
-        BLOCK_M=BLOCK_M,
-        BLOCK_R=BLOCK_R,
-        BLOCK_HO=BLOCK_HO,
-        BLOCK_DMODEL=BLOCK_DMODEL,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    kernel_meta = _kernel_meta()
+    _acc_b_mm_kernel[grid](xa,
+                           lora_b,
+                           output,
+                           b_start_loc,
+                           b_seq_lens,
+                           b_adapter_ids,
+                           Rank_page_table=rank_page_table,
+                           Ranks=ranks,
+                           stride_xas=xa.stride(0),
+                           stride_xar=xa.stride(1),
+                           stride_os=output.stride(0),
+                           stride_oh=output.stride(1),
+                           stride_lbs=lora_b.stride(0),
+                           stride_lbh=lora_b.stride(1),
+                           stride_ptb=rank_page_table.stride(0),
+                           BLOCK_M=BLOCK_M,
+                           BLOCK_R=BLOCK_R,
+                           BLOCK_HO=BLOCK_HO,
+                           BLOCK_DMODEL=BLOCK_DMODEL,
+                           num_warps=num_warps,
+                           num_stages=1,
+                           **kernel_meta)
 
     return output
