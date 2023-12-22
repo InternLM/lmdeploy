@@ -134,7 +134,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     INIReader reader;
     FT_CHECK_WITH_INFO((config.empty() ^ model_dir.empty()), "invalid init options");
 
-    if (!config.empty()) { // config has higher priority than model_dir
+    if (!config.empty()) {
         std::FILE* tmpf = std::tmpfile();
         std::fputs(config.c_str(), tmpf);
         std::rewind(tmpf);
