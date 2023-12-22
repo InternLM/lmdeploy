@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
+
 from ..kernels.mbgmm import mbgmm_a, mbgmm_b
 from ..kernels.mbgmv import mbgmv_a, mbgmv_b
 
@@ -10,13 +11,15 @@ class LoRALinear(torch.nn.Module):
         context = self.context.context
 
         # adapter inputs
-        adapter_ids = context.adapter_ids
+        local_adapter_ids = context.local_adapter_ids
+        global_adapter_ids = context.global_adapter_ids
         adapter_offsets = context.adapter_offsets
-        ranks = context.ranks
         max_rank = context.max_rank
 
         # adapter cache
         layer_idx = self.layer_idx
+        ranks = self.ranks[global_adapter_ids]
+        block_starts = self.block_starts[global_adapter_ids]
         k_cache, v_cache = context.kv_caches[layer_idx]
         cache_len = k_cache.size(0)
         a_cache = k_cache.view(cache_len, -1)
@@ -33,35 +36,40 @@ class LoRALinear(torch.nn.Module):
         x_shape = x.shape
         x = x.flatten(0, -2).contiguous()
 
-        if layer_idx == 0:
-            print(b_cache[145:169, :4])
         if not is_decoding:
-            xa = mbgmm_a(x, a_cache,
+            xa = mbgmm_a(x,
+                         a_cache,
                          b_start_loc=q_start_loc,
                          b_seq_lens=seq_length,
-                         b_adapter_ids=adapter_ids,
+                         b_adapter_ids=local_adapter_ids,
                          rank_page_table=adapter_offsets,
+                         rank_page_start=block_starts,
                          ranks=ranks,
                          max_seq_len=max_seq_length,
                          max_rank=max_rank)
-            lora_out = mbgmm_b(xa, b_cache,
+            lora_out = mbgmm_b(xa,
+                               b_cache,
                                b_start_loc=q_start_loc,
                                b_seq_lens=seq_length,
-                               b_adapter_ids=adapter_ids,
+                               b_adapter_ids=local_adapter_ids,
                                rank_page_table=adapter_offsets,
+                               rank_page_start=block_starts,
                                ranks=ranks,
                                max_seq_len=max_seq_length,
                                max_rank=max_rank)
         else:
-            xa = mbgmv_a(
-                x, a_cache,
-                b_adapter_ids=adapter_ids,
-                rank_page_table=adapter_offsets,
-                ranks=ranks,
-                max_rank=max_rank)
-            lora_out = mbgmv_b(xa, b_cache,
-                               b_adapter_ids=adapter_ids,
+            xa = mbgmv_a(x,
+                         a_cache,
+                         b_adapter_ids=local_adapter_ids,
+                         rank_page_table=adapter_offsets,
+                         rank_page_start=block_starts,
+                         ranks=ranks,
+                         max_rank=max_rank)
+            lora_out = mbgmv_b(xa,
+                               b_cache,
+                               b_adapter_ids=local_adapter_ids,
                                rank_page_table=adapter_offsets,
+                               rank_page_start=block_starts,
                                ranks=ranks,
                                max_rank=max_rank)
 

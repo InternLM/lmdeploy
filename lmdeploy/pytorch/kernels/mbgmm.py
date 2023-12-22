@@ -20,6 +20,7 @@ def _x_a_mm_kernel(
     B_seq_lens,
     B_adapter_id,
     Rank_page_table,
+    Rank_page_start,
     Ranks,
     stride_xs,
     stride_xh,
@@ -46,8 +47,9 @@ def _x_a_mm_kernel(
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
     rank = tl.load(Ranks + adapter_id)
+    page_start = tl.load(Rank_page_start + adapter_id)
 
-    page_table_off = adapter_id * stride_ptb + r_off
+    page_table_off = adapter_id * stride_ptb + r_off + page_start
     rank_mask = r_off < rank
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
@@ -101,6 +103,7 @@ def _acc_b_mm_kernel(
     B_seq_lens,
     B_adapter_id,
     Rank_page_table,
+    Rank_page_start,
     Ranks,
     stride_xas,
     stride_xar,
@@ -126,8 +129,9 @@ def _acc_b_mm_kernel(
     start_loc = tl.load(B_start_loc + cur_batch)
     adapter_id = tl.load(B_adapter_id + cur_batch)
     rank = tl.load(Ranks + adapter_id)
+    page_start = tl.load(Rank_page_start + adapter_id)
 
-    page_table_off = adapter_id * stride_ptb + r_off
+    page_table_off = adapter_id * stride_ptb + r_off + page_start
     rank_mask = r_off < rank
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
@@ -172,7 +176,7 @@ def _acc_b_mm_kernel(
 @torch.inference_mode()
 def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
             b_adapter_ids: Tensor, rank_page_table: Tensor, ranks: Tensor,
-            max_seq_len: int, max_rank: int):
+            rank_page_start: Tensor, max_seq_len: int, max_rank: int):
     """mbgmm_a."""
 
     def _kernel_meta():
@@ -207,6 +211,7 @@ def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
                          b_seq_lens,
                          b_adapter_ids,
                          Rank_page_table=rank_page_table,
+                         Rank_page_start=rank_page_start,
                          Ranks=ranks,
                          stride_xs=x.stride(0),
                          stride_xh=x.stride(1),
@@ -228,7 +233,8 @@ def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
 @torch.inference_mode()
 def mbgmm_b(xa: Tensor, lora_b: Tensor, b_start_loc: Tensor,
             b_seq_lens: Tensor, b_adapter_ids: Tensor, rank_page_table: Tensor,
-            ranks: Tensor, max_seq_len: int, max_rank: int):
+            ranks: Tensor, rank_page_start: Tensor, max_seq_len: int,
+            max_rank: int):
     """mbgmm_b."""
 
     def _kernel_meta():
@@ -263,6 +269,7 @@ def mbgmm_b(xa: Tensor, lora_b: Tensor, b_start_loc: Tensor,
                            b_seq_lens,
                            b_adapter_ids,
                            Rank_page_table=rank_page_table,
+                           Rank_page_start=rank_page_start,
                            Ranks=ranks,
                            stride_xas=xa.stride(0),
                            stride_xar=xa.stride(1),

@@ -24,7 +24,7 @@ def _cache_weight(cache: Tensor, weight: Tensor, block_table: Tensor):
                                                dtype=cache.dtype)
 
 
-def _get_named_loralinear(model: torch.nn.Module):
+def _get_named_loralinears(model: torch.nn.Module):
     """get all named loralinear."""
     from peft.tuners.lora import Linear as LoRALinear
     named_loralinear: Dict[str, torch.nn.Module] = dict()
@@ -48,27 +48,113 @@ def _get_layer_index(key: str, config: Any):
             return int(layer_index[1])
 
 
+def get_indexed_lora_linears(model: torch.nn.Module):
+    """get indexed lora linear."""
+    named_linears = _get_named_loralinears(model)
+
+    config = None
+    peft_config = getattr(model, 'peft_config', dict)
+    if len(peft_config) > 0:
+        config = next(iter(peft_config.values()))
+
+    indexed_linears = dict()
+    for name, layer in named_linears.items():
+        index = _get_layer_index(name, config)
+        target = name.split('.')[-1]
+        indexed_linears.setdefault(index, dict())
+        indexed_linears[index][target] = layer
+    return indexed_linears
+
+
+def update_lora_linears(lora_linears: Dict,
+                        weight_maps: List['AdapterWeightMap'],
+                        device: str = 'cuda'):
+    """update lora linears."""
+
+    def __get_rank_and_start(target_names):
+        """get rank and start."""
+        rank_map = dict()
+        start_map = dict()
+        for target in target_names:
+            ranks = [0] + [
+                weight_map.target_modules[target].rank
+                for weight_map in weight_maps
+            ]
+            block_starts = [0] + [
+                weight_map.target_modules[target].block_start
+                for weight_map in weight_maps
+            ]
+            rank_map[target] = torch.tensor(ranks)
+            start_map[target] = torch.tensor(block_starts)
+        return rank_map, start_map
+
+    def __update_linear(linear, idx, rank_map, start_map, adapter_names):
+        """update linear."""
+        linear.layer_idx = idx
+        linear.ranks = rank_map[target].to(device)
+        linear.block_starts = start_map[target].to(device)
+        for name in adapter_names:
+            if name in linear.lora_A:
+                linear.lora_A.pop(name)
+                linear.lora_B.pop(name)
+
+    adapter_names = [weight_map.adapter_name for weight_map in weight_maps]
+
+    all_targets = set()
+    for weight_map in weight_maps:
+        targets = weight_map.target_modules.keys()
+        all_targets.update(targets)
+
+    for weight_map in weight_maps:
+        weight_map.expand_targets(all_targets)
+
+    rank_map, start_map = __get_rank_and_start(all_targets)
+
+    for idx, lora_linear in lora_linears.items():
+        for target, linear in lora_linear.items():
+            __update_linear(linear,
+                            idx,
+                            rank_map=rank_map,
+                            start_map=start_map,
+                            adapter_names=adapter_names)
+
+
+@dataclass
+class TargetMeta:
+    rank: int
+    block_start: int
+
+
 @dataclass
 class AdapterWeightMap:
     adapter_name: str
-    adapter_path: str
     block_table: Tensor
-    target_modules: List[str]
+    target_modules: Dict[str, TargetMeta]
 
-    def get_lora_linears(self, model: torch.nn.Module):
-        """get all lora linears."""
-        name = self.adapter_name
-        config = model.peft_config[name]
-        target_modules = list(config.target_modules)
-        named_linears = _get_named_loralinear(model)
-        num_layers = len(named_linears) // len(target_modules)
-        indexed_linears = [dict() for _ in range(num_layers)]
-        for name, linear in named_linears.items():
-            index = _get_layer_index(name, config)
-            target = name.split('.')[-1]
-            assert target in target_modules
-            indexed_linears[index][target] = linear
-        return indexed_linears
+    @classmethod
+    def new(cls, adapter_name: str, rank: int, target_names: List[str],
+            block_table: Tensor):
+        """create new weightmap."""
+        block_start = 0
+        target_modules: Dict[str, TargetMeta] = dict()
+        for name in target_names:
+            target_modules[name] = TargetMeta(rank, block_start)
+            block_start += rank
+
+        return AdapterWeightMap(adapter_name,
+                                block_table=block_table,
+                                target_modules=target_modules)
+
+    def expand_targets(self,
+                       target_names: List[str],
+                       ignore_exists: bool = True):
+        for name in target_names:
+            if name in self.target_modules:
+                if ignore_exists:
+                    continue
+                else:
+                    raise RuntimeError(f'target {name} exists.')
+            self.target_modules[name] = TargetMeta(0, 0)
 
     @classmethod
     def cache_lora_a(cls, cache: Tensor, weight: Tensor, block_table: Tensor):
@@ -89,7 +175,8 @@ class AdapterWeightMap:
         block_start = 0
         for target in target_modules:
             linear = lora_linear[target]
-            assert name in linear.lora_A and name in linear.lora_B
+            if not (name in linear.lora_A and name in linear.lora_B):
+                continue
             linear_a = linear.lora_A[name]
             linear_b = linear.lora_B[name]
             assert linear_a.weight is not None
@@ -100,31 +187,22 @@ class AdapterWeightMap:
             self.cache_lora_a(cache_a, linear_a.weight, block_offset)
             self.cache_lora_b(cache_b, linear_b.weight, block_offset)
 
-    def cache_adapter(self, lora_linears: List[Dict],
-                      caches: List[List[Tensor]]):
+    def cache_adapter(self, lora_linears: Dict, caches: List[List[Tensor]]):
         """cache all linear."""
         assert len(lora_linears) == len(caches)
 
-        for cache, lora_linear in zip(caches, lora_linears):
-            cache_a, cache_b = cache
+        for idx, lora_linear in lora_linears.items():
+            assert idx < len(caches)
+            cache_a, cache_b = caches[idx]
             self.cache_lora_linear(lora_linear, cache_a, cache_b)
-
-    def update_linears(self, lora_linears: List[Dict]):
-        """remove linear weights, add index."""
-        target_modules = self.target_modules
-        for idx, lora_linear in enumerate(lora_linears):
-            for target in target_modules:
-                linear = lora_linear[target]
-                linear.layer_idx = idx
-                linear.lora_A.pop(self.adapter_name)
-                linear.lora_B.pop(self.adapter_name)
 
 
 class SchedulerAdapter:
     """lora adapter."""
 
-    def __init__(self, adapter_path: str, adapter_name: str):
+    def __init__(self, idx: int, adapter_path: str, adapter_name: str):
         from peft import PeftConfig
+        self._idx = idx
         self._adapter_path = adapter_path
         self._name = adapter_name
         self._config = PeftConfig.from_pretrained(self._adapter_path)
@@ -136,6 +214,10 @@ class SchedulerAdapter:
     def set_manager(self, manager: 'AdapterManager'):
         """set manager."""
         self._manager = manager
+
+    @property
+    def idx(self):
+        return self._idx
 
     @property
     def name(self):
@@ -186,16 +268,17 @@ class SchedulerAdapter:
         self._logical_blocks = logical_blocks
 
     def build_weight_map(self, block_table: Tensor):
-        return AdapterWeightMap(adapter_name=self._name,
-                                adapter_path=self._adapter_path,
-                                block_table=block_table,
-                                target_modules=self.target_modules)
+        return AdapterWeightMap.new(self.name,
+                                    rank=self.rank,
+                                    target_names=self.target_modules,
+                                    block_table=block_table)
 
 
 class NoneAdapter(SchedulerAdapter):
     """for sequence without adapter."""
 
     def __init__(self):
+        self._idx = 0
         self._adapter_path = None
         self._name = None
         self._config = None
@@ -216,14 +299,18 @@ class AdapterManager:
     def __init__(self) -> None:
         self._adapters: Dict[str, SchedulerAdapter] = dict()
         self._adapters[None] = NoneAdapter()
+        self._adapter_count = 1
         self._active_count = 1
 
     def add_adapter(self, adapter_path: str, adapter_name: str):
         """add adapter."""
         assert adapter_name not in self._adapters
-        adapter = SchedulerAdapter(adapter_path, adapter_name=adapter_name)
+        adapter = SchedulerAdapter(self._adapter_count,
+                                   adapter_path,
+                                   adapter_name=adapter_name)
         adapter.set_manager(self)
         self._adapters[adapter_name] = adapter
+        self._adapter_count += 1
         return adapter
 
     def get_adapter(self, name: str, default=None):

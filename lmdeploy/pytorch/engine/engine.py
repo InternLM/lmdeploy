@@ -140,10 +140,12 @@ def _paging_adapters(adapters: dict, model_agent: BaseModelAgent,
     if len(adapters) > 0:
         assert scheduler.cache_config.block_size == 1, (
             'Load adapter require block_size == 1.')
+    weight_maps = []
     for name, path in adapters.items():
         weight_map = scheduler.add_adapter(path, name)
         weight_map.block_table = torch.tensor(weight_map.block_table)
-        model_agent.paging_adapter(weight_map)
+        weight_maps.append(weight_map)
+    model_agent.paging_adapters(weight_maps)
 
 
 def _tensorlize_block_offsets(block_offsets):
@@ -218,9 +220,10 @@ class Engine:
         cache_config = self.model_agent.cache_config
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
-        _paging_adapters(adapters,
-                         model_agent=self.model_agent,
-                         scheduler=self.scheduler)
+        if adapters:
+            _paging_adapters(adapters,
+                             model_agent=self.model_agent,
+                             scheduler=self.scheduler)
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -417,16 +420,19 @@ class Engine:
         block_offsets = self.scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
-        adapter_ids = None
+        local_adapter_ids = None
+        global_adapter_ids = None
         adapter_offsets = None
-        ranks = None
+        max_rank = 0
         if ADAPTER_MANAGER.num_adapters() > 1:
-            adapter_ids = _get_adapter_ids(messages, adapters)
-            adapter_ids = seq_length.new_tensor(adapter_ids)
+            local_adapter_ids = _get_adapter_ids(messages, adapters)
+            local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
             adapter_offsets = self.scheduler.get_block_tables(adapters)
             adapter_offsets = _tensorlize_block_offsets(adapter_offsets)
+            global_adapter_ids = [ada.idx for ada in adapters]
+            global_adapter_ids = seq_length.new_tensor(global_adapter_ids)
             ranks = [ada.rank for ada in adapters]
-            ranks = seq_length.new_tensor(ranks)
+            max_rank = max(ranks)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -440,9 +446,10 @@ class Engine:
                            q_start_loc=q_start_loc,
                            history_lengths=history_lengths,
                            is_decoding=is_decoding,
-                           adapter_ids=adapter_ids,
+                           local_adapter_ids=local_adapter_ids,
+                           global_adapter_ids=global_adapter_ids,
                            adapter_offsets=adapter_offsets,
-                           ranks=ranks,
+                           max_rank=max_rank,
                            meta=meta)
 
     def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):

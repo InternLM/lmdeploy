@@ -18,6 +18,7 @@ def _x_a_mv_kernel(
     XA,
     B_adapter_id,
     Rank_page_table,
+    Rank_page_start,
     Ranks,
     stride_xs,
     stride_xh,
@@ -36,8 +37,9 @@ def _x_a_mv_kernel(
     r_off = tl.arange(0, BLOCK_R)
     adapter_id = tl.load(B_adapter_id + cur_batch)
     rank = tl.load(Ranks + adapter_id)
+    page_start = tl.load(Rank_page_start + adapter_id)
 
-    page_table_off = adapter_id * stride_ptb + r_off
+    page_table_off = adapter_id * stride_ptb + r_off + page_start
     rank_mask = r_off < rank
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
@@ -80,6 +82,7 @@ def _acc_b_mv_kernel(
     Out,
     B_adapter_id,
     Rank_page_table,
+    Rank_page_start,
     Ranks,
     stride_xas,
     stride_xar,
@@ -98,8 +101,9 @@ def _acc_b_mv_kernel(
     r_off = tl.arange(0, BLOCK_R)
     adapter_id = tl.load(B_adapter_id + cur_batch)
     rank = tl.load(Ranks + adapter_id)
+    page_start = tl.load(Rank_page_start + adapter_id)
 
-    page_table_off = adapter_id * stride_ptb + r_off
+    page_table_off = adapter_id * stride_ptb + r_off + page_start
     rank_mask = r_off < rank
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
@@ -135,7 +139,8 @@ def _acc_b_mv_kernel(
 
 @torch.inference_mode()
 def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
-            rank_page_table: Tensor, ranks: Tensor, max_rank: int):
+            rank_page_table: Tensor, ranks: Tensor, rank_page_start: Tensor,
+            max_rank: int):
     """mbgmv_a."""
 
     def _kernel_meta():
@@ -167,6 +172,7 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
                          xa,
                          b_adapter_ids,
                          Rank_page_table=rank_page_table,
+                         Rank_page_start=rank_page_start,
                          Ranks=ranks,
                          stride_xs=x.stride(0),
                          stride_xh=x.stride(1),
@@ -186,7 +192,8 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
 
 @torch.inference_mode()
 def mbgmv_b(xa: Tensor, lora_b: Tensor, b_adapter_ids: Tensor,
-            rank_page_table: Tensor, ranks: Tensor, max_rank: int):
+            rank_page_table: Tensor, ranks: Tensor, rank_page_start: Tensor,
+            max_rank: int):
     """mbgmv_b."""
 
     def _kernel_meta():
@@ -218,6 +225,7 @@ def mbgmv_b(xa: Tensor, lora_b: Tensor, b_adapter_ids: Tensor,
                            output,
                            b_adapter_ids,
                            Rank_page_table=rank_page_table,
+                           Rank_page_start=rank_page_start,
                            Ranks=ranks,
                            stride_xas=xa.stride(0),
                            stride_xar=xa.stride(1),

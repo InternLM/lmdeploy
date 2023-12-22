@@ -15,7 +15,8 @@ from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
-from ..adapter.adapter import AdapterWeightMap
+from ..adapter.adapter import (AdapterWeightMap, get_indexed_lora_linears,
+                               update_lora_linears)
 from ..config import CacheConfig, ModelConfig
 from ..models import patch
 from ..utils import get_gpu_memory
@@ -73,9 +74,10 @@ class ModelInputs:
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
-    adapter_ids: torch.LongTensor
+    local_adapter_ids: torch.LongTensor
+    global_adapter_ids: torch.LongTensor
     adapter_offsets: torch.LongTensor
-    ranks: torch.LongTensor
+    max_rank: int
     meta: Any
 
     def to_device(self, device: str):
@@ -110,15 +112,15 @@ class StepContext:
     is_decoding: bool
     world_size: int = 1
     json_config: Dict = None
-    adapter_ids: torch.LongTensor = None
+    local_adapter_ids: torch.LongTensor = None
+    global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
-    ranks: torch.LongTensor = None
     max_rank: int = 0
 
     _outputs: Dict = field(default_factory=dict)
 
     @classmethod
-    def build(
+    def new(
         cls,
         inputs: ModelInputs,
         world_size: int = 1,
@@ -140,15 +142,10 @@ class StepContext:
         # seq_len + history_length
         kv_seq_length = position_ids[..., -1] + 1
 
+        # position ids 1d
         seq_length = inputs.seq_length
         position_ids_1d = cls.get_position_ids_1d(position_ids, seq_length,
                                                   device)
-
-        # adapter
-        ranks = inputs.ranks
-        max_rank = 0
-        if ranks is not None and ranks.numel() > 0:
-            max_rank = max(ranks).item()
 
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
@@ -163,10 +160,10 @@ class StepContext:
                           is_decoding=inputs.is_decoding,
                           world_size=world_size,
                           json_config=json_config,
-                          adapter_ids=inputs.adapter_ids,
+                          local_adapter_ids=inputs.local_adapter_ids,
+                          global_adapter_ids=inputs.global_adapter_ids,
                           adapter_offsets=inputs.adapter_offsets,
-                          ranks=ranks,
-                          max_rank=max_rank)
+                          max_rank=inputs.max_rank)
         return ret
 
     @classmethod
@@ -246,7 +243,7 @@ def model_forward(
     with torch.inference_mode(), torch.cuda.stream(stream):
         # forward
         inputs = inputs.to_device('cuda')
-        context = StepContext.build(
+        context = StepContext.new(
             inputs=inputs,
             world_size=world_size,
             json_config=json_config,
@@ -357,16 +354,17 @@ class BaseModelAgent:
         patched_model = patched_model.cuda()
         return patched_model
 
-    def paging_adapter(self, weight_map: AdapterWeightMap):
+    def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """load adapter."""
-        lora_linears = weight_map.get_lora_linears(self.patched_model)
+        lora_linears = get_indexed_lora_linears(self.patched_model)
         cpu_caches = self.cache_engine.cpu_cache
         num_blocks = self.cache_engine.num_cpu_blocks
         cpu_caches = [(kcache.view(num_blocks,
                                    -1), vcache.view(num_blocks, -1))
                       for kcache, vcache in cpu_caches]
-        weight_map.cache_adapter(lora_linears, cpu_caches)
-        weight_map.update_linears(lora_linears)
+        for weight_map in weight_maps:
+            weight_map.cache_adapter(lora_linears, cpu_caches)
+        update_lora_linears(lora_linears, weight_maps, device='cuda')
 
     def forward(self, inputs: ModelInputs, swap_in_map: Dict[int, int],
                 swap_out_map: Dict[int, int]):
@@ -701,7 +699,7 @@ class TPModelAgent:
             raise next(err for err in resp.error if err is not None)
         self.cache_config = resp.data
 
-    def paging_adapter(self, weight_map: AdapterWeightMap):
+    def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """load adapter."""
         raise NotImplementedError('TP lora is not supported for now.')
 
