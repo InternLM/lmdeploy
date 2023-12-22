@@ -1,15 +1,23 @@
 #!/bin/bash
-# bash benchmark_fp16.sh <model_path> <engine_config>
 
 benchmark_rpm () {
     echo "start to benchmark rpm..."
     turbomind_model_path=$1
     dataset_path=$2
-    output_path=$3
-
-    batches=(64 128)
+    max_batch_size=$3
+    output_path=$4
+    echo $turbomind_model_path
+    echo $dataset_path
+    echo $max_batch_size
+    echo $output_path
+    batches=(64 128 256)
     for batch in "${batches[@]}"
     do
+        if [ "$batch" -gt "$max_batch_size" ]
+        then
+            continue
+        fi
+
         for i in {1..3}
         do
         python3 profile_throughput.py \
@@ -70,7 +78,8 @@ echo "---------- input config is ----------"
 cat ${config_path}
 echo "-------------------------------------"
 
-# get engine config
+# read config file
+model_name=$(crudini --get "${config_path}" llama model_name 2>/dev/null)
 turbomind_model_path=$(crudini --get "${config_path}" llama turbomind_model_path 2>/dev/null)
 model_path=$(crudini --get "${config_path}" llama model_path 2>/dev/null)
 dataset_path=$(crudini --get "${config_path}" llama dataset_path 2>/dev/null)
@@ -78,8 +87,8 @@ tp=$(crudini --get "${config_path}" llama tp 2>/dev/null)
 tune_gemm=$(crudini --get "${config_path}" llama tune_gemm 2>/dev/null)
 w4a16=$(crudini --get "${config_path}" llama w4a16 2>/dev/null)
 kvint8=$(crudini --get "${config_path}" llama kvint8 2>/dev/null)
-max_context_token_num=$(crudini --get "${config_path}" llama max_context_token_num 2>/dev/null)
-cache_chunk_size=$(crudini --get "${config_path}" llama cache_chunk_size 2>/dev/null)
+# max_context_token_num=$(crudini --get "${config_path}" llama max_context_token_num 2>/dev/null)
+# cache_chunk_size=$(crudini --get "${config_path}" llama cache_chunk_size 2>/dev/null)
 cache_max_entry_count=$(crudini --get "${config_path}" llama cache_max_entry_count 2>/dev/null)
 max_batch_size=$(crudini --get "${config_path}" llama max_batch_size 2>/dev/null)
 profile_rpm=$(crudini --get "${config_path}" llama profile_rpm 2>/dev/null)
@@ -94,13 +103,14 @@ else
     echo "turbomind model path is not provided."
     echo "model path is provided: ${model_path}"
     model_foldername=$(basename "$model_path")
-    turbomind_model_path="${workspace_dir}"/workspace/turbomind/"${model_foldername}"
-    quantized_model_path="${workspace_dir}"/workspace/quantization/"${model_foldername}"
-    output_path="${workspace_dir}/workspace/output/${model_foldername}-tp${tp}"
 
     if [ "$w4a16" == 1 ]
     then
         echo "start to quantize model..."
+        turbomind_model_path="${workspace_dir}"/workspace/turbomind/"${model_foldername}-4bit"
+        quantized_model_path="${workspace_dir}"/workspace/quantization/"${model_foldername}-4bit"
+        output_path="${workspace_dir}/workspace/output/${model_foldername}-4bit-tp${tp}"
+
         lmdeploy lite calibrate ${model_path} --work_dir ${quantized_model_path}
         lmdeploy lite auto_awq ${model_path} --work_dir ${quantized_model_path}
         # after quantization, the source model path will be the quantized model path
@@ -108,13 +118,16 @@ else
         model_format=awq
         group_size=128
     else
+        turbomind_model_path="${workspace_dir}"/workspace/turbomind/"${model_foldername}"
+        quantized_model_path="${workspace_dir}"/workspace/quantization/"${model_foldername}"
+        output_path="${workspace_dir}/workspace/output/${model_foldername}-tp${tp}"
         model_format=hf
         group_size=0
     fi
 
     # convert
     echo "start converting..."
-    lmdeploy convert llama2 ${model_path} --dst-path ${turbomind_model_path} --tp ${tp} --model-format ${model_format} --group-size ${group_size}
+    lmdeploy convert ${model_name} ${model_path} --dst-path ${turbomind_model_path} --tp ${tp} --model-format ${model_format} --group-size ${group_size}
     if [ $? != 0 ]
     then
         echo "convert model ${model_path} failed"
@@ -122,14 +135,13 @@ else
     fi
 fi
 
-output_path="${workspace_dir}/workspace/output/${model_foldername}-tp${tp}"
 mkdir -p ${output_path}
 cp ${config_path} ${output_path}
 
 # update engine config to config.ini
 turbomind_config_path=${turbomind_model_path}/triton_models/weights/config.ini
-crudini --set ${turbomind_config_path} llama max_context_token_num ${max_context_token_num}
-crudini --set ${turbomind_config_path} llama cache_chunk_size ${cache_chunk_size}
+# crudini --set ${turbomind_config_path} llama max_context_token_num ${max_context_token_num}
+# crudini --set ${turbomind_config_path} llama cache_chunk_size ${cache_chunk_size}
 crudini --set ${turbomind_config_path} llama cache_max_entry_count ${cache_max_entry_count}
 crudini --set ${turbomind_config_path} llama max_batch_size ${max_batch_size}
 cat ${turbomind_config_path}
@@ -146,7 +158,7 @@ fi
 # benchmark request throughput
 if [ "${profile_rpm}" == 1 ]
 then
-    benchmark_rpm ${turbomind_model_path} ${dataset_path} ${output_path}
+    benchmark_rpm ${turbomind_model_path} ${dataset_path} ${max_batch_size} ${output_path}
 fi
 
 # benchmark static inference
