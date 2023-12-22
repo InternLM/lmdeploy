@@ -249,7 +249,7 @@ def model_forward(
             json_config=json_config,
             kv_caches=cache_engine.gpu_cache,
         )
-        output = patched_model(
+        output = patched_model.patched_forward(
             input_ids=inputs.input_ids,
             position_ids=inputs.position_ids,
             attention_mask=inputs.attention_mask,
@@ -264,13 +264,15 @@ def model_forward(
     return dict(logits=output['logits'], custom_outputs=context._outputs)
 
 
-def _load_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
+def _load_adapters(hf_model: torch.nn.Module,
+                   adapters: Dict[str, str],
+                   device_map: str = 'cpu'):
     """load adapters."""
     if not adapters:
         return
     for name, path in adapters.items():
         logger.info(f'load adapter <{name}> from "{path}".')
-        hf_model.load_adapter(path, name, device_map='cpu')
+        hf_model.load_adapter(path, name, device_map=device_map)
 
 
 def _unparam_lora_weight(model: torch.nn.Module):
@@ -420,6 +422,7 @@ def _tp_build_model(
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    adapters: Dict[str, str],
     out_que: mp.Queue,
     world_size: int,
     trust_remote_code=True,
@@ -464,16 +467,28 @@ def _tp_build_model(
                 config,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code)
-            model.eval()
-            model.config.use_cache = True
+        model.eval()
+        model.config.use_cache = True
 
-        checkpoints = _get_checkpoints(model_path)
+        if rank == 0:
+            with LoadNoInit():
+                param_model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    torch_dtype=torch_dtype,
+                    device_map='auto',
+                    trust_remote_code=trust_remote_code)
+                model.load_state_dict(param_model.state_dict(), assign=True)
+                del param_model
+
+        if adapters:
+            device_map = 'auto'
+            _load_adapters(model, adapters, device_map=device_map)
+
         patched_model = patch(
             model,
             extra_args=_PATCH_ARG_NAMES,
             rank=rank,
             world_size=world_size,
-            checkpoints=checkpoints,
         )
 
         _update_cache_config(model_config, cache_config)
@@ -551,6 +566,7 @@ def _tp_model_loop(
     model_path: str,
     model_config: ModelConfig,
     cache_config: CacheConfig,
+    adapters: Dict[str, str],
     in_que: mp.Queue,
     out_que: mp.Queue,
     world_size: int,
@@ -569,10 +585,15 @@ def _tp_model_loop(
         world_size (int): The distribution world size.
     """
     stream = torch.cuda.Stream()
-    patched_model, cache_engine = _tp_build_model(rank, model_path,
-                                                  model_config, cache_config,
-                                                  out_que, world_size,
-                                                  trust_remote_code)
+    patched_model, cache_engine = _tp_build_model(
+        rank,
+        model_path,
+        model_config,
+        cache_config,
+        adapters,
+        out_que=out_que,
+        world_size=world_size,
+        trust_remote_code=trust_remote_code)
 
     while True:
         inputs, swap_in_map, swap_out_map = _tp_get_input(
@@ -643,6 +664,7 @@ class TPModelAgent:
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  world_size: int,
+                 adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
         mp.set_start_method('spawn')
         self.world_size = world_size
@@ -654,14 +676,15 @@ class TPModelAgent:
         self.patch_model_tp(model_path,
                             model_config=model_config,
                             cache_config=cache_config,
+                            adapters=adapters,
                             in_que=self.tp_model_in_que,
                             out_que=self.tp_model_out_que,
                             world_size=world_size,
                             trust_remote_code=trust_remote_code)
 
     def patch_model_tp(self, model_path: str, model_config: ModelConfig,
-                       cache_config: CacheConfig, in_que: mp.Queue,
-                       out_que: mp.Queue, world_size: int,
+                       cache_config: CacheConfig, adapters: Dict[str, str],
+                       in_que: mp.Queue, out_que: mp.Queue, world_size: int,
                        trust_remote_code: bool):
         """Start tensor parallel sub process.
 
@@ -684,6 +707,7 @@ class TPModelAgent:
                 (model_path, ),
                 dict(model_config=model_config,
                      cache_config=cache_config,
+                     adapters=adapters,
                      in_que=in_que,
                      out_que=out_que,
                      world_size=world_size,

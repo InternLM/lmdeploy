@@ -6,7 +6,6 @@ from copy import copy
 from typing import Any, Dict, Sequence
 
 import torch
-import torch.distributed as dist
 from addict import Addict
 from torch.distributed._tensor import DeviceMesh
 
@@ -154,106 +153,26 @@ def _update_model(model: torch.nn.Module):
         model._update_model_fn()
 
 
-def _params_to_meta(model: torch.nn.Module):
-    """move parameters to meta device."""
-    # recursive over children
-    for _, child in model.named_children():
-        _params_to_meta(child)
+def _dist_model(model: torch.nn.Module,
+                rank: int = 0,
+                device_mesh: DeviceMesh = None):
+    """distribute model parameters."""
 
-    for k, v in model.named_parameters(recurse=False):
-        model.register_parameter(
-            k, torch.nn.Parameter(v.to('meta'), requires_grad=False))
-
-
-def _load_state_dict(
-    model: torch.nn.Module,
-    state_dict: Dict[str, torch.Tensor] = None,
-    rank: int = 0,
-    world_size: int = 1,
-    device_mesh: DeviceMesh = None,
-    state_prefix: str = '',
-):
-    """Load state dict by rank.
-
-    Load full state dict into device memory is not possible in LLM.
-    This method load shard and partition weights for different
-    distribution rank
-
-    Args:
-        model (Module): Model to load weight.
-        state_dict (Dict[str, Tensor]): State dict object.
-        rank (int): Distribution rank.
-        world_size (int): Distribution world size.
-        device_mesh (DeviceMesh): Distribution device mesh.
-        state_prefix (str): The prefix of state dict.
-
-    Returns:
-        Module: Updated model
-    """
-
-    def _recursive_children():
-        """recursive children."""
-        for name, child in model.named_children():
-            loaded_child = _load_state_dict(
-                child,
-                state_dict,
-                rank,
-                world_size,
-                device_mesh=device_mesh,
-                state_prefix=f'{state_prefix}{name}.',
-            )
-            if loaded_child != child:
-                model.register_module(name, loaded_child)
-
-    def _init_parameters():
-        """init parameters."""
-        model_state_dict = model.state_dict()
+    def _init_params():
+        """init params."""
         device = torch.device(f'cuda:{rank}')
-        for k, v in model_state_dict.items():
-            if '.' in k or not v.is_meta:
-                # only process weight that directly owned by module
-                # already initialized
-                continue
-
-            full_k = state_prefix + k
+        for name, param in model.named_parameters(recurse=False):
             if rank == 0:
-                objs = [full_k in state_dict]
+                if device != param.device:
+                    new_param = param.to(device)
+                    model.register_parameter(name,
+                                             torch.nn.Parameter(new_param))
             else:
-                objs = [None]
-            dist.broadcast_object_list(objs, 0)
-            in_state_dict = objs[0]
+                new_param = torch.empty_like(param, device=device)
+                model.register_parameter(name, torch.nn.Parameter(new_param))
 
-            if not in_state_dict:
-                continue
-
-            param_names = [
-                name for name, _ in model.named_parameters(recurse=False)
-            ]
-            if k in param_names:
-                if rank == 0:
-                    new_param = torch.nn.Parameter(
-                        state_dict[full_k].to(v.dtype),
-                        requires_grad=False).to(device)
-                else:
-                    new_param = torch.nn.Parameter(torch.empty_like(
-                        v, device=device),
-                                                   requires_grad=False)
-                model.register_parameter(k, new_param)
-
-    def _check_need_dist(model):
-        """check need dist."""
-        need_dist = not getattr(model, '__tp_distributed__', False)
-        finish_param_init = all(not v.is_meta
-                                for v in model.state_dict().values())
-        return need_dist and finish_param_init
-
-    _recursive_children()
-    _init_parameters()
-
-    # distribute module
-    if world_size > 1 and _check_need_dist(model):
-        model.__tp_distributed__ = True
-
+    def _dist_params():
+        """dist params."""
         if hasattr(model, '_distribute_partition_fn'):
             partition_module(
                 model,
@@ -264,6 +183,8 @@ def _load_state_dict(
         else:
             replicate_module(model, device_mesh=device_mesh)
 
+    def _register_hooks():
+        """register hooks."""
         if hasattr(model, '_distribute_input_fn'):
             input_fn = model._distribute_input_fn
             model.register_forward_pre_hook(
@@ -277,7 +198,36 @@ def _load_state_dict(
             model.register_forward_hook(
                 lambda mod, inputs, outputs: output_fn(outputs, device_mesh))
 
+    for name, child in model.named_children():
+        new_child = _dist_model(child, rank, device_mesh)
+        if new_child != child:
+            model.register_module(name, child)
+
+    _init_params()
+    _dist_params()
+    _register_hooks()
+
     return model
+
+
+class PatchedForward:
+    """patched forward."""
+
+    def __init__(self, model, context, extra_args):
+        self._model = model
+        self._patch_context: Dict = context
+        self._extra_args: list = extra_args
+
+    def __call__(self, *args, **kwargs):
+        for arg_name in self._extra_args:
+            extra_arg = kwargs.pop(arg_name, None)
+            self._patch_context[arg_name] = extra_arg
+
+        output = self._model(*args, **kwargs)
+
+        self._patch_context.clear()
+
+        return output
 
 
 def patch(
@@ -285,7 +235,6 @@ def patch(
     extra_args: Sequence[str] = None,
     rank: int = 0,
     world_size: int = 1,
-    checkpoints: Sequence[str] = None,
 ):
     """Patch the model with rewrite modules.
 
@@ -297,32 +246,10 @@ def patch(
         extra_args (Sequence[str]): Extra arguments of model forward.
         rank (int): Distribution rank.
         world_size (int): Distribution world size.
-        checkpoints (Sequence[str]): checkpoints of the model.
 
     Returns:
         Module: The patched model.
     """
-
-    def _load_checkpoints(model, checkpoints, rank, world_size):
-        """load checkpoints."""
-        _params_to_meta(model)
-        device_mesh = DeviceMesh('cuda', list(range(world_size)))
-        for ckpt in checkpoints:
-            if rank == 0:
-                logger = get_logger('lmdeploy')
-                logger.info(f'loading checkpoint from: {ckpt}')
-                state_dict = torch.load(ckpt, map_location=f'cuda:{rank}')
-            else:
-                state_dict = None
-
-            with torch.cuda.device(rank):
-                _load_state_dict(
-                    model,
-                    state_dict,
-                    rank=rank,
-                    world_size=world_size,
-                    device_mesh=device_mesh,
-                )
 
     if extra_args is None:
         extra_args = []
@@ -331,37 +258,17 @@ def patch(
 
     model = _patch(model, _patch_context)
 
-    # load checkpoint
-    if checkpoints is not None:
-        _load_checkpoints(model, checkpoints, rank, world_size)
+    if world_size > 1:
+        if rank == 0:
+            logger.info('distribute model parameters.')
+        device_mesh = DeviceMesh('cuda', list(range(world_size)))
+        model = _dist_model(model, rank, device_mesh=device_mesh)
 
     _update_model(model)
-    extra_args_str = ' '.join(f'{arg}=None,' for arg in extra_args)
-    context_update_str = ' '.join(f'{arg}={arg},' for arg in extra_args)
 
-    wrap_forward_src = f"""
-from functools import wraps
-# old_forward = model.forward
-old_forward = type(model).forward
-@wraps(old_forward)
-def wrap_forward(self, *args, {extra_args_str} **kwargs):
-    global _patch_context
-    _patch_context.update({context_update_str})
-
-    output = old_forward(self, *args, **kwargs)
-
-    _patch_context.clear()
-
-    return output
-# model.forward = wrap_forward
-
-attrs = dict(type(model).__dict__)
-attrs.update(dict(forward=wrap_forward))
-class_name  = model.__class__.__name__
-new_type = type(class_name, (type(model), ), attrs)
-model.__class__ = new_type
-"""
-
-    exec(wrap_forward_src, dict(_patch_context=_patch_context, model=model))
+    patched_forward = PatchedForward(model,
+                                     _patch_context,
+                                     extra_args=extra_args)
+    model.patched_forward = patched_forward
 
     return model

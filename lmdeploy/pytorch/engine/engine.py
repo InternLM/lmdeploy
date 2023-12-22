@@ -125,11 +125,11 @@ def _build_model_agent(model_path: str,
                                      adapters=adapters,
                                      trust_remote_code=trust_remote_code)
     else:
-        assert not adapters, 'LoRA is not support on tp for now.'
         model_agent = TPModelAgent(model_path,
                                    model_config=model_config,
                                    cache_config=cache_config,
                                    world_size=tp,
+                                   adapters=adapters,
                                    trust_remote_code=trust_remote_code)
     return model_agent
 
