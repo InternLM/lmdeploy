@@ -14,13 +14,10 @@ class InterFace:
     lock = Lock()
 
 
-async def chat_stream_local(
-    instruction: str,
-    state_chatbot: Sequence,
-    cancel_btn: gr.Button,
-    reset_btn: gr.Button,
-    session_id: int,
-):
+async def chat_stream_local(instruction: str, state_chatbot: Sequence,
+                            cancel_btn: gr.Button, reset_btn: gr.Button,
+                            session_id: int, top_p: float, temperature: float,
+                            request_output_len: int):
     """Chat with AI assistant.
 
     Args:
@@ -39,7 +36,10 @@ async def chat_stream_local(
             session_id,
             stream_response=True,
             sequence_start=(len(state_chatbot) == 1),
-            sequence_end=False):
+            sequence_end=False,
+            request_output_len=request_output_len,
+            top_p=top_p,
+            temperature=temperature):
         response = outputs.response
         if outputs.finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
@@ -69,13 +69,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     """
     state_chatbot = []
     # end the session
-    async for out in InterFace.async_engine.generate('',
-                                                     session_id,
-                                                     request_output_len=1,
-                                                     stream_response=True,
-                                                     sequence_start=False,
-                                                     sequence_end=True):
-        pass
+    InterFace.async_engine.end_session(session_id)
     return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
 
 
@@ -90,15 +84,9 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
         reset_btn (gr.Button): the reset button
         session_id (int): the session id
     """
-    yield (state_chatbot, disable_btn, enable_btn)
-    async for out in InterFace.async_engine.generate('',
-                                                     session_id,
-                                                     request_output_len=0,
-                                                     stream_response=True,
-                                                     sequence_start=False,
-                                                     sequence_end=False,
-                                                     stop=True):
-        pass
+    yield (state_chatbot, disable_btn, disable_btn)
+    InterFace.async_engine.stop_session(session_id)
+    InterFace.async_engine.end_session(session_id)
     messages = []
     for qa in state_chatbot:
         messages.append(dict(role='user', content=qa[0]))
@@ -167,10 +155,22 @@ def run_local(model_path: str,
             with gr.Row():
                 cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
+            with gr.Row():
+                request_output_len = gr.Slider(1,
+                                               2048,
+                                               value=512,
+                                               step=1,
+                                               label='Maximum new tokens')
+                top_p = gr.Slider(0.01, 1, value=0.8, step=0.01, label='Top_p')
+                temperature = gr.Slider(0.01,
+                                        1.5,
+                                        value=0.7,
+                                        step=0.01,
+                                        label='Temperature')
 
         send_event = instruction_txtbox.submit(chat_stream_local, [
             instruction_txtbox, state_chatbot, cancel_btn, reset_btn,
-            state_session_id
+            state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
             lambda: gr.Textbox.update(value=''),

@@ -261,5 +261,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
 template class UnifiedDecoder<float>;
 template class UnifiedDecoder<half>;
+#ifdef ENABLE_BF16
+template class UnifiedDecoder<__nv_bfloat16>;
+#endif // ENABLE_BF16
 
 }  // namespace turbomind

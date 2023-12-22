@@ -125,5 +125,8 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
 template class LlamaFfnLayer<float>;
 template class LlamaFfnLayer<half>;
+#ifdef ENABLE_BF16
+template class LlamaFfnLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

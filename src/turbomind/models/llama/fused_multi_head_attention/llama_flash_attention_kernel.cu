@@ -13,6 +13,27 @@
 
 namespace turbomind {
 
+template<typename T>
+struct ToCutlassType_ {
+};
+
+template<>
+struct ToCutlassType_<float> {
+    using Type = float;
+};
+
+template<>
+struct ToCutlassType_<half> {
+    using Type = cutlass::half_t;
+};
+
+#ifdef ENABLE_BF16
+template<>
+struct ToCutlassType_<__nv_bfloat16> {
+    using Type = cutlass::bfloat16_t;
+};
+#endif
+
 template<
     // dtype of Q/K/V/M
     typename Element_,
@@ -655,8 +676,7 @@ void invokeFlashAttention_impl(int                                          batc
     auto   layout_o         = attention_params.layout_o;
     auto   group_size       = attention_params.group_size;
 
-    using scalar_t =
-        typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
+    using scalar_t = typename ToCutlassType_<T>::Type;
 
     const float qk_scale = static_cast<float>(1.f / sqrtf(size_per_head * 1.f));
 
@@ -742,8 +762,7 @@ void invokeFlashAttention_impl(int                                          batc
 template<typename T, int kQueriesPerBlock, int kKeysPerBlock>
 bool get_needs_accum_buffer()
 {
-    using scalar_t =
-        typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
+    using scalar_t = typename ToCutlassType_<T>::Type;
 
 #define GET_NEED_ACCUM_BUFFER(sm)                                                                                      \
     ATTENTION_KERNEL(scalar_t, sm, kQueriesPerBlock, kKeysPerBlock, false)::kNeedsOutputAccumulatorBuffer
@@ -774,8 +793,7 @@ void invoke_attention_impl(bool                                         single_v
                            typename FlashAttentionOpImpl<T, 1>::Params& params,
                            cudaStream_t                                 st)
 {
-    using scalar_t =
-        typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
+    using scalar_t = typename ToCutlassType_<T>::Type;
 
 #define INVOKE_ATTEN_IMPL(sm, single_value)                                                                            \
     {                                                                                                                  \
@@ -836,9 +854,8 @@ class FlashAttentionOpImpl<T, 1>::impl {
 private:
     static constexpr int kQueriesPerBlock = 32;
     static constexpr int kKeysPerBlock    = 128;
-    using scalar_t =
-        typename std::conditional_t<std::is_same<half, typename std::decay<T>::type>::value, cutlass::half_t, T>;
-    using Params = typename FlashAttentionOpImpl<T, 1>::Params;
+    using scalar_t                        = typename ToCutlassType_<T>::Type;
+    using Params                          = typename FlashAttentionOpImpl<T, 1>::Params;
 
     int  batch_size_;
     int  head_num_;
@@ -909,5 +926,8 @@ void FlashAttentionOpImpl<T, 1>::operator()(Params& params, cudaStream_t st) con
 
 template class FlashAttentionOpImpl<float, 1>;
 template class FlashAttentionOpImpl<half, 1>;
+#ifdef ENABLE_BF16
+template class FlashAttentionOpImpl<__nv_bfloat16, 1>;
+#endif  // ENABLE_BF16
 
 }  // namespace turbomind

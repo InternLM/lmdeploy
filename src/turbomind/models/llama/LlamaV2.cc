@@ -166,28 +166,57 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::forwardUnified(T*           out,
-                                T*           decoder_output,
-                                T*           decoder_input,
-                                void**       k_block_ptrs,
-                                void**       v_block_ptrs,
-                                const int*   input_ids,
-                                const int*   cu_block_cnts,
-                                const float* rope_theta,
-                                const bool*  dc_finished,
-                                const int*   pf_input_length,
-                                const int*   pf_context_length,
-                                T**          pf_tmp_k_ptrs,
-                                T**          pf_tmp_v_ptrs,
-                                size_t       token_num,
-                                int          dc_batch_size,
-                                int          dc_step,
-                                int          dc_sum_seq_len,
-                                int          dc_max_seq_len,
-                                int          pf_batch_size,
-                                int          pf_max_input_len,
-                                int          pf_max_context_len,
-                                int          pf_session_len)
+void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_input_length, const Sequence** sequences)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    for (int i = 0; i < bsz; i++) {
+        const auto& seq        = *sequences[i];
+        const auto& embeddings = seq.input_embeddings;
+        const auto& ranges     = seq.input_embedding_ranges;
+        for (int j = embeddings.size() - 1; j >= 0; j--) {
+            int begin = ranges[j].first;
+            int end   = ranges[j].second;
+            if (end <= seq.cache_len) {
+                break;
+            }
+            int    off_dst   = std::max(0, begin - seq.cache_len);
+            int    off_src   = std::max(0, seq.cache_len - begin);
+            size_t byte_size = (end - begin) * hidden_units_ * sizeof(T);
+            T*     dst_ptr   = decoder_input + off_dst * hidden_units_;
+            auto   src_ptr   = embeddings[j].data() + off_src * hidden_units_ * sizeof(T);
+            cudaMemcpyAsync(dst_ptr, src_ptr, byte_size, cudaMemcpyDefault, stream_);
+        }
+        decoder_input += h_input_length[i] * hidden_units_;
+    }
+    sync_check_cuda_error();
+}
+
+template<typename T>
+void LlamaV2<T>::forwardUnified(T*               out,
+                                T*               decoder_output,
+                                T*               decoder_input,
+                                void**           k_block_ptrs,
+                                void**           v_block_ptrs,
+                                const int*       input_ids,
+                                const int*       cu_block_cnts,
+                                const float*     rope_theta,
+                                const bool*      dc_finished,
+                                const int*       pf_input_length,
+                                const int*       pf_context_length,
+                                T**              pf_tmp_k_ptrs,
+                                T**              pf_tmp_v_ptrs,
+                                size_t           token_num,
+                                int              dc_batch_size,
+                                int              dc_step,
+                                int              dc_sum_seq_len,
+                                int              dc_max_seq_len,
+                                int              pf_batch_size,
+                                int              pf_max_input_len,
+                                int              pf_max_context_len,
+                                int              pf_session_len,
+                                const int*       h_input_length,
+                                const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -203,6 +232,9 @@ void LlamaV2<T>::forwardUnified(T*           out,
                                              1,
                                              hidden_units_,
                                              stream_);
+
+    updateEmbedding(decoder_input, dc_batch_size + pf_batch_size, h_input_length, sequences);
+
     sync_check_cuda_error();
 
     const auto   dtype = getTensorType<T>();
@@ -478,5 +510,8 @@ void LlamaV2<T>::forward(std::unordered_map<std::string, Tensor>*       outputs,
 
 template class LlamaV2<half>;
 template class LlamaV2<float>;
+#ifdef ENABLE_BF16
+template class LlamaV2<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind
