@@ -5,6 +5,8 @@ import random
 from contextlib import contextmanager
 from typing import List, Literal, Optional, Union
 
+from lmdeploy.turbomind.turbomind import _stop_words
+
 
 @dataclasses.dataclass
 class GenOut:
@@ -231,6 +233,7 @@ class AsyncEngine:
             repetition_penalty=1.0,
             ignore_eos=False,
             do_preprocess=True,
+            stop_words=None,
             **kwargs):
         """Generate responses.
 
@@ -253,6 +256,9 @@ class AsyncEngine:
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages.
+            stop_words (str | List[str] | None): Up to one sequence where the
+              API will stop generating further tokens. Only accept stop words
+              that's encoded to one token idex.
         """
         if str(session_id) not in self.id2step:
             self.id2step[str(session_id)] = 0
@@ -279,6 +285,10 @@ class AsyncEngine:
             generator = await self.get_generator(stop, session_id)
             with self.safe_run(session_id):
                 response_size = 0
+                if stop_words is not None:
+                    if isinstance(stop_words, str):
+                        stop_words = [stop_words]
+                    stop_words = _stop_words(stop_words, self.tokenizer)
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         input_ids=[input_ids],
@@ -293,7 +303,8 @@ class AsyncEngine:
                         temperature=temperature,
                         repetition_penalty=repetition_penalty,
                         ignore_eos=ignore_eos,
-                        random_seed=seed if sequence_start else None):
+                        random_seed=seed if sequence_start else None,
+                        stop_words=stop_words):
                     res, tokens = outputs[0]
                     # decode res
                     response = self.tokenizer.decode(res.tolist(),

@@ -472,7 +472,8 @@ class TurboMindInstance:
                        repetition_penalty=1.0,
                        ignore_eos=False,
                        random_seed=None,
-                       stream_output=False):
+                       stream_output=False,
+                       stop_words=None):
         """Convert inputs format."""
         if len(input_ids) == 0:
             input_ids = [[]]
@@ -564,8 +565,9 @@ class TurboMindInstance:
             stop_words = None
             bad_words = torch.tensor([[[self.eos_id], [1]]], dtype=torch.int32)
         else:
-            stop_words = self.stop_words
             bad_words = None
+            if stop_words is None:
+                stop_words = self.stop_words
 
         if stop_words is not None:
             inputs['stop_words_list'] = stop_words
@@ -592,7 +594,8 @@ class TurboMindInstance:
                                  repetition_penalty=1.0,
                                  ignore_eos=False,
                                  random_seed=None,
-                                 stream_output=False):
+                                 stream_output=False,
+                                 stop_words=None):
         """Perform model inference.
 
         Args:
@@ -617,6 +620,7 @@ class TurboMindInstance:
             ignore_eos (bool): indicator for ignoring eos
             random_seed (int): seed used by sampling
             stream_output (bool): indicator for stream output
+            stop_words (np.array | None): the stop words token ids.
         """
         if stream_output and not stop:
             self.model_insts[0].register_callback(self._forward_callback)
@@ -636,7 +640,8 @@ class TurboMindInstance:
             repetition_penalty=repetition_penalty,
             ignore_eos=ignore_eos,
             random_seed=random_seed,
-            stream_output=stream_output)
+            stream_output=stream_output,
+            stop_words=stop_words)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
