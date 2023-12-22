@@ -88,7 +88,7 @@ tune_gemm=$(crudini --get "${config_path}" llama tune_gemm 2>/dev/null)
 w4a16=$(crudini --get "${config_path}" llama w4a16 2>/dev/null)
 kvint8=$(crudini --get "${config_path}" llama kvint8 2>/dev/null)
 # max_context_token_num=$(crudini --get "${config_path}" llama max_context_token_num 2>/dev/null)
-# cache_chunk_size=$(crudini --get "${config_path}" llama cache_chunk_size 2>/dev/null)
+cache_chunk_size=$(crudini --get "${config_path}" llama cache_chunk_size 2>/dev/null)
 cache_max_entry_count=$(crudini --get "${config_path}" llama cache_max_entry_count 2>/dev/null)
 max_batch_size=$(crudini --get "${config_path}" llama max_batch_size 2>/dev/null)
 profile_rpm=$(crudini --get "${config_path}" llama profile_rpm 2>/dev/null)
@@ -150,19 +150,19 @@ cat ${turbomind_config_path}
 cd ${workspace_dir}
 
 # tune gemm
-if [ "${tune_gemm}" == 1 ]
+if [ "${tune_gemm}" -eq 1 ]
 then
     tune_gemm ${turbomind_config_path} ${output_path}
 fi
 
 # benchmark request throughput
-if [ "${profile_rpm}" == 1 ]
+if [ "${profile_rpm}" -eq 1 ]
 then
     benchmark_rpm ${turbomind_model_path} ${dataset_path} ${max_batch_size} ${output_path}
 fi
 
 # benchmark static inference
-if [ "${profile_generation}" ==  1 ]
+if [ "${profile_generation}" -eq 1 ]
 then
     benchmark_generation ${turbomind_model_path} ${output_path}
 fi
