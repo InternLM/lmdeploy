@@ -6,10 +6,7 @@ benchmark_rpm () {
     dataset_path=$2
     max_batch_size=$3
     output_path=$4
-    echo $turbomind_model_path
-    echo $dataset_path
-    echo $max_batch_size
-    echo $output_path
+
     batches=(64 128 256)
     for batch in "${batches[@]}"
     do
@@ -18,15 +15,12 @@ benchmark_rpm () {
             continue
         fi
 
-        for i in {1..3}
-        do
         python3 profile_throughput.py \
             ${dataset_path} \
             ${turbomind_model_path} \
             --concurrency "$batch" \
             --num_prompts 3000 \
-            --csv ${output_path}/rpm_localhost_batch_"${batch}"_"${i}"th.csv
-        done
+            --csv ${output_path}/rpm_localhost_batch_"${batch}".csv
     done
 }
 
@@ -38,6 +32,7 @@ benchmark_generation () {
     python3 profile_generation.py \
         ${turbomind_model_path} \
         --concurrency 1 16 32 64 \
+        --warmup-round 1 --test-round 3 \
         --csv ${output_path}/generation.csv
 }
 
@@ -87,8 +82,6 @@ tp=$(crudini --get "${config_path}" llama tp 2>/dev/null)
 tune_gemm=$(crudini --get "${config_path}" llama tune_gemm 2>/dev/null)
 w4a16=$(crudini --get "${config_path}" llama w4a16 2>/dev/null)
 kvint8=$(crudini --get "${config_path}" llama kvint8 2>/dev/null)
-# max_context_token_num=$(crudini --get "${config_path}" llama max_context_token_num 2>/dev/null)
-cache_chunk_size=$(crudini --get "${config_path}" llama cache_chunk_size 2>/dev/null)
 cache_max_entry_count=$(crudini --get "${config_path}" llama cache_max_entry_count 2>/dev/null)
 max_batch_size=$(crudini --get "${config_path}" llama max_batch_size 2>/dev/null)
 profile_rpm=$(crudini --get "${config_path}" llama profile_rpm 2>/dev/null)
@@ -99,6 +92,12 @@ if [ -n "${turbomind_model_path}" ]
 then
     echo "turbomind model path is provided: ${turbomind_model_path}"
     model_foldername=$(basename "$turbomind_model_path")
+    if [ "$w4a16" == 1 ]
+    then
+        output_path="${workspace_dir}/workspace/output/${model_foldername}-4bit-tp${tp}"
+    else
+        output_path="${workspace_dir}/workspace/output/${model_foldername}-tp${tp}"
+    fi
 else
     echo "turbomind model path is not provided."
     echo "model path is provided: ${model_path}"
@@ -140,8 +139,6 @@ cp ${config_path} ${output_path}
 
 # update engine config to config.ini
 turbomind_config_path=${turbomind_model_path}/triton_models/weights/config.ini
-# crudini --set ${turbomind_config_path} llama max_context_token_num ${max_context_token_num}
-# crudini --set ${turbomind_config_path} llama cache_chunk_size ${cache_chunk_size}
 crudini --set ${turbomind_config_path} llama cache_max_entry_count ${cache_max_entry_count}
 crudini --set ${turbomind_config_path} llama max_batch_size ${max_batch_size}
 cat ${turbomind_config_path}
