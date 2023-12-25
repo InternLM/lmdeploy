@@ -277,9 +277,25 @@ class InternLM2BaseModel7B(BaseModel):
 class InternLM2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM2-Chat-7B."""
 
-    def __init__(self, session_len=32768, **kwargs):
-        super(InternLM2Chat7B, self).__init__(**kwargs)
-        self.session_len = session_len
+    def __init__(self,
+                 session_len=32768,
+                 system='[UNUSED_TOKEN_146]system\n',
+                 user='[UNUSED_TOKEN_146]user\n',
+                 assistant='[UNUSED_TOKEN_146]assistant\n',
+                 eosys='[UNUSED_TOKEN_145]\n',
+                 eoh='[UNUSED_TOKEN_145]\n',
+                 eoa='[UNUSED_TOKEN_145]\n',
+                 stop_words=['[UNUSED_TOKEN_145]'],
+                 **kwargs):
+        super(InternLM2Chat7B, self).__init__(session_len=session_len,
+                                              system=system,
+                                              user=user,
+                                              assistant=assistant,
+                                              eosys=eosys,
+                                              eoh=eoh,
+                                              eoa=eoa,
+                                              stop_words=stop_words,
+                                              **kwargs)
 
 
 @MODELS.register_module(name='baichuan-7b')
