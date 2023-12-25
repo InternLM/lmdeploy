@@ -161,6 +161,7 @@ class CompletionRequest(BaseModel):
     ignore_eos: Optional[bool] = False
     top_k: Optional[int] = 40  # for opencompass
 
+
 class CompletionRequestQos(BaseModel):
     """Completion request."""
     model: str
@@ -178,6 +179,7 @@ class CompletionRequestQos(BaseModel):
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
     # additional argument of lmdeploy
+    top_k: int = 40
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False

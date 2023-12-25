@@ -15,13 +15,14 @@ from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse, ChatMessage, CompletionRequest, CompletionRequestQos,
-    CompletionResponse, CompletionResponseChoice,
+    ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
+    CompletionRequestQos, CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
     EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-    GenerateRequest, GenerateRequestQos, GenerateResponse, ModelCard, ModelList,
-    ModelPermission, UsageInfo)
+    GenerateRequest, GenerateRequestQos, GenerateResponse, ModelCard,
+    ModelList, ModelPermission, UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
+
 
 class VariableInterface:
     """A IO interface maintaining variables."""
@@ -84,9 +85,10 @@ def ip2id(host_ip: str):
     print('Warning, could not get session id from ip, set it 0')
     return 0
 
+
 @app.post('/v1/chat/completions_qos')
 async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
-                              raw_request: Request = None):
+                                  raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -109,7 +111,7 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
     - session_id (int): if not specified, will set random value
-    - user_id (str): for qos functionality; if not specified, will set to "default"
+    - user_id (str): for qos; if not specified, will set to "default"
 
     Currently we do not support the following features:
     - function_call (Users should implement this by themselves)
@@ -127,10 +129,17 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     request_id = str(request.session_id)
     created_time = int(time.time())
 
-    result_generator = await VariableInterface.qos_engine.generate_with_qos(request)
+    if VariableInterface.qos_engine is None:
+        return create_error_response(
+            HTTPStatus.NOT_FOUND,
+            'cannot parse qos engine config, this api is not work')
+
+    result_generator = await VariableInterface.qos_engine.generate_with_qos(
+        request)
 
     if result_generator is None:
-        return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'Failed to generate completions')
+        return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR,
+                                     'Failed to generate completions')
 
     def create_stream_response_json(
         index: int,
@@ -367,7 +376,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
 @app.post('/v1/completions_qos')
 async def completions_v1_qos(request: CompletionRequestQos,
-                         raw_request: Request = None):
+                             raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -390,9 +399,11 @@ async def completions_v1_qos(request: CompletionRequestQos,
     - user (str): A unique identifier representing your end-user.
 
     Additional arguments supported by LMDeploy:
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
     - ignore_eos (bool): indicator for ignoring eos
     - session_id (int): if not specified, will set random value
-    - user_id (str): for qos functionality; if not specified, will set to "default"
+    - user_id (str): for qos; if not specified, will set to "default"
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
@@ -411,25 +422,12 @@ async def completions_v1_qos(request: CompletionRequestQos,
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
 
-    generators = await VariableInterface.qos_engine.generate_with_qos(request)
+    if VariableInterface.qos_engine is None:
+        return create_error_response(
+            HTTPStatus.NOT_FOUND,
+            'cannot parse qos engine config, this api is not work')
 
-    # generators = []
-    # for i in range(len(request.prompt)):
-    #     result_generator = VariableInterface.async_engine.generate(
-    #         request.prompt[i],
-    #         request.session_id + i,
-    #         True,  # always use stream to enable batching
-    #         sequence_start=True,
-    #         sequence_end=True,
-    #         request_output_len=request.max_tokens
-    #         if request.max_tokens else 512,
-    #         stop=False,
-    #         top_p=request.top_p,
-    #         temperature=request.temperature,
-    #         repetition_penalty=request.repetition_penalty,
-    #         ignore_eos=request.ignore_eos,
-    #         do_preprocess=False)
-    #     generators.append(result_generator)
+    generators = await VariableInterface.qos_engine.generate_with_qos(request)
 
     def create_stream_response_json(
         index: int,
@@ -522,8 +520,6 @@ async def completions_v1_qos(request: CompletionRequestQos,
     )
 
     return response
-
-
 
 
 @app.post('/v1/completions')
@@ -723,9 +719,10 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
 
+
 @app.post('/v1/chat/interactive_qos')
 async def chat_interactive_v1_qos(request: GenerateRequestQos,
-                              raw_request: Request = None):
+                                  raw_request: Request = None):
     """Generate completion for the request.
 
     - On interactive mode, the chat history is kept on the server. Please set
@@ -751,13 +748,17 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - ignore_eos (bool): indicator for ignoring eos
-    - user_id (str): for qos functionality; if not specified, will set to "default"
+    - user_id (str): for qos; if not specified, will set to "default"
     """
     if request.session_id == -1:
         request.session_id = random.randint(10087, 23333)
 
-    generation = await VariableInterface.qos_engine.generate_with_qos(request)
+    if VariableInterface.qos_engine is None:
+        return create_error_response(
+            HTTPStatus.NOT_FOUND,
+            'cannot parse qos engine config, this api is not work')
 
+    generation = await VariableInterface.qos_engine.generate_with_qos(request)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
@@ -779,7 +780,7 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                async_engine.stop_session(request.session_id)
+                VariableInterface.qos_engine.stop_session(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Client disconnected')
             text += out.response
@@ -883,6 +884,7 @@ def serve(model_path: str,
           allow_methods: List[str] = ['*'],
           allow_headers: List[str] = ['*'],
           log_level: str = 'ERROR',
+          qos_config_path: str = '',
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -924,24 +926,23 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
-    qos_config_str = ""
-    if qos_config_path:
-        try:
-            with open(qos_config_path, 'r') as file:
-                qos_config_str = file.read()
-        except FileNotFoundError:
-            qos_config_str = ""
-
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
                                                  model_name=model_name,
                                                  instance_num=instance_num,
                                                  tp=tp,
                                                  **kwargs)
-    VariableInterface.qos_engine = QosEngine(instance_num=instance_num,
-                                                 qos_tag=qos_config_str,
-                                                 engine=VariableInterface.async_engine,
-                                                 **kwargs)
-    VariableInterface.qos_engine.start()
+
+    if qos_config_path:
+        try:
+            with open(qos_config_path, 'r') as file:
+                qos_config_str = file.read()
+                VariableInterface.qos_engine = QosEngine(
+                    qos_tag=qos_config_str,
+                    engine=VariableInterface.async_engine,
+                    **kwargs)
+                VariableInterface.qos_engine.start()
+        except FileNotFoundError:
+            VariableInterface.qos_engine = None
 
     for i in range(3):
         print(f'HINT:    Please open \033[93m\033[1mhttp://{server_name}:'
