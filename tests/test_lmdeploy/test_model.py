@@ -1,6 +1,23 @@
 import pytest
 
-from lmdeploy.model import MODELS, SamplingParam
+from lmdeploy.model import MODELS, SamplingParam, best_match_model
+
+
+@pytest.mark.parametrize('model_path_and_name',
+                         [('internlm/internlm-chat-7b', 'internlm-chat-7b'),
+                          ('Qwen/Qwen-7B-Chat', 'qwen-7b'),
+                          ('baichuan-inc/Baichuan-7B', 'baichuan-7b'),
+                          ('codellama/CodeLlama-7b-hf', 'codellama'),
+                          ('upstage/SOLAR-0-70b-16bit', 'solar'),
+                          ('workspace', None)])
+def test_best_match_model(model_path_and_name):
+    deduced_name = best_match_model(model_path_and_name[0])
+    if deduced_name is not None:
+        assert deduced_name[0] == model_path_and_name[
+            1], f'expect {model_path_and_name[1]}, but got {deduced_name[0]}'
+    else:
+        assert deduced_name == model_path_and_name[
+            1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
 
 
 def test_base_model():
