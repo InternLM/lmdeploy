@@ -649,11 +649,11 @@ class TurboMindInstance:
         while True:
             # Thanks for https://github.com/frankxyy and his issue
             # https://github.com/InternLM/lmdeploy/issues/832
-            while self.que.qsize() == 0:
-                await asyncio.sleep(0)
             while self.que.qsize() > 1:
                 self.que.get()
 
+            while self.que.qsize() == 0:
+                await asyncio.sleep(0.002)  # sleep(0) make server unstable
             finish, tm_outputs = self.que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
