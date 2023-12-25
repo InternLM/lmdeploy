@@ -184,7 +184,7 @@ For detailed instructions on Inference pytorch models, see [here](docs/en/pytorc
 ```shell
 lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
-    --temperture 0.8 \
+    --temperature 0.8 \
     --top_p 0.95 \
     --seed 0
 ```
@@ -195,7 +195,7 @@ lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL \
 deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
-    --temperture 0.8 \
+    --temperature 0.8 \
     --top_p 0.95 \
     --seed 0
 ```
