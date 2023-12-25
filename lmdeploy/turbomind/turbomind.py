@@ -650,7 +650,8 @@ class TurboMindInstance:
             # Thanks for https://github.com/frankxyy and his issue
             # https://github.com/InternLM/lmdeploy/issues/832
             while self.que.qsize() == 0:
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.002)  # sleep(0) makes server unstable
+
             while self.que.qsize() > 1:
                 self.que.get()
 
