@@ -47,7 +47,7 @@ class QRMSNorm(nn.Module):
         eps = mod.variance_epsilon
         q_mod = cls(hidden_size, eps)
         q_mod.weight = nn.Parameter(mod.weight.detach())
-        q_mod.to('cpu')
+        # q_mod.to('cpu')
         return q_mod
 
     def forward(self, hidden_states):
@@ -84,17 +84,20 @@ class QLinear(nn.Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.register_buffer(
-            'weight',
+        q_weight = torch.Tensor._make_subclass(
+            nn.Parameter,
             torch.empty((out_features, in_features),
                         device=device,
-                        dtype=torch.int8))
+                        dtype=torch.int8), False)
+        q_weight.__dict__.update({'requires_grad': False})
+        self.weight = q_weight
         self.register_buffer(
             'scale',
             torch.empty((out_features, 1), device=device, dtype=torch.float32))
         if bias:
-            self.register_buffer('bias',
-                                 torch.empty(out_features, **factory_kwargs))
+            self.bias = nn.Parameter(torch.empty(out_features,
+                                                 **factory_kwargs),
+                                     requires_grad=False)
         else:
             self.register_parameter('bias', None)
 
@@ -109,11 +112,11 @@ class QLinear(nn.Module):
                     dtype=mod.weight.dtype)
         weight_quant, scale = per_channel_quant(mod.weight.detach(), 8,
                                                 torch.int8)
-        q_mod.weight = weight_quant
+        q_mod.weight.data = weight_quant
         q_mod.scale = scale
         if mod.bias is not None:
-            q_mod.bias = mod.bias.detach()
-        q_mod.to('cpu')
+            q_mod.bias.data = mod.bias.detach()
+        # q_mod.to('cpu')
         return q_mod
 
     def forward(self, input):

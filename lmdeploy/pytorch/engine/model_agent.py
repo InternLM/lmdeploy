@@ -355,36 +355,36 @@ def _tp_build_model(
         dist.broadcast_object_list(config_list)
         return config_list[0]
 
-    try:
-        config = AutoConfig.from_pretrained(
-            model_path, trust_remote_code=trust_remote_code)
-        torch_dtype = _get_torch_dtype(config)
-        with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(
-                config,
-                torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code)
-            model.eval()
-            model.config.use_cache = True
+    # try:
+    config = AutoConfig.from_pretrained(model_path,
+                                        trust_remote_code=trust_remote_code)
+    torch_dtype = _get_torch_dtype(config)
+    with init_empty_weights():
+        model = AutoModelForCausalLM.from_config(
+            config,
+            torch_dtype=torch_dtype,
+            trust_remote_code=trust_remote_code)
+        model.eval()
+        model.config.use_cache = True
 
-        checkpoints = _get_checkpoints(model_path)
-        patched_model = patch(
-            model,
-            extra_args=_PATCH_ARG_NAMES,
-            rank=rank,
-            world_size=world_size,
-            checkpoints=checkpoints,
-        )
+    checkpoints = _get_checkpoints(model_path)
+    patched_model = patch(
+        model,
+        extra_args=_PATCH_ARG_NAMES,
+        rank=rank,
+        world_size=world_size,
+        checkpoints=checkpoints,
+    )
 
-        _update_cache_config(model_config, cache_config)
-        cache_config = _broadcast_config(cache_config)
-        cache_engine = CacheEngine(cache_config,
-                                   model_config,
-                                   rank=rank,
-                                   world_size=world_size)
-    except Exception as e:
-        error_code = 1
-        error_type = e
+    _update_cache_config(model_config, cache_config)
+    cache_config = _broadcast_config(cache_config)
+    cache_engine = CacheEngine(cache_config,
+                               model_config,
+                               rank=rank,
+                               world_size=world_size)
+    # except Exception as e:
+    #     error_code = 1
+    #     error_type = e
 
     # response
     error_code = torch.tensor(error_code).cuda(rank)
