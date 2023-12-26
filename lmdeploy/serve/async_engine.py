@@ -159,13 +159,14 @@ class AsyncEngine:
 
     def batch_infer(self,
                     prompts: Union[List[str], str],
-                    request_output_len=512,
-                    top_k=40,
-                    top_p=0.8,
-                    temperature=0.8,
-                    repetition_penalty=1.0,
-                    ignore_eos=False,
-                    do_preprocess=True,
+                    request_output_len: Optional[int] = 512,
+                    top_k: Optional[int] = 40,
+                    top_p: Optional[float] = 0.8,
+                    temperature: Optional[float] = 0.8,
+                    repetition_penalty: Optional[float] = 1.0,
+                    ignore_eos: Optional[bool] = False,
+                    do_preprocess: Optional[bool] = True,
+                    stop: Optional[Union[str, List[str]]] = None,
                     **kwargs):
         """Inference a batch of prompts.
 
@@ -199,6 +200,7 @@ class AsyncEngine:
                               request_output_len=request_output_len,
                               top_k=top_k,
                               top_p=top_p,
+                              stop_words=stop,
                               temperature=temperature,
                               ignore_eos=ignore_eos,
                               repetition_penalty=repetition_penalty,
