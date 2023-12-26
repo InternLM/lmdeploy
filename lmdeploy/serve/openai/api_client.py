@@ -76,7 +76,7 @@ class APIClient:
                             top_p: Optional[float] = 1.0,
                             n: Optional[int] = 1,
                             max_tokens: Optional[int] = 512,
-                            stop: Optional[bool] = False,
+                            stop: Optional[Union[str, List[str]]] = None,
                             stream: Optional[bool] = False,
                             presence_penalty: Optional[float] = 0.0,
                             frequency_penalty: Optional[float] = 0.0,
@@ -89,7 +89,8 @@ class APIClient:
 
         Args:
             model: model name. Available from self.available_models.
-            messages: string prompt or chat history in OpenAI format.
+            messages: string prompt or chat history in OpenAI format. Chat
+                history example: `[{"role": "user", "content": "hi"}]`.
             temperature (float): to modulate the next token probability
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
@@ -98,6 +99,8 @@ class APIClient:
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
             max_tokens (int): output token nums
+            stop (str | List[str] | None): To stop generating further
+              tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
@@ -162,7 +165,9 @@ class APIClient:
                 interactive mode, session history is kept on the server (and
                 vice versa).
             stream: whether to stream the results or not.
-            stop: whether to stop the session response or not.
+            stop: whether to stop the session response or not. Different from
+                openai argument, this is a signal to pause the session, instead
+                of stop words.
             request_output_len (int): output token nums
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
@@ -204,6 +209,7 @@ class APIClient:
             n: Optional[int] = 1,
             max_tokens: Optional[int] = 16,
             stream: Optional[bool] = False,
+            stop: Optional[Union[str, List[str]]] = None,
             top_p: Optional[float] = 1.0,
             top_k: Optional[int] = 40,
             user: Optional[str] = None,
@@ -229,6 +235,8 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
+            stop (str | List[str] | None): To stop generating further
+              tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
             user (str): A unique identifier representing your end-user.
