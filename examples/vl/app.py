@@ -83,7 +83,7 @@ def parse_args():
                         help='Server port, default %(default)s')
     parser.add_argument('--server-name',
                         type=str,
-                        default='127.0.0.1',
+                        default='0.0.0.0',
                         help='Server name, default %(default)s')
     args = parser.parse_args()
     return args
@@ -101,7 +101,6 @@ def launch_demo(args, preprocessor, model):
 
     def add_image(chatbot, session, file):
         chatbot = chatbot + [((file.name, ), None)]
-        # print('add_image', chatbot)
         history = session._message
         # [([user, url, url], assistant), ...]
         if len(history) == 0 or history[-1][-1] is not None:
@@ -122,6 +121,7 @@ def launch_demo(args, preprocessor, model):
     def chat(
         chatbot,
         session,
+        request_output_len=512,
     ):
         generator = model.create_instance()
         history = session._message
@@ -130,7 +130,8 @@ def launch_demo(args, preprocessor, model):
         input_ids, features, ranges = preprocessor.prepare_query(
             history[-1][0], sequence_start)
 
-        if len(input_ids) + session.step > model.model.session_len:
+        if len(input_ids
+               ) + session.step + request_output_len > model.model.session_len:
             gr.Warning('WARNING: exceed session max length.'
                        ' Please restart the session by reset button.')
             yield chatbot, session, enable_btn, disable_btn, enable_btn
@@ -142,6 +143,7 @@ def launch_demo(args, preprocessor, model):
                     input_ids=input_ids,
                     input_embeddings=features,
                     input_embedding_ranges=ranges,
+                    request_output_len=request_output_len,
                     stream_output=True,
                     sequence_start=sequence_start,
                     random_seed=seed,
