@@ -256,9 +256,8 @@ class AsyncEngine:
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
             do_preprocess (bool): whether pre-process the messages.
-            stop_words (str | List[str] | None): Up to one sequence where the
-              API will stop generating further tokens. Only accept stop words
-              that's encoded to one token idex.
+            stop_words (str | List[str] | None): To stop generating further
+              tokens. Only accept stop words that's encoded to one token idex.
         """
         if str(session_id) not in self.id2step:
             self.id2step[str(session_id)] = 0

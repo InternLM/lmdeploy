@@ -105,9 +105,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - max_tokens (int): output token nums
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
-    - stop (str | List[str] | None): Up to one sequence where the API will
-        stop generating further tokens. Only accept stop words that's encoded
-        to one token idex.
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
@@ -256,9 +255,8 @@ async def completions_v1(request: CompletionRequest,
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - user (str): A unique identifier representing your end-user.
-    - stop (str | List[str] | None): Up to one sequence where the API will
-        stop generating further tokens. Accepts stop words that's encoded to
-        one token idex.
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
