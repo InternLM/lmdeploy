@@ -240,6 +240,17 @@ def _load_state_dict(
                                                    requires_grad=False)
                 model.register_parameter(k, new_param)
 
+            # Weight, bias and scale are registered as buffer in QLinear
+            buffer_names = [
+                name for name, _ in model.named_buffers(recurse=False)
+            ]
+            if k in buffer_names:
+                if rank == 0:
+                    new_buffer = state_dict[full_k].to(v.dtype).to(device)
+                else:
+                    new_buffer = torch.empty_like(v, device=device)
+                model.register_buffer(k, new_buffer)
+
     def _check_need_dist(model):
         """check need dist."""
         need_dist = not getattr(model, '__tp_distributed__', False)

@@ -64,6 +64,25 @@ def rowwise_parallelize_linear_fn(module: nn.Module,
         dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
 
+    # Weight, bias and scale are registered as buffer in QLinear
+    for name, buffer in module.named_buffers():
+        dist_spec = ([Shard(1)] if name == 'weight' else
+                     [Replicate()]  # type: ignore[list-item]
+                     )
+
+        dist_tensor = distribute_tensor(buffer, device_mesh, dist_spec)
+        if to_local:
+            dist_tensor = try_to_local(dist_tensor)
+            if name == 'bias':
+                # rowwise linear would add bias more than ones.
+                dist_tensor /= device_mesh.size()
+        module.register_buffer(name, dist_tensor)
+
+        dist_tensor = distribute_tensor(buffer, device_mesh, dist_spec)
+        if to_local:
+            dist_tensor = try_to_local(dist_tensor)
+        module.register_buffer(name, dist_tensor)
+
 
 def colwise_parallelize_linear_fn(module: nn.Module,
                                   device_mesh: DeviceMesh,
@@ -88,6 +107,13 @@ def colwise_parallelize_linear_fn(module: nn.Module,
             dist_tensor = try_to_local(dist_tensor)
         dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
+
+    # Weight, bias and scale are registered as buffer in QLinear
+    for name, buffer in module.named_buffers():
+        dist_tensor = distribute_tensor(buffer, device_mesh, [Shard(0)])
+        if to_local:
+            dist_tensor = try_to_local(dist_tensor)
+        module.register_buffer(name, dist_tensor)
 
 
 def _partition_module(
