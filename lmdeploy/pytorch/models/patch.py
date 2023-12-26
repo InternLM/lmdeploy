@@ -240,6 +240,7 @@ def _load_state_dict(
                                                    requires_grad=False)
                 model.register_parameter(k, new_param)
 
+            # Weight, bias and scale are registered as buffer in QLinear
             buffer_names = [
                 name for name, _ in model.named_buffers(recurse=False)
             ]

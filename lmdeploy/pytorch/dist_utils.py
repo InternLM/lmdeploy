@@ -64,6 +64,7 @@ def rowwise_parallelize_linear_fn(module: nn.Module,
         dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
 
+    # Weight, bias and scale are registered as buffer in QLinear
     for name, buffer in module.named_buffers():
         dist_spec = ([Shard(1)] if name == 'weight' else
                      [Replicate()]  # type: ignore[list-item]
@@ -107,6 +108,7 @@ def colwise_parallelize_linear_fn(module: nn.Module,
         dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
 
+    # Weight, bias and scale are registered as buffer in QLinear
     for name, buffer in module.named_buffers():
         dist_tensor = distribute_tensor(buffer, device_mesh, [Shard(0)])
         if to_local:
