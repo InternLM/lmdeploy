@@ -28,12 +28,7 @@ def module_to_local(module: nn.Module):
         module_to_local(mod)
 
     for name, param in module.named_parameters(recurse=False):
-        dist_param = torch.Tensor._make_subclass(nn.Parameter,
-                                                 try_to_local(param), False)
-        if dist_param.dtype == torch.int8:
-            dist_param.__dict__.update({'requires_grad': False})
-        module.register_parameter(name, dist_param)
-        # module.register_parameter(name, nn.Parameter(try_to_local(param)))
+        module.register_parameter(name, nn.Parameter(try_to_local(param)))
 
     for name, buf in module.named_buffers(recurse=False):
         module.register_buffer(name, try_to_local(buf))
@@ -66,15 +61,21 @@ def rowwise_parallelize_linear_fn(module: nn.Module,
             if name == 'bias':
                 # rowwise linear would add bias more than ones.
                 dist_tensor /= device_mesh.size()
-        dist_param = torch.Tensor._make_subclass(nn.Parameter, dist_tensor,
-                                                 False)
-        if dist_param.dtype == torch.int8:
-            dist_param.__dict__.update({'requires_grad': False})
-        # dist_param = torch.nn.Parameter(dist_tensor)
+        dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
 
     for name, buffer in module.named_buffers():
-        dist_spec = [Replicate()]
+        dist_spec = ([Shard(1)] if name == 'weight' else
+                     [Replicate()]  # type: ignore[list-item]
+                     )
+
+        dist_tensor = distribute_tensor(buffer, device_mesh, dist_spec)
+        if to_local:
+            dist_tensor = try_to_local(dist_tensor)
+            if name == 'bias':
+                # rowwise linear would add bias more than ones.
+                dist_tensor /= device_mesh.size()
+        module.register_buffer(name, dist_tensor)
 
         dist_tensor = distribute_tensor(buffer, device_mesh, dist_spec)
         if to_local:
@@ -103,11 +104,7 @@ def colwise_parallelize_linear_fn(module: nn.Module,
         dist_tensor = distribute_tensor(param, device_mesh, [Shard(0)])
         if to_local:
             dist_tensor = try_to_local(dist_tensor)
-        dist_param = torch.Tensor._make_subclass(nn.Parameter, dist_tensor,
-                                                 False)
-        if dist_param.dtype == torch.int8:
-            dist_param.__dict__.update({'requires_grad': False})
-        # dist_param = torch.nn.Parameter(dist_tensor)
+        dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
 
     for name, buffer in module.named_buffers():
@@ -181,10 +178,7 @@ def replicate_module(model: nn.Module, device_mesh: DeviceMesh):
         param = distribute_tensor(param,
                                   device_mesh=device_mesh,
                                   placements=[Replicate()]).to_local()
-        param = torch.Tensor._make_subclass(nn.Parameter, param, False)
-        # param = nn.Parameter(param)
-        if param.dtype == torch.int8:
-            param.__dict__.update({'requires_grad': False})
+        param = nn.Parameter(param)
         model.register_parameter(name, param)
 
     for name, buf in model.named_buffers(recurse=False):
