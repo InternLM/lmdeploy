@@ -1065,9 +1065,10 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 }
 
 template<typename T>
-void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_output,
-                                        const std::vector<int>& indices,
-                                        const std::vector<int>& lengths)
+void LlamaBatch<T>::OutputContextLogits(T*                                  context_decoder_output,
+                                        const std::vector<int>&             indices,
+                                        const std::vector<int>&             lengths,
+                                        const std::vector<const Sequence*>& sequences)
 {
     std::vector<float*> output_logits;
     int                 num_token = 0;
@@ -1075,7 +1076,11 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
         bool is_return_logits = false;
         for (int k = 0; k < indices.size(); ++k) {
             auto& request = state_->requests[indices[k]];
-            output_logits.push_back(request->outputs[rank_].getPtr<float>("logits", nullptr));
+            auto  logits  = request->outputs[rank_].getPtr<float>("logits", nullptr);
+            if (logits && sequences[k]->cache_len + lengths[k] <= sequences[k]->tokens.size()) {
+                logits = nullptr;
+            }
+            output_logits.push_back(logits);
             num_token += lengths[k];
             if (output_logits.back()) {
                 is_return_logits = true;
@@ -1105,7 +1110,18 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
 
     for (int k = 0; k < indices.size(); ++k) {
         if (output_logits[k]) {
-            Copy(logits, model_->vocab_size_ * lengths[k], output_logits[k]);
+            auto src_ptr       = logits;
+            auto dst_ptr       = output_logits[k];
+            int  num_new_token = 0;
+            if (sequences[k]->cache_len < sequences[k]->tokens.size()) {
+                num_new_token = sequences[k]->cache_len + lengths[k] - sequences[k]->tokens.size();
+                src_ptr += (lengths[k] - num_new_token) * model_->vocab_size_;
+            }
+            else {
+                num_new_token = lengths[k];
+                dst_ptr += (sequences[k]->cache_len - sequences[k]->tokens.size()) * model_->vocab_size_;
+            }
+            Copy(src_ptr, model_->vocab_size_ * num_new_token, dst_ptr);
         }
         logits += model_->vocab_size_padded_ * lengths[k];
     }
@@ -1562,7 +1578,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
         if (iter == 0) {
             // compute logits of inputs if requested
-            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
         }
     }
 
