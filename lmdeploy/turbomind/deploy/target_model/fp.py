@@ -14,7 +14,7 @@ def transpose_tensor(input: List[torch.Tensor]):
     return output
 
 
-@OUTPUT_MODELS.register_module(name='fp16')
+@OUTPUT_MODELS.register_module(name=['fp16', 'bf16'])
 class TurbomindModel(BaseOutputModel):
     """Export to turbomind fp16 format."""
 

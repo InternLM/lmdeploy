@@ -207,7 +207,7 @@ int BlockManager::Lock(const BlockIds& ids)
 
     for (const auto& i : ids) {
         auto& b = blocks_[i];
-        FT_CHECK(is_cached(b));
+        FT_CHECK_WITH_INFO(is_cached(b), to_string(b));
         if (++b.use_count == 1) {
             lock.push_back(i);
             FT_CHECK(is_active(b));

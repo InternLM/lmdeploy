@@ -18,8 +18,9 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionStreamResponse, ChatMessage, CompletionRequest,
     CompletionResponse, CompletionResponseChoice,
     CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
-    EmbeddingsRequest, ErrorResponse, GenerateRequest, GenerateResponse,
-    ModelCard, ModelList, ModelPermission, UsageInfo)
+    EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
+    GenerateRequest, GenerateResponse, ModelCard, ModelList, ModelPermission,
+    UsageInfo)
 
 
 class VariableInterface:
@@ -179,6 +180,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             response_json = create_stream_response_json(
                 index=0,
                 text=res.response,
+                finish_reason=res.finish_reason,
             )
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
@@ -255,6 +257,8 @@ async def completions_v1(request: CompletionRequest,
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
     - session_id (int): if not specified, will set random value
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
@@ -284,6 +288,7 @@ async def completions_v1(request: CompletionRequest,
             if request.max_tokens else 512,
             stop=False,
             top_p=request.top_p,
+            top_k=request.top_k,
             temperature=request.temperature,
             repetition_penalty=request.repetition_penalty,
             ignore_eos=request.ignore_eos,
@@ -329,6 +334,7 @@ async def completions_v1(request: CompletionRequest,
                 response_json = create_stream_response_json(
                     index=0,
                     text=res.response,
+                    finish_reason=res.finish_reason,
                 )
                 yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
@@ -389,6 +395,37 @@ async def create_embeddings(request: EmbeddingsRequest,
     """Creates embeddings for the text."""
     return create_error_response(HTTPStatus.BAD_REQUEST,
                                  'Unsupported by turbomind.')
+
+
+@app.post('/v1/encode')
+async def encode(request: EncodeRequest, raw_request: Request = None):
+    """Encode prompts.
+
+    The request should be a JSON object with the following fields:
+    - input: the prompt to be encoded. In str or List[str] format.
+    - do_preprocess: whether do preprocess or not. Default to False.
+    - add_bos: True when it is the beginning of a conversation. False when it
+        is not. Default to True.
+    """
+
+    def encode(prompt: str, do_preprocess: bool, add_bos: bool):
+        if do_preprocess:
+            prompt = VariableInterface.async_engine.model.get_prompt(
+                prompt, sequence_start=add_bos)
+        input_ids = VariableInterface.async_engine.tokenizer.encode(
+            prompt, add_bos=add_bos)
+        return input_ids
+
+    if isinstance(request.input, str):
+        encoded = encode(request.input, request.do_preprocess, request.add_bos)
+        return EncodeResponse(input_ids=encoded, length=len(encoded))
+    else:
+        encoded, length = [], []
+        for prompt in request.input:
+            ids = encode(prompt, request.do_preprocess, request.add_bos)
+            encoded.append(ids)
+            length.append(len(ids))
+        return EncodeResponse(input_ids=encoded, length=length)
 
 
 @app.post('/generate',
@@ -474,22 +511,37 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
-def main(model_path: str,
-         server_name: str = '0.0.0.0',
-         server_port: int = 23333,
-         instance_num: int = 64,
-         tp: int = 1,
-         allow_origins: List[str] = ['*'],
-         allow_credentials: bool = True,
-         allow_methods: List[str] = ['*'],
-         allow_headers: List[str] = ['*'],
-         log_level: str = 'ERROR',
-         **kwargs):
+def serve(model_path: str,
+          model_name: Optional[str] = None,
+          server_name: str = '0.0.0.0',
+          server_port: int = 23333,
+          instance_num: int = 64,
+          tp: int = 1,
+          allow_origins: List[str] = ['*'],
+          allow_credentials: bool = True,
+          allow_methods: List[str] = ['*'],
+          allow_headers: List[str] = ['*'],
+          log_level: str = 'ERROR',
+          **kwargs):
     """An example to perform model inference through the command line
     interface.
 
     Args:
-        model_path (str): the path of the deployed model
+        model_path (str): the path of a model.
+            It could be one of the following options:
+                - i) A local directory path of a turbomind model which is
+                    converted by `lmdeploy convert` command or download from
+                    ii) and iii).
+                - ii) The model_id of a lmdeploy-quantized model hosted
+                    inside a model repo on huggingface.co, such as
+                    "InternLM/internlm-chat-20b-4bit",
+                    "lmdeploy/llama2-chat-70b-4bit", etc.
+                - iii) The model_id of a model hosted inside a model repo
+                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    and so on.
+        model_name (str): needed when model_path is a pytorch model on
+            huggingface.co, such as "InternLM/internlm-chat-7b"
         server_name (str): host ip for serving
         server_port (int): server port
         instance_num (int): number of instances of turbomind model
@@ -512,6 +564,7 @@ def main(model_path: str,
         )
 
     VariableInterface.async_engine = AsyncEngine(model_path=model_path,
+                                                 model_name=model_name,
                                                  instance_num=instance_num,
                                                  tp=tp,
                                                  **kwargs)
@@ -524,4 +577,4 @@ def main(model_path: str,
 if __name__ == '__main__':
     import fire
 
-    fire.Fire(main)
+    fire.Fire(serve)

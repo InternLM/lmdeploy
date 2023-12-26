@@ -2,6 +2,7 @@
 
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
+#include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -82,6 +83,32 @@ struct res_norm_ops_t<float> {
         return a * s * factor;
     }
 };
+
+#ifdef ENABLE_BF16
+template<>
+struct res_norm_ops_t<__nv_bfloat16> {
+    __device__ float2 cast(const uint& x) const
+    {
+        return cuda_cast<float2, __nv_bfloat162>(reinterpret_cast<const __nv_bfloat162&>(x));
+    }
+    __device__ uint cast(const float2& x) const
+    {
+        auto y = cuda_cast<__nv_bfloat162, float2>(x);
+        return reinterpret_cast<uint&>(y);
+    }
+    __device__ float2 add(const float2& a, const float2& b, const float2& bias, float& accum) const
+    {
+        float2 c{a.x + b.x + bias.x, a.y + b.y + bias.y};
+        accum += c.x * c.x + c.y * c.y;
+        return c;
+    }
+    __device__ float2 norm(const float2& a, const float2& s, float factor) const
+    {
+        return {a.x * s.x * factor, a.y * s.y * factor};
+    }
+};
+
+#endif
 
 template<typename T>
 __device__ T blockReduceSum(const cg::thread_block& block, T value)
@@ -164,5 +191,8 @@ void invokeFusedAddBiasResidualRMSNorm(
 template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
-
+#ifdef ENABLE_BF16
+template void invokeFusedAddBiasResidualRMSNorm(
+    __nv_bfloat16*, __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+#endif
 }  // namespace turbomind

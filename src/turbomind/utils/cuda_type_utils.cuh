@@ -507,12 +507,12 @@ __device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val)
 template<>
 __device__ inline __nv_bfloat16 cuda_abs(__nv_bfloat16 val)
 {
-    return fabs(val);
+    return fabs(cuda_cast<float>(val));
 }
 template<>
 __device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val)
 {
-    return make_bfloat162(fabs(val.x), fabs(val.y));
+    return make_bfloat162(fabs(cuda_cast<float>(val.x)), fabs(cuda_cast<float>(val.y)));
 }
 #endif
 

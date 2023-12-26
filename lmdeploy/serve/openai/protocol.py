@@ -139,6 +139,7 @@ class CompletionRequest(BaseModel):
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
+    top_k: Optional[int] = 40  # for opencompass
 
 
 class CompletionResponseChoice(BaseModel):
@@ -189,6 +190,19 @@ class EmbeddingsResponse(BaseModel):
     data: List[Dict[str, Any]]
     model: str
     usage: UsageInfo
+
+
+class EncodeRequest(BaseModel):
+    """Encode request."""
+    input: Union[str, List[str]]
+    do_preprocess: Optional[bool] = False
+    add_bos: Optional[bool] = True
+
+
+class EncodeResponse(BaseModel):
+    """Encode response."""
+    input_ids: Union[List[int], List[List[int]]]
+    length: Union[int, List[int]]
 
 
 class GenerateRequest(BaseModel):

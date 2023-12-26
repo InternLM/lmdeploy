@@ -60,6 +60,18 @@ input [
     dims: [ -1 ]
   },
   {
+    name: "input_embeddings"
+    data_type: TYPE_INT8
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "input_embedding_ranges"
+    data_type: TYPE_UINT32
+    dims: [ -1, 2 ]
+    optional: true
+  },
+  {
     name: "step"
     data_type: TYPE_INT32
     dims: [ 1 ]
