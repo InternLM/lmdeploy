@@ -114,8 +114,8 @@ class Scheduler:
             adapter_path (str): The path of adapter.
             adapter_name (str): The name of the adapter.
         """
-        adapter = ADAPTER_MANAGER.add_adapter(adapter_path,
-                                              adapter_name=adapter_name)
+        adapter = ADAPTER_MANAGER.add_adapter_from_pretrained(
+            adapter_path, adapter_name=adapter_name)
         self.block_manager.allocate_adapter(adapter)
         block_table = self.block_manager.get_block_table(
             adapter) - self.block_manager.num_gpu_blocks

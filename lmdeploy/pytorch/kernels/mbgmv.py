@@ -27,6 +27,7 @@ def _x_a_mv_kernel(
     stride_xas,
     stride_xar,
     stride_ptb,
+    rank_step,
     BLOCK_R: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -36,7 +37,7 @@ def _x_a_mv_kernel(
 
     r_off = tl.arange(0, BLOCK_R)
     adapter_id = tl.load(B_adapter_id + cur_batch)
-    rank = tl.load(Ranks + adapter_id)
+    rank = tl.load(Ranks + adapter_id) // rank_step
     page_start = tl.load(Rank_page_start + adapter_id)
 
     page_table_off = adapter_id * stride_ptb + r_off + page_start
@@ -44,7 +45,6 @@ def _x_a_mv_kernel(
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     dm_off = tl.arange(0, BLOCK_DMODEL)
-    rank_mask = r_off < rank
 
     x_off = cur_batch * stride_xs
     la_page_off = page_table * stride_las
@@ -108,7 +108,6 @@ def _acc_b_mv_kernel(
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     dm_off = tl.arange(0, BLOCK_DMODEL)
-    rank_mask = r_off < rank
     lb_page_off = page_table * stride_lbs
 
     o_off = cur_batch * stride_os
@@ -138,9 +137,14 @@ def _acc_b_mv_kernel(
 
 
 @torch.inference_mode()
-def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
-            rank_page_table: Tensor, ranks: Tensor, rank_page_start: Tensor,
-            max_rank: int):
+def mbgmv_a(x: Tensor,
+            lora_a: Tensor,
+            b_adapter_ids: Tensor,
+            rank_page_table: Tensor,
+            ranks: Tensor,
+            rank_page_start: Tensor,
+            max_rank: int,
+            rank_step: int = 1):
     """mbgmv_a."""
 
     def _kernel_meta():
@@ -156,10 +160,9 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
 
     head_size = x.size(-1)
     batch_size = x.size(0)
+    max_rank = max_rank // rank_step
 
     BLOCK_R = _next_pow_of_2(max_rank)
-    if BLOCK_R < 16:
-        BLOCK_R = 16
     BLOCK_H = head_size
     BLOCK_DMODEL = 512
 
@@ -181,6 +184,7 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
                          stride_xas=xa.stride(0),
                          stride_xar=xa.stride(1),
                          stride_ptb=rank_page_table.stride(0),
+                         rank_step=rank_step,
                          BLOCK_R=BLOCK_R,
                          BLOCK_H=BLOCK_H,
                          BLOCK_DMODEL=BLOCK_DMODEL,
@@ -191,9 +195,14 @@ def mbgmv_a(x: Tensor, lora_a: Tensor, b_adapter_ids: Tensor,
 
 
 @torch.inference_mode()
-def mbgmv_b(xa: Tensor, lora_b: Tensor, b_adapter_ids: Tensor,
-            rank_page_table: Tensor, ranks: Tensor, rank_page_start: Tensor,
-            max_rank: int):
+def mbgmv_b(xa: Tensor,
+            lora_b: Tensor,
+            b_adapter_ids: Tensor,
+            rank_page_table: Tensor,
+            ranks: Tensor,
+            rank_page_start: Tensor,
+            max_rank: int,
+            out_size: int = None):
     """mbgmv_b."""
 
     def _kernel_meta():
@@ -207,13 +216,12 @@ def mbgmv_b(xa: Tensor, lora_b: Tensor, b_adapter_ids: Tensor,
     assert lora_b.dim() == 2
     assert rank_page_table.dim() == 2
 
-    head_o_size = lora_b.size(-1)
+    if out_size is None:
+        out_size = lora_b.size(-1)
     batch_size = xa.size(0)
 
     BLOCK_R = _next_pow_of_2(max_rank)
-    if BLOCK_R < 16:
-        BLOCK_R = 16
-    BLOCK_HO = head_o_size
+    BLOCK_HO = out_size
     BLOCK_DMODEL = 512
 
     num_warps = 4

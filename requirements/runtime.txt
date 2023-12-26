@@ -1,6 +1,7 @@
 fire
 mmengine-lite
 numpy
+peft
 pycuda
 safetensors
 sentencepiece

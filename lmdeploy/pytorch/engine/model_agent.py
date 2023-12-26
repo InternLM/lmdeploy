@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import json
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Union
@@ -10,7 +8,6 @@ import torch.distributed as dist
 from torch import multiprocessing as mp
 from torch.distributed._tensor import DeviceMesh, Replicate, distribute_tensor
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.utils import WEIGHTS_INDEX_NAME, WEIGHTS_NAME, cached_file
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
@@ -38,7 +35,7 @@ def _update_cache_config(model_config: ModelConfig,
         gpu_id (int): The GPU id to use.
     """
     GPU_MEM_PERCENT = 0.7
-    SWAP_SPACE = 8 * (1 << 30)
+    SWAP_SPACE = 4 * (1 << 30)
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
     gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
     cpu_mem = SWAP_SPACE
@@ -275,6 +272,16 @@ def _load_adapters(hf_model: torch.nn.Module,
         hf_model.load_adapter(path, name, device_map=device_map)
 
 
+def _add_adapters(hf_model: torch.nn.Module, adapters: Dict[str, str]):
+    """add adapters."""
+    if not adapters:
+        return
+    from peft import PeftConfig, inject_adapter_in_model
+    for name, path in adapters.items():
+        config = PeftConfig.from_pretrained(path)
+        inject_adapter_in_model(config, model=hf_model, adapter_name=name)
+
+
 def _unparam_lora_weight(model: torch.nn.Module):
     """unparam lora weight.
 
@@ -358,6 +365,7 @@ class BaseModelAgent:
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """load adapter."""
+        logger.info('paging adapters.')
         lora_linears = get_indexed_lora_linears(self.patched_model)
         cpu_caches = self.cache_engine.cpu_cache
         num_blocks = self.cache_engine.num_cpu_blocks
@@ -392,29 +400,41 @@ class BaseModelAgent:
         return output
 
 
-def _get_checkpoints(model_path: str):
-    """get checkpoints."""
-    try:
-        torch_model_json_path = cached_file(model_path, WEIGHTS_INDEX_NAME)
-        with open(torch_model_json_path, mode='r') as f:
-            torch_model_json = json.load(f)
-
-        weight_map = torch_model_json['weight_map']
-
-        checkpoints = list(set(weight_map.values()))
-        checkpoints = [cached_file(model_path, ckpt) for ckpt in checkpoints]
-    except Exception:
-        logger.warning(f'load failed, try load from {WEIGHTS_NAME}.')
-        checkpoints = [cached_file(model_path, WEIGHTS_NAME)]
-
-    return checkpoints
-
-
 @dataclass
 class TPResponse:
     ret_code: int
     error: Union[Exception, List[Exception]] = None
     data: Any = None
+
+    def gather_error(self):
+        """gather error."""
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+
+        # gather errors
+        error_count = torch.tensor(self.ret_code).cuda(rank)
+        dist.all_reduce(error_count)
+        if error_count.item() > 0:
+            all_errors = [None] * world_size
+            dist.all_gather_object(all_errors, self.error)
+            self.ret_code = 1
+            self.error = all_errors
+
+    def raise_error(self, default_error: Exception):
+        """raise error."""
+        if self.error is None:
+            raise default_error
+        elif isinstance(self.error, Exception):
+            raise self.error
+        else:
+            assert isinstance(self.error, List), ('expect error type list, '
+                                                  f'got {type(self.error)}')
+            rank = dist.get_rank()
+            err = self.error[rank]
+            if err is None:
+                raise default_error
+            else:
+                raise err
 
 
 def _tp_build_model(
@@ -467,22 +487,21 @@ def _tp_build_model(
                 config,
                 torch_dtype=torch_dtype,
                 trust_remote_code=trust_remote_code)
+            _add_adapters(model, adapters)
         model.eval()
         model.config.use_cache = True
 
         if rank == 0:
             with LoadNoInit():
+                device_map = 'auto'
                 param_model = AutoModelForCausalLM.from_pretrained(
                     model_path,
                     torch_dtype=torch_dtype,
-                    device_map='auto',
+                    device_map=device_map,
                     trust_remote_code=trust_remote_code)
+                _load_adapters(param_model, adapters, device_map=device_map)
                 model.load_state_dict(param_model.state_dict(), assign=True)
                 del param_model
-
-        if adapters:
-            device_map = 'auto'
-            _load_adapters(model, adapters, device_map=device_map)
 
         patched_model = patch(
             model,
@@ -502,18 +521,12 @@ def _tp_build_model(
         error_type = e
 
     # response
-    error_code = torch.tensor(error_code).cuda(rank)
-    dist.all_reduce(error_code)
-    error_code = error_code.item()
-    if error_code > 0:
-        all_errors = [None] * world_size
-        dist.all_gather_object(all_errors, error_type)
-        if rank == 0:
-            out_que.put(TPResponse(1, all_errors, cache_config))
-        return
-    else:
-        if rank == 0:
-            out_que.put(TPResponse(0, None, cache_config))
+    resp = TPResponse(error_code, error_type, cache_config)
+    resp.gather_error()
+    if rank == 0:
+        out_que.put(resp)
+    if resp.ret_code != 0:
+        resp.raise_error(RuntimeError('failed to init model.'))
 
     return patched_model, cache_engine
 
@@ -561,6 +574,56 @@ def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
     return inputs, swap_in_map, swap_out_map
 
 
+def _tp_paging_adapters(
+    rank: int,
+    patched_model: torch.nn.Module,
+    cache_engine: CacheEngine,
+    in_que: mp.Queue,
+    out_que: mp.Queue,
+):
+    """tp paging adapters."""
+
+    def __get_weight_map():
+        """get weight map."""
+        if rank == 0:
+            weight_maps = in_que.get()
+            dist_obj = [weight_maps]
+        else:
+            dist_obj = [None]
+        dist.broadcast_object_list(dist_obj)
+        return dist_obj[0]
+
+    def __paging(weight_maps):
+        """paging."""
+        lora_linears = get_indexed_lora_linears(patched_model)
+        cpu_caches = cache_engine.cpu_cache
+        num_blocks = cache_engine.num_cpu_blocks
+        cpu_caches = [(kcache.view(num_blocks,
+                                   -1), vcache.view(num_blocks, -1))
+                      for kcache, vcache in cpu_caches]
+        for weight_map in weight_maps:
+            weight_map.cache_adapter(lora_linears, cpu_caches)
+        update_lora_linears(lora_linears, weight_maps, device='cuda')
+
+    weight_maps = __get_weight_map()
+
+    resp = TPResponse(0)
+    try:
+        if rank == 0:
+            logger.info('tp paging adapters.')
+        if len(weight_maps) > 0:
+            __paging(weight_maps)
+    except Exception as e:
+        resp.ret_code = 1
+        resp.error = e
+
+    resp.gather_error()
+    if rank == 0:
+        out_que.put(resp)
+    if resp.ret_code != 0:
+        resp.raise_error(RuntimeError('tp paging adapters failed.'))
+
+
 def _tp_model_loop(
     rank: int,
     model_path: str,
@@ -594,6 +657,13 @@ def _tp_model_loop(
         out_que=out_que,
         world_size=world_size,
         trust_remote_code=trust_remote_code)
+
+    if adapters:
+        _tp_paging_adapters(rank,
+                            patched_model,
+                            cache_engine=cache_engine,
+                            in_que=in_que,
+                            out_que=out_que)
 
     while True:
         inputs, swap_in_map, swap_out_map = _tp_get_input(
@@ -725,7 +795,13 @@ class TPModelAgent:
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """load adapter."""
-        raise NotImplementedError('TP lora is not supported for now.')
+        if not weight_maps:
+            return
+        self.tp_model_in_que.put(weight_maps)
+        resp: TPResponse = self.tp_model_out_que.get()
+        if resp.ret_code != 0:
+            logger.error(f'paging adapters failed with error: {resp.error}')
+            raise next(err for err in resp.error if err is not None)
 
     def forward(self, inputs: Dict, swap_in_map: Dict[int, int],
                 swap_out_map: Dict[int, int]):

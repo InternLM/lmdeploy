@@ -132,8 +132,8 @@ class CacheEngine:
     def allocate_cpu_cache(self):
         """allocate caches on Host."""
         cpu_cache: List[KVCache] = []
-        key_block_shape = self.get_key_block_shape()
-        value_block_shape = self.get_value_block_shape()
+        key_block_shape = self.get_key_block_shape(local=True)
+        value_block_shape = self.get_value_block_shape(local=True)
 
         # TODO: pin memory might need be banned on wsl
         pin_memory = True

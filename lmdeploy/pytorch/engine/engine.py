@@ -137,9 +137,6 @@ def _build_model_agent(model_path: str,
 def _paging_adapters(adapters: dict, model_agent: BaseModelAgent,
                      scheduler: Scheduler):
     adapters = adapters or dict()
-    if len(adapters) > 0:
-        assert scheduler.cache_config.block_size == 1, (
-            'Load adapter require block_size == 1.')
     weight_maps = []
     for name, path in adapters.items():
         weight_map = scheduler.add_adapter(path, name)
@@ -196,10 +193,9 @@ class Engine:
         # block_size = 1 to enable unified paging
         cache_config = cache_config or CacheConfig(
             block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
-        if adapters is not None:
-            if cache_config.block_size != 1:
-                logger.warning('Lora adapter require block size 1.')
-                cache_config.block_size = 1
+        cache_config = self._update_blocksize(cache_config,
+                                              adapters=adapters,
+                                              tp=tp)
 
         hf_config = AutoConfig.from_pretrained(
             model_path, trust_remote_code=trust_remote_code)
@@ -239,6 +235,18 @@ class Engine:
 
         self._create_buffers()
         self.tokenizer = Tokenizer(model_path)
+
+    def _update_blocksize(self, cache_config: CacheConfig, adapters: List[str],
+                          tp: int):
+        """update blocksize for adapters."""
+        if adapters is None:
+            return cache_config
+
+        if cache_config.block_size != tp:
+            logger.warning('Lora adapter require block size '
+                           f'= tp({tp}).')
+            cache_config.block_size = tp
+        return cache_config
 
     def _create_buffers(self):
         scheduler_config = self.scheduler_config
