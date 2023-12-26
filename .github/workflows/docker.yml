@@ -71,7 +71,7 @@ jobs:
         run: |
           echo $TAG
           docker build . -f docker/Dockerfile -t ${TAG} --no-cache
-          #docker push $TAG
+          docker push $TAG
       - name: Push docker image with released tag
         if: startsWith(github.ref, 'refs/tags/') == true
         run: |
