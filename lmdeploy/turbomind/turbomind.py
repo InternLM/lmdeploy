@@ -806,6 +806,9 @@ class TurboMindInstance:
 
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
+            steps (List[int]): the offset of the k/v cache
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
         """
 
         if len(input_ids) == 0:
