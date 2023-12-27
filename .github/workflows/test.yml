@@ -130,14 +130,13 @@ jobs:
         run: |
           export CONTAINER_ID=$(docker create \
             --rm \
-            --gpus='"device=0,1"' \
+            --gpus='"device=4,5"' \
             --shm-size 16g \
             --cap-add=SYS_PTRACE \
             --cap-add=SYS_ADMIN \
             --security-opt seccomp=unconfined \
-            --name lmdeploy-ci-triton \
+            --name "lmdeploy-ci-triton-$GITHUB_RUN_ID" \
             --workdir /__w/lmdeploy/lmdeploy \
-            --env PIP_CACHE_DIR=/root/.cache/pip \
             --env NCCL_LAUNCH_MODE=GROUP \
             -v $(pwd)/../../:/__w \
             -v ${HF_MODEL}:/root/workspace/hf_model \
@@ -151,12 +150,14 @@ jobs:
           echo "CONTAINER_ID=$CONTAINER_ID"  >> $GITHUB_ENV
       - name: Build lmdeploy from source
         run: |
-          docker exec $CONTAINER_ID cp -r ../../build build
+          docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
             --env HTTP_PROXY=${{secrets.PROXY}} \
             --env HTTPS_PROXY=${{secrets.PROXY}} \
+            --env no_proxy="localhost,127.0.0.1" \
+            --env NO_PROXY="localhost,127.0.0.1" \
             $CONTAINER_ID  cmake .. \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
@@ -198,21 +199,27 @@ jobs:
             --dst-path /root/workspace/workdir/${TB_MODEL}
       - name: Start triton server service
         run: |
-          docker exec --detach $CONTAINER_ID \
-            tritonserver \
+          docker exec --detach $CONTAINER_ID bash -c \
+            "tritonserver \
             --model-repository=/root/workspace/workdir/${TB_MODEL}/model_repository \
             --allow-http=0 \
             --allow-grpc=1 \
             --grpc-port=${GRPC_PORT} \
-            --log-verbose=0 \
-            --allow-metrics=1
+            --log-verbose=1 \
+            --allow-metrics=1 > run.log 2>&1 ; touch finish.txt"
           # wait for triton server to fully start up
           sleep 180s
+          # print triton server log file
+          cat run.log
+          python3 -c 'import os; assert not os.path.exists("finish.txt"), "Failed to start tritonserver"'
       - name: Test triton server
         run: |
           docker exec \
             --env no_proxy="localhost,127.0.0.1" \
+            --env NO_PROXY="localhost,127.0.0.1" \
             $CONTAINER_ID python3 .github/scripts/test_triton_server.py --port ${GRPC_PORT}
+          # print triton server log file
+          cat run.log
       - name: Clear workfile
         if: always()
         run: |
