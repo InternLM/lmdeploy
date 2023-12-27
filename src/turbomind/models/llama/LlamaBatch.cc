@@ -60,6 +60,21 @@ void ClearState(BatchState& s)
     s.size = s.active_size = 0;
 }
 
+void DropEmbeddings(const Sequence& seq)
+{
+    int    seq_len = seq.tokens.size();
+    int    num_emb = seq.input_embeddings.size();
+    size_t sz      = num_emb;
+    for (; sz >= 1; sz--) {
+        if (seq.input_embedding_ranges[sz - 1].second <= seq_len) {
+            break;
+        }
+    }
+    // should we keep part of embedding?
+    seq.input_embeddings.resize(sz);
+    seq.input_embedding_ranges.resize(sz);
+}
+
 template<typename T>
 void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_reqs)
 {
@@ -234,6 +249,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
             if (step <= seq.tokens.size()) {
                 seq.tokens.resize(step);
                 seq.cache_len = std::min(seq.cache_len, step);
+                DropEmbeddings(seq);
             }
             else if (rank_ == 0) {
                 TM_LOG_WARNING(
@@ -256,6 +272,59 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         // copy input tokens
         if (input_length) {
             output_ids = Copy(input_ids, input_length, output_ids);
+        }
+
+        // copy input embeddings
+        if (r->inputs[rank_].isExist("input_embedding_ranges")) {
+            const auto range_tensor = r->inputs[rank_].at("input_embedding_ranges");
+            const auto emb_tensor   = r->inputs[rank_].at("input_embeddings");
+            const int* ranges       = range_tensor.getPtr<int>();
+
+            auto check_embeddings = [&](int& num_valid_embeddings) {
+                if (range_tensor.shape.size() != 3 || range_tensor.shape[2] % 2 != 0) {
+                    return false;
+                }
+                int embedding_count  = range_tensor.shape[1];
+                int embedding_length = 0;
+                int pre_end          = -1;
+
+                for (size_t i = 0; i < embedding_count; i++) {
+                    int begin = ranges[i * 2];
+                    int end   = ranges[i * 2 + 1];
+                    embedding_length += (end - begin);
+                    if (begin < 0 || end < 0) {
+                        break;
+                    }
+                    if (begin >= end || end > input_length || begin < pre_end
+                        || embedding_length * model_->hidden_units_ * sizeof(T) > emb_tensor.shape[1]) {
+                        return false;
+                    }
+                    pre_end              = end;
+                    num_valid_embeddings = i + 1;
+                }
+                return true;
+            };
+
+            int num_valid_embeddings = 0;
+            if (!check_embeddings(num_valid_embeddings)) {
+                TM_LOG_WARNING("[ImageFeature] Skip invalid input embeddings, id = %ld, input_length = %d, "
+                               "input embeddings = %s, range_tensor = %s",
+                               (long)seq.id,
+                               input_length,
+                               emb_tensor.toString().c_str(),
+                               range_tensor.toString().c_str());
+            }
+            else {
+                char* emb_tensor_ptr = emb_tensor.getPtr<char>();
+                for (size_t i = 0; i < num_valid_embeddings; i++) {
+                    int    begin = ranges[i * 2];
+                    int    end   = ranges[i * 2 + 1];
+                    size_t count = (end - begin) * model_->hidden_units_ * sizeof(T);
+                    seq.input_embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
+                    seq.input_embedding_ranges.emplace_back(begin + seq.tokens.size(), end + seq.tokens.size());
+                    emb_tensor_ptr += count;
+                }
+            }
         }
 
         // total context length (history + input)
@@ -996,9 +1065,10 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 }
 
 template<typename T>
-void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_output,
-                                        const std::vector<int>& indices,
-                                        const std::vector<int>& lengths)
+void LlamaBatch<T>::OutputContextLogits(T*                                  context_decoder_output,
+                                        const std::vector<int>&             indices,
+                                        const std::vector<int>&             lengths,
+                                        const std::vector<const Sequence*>& sequences)
 {
     std::vector<float*> output_logits;
     int                 num_token = 0;
@@ -1006,7 +1076,11 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
         bool is_return_logits = false;
         for (int k = 0; k < indices.size(); ++k) {
             auto& request = state_->requests[indices[k]];
-            output_logits.push_back(request->outputs[rank_].getPtr<float>("logits", nullptr));
+            auto  logits  = request->outputs[rank_].getPtr<float>("logits", nullptr);
+            if (logits && sequences[k]->cache_len + lengths[k] <= sequences[k]->tokens.size()) {
+                logits = nullptr;
+            }
+            output_logits.push_back(logits);
             num_token += lengths[k];
             if (output_logits.back()) {
                 is_return_logits = true;
@@ -1036,7 +1110,18 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
 
     for (int k = 0; k < indices.size(); ++k) {
         if (output_logits[k]) {
-            Copy(logits, model_->vocab_size_ * lengths[k], output_logits[k]);
+            auto src_ptr       = logits;
+            auto dst_ptr       = output_logits[k];
+            int  num_new_token = 0;
+            if (sequences[k]->cache_len < sequences[k]->tokens.size()) {
+                num_new_token = sequences[k]->cache_len + lengths[k] - sequences[k]->tokens.size();
+                src_ptr += (lengths[k] - num_new_token) * model_->vocab_size_;
+            }
+            else {
+                num_new_token = lengths[k];
+                dst_ptr += (sequences[k]->cache_len - sequences[k]->tokens.size()) * model_->vocab_size_;
+            }
+            Copy(src_ptr, model_->vocab_size_ * num_new_token, dst_ptr);
         }
         logits += model_->vocab_size_padded_ * lengths[k];
     }
@@ -1422,6 +1507,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
         std::vector<int> decode_indices{};
         std::vector<int> decode_lengths{};
 
+        std::vector<const Sequence*> sequences;
+
         BatchedCopy batched_copy;
         for (int i = first; i < last; ++i) {
             input_ids = batched_copy.Add(input_d_ptrs[i], h_input_length_buf_[i], input_ids);
@@ -1438,6 +1525,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
             }
             decode_indices.push_back(i);
             decode_lengths.push_back(h_input_length_buf_[i]);
+            sequences.push_back(state_->sequences[i]);
             max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
         }
         int token_count = input_ids - context_decoder_ids_buf_;
@@ -1484,11 +1572,13 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                                pf_batch_size,
                                max_input_len,
                                max_context_cnts[p],
-                               max_context_cnts[p]);
+                               max_context_cnts[p],
+                               h_input_length_buf_ + first,
+                               sequences.data());
 
         if (iter == 0) {
             // compute logits of inputs if requested
-            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
         }
     }
 
@@ -1557,5 +1647,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
 template class LlamaBatch<half>;
 template class LlamaBatch<float>;
+#ifdef ENABLE_BF16
+template class LlamaBatch<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

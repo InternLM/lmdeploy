@@ -12,7 +12,7 @@
 lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
 ```
 
-我们一共提供四个 restful api，其中三个仿照 OpenAI 的形式。
+我们提供的 restful api，其中三个仿照 OpenAI 的形式。
 
 - /v1/chat/completions
 - /v1/models
@@ -56,7 +56,7 @@ LMDeploy 的 `/v1/chat/interactive` api 支持将对话内容管理在服务端�
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
 api_client = APIClient('http://{server_ip}:{server_port}')
-for item in api_client.generate(prompt='hi'):
+for item in api_client.chat_interactive_v1(prompt='hi'):
     print(item)
 ```
 
@@ -152,3 +152,5 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 3. 当同一个 `session_id` 的请求给 `/v1/chat/interactive` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
 
 4. `/v1/chat/interactive` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
+
+5. 如需调整会话默认的其他参数，比如 system 等字段的内容，可以直接将[对话模板](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py)初始化参数传入。比如 internlm-chat-7b 模型，可以通过启动`api_server`时，设置`--meta_instruction`参数。

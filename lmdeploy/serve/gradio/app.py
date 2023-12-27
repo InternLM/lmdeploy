@@ -6,6 +6,7 @@ def run(model_path_or_server: str,
         server_port: int = 6006,
         batch_size: int = 32,
         tp: int = 1,
+        model_name: str = None,
         **kwargs):
     """chat with AI assistant through web ui.
 
@@ -31,8 +32,13 @@ def run(model_path_or_server: str,
             run_triton_server(model_path_or_server, server_name, server_port)
     else:
         from lmdeploy.serve.gradio.turbomind_coupled import run_local
-        run_local(model_path_or_server, server_name, server_port, batch_size,
-                  tp, **kwargs)
+        run_local(model_path_or_server,
+                  model_name=model_name,
+                  server_name=server_name,
+                  server_port=server_port,
+                  batch_size=batch_size,
+                  tp=tp,
+                  **kwargs)
 
 
 if __name__ == '__main__':

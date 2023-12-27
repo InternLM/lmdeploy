@@ -117,15 +117,15 @@ pip install lmdeploy
 
 To use TurboMind inference engine, you need to first convert the model into TurboMind format. Currently, we support online conversion and offline conversion. With online conversion, TurboMind can load the Huggingface model directly. While with offline conversion, you should save the converted model first before using it.
 
-The following use [internlm/internlm-chat-7b-v1_1](https://huggingface.co/internlm/internlm-chat-7b-v1_1) as a example to show how to use turbomind with online conversion. You can refer to [load_hf.md](docs/en/load_hf.md) for other methods.
+The following use [internlm/internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) as a example to show how to use turbomind with online conversion. You can refer to [load_hf.md](docs/en/load_hf.md) for other methods.
 
 #### Inference by TurboMind
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
+lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
 ```
 
-> **Note**<br /> The internlm/internlm-chat-7b-v1_1 model will be downloaded under `.cache` folder. You can also use a local path here.
+> **Note**<br /> The internlm/internlm-chat-7b model will be downloaded under `.cache` folder. You can also use a local path here.
 
 > **Note**<br />
 > When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. <br />
@@ -141,7 +141,7 @@ lmdeploy chat turbomind internlm/internlm-chat-7b-v1_1 --model-name internlm-cha
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve gradio internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b
+lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -154,7 +154,7 @@ Launch inference server by:
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server internlm/internlm-chat-7b-v1_1 --model-name internlm-chat-7b --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b --model-name internlm-chat-7b --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
@@ -184,7 +184,7 @@ For detailed instructions on Inference pytorch models, see [here](docs/en/pytorc
 ```shell
 lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
-    --temperture 0.8 \
+    --temperature 0.8 \
     --top_p 0.95 \
     --seed 0
 ```
@@ -195,7 +195,7 @@ lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL \
 deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
     $NAME_OR_PATH_TO_HF_MODEL \
     --max_new_tokens 64 \
-    --temperture 0.8 \
+    --temperature 0.8 \
     --top_p 0.95 \
     --seed 0
 ```

@@ -30,6 +30,7 @@ enum class WeightType : int
     kFP32,
     kFP16,
     kFP8,  // not supported yet
+    kBF16,
     kINT8,
     kINT4
 };
@@ -43,6 +44,8 @@ inline size_t getBitSize(WeightType type)
             return 16;
         case WeightType::kFP8:
             return 8;
+        case WeightType::kBF16:
+            return 16;
         case WeightType::kINT8:
             return 8;
         case WeightType::kINT4:

@@ -10,7 +10,7 @@ from configparser import ConfigParser
 from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Union
 
 import numpy as np
 import torch
@@ -22,7 +22,8 @@ from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
-from .deploy.converter import get_model_format, supported_formats
+from .deploy.converter import (get_model_format, supported_formats,
+                               update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 from .utils import (ModelSource, check_tm_model_input, create_hf_download_args,
@@ -246,6 +247,12 @@ class TurboMind:
             output_format = 'w4'
             data_type = 'int4'
             assert group_size > 0, f'group_size: {group_size} should > 0'
+        else:
+            output_format = update_output_format(model_name,
+                                                 inferred_model_format,
+                                                 model_path, output_format)
+            data_type = output_format
+            update_config_weight_type(output_format, cfg)
 
         self.config = cfg
         self.model_name = model_name
@@ -457,53 +464,24 @@ class TurboMindInstance:
             t.start()
             self.threads[device_id] = t
 
-    async def async_stream_infer(self, *args, **kwargs):
-        """Async wrapper of self.stream_infer."""
-        for output in self.stream_infer(*args, **kwargs):
-            # Allow the pipeline add new requests into the queue.
-            await asyncio.sleep(0)
-            yield output
-
-    def stream_infer(self,
-                     session_id,
-                     input_ids,
-                     request_output_len: int = 512,
-                     sequence_start: bool = True,
-                     sequence_end: bool = False,
-                     step=0,
-                     stop=False,
-                     top_p=0.8,
-                     top_k=40,
-                     temperature=0.8,
-                     repetition_penalty=1.0,
-                     ignore_eos=False,
-                     random_seed=None,
-                     stream_output=False):
-        """Perform model inference.
-
-        Args:
-            session_id (int): the id of a session
-            input_ids (numpy.ndarray): the token ids of a prompt
-            request_output_len (int): the max number of to-be-generated tokens
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-            top_k (int): The number of the highest probability vocabulary
-              tokens to keep for top-k-filtering
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-              1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
-            random_seed (int): seed used by sampling
-            stream_output (bool): indicator for stream output
-        """
-        if stream_output and not stop:
-            self.model_insts[0].register_callback(self._forward_callback)
-
+    def prepare_inputs(self,
+                       session_id,
+                       input_ids,
+                       input_embeddings=None,
+                       input_embedding_ranges=None,
+                       request_output_len: int = 512,
+                       sequence_start: bool = True,
+                       sequence_end: bool = False,
+                       step=0,
+                       stop=False,
+                       top_p=0.8,
+                       top_k=40,
+                       temperature=0.8,
+                       repetition_penalty=1.0,
+                       ignore_eos=False,
+                       random_seed=None,
+                       stream_output=False):
+        """Convert inputs format."""
         if len(input_ids) == 0:
             input_ids = [[]]
         if isinstance(input_ids[0], int):
@@ -552,6 +530,44 @@ class TurboMindInstance:
             CORRID=np.array(session_id, dtype=np.uint64),
             STOP=_broadcast_np((1 if stop else 0), np.int32))
 
+        if input_embeddings is not None:
+            assert len(input_embeddings) == len(input_embedding_ranges)
+            if isinstance(input_embeddings[0], np.ndarray):
+                input_embeddings = [input_embeddings]
+                input_embedding_ranges = [input_embedding_ranges]
+            # convert to lookup table type
+            if self.tm_model.config.weight_type == 'fp32':
+                input_embeddings = [[x.astype(np.float32) for x in y]
+                                    for y in input_embeddings]
+            elif self.tm_model.config.weight_type == 'bf16':
+                input_embeddings = [[
+                    torch.from_numpy(x).bfloat16().view(torch.half).numpy()
+                    for x in y
+                ] for y in input_embeddings]
+            else:
+                input_embeddings = [[x.astype(np.float16) for x in y]
+                                    for y in input_embeddings]
+
+            input_embeddings = [[torch.from_numpy(x).squeeze() for x in y]
+                                for y in input_embeddings]
+            input_embeddings = [torch.cat(x) for x in input_embeddings]
+            input_embeddings = pad_sequence(input_embeddings, batch_first=True)
+            input_embeddings = input_embeddings.reshape(
+                input_embeddings.shape[0], -1).view(torch.int8)
+
+            _input_embedding_ranges = []
+            for x in input_embedding_ranges:
+                if x is not None and len(x) != 0:
+                    _input_embedding_ranges.append(torch.IntTensor(x))
+                else:
+                    _input_embedding_ranges.append(torch.IntTensor(size=(0,
+                                                                         2)))
+            input_embedding_ranges = pad_sequence(_input_embedding_ranges,
+                                                  batch_first=True,
+                                                  padding_value=-1)
+            inputs['input_embeddings'] = input_embeddings
+            inputs['input_embedding_ranges'] = input_embedding_ranges
+
         if ignore_eos:
             stop_words = None
             bad_words = torch.tensor([[[self.eos_id], [1]]], dtype=torch.int32)
@@ -566,8 +582,184 @@ class TurboMindInstance:
 
         if random_seed is not None:
             inputs['random_seed'] = _broadcast_np(random_seed, np.uint64)
-        tm_inputs = _np_dict_to_tm_dict(inputs)
+        return inputs, input_lengths
 
+    async def async_stream_infer(self,
+                                 session_id,
+                                 input_ids,
+                                 input_embeddings=None,
+                                 input_embedding_ranges=None,
+                                 request_output_len: int = 512,
+                                 sequence_start: bool = True,
+                                 sequence_end: bool = False,
+                                 step=0,
+                                 stop=False,
+                                 top_p=0.8,
+                                 top_k=40,
+                                 temperature=0.8,
+                                 repetition_penalty=1.0,
+                                 ignore_eos=False,
+                                 random_seed=None,
+                                 stream_output=False):
+        """Perform model inference.
+
+        Args:
+            session_id (int): the id of a session
+            input_ids (numpy.ndarray): the token ids of a prompt
+            input_embeddings (List[numpy.ndarray]): embeddings features
+            input_embedding_ranges (List[Tuple[int,int]]): the begin/end
+              offsets of input_embeddings to input_ids
+            request_output_len (int): the max number of to-be-generated tokens
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
+            step (int): the offset of the k/v cache
+            stop (bool): indicator for cancelling the session
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+            are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+              1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+            random_seed (int): seed used by sampling
+            stream_output (bool): indicator for stream output
+        """
+        if stream_output and not stop:
+            self.model_insts[0].register_callback(self._forward_callback)
+        inputs, input_lengths = self.prepare_inputs(
+            session_id=session_id,
+            input_ids=input_ids,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
+            request_output_len=request_output_len,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            step=step,
+            stop=stop,
+            top_p=top_p,
+            top_k=top_k,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            ignore_eos=ignore_eos,
+            random_seed=random_seed,
+            stream_output=stream_output)
+
+        tm_inputs = _np_dict_to_tm_dict(inputs)
+        # start forward thread
+        self.que = Queue()
+        self._forward_thread(tm_inputs)
+
+        seq_start = input_lengths + input_lengths.new_tensor(step)
+
+        # generator
+        while True:
+            # Thanks for https://github.com/frankxyy and his issue
+            # https://github.com/InternLM/lmdeploy/issues/832
+            while self.que.qsize() == 0:
+                await asyncio.sleep(0.002)  # sleep(0) makes server unstable
+
+            while self.que.qsize() > 1:
+                self.que.get()
+
+            finish, tm_outputs = self.que.get()
+
+            outputs = _tm_dict_to_torch_dict(tm_outputs)
+
+            output_ids = outputs['output_ids'][:, 0, :]
+            sequence_length = outputs['sequence_length'].long()[:, 0]
+            output_ids = [
+                output_id[s:l] for output_id, s, l in zip(
+                    output_ids, seq_start, sequence_length)
+            ]
+            sequence_length -= seq_start.to(sequence_length.device)
+
+            outputs = []
+            for output, len_ in zip(output_ids, sequence_length):
+                output, len_ = output, len_.item()
+                if len(output) > 0 and output[-1].item(
+                ) == self.eos_id and not ignore_eos:
+                    outputs.append((output[:-1], len_ - 1))
+                elif len(output) > 0 and output[-1].item() in self.stop_tokens:
+                    outputs.append((output[:-1], len_))
+                else:
+                    outputs.append((output, len_))
+            yield outputs
+
+            if finish:
+                for t in self.threads:
+                    t.join()
+                while self.que.qsize() > 0:
+                    self.que.get()
+                break
+
+        if stream_output and not stop:
+            self.model_insts[0].unregister_callback()
+
+    def stream_infer(self,
+                     session_id,
+                     input_ids,
+                     input_embeddings=None,
+                     input_embedding_ranges=None,
+                     request_output_len: int = 512,
+                     sequence_start: bool = True,
+                     sequence_end: bool = False,
+                     step=0,
+                     stop=False,
+                     top_p=0.8,
+                     top_k=40,
+                     temperature=0.8,
+                     repetition_penalty=1.0,
+                     ignore_eos=False,
+                     random_seed=None,
+                     stream_output=False):
+        """Perform model inference.
+
+        Args:
+            session_id (int): the id of a session
+            input_ids (numpy.ndarray): the token ids of a prompt
+            input_embeddings (List[numpy.ndarray]): embeddings features
+            input_embedding_ranges (List[Tuple[int,int]]): the begin/end
+              offsets of input_embeddings to input_ids
+            request_output_len (int): the max number of to-be-generated tokens
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
+            step (int): the offset of the k/v cache
+            stop (bool): indicator for cancelling the session
+            top_p (float): If set to float < 1, only the smallest set of most
+              probable tokens with probabilities that add up to top_p or higher
+            are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+              tokens to keep for top-k-filtering
+            temperature (float): to modulate the next token probability
+            repetition_penalty (float): The parameter for repetition penalty.
+              1.0 means no penalty
+            ignore_eos (bool): indicator for ignoring eos
+            random_seed (int): seed used by sampling
+            stream_output (bool): indicator for stream output
+        """
+        if stream_output and not stop:
+            self.model_insts[0].register_callback(self._forward_callback)
+        inputs, input_lengths = self.prepare_inputs(
+            session_id=session_id,
+            input_ids=input_ids,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges,
+            request_output_len=request_output_len,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            step=step,
+            stop=stop,
+            top_p=top_p,
+            top_k=top_k,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            ignore_eos=ignore_eos,
+            random_seed=random_seed,
+            stream_output=stream_output)
+
+        tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
         self.que = Queue()
         self._forward_thread(tm_inputs)
@@ -613,17 +805,27 @@ class TurboMindInstance:
         if stream_output and not stop:
             self.model_insts[0].unregister_callback()
 
-    def decode(self, input_ids):
+    def decode(self,
+               input_ids,
+               steps: List[int] = None,
+               sequence_start: bool = True,
+               sequence_end: bool = True):
         """Perform context decode on input tokens.
 
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
+            steps (List[int]): the offset of the k/v cache
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
         """
 
         if len(input_ids) == 0:
             input_ids = [[]]
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
+        if steps is None:
+            steps = [0] * len(input_ids)
+        assert isinstance(steps, List) and len(steps) == len(input_ids)
 
         # append an extra token since input_len-1 tokens will be
         # decoded by context decoder
@@ -644,11 +846,16 @@ class TurboMindInstance:
         input_ids = pad_sequence(input_ids,
                                  batch_first=True,
                                  padding_value=self.eos_id)
+        steps = torch.IntTensor([step for step in steps])
 
         inputs = dict(input_ids=input_ids,
                       input_lengths=input_lengths,
                       request_output_len=_broadcast_np(0, dtype=np.uint32),
-                      is_return_logits=_broadcast_np(1, np.uint32))
+                      is_return_logits=_broadcast_np(1, np.uint32),
+                      START=_broadcast_np((1 if sequence_start else 0),
+                                          np.int32),
+                      END=_broadcast_np((1 if sequence_end else 0), np.int32),
+                      step=steps)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
 
@@ -661,3 +868,83 @@ class TurboMindInstance:
         logits = outputs['logits']
 
         return logits[:, :-1, :]
+
+    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]):
+        """Get perplexity scores given a list of input tokens.
+
+        Args:
+            input_ids (Union[List[int], List[List[int]]]): the batch of input token ids
+        """  # noqa 501
+
+        if len(input_ids) == 0:
+            input_ids = [[]]
+        if isinstance(input_ids[0], int):
+            input_ids = [input_ids]
+
+        max_input_len = 16 * 1024
+        # max_input_len = 16
+        n_max_iter = np.ceil(
+            max([len(input_id)
+                 for input_id in input_ids]) / max_input_len).astype(int)
+
+        device = 'cpu' if n_max_iter > 0 else 'cuda'
+
+        index_range_starts = []
+        index_range_ends = []
+        for input_id in input_ids:
+            index_range_start = np.array(
+                [i * max_input_len for i in range(n_max_iter)])
+            index_range_end = index_range_start + max_input_len
+            index_range_start[index_range_start >= len(input_id)] = len(
+                input_id)
+            index_range_end[index_range_end >= len(input_id)] = len(input_id)
+            index_range_starts.append(index_range_start)
+            index_range_ends.append(index_range_end)
+
+        logits = []
+        for i in range(n_max_iter):
+            steps = [start[i] for start in index_range_starts]
+            _input_ids = [
+                input_id[start[i]:end[i]] for input_id, start, end in zip(
+                    input_ids, index_range_starts, index_range_ends)
+            ]
+            _logits = self.decode(_input_ids,
+                                  steps,
+                                  sequence_start=(i == 0),
+                                  sequence_end=(i == n_max_iter - 1))
+            _logits = _logits.to(device=device)
+            logits.append(_logits)
+
+        # concat logits. Shape is [bsz, seq_len, vocab_size]
+        logits = torch.cat(logits, dim=1)
+
+        # get target ids
+        padding_token_id = -100
+        target_ids = [(_input_ids + [padding_token_id])[1:]
+                      for _input_ids in input_ids]
+        target_ids = [
+            torch.Tensor(torch.LongTensor(_target_ids))
+            for _target_ids in target_ids
+        ]
+        target_ids = pad_sequence(target_ids,
+                                  batch_first=True,
+                                  padding_value=padding_token_id)
+        target_ids = target_ids.to(logits.device)
+        target_mask = target_ids != padding_token_id
+        target_count = torch.sum(target_mask, dim=-1)
+
+        # compute cross entropy loss
+        bsz, seq_len, vocab_size = logits.shape
+        flat_logits = logits.contiguous().view(-1, vocab_size)
+        flat_target_ids = target_ids.contiguous().view(-1)
+        flat_loss_matrix = torch.nn.functional.cross_entropy(
+            flat_logits,
+            flat_target_ids,
+            reduction='none',
+            ignore_index=padding_token_id)
+
+        loss_matrix = flat_loss_matrix.view(bsz, seq_len)
+        loss_sum = torch.sum(loss_matrix * target_mask, dim=1)
+        loss_avg = loss_sum / target_count
+        loss_avg = loss_avg.cpu().numpy()
+        return loss_avg

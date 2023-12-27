@@ -22,7 +22,8 @@ SequenceManager::SequenceManager(size_t      layer_num,
                                  size_t      elem_bits,
                                  int         rank,
                                  IAllocator* allocator):
-    block_seq_len_(block_seq_len)
+    block_seq_len_(block_seq_len),
+    rank_(rank)
 {
     constexpr int kBitsPerByte = 8;
 
@@ -61,7 +62,7 @@ bool SequenceManager::Contains(uint64_t id)
     return sequences_.find(id) != sequences_.end();
 }
 
-void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
+void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
 {
     auto& seq = it->second;
     if (seq.status == Sequence::kCached) {
@@ -72,7 +73,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator it)
         UpdateAndSetUnlock(seq);
     }
     freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
-    sequences_.erase(it);
+    it = sequences_.erase(it);
 }
 
 bool SequenceManager::Erase(uint64_t id)

@@ -52,7 +52,10 @@ class TurbomindModelConfig:
     step_length: int = 1
     cache_max_entry_count: float = 0.5
     cache_block_seq_len: int = 128
-    cache_chunk_size: int = 1
+    cache_chunk_size: int = -1
+    num_tokens_per_iter: int = 0
+    max_prefill_iters: int = 1
+    extra_tokens_per_iter: int = 0
     use_context_fmha: int = 1
     quant_policy: int = 0
     max_position_embeddings: int = 0
@@ -81,6 +84,20 @@ class TurbomindModelConfig:
             if v is None:
                 return False
         return True
+
+
+def _weight_dtype_map(weight_type: str, default=None):
+    """get weight dtype map."""
+
+    _WEIGHT_DTYPE_MAP = dict(
+        int4=torch.float16,
+        fp16=torch.float16,
+        fp32=torch.float16,
+        bf16=torch.bfloat16
+        if torch.cuda.is_bf16_supported() else torch.float16,
+    )
+
+    return _WEIGHT_DTYPE_MAP.get(weight_type, default)
 
 
 class BaseOutputModel(ABC):
@@ -136,19 +153,27 @@ class BaseOutputModel(ABC):
 
     def export_weight(self, param: torch.Tensor, name: str) -> None:
         """export turbomind weight."""
+
+        def _tofile(tensor, path):
+            """to file."""
+            if tensor.dtype == torch.bfloat16:
+                tensor = tensor.view(torch.half)
+            tensor.contiguous().cpu().numpy().tofile(path)
+
         if self.to_file:
-            if param.dtype in [torch.float, torch.bfloat16]:
-                param = param.half()
+            if torch.is_floating_point(param):
+                torch_type = _weight_dtype_map(self.cfg.weight_type,
+                                               torch.float16)
+                param = param.to(torch_type)
             tprint(name, param.shape)
-            param.contiguous().cpu().numpy().tofile(
-                osp.join(self.out_dir, name))
+            _tofile(param, osp.join(self.out_dir, name))
         elif len(self.tm_params) > 0:
             tm_params = self.tm_params
             weight_type = self.cfg.weight_type
-            assert weight_type in ['fp16', 'fp32', 'int4']
+            assert weight_type in ['fp16', 'fp32', 'bf16', 'int4']
 
             # currently, the tensor type should in
-            # [torch.float, torch.half, torch.int32]
+            # [torch.float, torch.half, torch.bfloat16, torch.int32]
             torch_tensor = param.cuda().contiguous()
             assert torch_tensor.dtype in [
                 torch.int32, torch.float, torch.half, torch.bfloat16
@@ -156,6 +181,8 @@ class BaseOutputModel(ABC):
             if torch_tensor.dtype != torch.int32:
                 if weight_type in ['fp16', 'int4']:
                     torch_tensor = torch_tensor.half()
+                elif weight_type == 'bf16':
+                    torch_tensor = torch_tensor.bfloat16()
                 else:
                     torch_tensor = torch_tensor.float()
             for tm_tensor in tm_params[name]:

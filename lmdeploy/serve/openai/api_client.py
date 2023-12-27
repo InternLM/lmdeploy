@@ -28,6 +28,7 @@ class APIClient:
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
         self.models_v1_url = f'{api_server_url}/v1/models'
+        self.encode_v1_url = f'{api_server_url}/v1/encode'
         self._available_models = None
 
     @property
@@ -42,6 +43,31 @@ class APIClient:
             self._available_models = [item['id'] for item in model_list]
             return self._available_models
         return None
+
+    def encode(self,
+               input: Union[str, List[str]],
+               do_preprocess: Optional[bool] = False,
+               add_bos: Optional[bool] = True):
+        """Encode prompts.
+
+        Args:
+            input: the prompt to be encoded. In str or List[str] format.
+            do_preprocess: whether do preprocess or not. Default to False.
+            add_bos: True when it is the beginning of a conversation. False
+                when it is not. Default to True.
+        Return: (input_ids, length)
+        """
+        headers = {'content-type': 'application/json'}
+        response = requests.post(self.encode_v1_url,
+                                 headers=headers,
+                                 json=dict(input=input,
+                                           do_preprocess=do_preprocess,
+                                           add_bos=add_bos),
+                                 stream=False)
+        if hasattr(response, 'text'):
+            output = json.loads(response.text)
+            return output['input_ids'], output['length']
+        return None, None
 
     def chat_completions_v1(self,
                             model: str,
@@ -179,6 +205,7 @@ class APIClient:
             max_tokens: Optional[int] = 16,
             stream: Optional[bool] = False,
             top_p: Optional[float] = 1.0,
+            top_k: Optional[int] = 40,
             user: Optional[str] = None,
             # additional argument of lmdeploy
             repetition_penalty: Optional[float] = 1.0,
@@ -197,6 +224,8 @@ class APIClient:
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
                 higher are kept for generation.
+            top_k (int): The number of the highest probability vocabulary
+                tokens to keep for top-k-filtering
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
@@ -315,7 +344,9 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            interactive_mode: bool = False,
                            ignore_eos: bool = False,
-                           stop: bool = False) -> Iterable[List[str]]:
+                           stop: bool = False,
+                           top_p: float = 0.8,
+                           temperature: float = 0.7) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
     pload = {
         'prompt': prompt,
@@ -324,7 +355,9 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'interactive_mode': interactive_mode,
         'ignore_eos': ignore_eos,
-        'stop': stop
+        'stop': stop,
+        'top_p': top_p,
+        'temperature': temperature
     }
     response = requests.post(api_url,
                              headers=headers,

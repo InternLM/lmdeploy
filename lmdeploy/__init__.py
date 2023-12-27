@@ -1,4 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
+from lmdeploy.api import client, pipeline, serve
+
+__all__ = ['pipeline', 'serve', 'client']
+
+
 def bootstrap():
     import os
     import sys
