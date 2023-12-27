@@ -205,7 +205,7 @@ jobs:
             --allow-http=0 \
             --allow-grpc=1 \
             --grpc-port=${GRPC_PORT} \
-            --log-verbose=1 \
+            --log-verbose=0 \
             --allow-metrics=1 > run.log 2>&1 ; touch finish.txt"
           # wait for triton server to fully start up
           sleep 180s
