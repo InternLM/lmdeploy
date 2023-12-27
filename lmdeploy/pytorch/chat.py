@@ -75,10 +75,10 @@ def main(
     if adapter is not None:
         adapter_name = 'default'
         adapter = {adapter_name: adapter}
-    tm_model = tm.Engine(model_path,
-                         tp=tp,
-                         trust_remote_code=trust_remote_code,
-                         adapters=adapter)
+    tm_model = tm.Engine.from_pretrained(model_path,
+                                         tp=tp,
+                                         trust_remote_code=trust_remote_code,
+                                         adapters=adapter)
     generator = tm_model.create_instance()
 
     nth_round = 1

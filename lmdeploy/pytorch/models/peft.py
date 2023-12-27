@@ -6,6 +6,7 @@ import torch.distributed as dist
 
 from ..kernels.mbgmm import mbgmm_a, mbgmm_b
 from ..kernels.mbgmv import mbgmv_a, mbgmv_b
+from ..kernels.rearange_all_gather import rearange_all_gather
 
 
 @dataclass
@@ -187,6 +188,16 @@ class LoRALinear(torch.nn.Module):
                          max_rank=lora_input.max_rank,
                          rank_step=world_size)
             gathered_xa = __gather_xa(xa)
+            if len(lora_input.ranks) > 1:
+                gathered_xa = rearange_all_gather(
+                    gathered_xa,
+                    b_start_loc=lora_input.b_start_loc,
+                    b_seq_lens=lora_input.b_seq_lens,
+                    adapter_ids=lora_input.b_adapter_ids,
+                    ranks=lora_input.ranks,
+                    world_size=world_size,
+                    max_seq_len=lora_input.max_seq_len,
+                )
             lora_out = mbgmm_b(gathered_xa,
                                lora_input.b_cache,
                                b_start_loc=lora_input.b_start_loc,
@@ -208,6 +219,16 @@ class LoRALinear(torch.nn.Module):
                          max_rank=lora_input.max_rank,
                          rank_step=world_size)
             gathered_xa = __gather_xa(xa)
+            if len(lora_input.ranks) > 1:
+                gathered_xa = rearange_all_gather(
+                    gathered_xa,
+                    b_start_loc=lora_input.b_start_loc,
+                    b_seq_lens=lora_input.b_seq_lens,
+                    adapter_ids=lora_input.b_adapter_ids,
+                    ranks=lora_input.ranks,
+                    world_size=world_size,
+                    max_seq_len=lora_input.max_seq_len,
+                )
             lora_out = mbgmv_b(gathered_xa,
                                lora_input.b_cache,
                                b_adapter_ids=lora_input.b_adapter_ids,

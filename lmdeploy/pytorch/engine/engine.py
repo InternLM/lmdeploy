@@ -236,6 +236,46 @@ class Engine:
         self._create_buffers()
         self.tokenizer = Tokenizer(model_path)
 
+    @classmethod
+    def from_pretrained(cls,
+                        pretrained_model_name_or_path: str,
+                        scheduler_config: SchedulerConfig = None,
+                        cache_config: CacheConfig = None,
+                        tp: int = 1,
+                        model_name: str = None,
+                        adapters: dict = None,
+                        trust_remote_code=True,
+                        **kwargs):
+        """lmdeploy python inference engine.
+
+        Args:
+            pretrained_model_name_or_path (str):
+                It could be one of the following options:
+                    - i) A local directory path of a turbomind model which is
+                      converted by `lmdeploy convert` command or download from
+                      ii) and iii)
+                    - ii) The model_id of a lmdeploy-quantized model hosted
+                      inside a model repo on huggingface.co, such as
+                      "InternLM/internlm-chat-20b-4bit",
+                      "lmdeploy/llama2-chat-70b-4bit", etc.
+                    - iii) The model_id of a model hosted inside a model repo
+                      on huggingface.co, such as "InternLM/internlm-chat-7b",
+                      "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                      and so on.
+            scheduler_config (SchedulerConfig): The config of the scheduler.
+            cache_config (CacheConfig): The config of the cache info.
+            tp (int): Number of tensor parallel.
+            model_name (str): needed when pretrained_model_name_or_path is c)
+            adapters (dict): named lora adapters.
+        """
+        return cls(model_path=pretrained_model_name_or_path,
+                   scheduler_config=scheduler_config,
+                   cache_config=cache_config,
+                   tp=tp,
+                   model_name=model_name,
+                   adapters=adapters,
+                   trust_remote_code=trust_remote_code)
+
     def _update_blocksize(self, cache_config: CacheConfig, adapters: List[str],
                           tp: int):
         """update blocksize for adapters."""
