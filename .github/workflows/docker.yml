@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       repo_ref:
-        required: true
+        required: false
         description: 'Set branch or tag or commit id. Default is ""'
         type: string
         default: ''
