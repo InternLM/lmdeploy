@@ -20,7 +20,7 @@ on:
         required: false
         description: 'Set branch or tag or commit id. Default is ""'
         type: string
-        default: ''
+        default: 'main'
       image_tag:
         required: true
         description: 'Set docker image tag. Default is "latest"'

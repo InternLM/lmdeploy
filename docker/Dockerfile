@@ -7,8 +7,9 @@ RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -
 RUN cd /opt && python3 -m venv py38
 ENV PATH=/opt/py38/bin:$PATH
 
-RUN python3 -m pip install --no-cache-dir pip install torch==2.1.1 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cu118
-RUN python3 -m pip install --no-cache-dir cmake packaging wheel
+RUN python3 -m pip install --no-cache-dir --upgrade pip &&\
+    python3 -m pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118 &&\
+    python3 -m pip install --no-cache-dir cmake packaging wheel
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
