@@ -2,9 +2,8 @@ FROM nvcr.io/nvidia/tritonserver:22.12-py3
 
 RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -y --no-install-recommends \
     rapidjson-dev libgoogle-glog-dev gdb python3.8-venv \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py38
 
-RUN cd /opt && python3 -m venv py38
 ENV PATH=/opt/py38/bin:$PATH
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip &&\
