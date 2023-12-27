@@ -122,7 +122,7 @@ The following use [internlm/internlm-chat-7b](https://huggingface.co/internlm/in
 #### Inference by TurboMind
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
+lmdeploy chat turbomind internlm/internlm-chat-7b
 ```
 
 > **Note**<br /> The internlm/internlm-chat-7b model will be downloaded under `.cache` folder. You can also use a local path here.
@@ -141,7 +141,7 @@ lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
+lmdeploy serve gradio internlm/internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -154,7 +154,7 @@ Launch inference server by:
 # install lmdeploy with extra dependencies
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server internlm/internlm-chat-7b --model-name internlm-chat-7b --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b --instance_num 32 --tp 1
 ```
 
 Then, you can communicate with it by command line,
