@@ -10,7 +10,7 @@ from configparser import ConfigParser
 from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Union
 
 import numpy as np
 import torch
@@ -797,17 +797,27 @@ class TurboMindInstance:
         if stream_output and not stop:
             self.model_insts[0].unregister_callback()
 
-    def decode(self, input_ids):
+    def decode(self,
+               input_ids,
+               steps: List[int] = None,
+               sequence_start: bool = True,
+               sequence_end: bool = True):
         """Perform context decode on input tokens.
 
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
+            steps (List[int]): the offset of the k/v cache
+            sequence_start (bool): indicator for starting a sequence
+            sequence_end (bool): indicator for ending a sequence
         """
 
         if len(input_ids) == 0:
             input_ids = [[]]
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
+        if steps is None:
+            steps = [0] * len(input_ids)
+        assert isinstance(steps, List) and len(steps) == len(input_ids)
 
         # append an extra token since input_len-1 tokens will be
         # decoded by context decoder
@@ -828,11 +838,16 @@ class TurboMindInstance:
         input_ids = pad_sequence(input_ids,
                                  batch_first=True,
                                  padding_value=self.eos_id)
+        steps = torch.IntTensor([step for step in steps])
 
         inputs = dict(input_ids=input_ids,
                       input_lengths=input_lengths,
                       request_output_len=_broadcast_np(0, dtype=np.uint32),
-                      is_return_logits=_broadcast_np(1, np.uint32))
+                      is_return_logits=_broadcast_np(1, np.uint32),
+                      START=_broadcast_np((1 if sequence_start else 0),
+                                          np.int32),
+                      END=_broadcast_np((1 if sequence_end else 0), np.int32),
+                      step=steps)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
 
@@ -845,3 +860,83 @@ class TurboMindInstance:
         logits = outputs['logits']
 
         return logits[:, :-1, :]
+
+    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]):
+        """Get perplexity scores given a list of input tokens.
+
+        Args:
+            input_ids (Union[List[int], List[List[int]]]): the batch of input token ids
+        """  # noqa 501
+
+        if len(input_ids) == 0:
+            input_ids = [[]]
+        if isinstance(input_ids[0], int):
+            input_ids = [input_ids]
+
+        max_input_len = 16 * 1024
+        # max_input_len = 16
+        n_max_iter = np.ceil(
+            max([len(input_id)
+                 for input_id in input_ids]) / max_input_len).astype(int)
+
+        device = 'cpu' if n_max_iter > 0 else 'cuda'
+
+        index_range_starts = []
+        index_range_ends = []
+        for input_id in input_ids:
+            index_range_start = np.array(
+                [i * max_input_len for i in range(n_max_iter)])
+            index_range_end = index_range_start + max_input_len
+            index_range_start[index_range_start >= len(input_id)] = len(
+                input_id)
+            index_range_end[index_range_end >= len(input_id)] = len(input_id)
+            index_range_starts.append(index_range_start)
+            index_range_ends.append(index_range_end)
+
+        logits = []
+        for i in range(n_max_iter):
+            steps = [start[i] for start in index_range_starts]
+            _input_ids = [
+                input_id[start[i]:end[i]] for input_id, start, end in zip(
+                    input_ids, index_range_starts, index_range_ends)
+            ]
+            _logits = self.decode(_input_ids,
+                                  steps,
+                                  sequence_start=(i == 0),
+                                  sequence_end=(i == n_max_iter - 1))
+            _logits = _logits.to(device=device)
+            logits.append(_logits)
+
+        # concat logits. Shape is [bsz, seq_len, vocab_size]
+        logits = torch.cat(logits, dim=1)
+
+        # get target ids
+        padding_token_id = -100
+        target_ids = [(_input_ids + [padding_token_id])[1:]
+                      for _input_ids in input_ids]
+        target_ids = [
+            torch.Tensor(torch.LongTensor(_target_ids))
+            for _target_ids in target_ids
+        ]
+        target_ids = pad_sequence(target_ids,
+                                  batch_first=True,
+                                  padding_value=padding_token_id)
+        target_ids = target_ids.to(logits.device)
+        target_mask = target_ids != padding_token_id
+        target_count = torch.sum(target_mask, dim=-1)
+
+        # compute cross entropy loss
+        bsz, seq_len, vocab_size = logits.shape
+        flat_logits = logits.contiguous().view(-1, vocab_size)
+        flat_target_ids = target_ids.contiguous().view(-1)
+        flat_loss_matrix = torch.nn.functional.cross_entropy(
+            flat_logits,
+            flat_target_ids,
+            reduction='none',
+            ignore_index=padding_token_id)
+
+        loss_matrix = flat_loss_matrix.view(bsz, seq_len)
+        loss_sum = torch.sum(loss_matrix * target_mask, dim=1)
+        loss_avg = loss_sum / target_count
+        loss_avg = loss_avg.cpu().numpy()
+        return loss_avg
