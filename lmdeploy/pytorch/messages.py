@@ -194,3 +194,5 @@ class SchedulerSequence:
         new_token_ids = torch.cat([history_token_ids[step:], self.token_ids])
         self.history_token_ids = new_history_ids
         self.token_ids = new_token_ids
+
+        self.logical_blocks.reshape_by_tokens(step)
