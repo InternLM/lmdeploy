@@ -110,6 +110,10 @@ class LogicalTokenBlocks:
 
     def reshape_by_tokens(self, num_tokens: int):
         """resize logical blocks by num tokens."""
+        if num_tokens == 0:
+            self._num_real = 0
+            self._last_block_size = 0
+            return
         assert num_tokens <= self.num_tokens()
         self._num_real = _div_up(num_tokens, self._block_size)
         self._last_block_size = num_tokens % self._block_size

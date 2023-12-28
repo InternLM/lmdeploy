@@ -5,14 +5,13 @@ import shutil
 import fire
 import torch
 from torch import nn
-from transformers import AutoTokenizer
 
-from lmdeploy.lite.quantization import CalibrationContext
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
-from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
-                                 load_hf_from_pretrained)
+from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
+
+from .calibrate import calibrate
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -50,58 +49,6 @@ AUTO_MAP = {
 }
 
 
-def calibrate(model,
-              tokenizer,
-              calib_dataset: str = 'c4',
-              calib_samples: int = 128,
-              calib_seqlen: int = 2048,
-              device: str = 'cuda') -> None:
-    """The main function for loading the model and performing calibration on a
-    given dataset.
-
-    Args:
-        model (nn.Module): The transformers model.
-        tokenizer: The corresponding tokenizer.
-        calib_dataset (str, optional): The calibration dataset name.
-            Defaults to 'c4'.
-        calib_samples (int, optional): The number of samples for calibration.
-            Defaults to 128.
-        calib_seqlen (int, optional): The sequence length for calibration.
-            Defaults to 2048.
-        device (str, optional): The device to be used for calculation.
-            Defaults to 'cuda'.
-    """
-
-    assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \
-        'Support only `c4`, `ptb`, `wikitext2` or `pileval`.'
-
-    layer_type = LAYER_TYPE_MAP[type(model).__name__]
-    norm_type = NORM_TYPE_MAP[type(model).__name__]
-
-    print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset,
-                                        tokenizer,
-                                        nsamples=calib_samples,
-                                        seqlen=calib_seqlen)
-
-    # Initialize calibration context
-    calib_ctx = CalibrationContext(model,
-                                   tokenizer,
-                                   layer_type=layer_type,
-                                   norm_type=norm_type,
-                                   device=device)
-
-    with calib_ctx:
-        all_data = torch.cat([
-            data if isinstance(data, torch.Tensor) else data[0]
-            for data in calib_loader
-        ]).to(device)
-        calib_ctx.calibrate(all_data)
-
-    inp_stats = calib_ctx.collect_inputs_stats()
-    return inp_stats
-
-
 def smooth_quant(model: str,
                  work_dir: str = './work_dir',
                  calib_dataset: str = 'c4',
@@ -109,14 +56,12 @@ def smooth_quant(model: str,
                  calib_seqlen: int = 2048,
                  device: str = 'cuda'):
 
-    # Load tokenizer and configuration
-    tokenizer = AutoTokenizer.from_pretrained(model,
-                                              use_fast=False,
-                                              trust_remote_code=True)
-
-    model = load_hf_from_pretrained(model,
-                                    torch_dtype=torch.float16,
-                                    trust_remote_code=True)
+    model, tokenizer, work_dir = calibrate(model, calib_dataset, calib_samples,
+                                           calib_seqlen, work_dir, device)
+    # calibrate function exports the calibration statistics
+    # (inputs, outputs, keys and values) to `work_dir`.
+    inp_stats = torch.load(work_dir / 'inputs_stats.pth')
+    act_scales = inp_stats['absmax']
 
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
@@ -138,10 +83,6 @@ def smooth_quant(model: str,
     norm_type = NORM_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
     norm2fcs = NORM_FCS_MAP[layer_type]
-
-    inp_stats = calibrate(model, tokenizer, calib_dataset, calib_samples,
-                          calib_seqlen, device)
-    act_scales = inp_stats['absmax']
 
     layers = collect_target_modules(model, layer_type)
     fcs = {}
@@ -174,7 +115,9 @@ def smooth_quant(model: str,
     else:
         model.config.auto_map = AUTO_MAP[type(model).__name__]
 
-    model.save_pretrained(work_dir)
+    model.save_pretrained(work_dir,
+                          max_shard_size='2GB',
+                          safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
     shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)

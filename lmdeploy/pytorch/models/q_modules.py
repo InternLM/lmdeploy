@@ -47,7 +47,6 @@ class QRMSNorm(nn.Module):
         eps = mod.variance_epsilon
         q_mod = cls(hidden_size, eps)
         q_mod.weight = nn.Parameter(mod.weight.detach())
-        q_mod.to('cpu')
         return q_mod
 
     def forward(self, hidden_states):
@@ -109,11 +108,10 @@ class QLinear(nn.Module):
                     dtype=mod.weight.dtype)
         weight_quant, scale = per_channel_quant(mod.weight.detach(), 8,
                                                 torch.int8)
-        q_mod.weight = weight_quant
+        q_mod.weight.data = weight_quant
         q_mod.scale = scale
         if mod.bias is not None:
-            q_mod.bias = mod.bias.detach()
-        q_mod.to('cpu')
+            q_mod.bias.data = mod.bias.detach()
         return q_mod
 
     def forward(self, input):

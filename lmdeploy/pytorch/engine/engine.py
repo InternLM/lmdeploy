@@ -227,11 +227,12 @@ class Engine:
         self.session_len = scheduler_config.max_session_len
         self.stream = torch.cuda.Stream()
 
-        self._bind_request_manager()
+        self.req_manager = self._bind_request_manager()
         self.owned_sessions = []
 
         # create main thread
-        self._start_loop()
+        self.loop_threads = self._start_loop()
+        self.req_sender = self.req_manager.build_sender(self.loop_threads)
 
         self._create_buffers()
         self.tokenizer = Tokenizer(model_path)
@@ -304,14 +305,13 @@ class Engine:
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
         req_manager.bind_func(RequestType.ADD_MESSAGE, self._on_add_message)
-        self.req_manager = req_manager
-        self.req_sender = req_manager.build_sender()
+        return req_manager
 
     def _start_loop(self):
         """start loop."""
         loop_threads = Thread(target=self.loop, daemon=True)
         loop_threads.start()
-        self.loop_threads = loop_threads
+        return loop_threads
 
     def _on_add_session(self, reqs: Request, **kwargs):
         """on add session callback."""
@@ -841,13 +841,15 @@ class EngineInstance:
 
     def __init__(self, engine: Engine):
         self.engine = engine
-        self.req_sender = engine.req_manager.build_sender()
+        self.req_sender = engine.req_manager.build_sender(engine.loop_threads)
         self.owned_sessions: List[int] = list()
 
     def __del__(self):
         """Destructor."""
-        for session_id in self.owned_sessions:
-            self.end(session_id)
+        if self.req_sender.is_thread_alive():
+            for session_id in self.owned_sessions:
+                self.end(session_id)
+        self.engine.req_manager.senders.pop(self.req_sender.sender_id)
 
     def _try_add_session(self, session_id: int):
         """Add new session.

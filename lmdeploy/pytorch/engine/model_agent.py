@@ -711,10 +711,30 @@ def _start_tp_process(rank: int,
             func(rank, *args, **kwargs)
     except Exception as e:
         from traceback import print_exc
-
-        logger.error(f'rank[{rank}]: {e}')
+        logger.error(f'Rank[{rank}] failed.')
         print_exc()
         raise e
+
+
+def _queue_get_response(que: mp.Queue,
+                        mp_context: mp.ProcessContext,
+                        interval: float = 1.0):
+    """get response."""
+    from multiprocessing.queues import Empty
+
+    def __check_context_alive():
+        """check context alive."""
+        procs = mp_context.processes
+        for idx, p in enumerate(procs):
+            if not p.is_alive():
+                raise RuntimeError(f'Rank[{idx}] failed.')
+
+    while True:
+        try:
+            return que.get(timeout=interval)
+        except Empty:
+            pass
+        __check_context_alive()
 
 
 class TPModelAgent:
@@ -787,7 +807,7 @@ class TPModelAgent:
             join=False,
             daemon=True,
         )
-        resp: TPResponse = out_que.get()
+        resp: TPResponse = _queue_get_response(out_que, self.mp_context)
         if resp.ret_code != 0:
             logger.error(f'Init tp model failed with error: {resp.error}')
             raise next(err for err in resp.error if err is not None)
@@ -815,7 +835,8 @@ class TPModelAgent:
         with torch.no_grad():
             self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
 
-        resp: TPResponse = self.tp_model_out_que.get()
+        resp: TPResponse = _queue_get_response(self.tp_model_out_que,
+                                               self.mp_context)
         if resp.ret_code != 0:
             raise RuntimeError('tp forward failed.')
 

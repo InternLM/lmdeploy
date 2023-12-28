@@ -171,6 +171,15 @@ def _dist_model(model: torch.nn.Module,
                 new_param = torch.empty_like(param, device=device)
                 model.register_parameter(name, torch.nn.Parameter(new_param))
 
+        for name, param in model.named_buffers(recurse=False):
+            if rank == 0:
+                if device != param.device:
+                    new_param = param.to(device)
+                    model.register_buffer(name, new_param)
+            else:
+                new_param = torch.empty_like(param, device=device)
+                model.register_buffer(name, new_param)
+
     def _dist_params():
         """dist params."""
         if hasattr(model, '_distribute_partition_fn'):

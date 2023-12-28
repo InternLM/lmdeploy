@@ -1,10 +1,14 @@
+fastapi
 fire
 mmengine-lite
 numpy
 peft
 pycuda
+pydantic>2.0.0
 safetensors
 sentencepiece
+shortuuid
 tiktoken
 torch
 transformers>=4.33.0
+uvicorn
