@@ -13,6 +13,7 @@ import numpy as np
 from tqdm import tqdm
 
 from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.turbomind import TurboMind
 
 
 def sample_requests(
@@ -61,17 +62,10 @@ class Engine:
     def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
         # avoid turbomind checking chat template name by setting
         # `model_name='llama'`
-        from lmdeploy.pytorch.engine import Engine
-        tokenizer_model_path = os.path.join(model_path, 'triton_models',
-                                            'tokenizer')
-        if os.path.exists(tokenizer_model_path):
-            from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind(model_path=model_path,
-                                 model_name='llama',
-                                 tp=tp,
-                                 **kwargs)
-        else:
-            tm_model = Engine(model_path, tp=tp, model_name='llama')
+        tm_model = TurboMind(model_path=model_path,
+                             model_name='llama',
+                             tp=tp,
+                             **kwargs)
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
         self.csv = csv
@@ -79,8 +73,6 @@ class Engine:
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
                    stream_output: bool):
-        from lmdeploy.pytorch.engine import Engine
-        from lmdeploy.pytorch.messages import SamplingParam
         model_inst = self.tm_model.create_instance()
         stats = []
         # get each generated token's latency
@@ -93,50 +85,25 @@ class Engine:
             n_prev_token = 0
 
             input_ids = self.tokenizer(prompt).input_ids
-            # TODO: share same stream infer
-            if isinstance(self.tm_model, Engine):
-                sampling_param = SamplingParam(top_k=1,
-                                               top_p=1.0,
-                                               temperature=1.0,
-                                               ignore_eos=True)
-                for outputs in model_inst.stream_infer(
-                        session_id,
-                        input_ids=input_ids,
-                        request_output_len=output_seqlen,
-                        sampling_param=sampling_param):
-                    if len(outputs) > 1:
-                        res, n_token = outputs[-2:]
-                    else:
-                        res, n_token = outputs[0]
-                    self.tokenizer.decode(res, offset)
-                    offset = n_token
-                    now = time.perf_counter()
-                    if n_prev_token != n_token:
-                        _per_token_latency_stats[n_prev_token] = np.round(
-                            now - prev, 3)
-                        n_prev_token = n_token
-                    prev = now
-                model_inst.end(session_id)
-            else:
-                for outputs in model_inst.stream_infer(
-                        session_id,
-                        input_ids=input_ids,
-                        request_output_len=output_seqlen,
-                        temperature=1.0,
-                        top_p=1.0,
-                        sequence_start=True,
-                        sequence_end=True,
-                        ignore_eos=True,
-                        stream_output=stream_output):
-                    res, n_token = outputs[0]
-                    self.tokenizer.decode(res, offset)
-                    offset = n_token
-                    now = time.perf_counter()
-                    if n_prev_token != n_token:
-                        _per_token_latency_stats[n_prev_token] = np.round(
-                            now - prev, 3)
-                        n_prev_token = n_token
-                    prev = now
+            for outputs in model_inst.stream_infer(
+                    session_id,
+                    input_ids=input_ids,
+                    request_output_len=output_seqlen,
+                    temperature=1.0,
+                    top_p=1.0,
+                    sequence_start=True,
+                    sequence_end=True,
+                    ignore_eos=True,
+                    stream_output=stream_output):
+                res, n_token = outputs[0]
+                self.tokenizer.decode(res, offset)
+                offset = n_token
+                now = time.perf_counter()
+                if n_prev_token != n_token:
+                    _per_token_latency_stats[n_prev_token] = np.round(
+                        now - prev, 3)
+                    n_prev_token = n_token
+                prev = now
 
             assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \

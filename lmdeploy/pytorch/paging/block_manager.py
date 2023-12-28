@@ -18,7 +18,8 @@ class LogicalMemory:
 
     def get_physical_blocks(self, logical_address: np.ndarray):
         """get physical address."""
-        if len(logical_address) == 0:
+        if isinstance(logical_address,
+                      np.ndarray) and len(logical_address) == 0:
             return np.empty((0, ), dtype=np.int64)
         return self.phy_map[logical_address]
 
