@@ -197,7 +197,7 @@ class LoRALinear(torch.nn.Module):
                     ranks=lora_input.ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
-                )
+                    output=gathered_xa)
             lora_out = mbgmm_b(gathered_xa,
                                lora_input.b_cache,
                                b_start_loc=lora_input.b_start_loc,
@@ -228,7 +228,7 @@ class LoRALinear(torch.nn.Module):
                     ranks=lora_input.ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
-                )
+                    output=gathered_xa)
             lora_out = mbgmv_b(gathered_xa,
                                lora_input.b_cache,
                                b_adapter_ids=lora_input.b_adapter_ids,

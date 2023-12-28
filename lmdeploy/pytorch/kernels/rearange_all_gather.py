@@ -66,10 +66,14 @@ def _rearange_all_gather_decoding_kernel(X, AdapterIds, Ranks, Out, stride_x,
         tl.store(Out + o_off, x, mask=o_mask)
 
 
-def rearange_all_gather(x: torch.Tensor, b_start_loc: torch.Tensor,
+def rearange_all_gather(x: torch.Tensor,
+                        b_start_loc: torch.Tensor,
                         b_seq_lens: torch.Tensor,
-                        adapter_ids: torch.LongTensor, ranks: torch.Tensor,
-                        world_size: int, max_seq_len: int):
+                        adapter_ids: torch.LongTensor,
+                        ranks: torch.Tensor,
+                        world_size: int,
+                        max_seq_len: int,
+                        output: torch.Tensor = None):
     """rearange all gather."""
 
     def _kernel_meta():
@@ -83,7 +87,8 @@ def rearange_all_gather(x: torch.Tensor, b_start_loc: torch.Tensor,
     batch_size = len(b_seq_lens)
     partition_size = max_rank // world_size
 
-    output = torch.empty_like(x)
+    if output is None:
+        output = torch.empty_like(x)
 
     num_warps = 4
     kernel_meta = _kernel_meta()
