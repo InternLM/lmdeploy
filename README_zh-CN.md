@@ -52,7 +52,7 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 # 性能
 
-LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型上，每秒处理的请求数是 vLLM 的 1.36 ~ 1.85 倍。在静态推理能力方面，TurboMind 4bit 模型推理速度（out token/s) 远高于 FP16/BF16 推理。在小 batch 时，提高到 2.4 倍。
+LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型上，每秒处理的请求数是 vLLM 的 1.36 ~ 1.85 倍。在静态推理能力方面，TurboMind 4bit 模型推理速度（out token/s）远高于 FP16/BF16 推理。在小 batch 时，提高到 2.4 倍。
 
 ![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/f4d218f9-db3b-4ceb-ab50-97cb005b3ac9)
 
@@ -162,7 +162,7 @@ LMDeploy 4bit 量化和推理支持的显卡包括：
 
 量化模型在各型号显卡上的推理速度可以从[这里](./docs/zh_cn/w4a16.md)找到。
 
-### KV Cache INT8 量化
+### KV INT8 量化
 
 [点击这里](./docs/zh_cn/kv_int8.md) 查看 kv int8 使用方法、实现公式和测试结果。
 
@@ -190,7 +190,7 @@ LMDeploy 使用 gradio 开发了在线对话 demo。
 # 安装依赖
 pip install lmdeploy[serve]
 # 启动
-lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
+lmdeploy serve gradio internlm/internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
