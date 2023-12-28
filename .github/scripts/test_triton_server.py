@@ -43,7 +43,7 @@ def test(port=33337):
     all_pass = True
     for cases in test_cases:
         quest = cases['prompts']
-        keywords = cases['keywords']
+        keywords = [k.lower() for k in cases['keywords']]
         inputs = quest + end
         print(f'Test Input prompts: {quest}\nKey words: {keywords}')
         time.sleep(5)
@@ -58,7 +58,7 @@ def test(port=33337):
             out, err = proc.communicate(input=inputs)
             print(f'Output: {out}')
             if proc.returncode == 0:
-                out = parse_dialogue(out)[0]
+                out = parse_dialogue(out)[0].lower()
                 success = any([k in out for k in keywords])
                 if not success:
                     print(f'>>> Failed to output keywords: {out} {keywords}')
