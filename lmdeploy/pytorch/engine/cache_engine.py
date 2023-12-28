@@ -34,6 +34,8 @@ class CacheEngine:
         world_size: int = 1,
         device_mesh: DeviceMesh = None,
     ) -> None:
+        if rank == 0:
+            logger.info(f'build CacheEngine with config:{cache_config}')
         self.rank = rank
         self.world_size = world_size
         if device_mesh is None and self.world_size > 1:
@@ -44,8 +46,6 @@ class CacheEngine:
         self.model_config = model_config
 
         self.block_size = cache_config.block_size
-        self.num_gpu_blocks = cache_config.num_gpu_blocks
-        self.num_cpu_blocks = cache_config.num_cpu_blocks
 
         self.head_size = model_config.get_head_size()
         self.num_layers = model_config.num_layers
@@ -80,6 +80,16 @@ class CacheEngine:
     def gpu_cache(self):
         """gpu cache."""
         return self.local_gpu_cache
+
+    @property
+    def num_gpu_blocks(self):
+        """num gpu blocks."""
+        return self.cache_config.num_gpu_blocks
+
+    @property
+    def num_cpu_blocks(self):
+        """num gpu blocks."""
+        return self.cache_config.num_cpu_blocks
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""

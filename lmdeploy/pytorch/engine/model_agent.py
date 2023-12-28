@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 from torch import multiprocessing as mp
 from torch.distributed._tensor import DeviceMesh, Replicate, distribute_tensor
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 
 from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
@@ -26,7 +26,9 @@ _PATCH_ARG_NAMES = ['context', 'use_origin']
 
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
-                         gpu_id: int = 0):
+                         gpu_id: int = 0,
+                         gpu_mem_percent: float = 0.7,
+                         host_mem_size: int = 4 * (1 << 30)):
     """Update the gpu mem and cpu mem according to model info.
 
     Args:
@@ -34,11 +36,10 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config (CacheConfig): The config of the cache info.
         gpu_id (int): The GPU id to use.
     """
-    GPU_MEM_PERCENT = 0.7
-    SWAP_SPACE = 4 * (1 << 30)
+    torch.cuda.empty_cache()
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
-    gpu_mem = gpu_mem_physical_free * GPU_MEM_PERCENT
-    cpu_mem = SWAP_SPACE
+    gpu_mem = gpu_mem_physical_free * gpu_mem_percent
+    cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config)
     if cache_config.num_cpu_blocks == 0:
@@ -46,18 +47,7 @@ def _update_cache_config(model_config: ModelConfig,
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
 
-    logger.info('block num: {}'.format(cache_config.num_gpu_blocks))
-
-
-def _get_torch_dtype(config: Any, default: str = 'float16'):
-    """Get the torch dtype from the model config.
-
-    Args:
-        config: Config of the hf model.
-        default (str): default device type.
-    """
-    torch_dtype = getattr(config, 'torch_dtype', default)
-    return eval(f'torch.{torch_dtype}')
+    logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
 
 
 @dataclass
@@ -305,7 +295,47 @@ def _unparam_lora_weight(model: torch.nn.Module):
                 _tensorize_weight(linear)
 
 
-class BaseModelAgent:
+SwapMap = Dict[int, int]
+
+
+class AutoModelAgent:
+    """Base model agent."""
+
+    def __init__(self, model_config: ModelConfig, cache_config: CacheConfig):
+        self.model_config = model_config
+        self.cache_config = cache_config
+
+    def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
+        """paging adapter."""
+        raise NotImplementedError('Not implemented.')
+
+    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                swap_out_map: SwapMap):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+        """
+        raise NotImplementedError('Not implemented.')
+
+    @classmethod
+    def from_pretrained(cls,
+                        pretrained_model_name_or_path: str,
+                        cache_config: CacheConfig,
+                        trust_remote_code: bool,
+                        adapters: Dict[str, str] = None,
+                        tp: int = 1):
+        """from pretrained."""
+        return build_model_agent(pretrained_model_name_or_path,
+                                 cache_config=cache_config,
+                                 trust_remote_code=trust_remote_code,
+                                 adapters=adapters,
+                                 tp=tp)
+
+
+class BaseModelAgent(AutoModelAgent):
     """Base model agent.
 
     load model on local gpu
@@ -323,8 +353,7 @@ class BaseModelAgent:
                  cache_config: CacheConfig,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True):
-        self.model_config = model_config
-        self.cache_config = cache_config
+        super().__init__(model_config=model_config, cache_config=cache_config)
         torch_dtype = model_config.dtype
 
         self.patched_model = self._build_model(
@@ -364,7 +393,7 @@ class BaseModelAgent:
         return patched_model
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
-        """load adapter."""
+        """paging adapter."""
         logger.info('paging adapters.')
         lora_linears = get_indexed_lora_linears(self.patched_model)
         cpu_caches = self.cache_engine.cpu_cache
@@ -376,14 +405,14 @@ class BaseModelAgent:
             weight_map.cache_adapter(lora_linears, cpu_caches)
         update_lora_linears(lora_linears, weight_maps, device='cuda')
 
-    def forward(self, inputs: ModelInputs, swap_in_map: Dict[int, int],
-                swap_out_map: Dict[int, int]):
+    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                swap_out_map: SwapMap):
         """model forward.
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (Dict[int, int]): Cache maps to swap in.
-            swap_out_map (Dict[int, int]): Cache maps to swap out.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
         """
 
         cache_swapping(self.cache_engine,
@@ -479,9 +508,10 @@ def _tp_build_model(
         return config_list[0]
 
     try:
-        config = AutoConfig.from_pretrained(
-            model_path, trust_remote_code=trust_remote_code)
-        torch_dtype = _get_torch_dtype(config)
+        config = model_config.hf_config
+        # config = AutoConfig.from_pretrained(
+        #     model_path, trust_remote_code=trust_remote_code)
+        torch_dtype = model_config.dtype
         with init_empty_weights():
             model = AutoModelForCausalLM.from_config(
                 config,
@@ -737,7 +767,7 @@ def _queue_get_response(que: mp.Queue,
         __check_context_alive()
 
 
-class TPModelAgent:
+class TPModelAgent(AutoModelAgent):
     """Tensor Parallelism model agent.
 
     load model on multiple GPUs
@@ -757,9 +787,8 @@ class TPModelAgent:
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
         mp.set_start_method('spawn')
+        super().__init__(model_config=model_config, cache_config=cache_config)
         self.world_size = world_size
-        self.model_config = model_config
-        self.cache_config = cache_config
         self.tp_model_in_que = mp.Queue(10)
         self.tp_model_out_que = mp.Queue(10)
 
@@ -823,8 +852,8 @@ class TPModelAgent:
             logger.error(f'paging adapters failed with error: {resp.error}')
             raise next(err for err in resp.error if err is not None)
 
-    def forward(self, inputs: Dict, swap_in_map: Dict[int, int],
-                swap_out_map: Dict[int, int]):
+    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                swap_out_map: SwapMap):
         """model forward.
 
         Args:
@@ -841,3 +870,27 @@ class TPModelAgent:
             raise RuntimeError('tp forward failed.')
 
         return resp.data
+
+
+def build_model_agent(model_path: str,
+                      cache_config: CacheConfig,
+                      trust_remote_code: bool,
+                      adapters: Dict[str, str] = None,
+                      tp: int = 1):
+    """create model agent."""
+    model_config = ModelConfig.from_pretrained(
+        model_path, trust_remote_code=trust_remote_code)
+    if tp == 1:
+        model_agent = BaseModelAgent(model_path,
+                                     model_config=model_config,
+                                     cache_config=cache_config,
+                                     adapters=adapters,
+                                     trust_remote_code=trust_remote_code)
+    else:
+        model_agent = TPModelAgent(model_path,
+                                   model_config=model_config,
+                                   cache_config=cache_config,
+                                   world_size=tp,
+                                   adapters=adapters,
+                                   trust_remote_code=trust_remote_code)
+    return model_agent

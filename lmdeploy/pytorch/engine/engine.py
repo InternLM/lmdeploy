@@ -6,18 +6,17 @@ from threading import Thread
 from typing import Any, Dict, List
 
 import torch
-from transformers import AutoConfig
 
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
-from ..config import CacheConfig, ModelConfig, SchedulerConfig
+from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor
-from .model_agent import BaseModelAgent, ModelInputs, TPModelAgent
+from .model_agent import AutoModelAgent, ModelInputs
 from .request import (Request, RequestManager, RequestType, Response,
                       ResponseType)
 
@@ -53,88 +52,7 @@ def _check_resp_success(resp: Response, warning_msg: str = None):
     return _check_resp(resp, ResponseType.SUCCESS, warning_msg)
 
 
-def _get_torch_dtype(config: Any, default: str = 'float16'):
-    """Get the torch dtype from the model config.
-
-    Args:
-        config: Config of the hf model.
-        default (str): default device type.
-    """
-    torch_dtype = getattr(config, 'torch_dtype', default)
-    return eval(f'torch.{torch_dtype}')
-
-
-def _build_model_config(model_path: str, hf_config: Any):
-    """build model config."""
-    torch_dtype = _get_torch_dtype(hf_config)
-    if 'falcon' in model_path:
-        if hf_config.new_decoder_architecture:
-            # 40b-instruct, GQA
-            kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
-            kv_dim *= hf_config.num_kv_heads
-            kv_head = hf_config.num_kv_heads
-        if hf_config.multi_query:
-            # 7b-instruct, MQA
-            kv_dim = hf_config.hidden_size // hf_config.num_attention_heads
-            kv_head = 1
-        else:
-            # rw-1b, MHA
-            kv_dim = hf_config.hidden_size
-            kv_head = hf_config.num_attention_heads
-        model_config = ModelConfig(kv_dim,
-                                   hf_config.num_hidden_layers,
-                                   kv_head,
-                                   bos_token_id=hf_config.bos_token_id,
-                                   eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch_dtype,
-                                   multi_query_attention=hf_config.multi_query,
-                                   json_config=hf_config.to_dict())
-    elif 'chatglm' in model_path:
-        model_config = ModelConfig(hf_config.hidden_size //
-                                   hf_config.num_attention_heads *
-                                   hf_config.multi_query_group_num,
-                                   hf_config.num_layers,
-                                   hf_config.multi_query_group_num,
-                                   bos_token_id=hf_config.bos_token_id,
-                                   eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch_dtype,
-                                   json_config=hf_config.to_dict())
-    else:
-        model_config = ModelConfig(hf_config.hidden_size,
-                                   hf_config.num_hidden_layers,
-                                   hf_config.num_attention_heads,
-                                   bos_token_id=hf_config.bos_token_id,
-                                   eos_token_id=hf_config.eos_token_id,
-                                   dtype=torch_dtype,
-                                   json_config=hf_config.to_dict())
-
-    return model_config
-
-
-def _build_model_agent(model_path: str,
-                       model_config: ModelConfig,
-                       cache_config: CacheConfig,
-                       trust_remote_code: bool,
-                       adapters: Dict[str, str] = None,
-                       tp: int = 1):
-    """create model agent."""
-    if tp == 1:
-        model_agent = BaseModelAgent(model_path,
-                                     model_config=model_config,
-                                     cache_config=cache_config,
-                                     adapters=adapters,
-                                     trust_remote_code=trust_remote_code)
-    else:
-        model_agent = TPModelAgent(model_path,
-                                   model_config=model_config,
-                                   cache_config=cache_config,
-                                   world_size=tp,
-                                   adapters=adapters,
-                                   trust_remote_code=trust_remote_code)
-    return model_agent
-
-
-def _paging_adapters(adapters: dict, model_agent: BaseModelAgent,
+def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
                      scheduler: Scheduler):
     adapters = adapters or dict()
     weight_maps = []
@@ -161,6 +79,18 @@ def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     return adapter_ids
 
 
+def _update_blocksize(cache_config: CacheConfig, adapters: List[str], tp: int):
+    """update blocksize for adapters."""
+    if adapters is None:
+        return cache_config
+
+    if cache_config.block_size != tp:
+        logger.warning('Lora adapter require block size '
+                       f'= tp({tp}).')
+        cache_config.block_size = tp
+    return cache_config
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -181,7 +111,6 @@ class Engine:
                  adapters: dict = None) -> None:
 
         self.tp = tp
-        self.gpu_count = tp
         self.model_name = model_name
 
         scheduler_config = scheduler_config or SchedulerConfig(
@@ -193,21 +122,12 @@ class Engine:
         # block_size = 1 to enable unified paging
         cache_config = cache_config or CacheConfig(
             block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
-        cache_config = self._update_blocksize(cache_config,
-                                              adapters=adapters,
-                                              tp=tp)
+        cache_config = _update_blocksize(cache_config,
+                                         adapters=adapters,
+                                         tp=tp)
 
-        hf_config = AutoConfig.from_pretrained(
-            model_path, trust_remote_code=trust_remote_code)
-
-        torch_dtype = _get_torch_dtype(hf_config)
-        self.torch_dtype = torch_dtype
-
-        model_config = _build_model_config(model_path, hf_config)
-
-        self.model_agent = _build_model_agent(
+        self.model_agent = AutoModelAgent.from_pretrained(
             model_path,
-            model_config=model_config,
             cache_config=cache_config,
             trust_remote_code=trust_remote_code,
             adapters=adapters,
@@ -223,8 +143,6 @@ class Engine:
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
-        self.model_config = model_config
-        self.session_len = scheduler_config.max_session_len
         self.stream = torch.cuda.Stream()
 
         self.req_manager = self._bind_request_manager()
@@ -269,6 +187,7 @@ class Engine:
             model_name (str): needed when pretrained_model_name_or_path is c)
             adapters (dict): named lora adapters.
         """
+        logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
                    scheduler_config=scheduler_config,
                    cache_config=cache_config,
@@ -277,21 +196,8 @@ class Engine:
                    adapters=adapters,
                    trust_remote_code=trust_remote_code)
 
-    def _update_blocksize(self, cache_config: CacheConfig, adapters: List[str],
-                          tp: int):
-        """update blocksize for adapters."""
-        if adapters is None:
-            return cache_config
-
-        if cache_config.block_size != tp:
-            logger.warning('Lora adapter require block size '
-                           f'= tp({tp}).')
-            cache_config.block_size = tp
-        return cache_config
-
     def _create_buffers(self):
-        scheduler_config = self.scheduler_config
-        max_batches = scheduler_config.max_batches
+        max_batches = self.scheduler_config.max_batches
 
         # buffers to create inputs
         self._q_start_loc_buf = torch.arange(max_batches)
@@ -385,6 +291,19 @@ class Engine:
             msg.sender_id = req.sender_id
             msg.req_id = req.req_id
         self.scheduler.update()
+
+    @property
+    def model_config(self):
+        """model config."""
+        return self.model_agent.model_config
+
+    @property
+    def gpu_count(self):
+        return self.tp
+
+    @property
+    def session_len(self):
+        return self.scheduler_config.max_session_len
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
