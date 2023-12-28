@@ -92,8 +92,10 @@ public:
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
-    void
-    OutputContextLogits(T* context_decoder_output, const std::vector<int>& indices, const std::vector<int>& lengths);
+    void OutputContextLogits(T*                                  context_decoder_output,
+                             const std::vector<int>&             indices,
+                             const std::vector<int>&             lengths,
+                             const std::vector<const Sequence*>& sequences);
 
     explicit LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model);
 

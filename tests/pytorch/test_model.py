@@ -1,4 +1,4 @@
-from lmdeploy.pytorch.model import accel_model, init_model
+from lmdeploy.legacy.pytorch.model import accel_model, init_model
 
 
 def test_init_model():

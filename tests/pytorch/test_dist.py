@@ -2,9 +2,9 @@ import unittest
 
 import torch
 
-from lmdeploy.pytorch.dist import (get_rank, master_only,
-                                   master_only_and_broadcast_general,
-                                   master_only_and_broadcast_tensor)
+from lmdeploy.legacy.pytorch.dist import (get_rank, master_only,
+                                          master_only_and_broadcast_general,
+                                          master_only_and_broadcast_tensor)
 
 
 class SimpleTest(unittest.TestCase):

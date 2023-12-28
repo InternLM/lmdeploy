@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from transformers import AutoTokenizer
 
-from lmdeploy.pytorch.decode import Engine, decode_single
-from lmdeploy.pytorch.model import accel_model, init_model
+from lmdeploy.legacy.pytorch.decode import Engine, decode_single
+from lmdeploy.legacy.pytorch.model import accel_model, init_model
 
 
 def _test_decode_dist(model_path, prompt):
