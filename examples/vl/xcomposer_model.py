@@ -21,6 +21,7 @@ conversation
 
 @MODELS.register_module(name='internlm-xcomposer-7b')
 class InternLMXComposerTemplate(BaseModel):
+    """Internlm xcomposer chat template."""
 
     def __init__(self,
                  system=meta_instruction,
@@ -41,6 +42,7 @@ class InternLMXComposerTemplate(BaseModel):
         self.image_placeholder = image_placeholder
 
     def _concat_image_info(self, prompt):
+        """Append image placeholder."""
         if isinstance(prompt, str):
             return prompt
         prompt, nimg = prompt
@@ -50,6 +52,7 @@ class InternLMXComposerTemplate(BaseModel):
         return prompt
 
     def decorate_prompt(self, prompt, sequence_start=True):
+        """Apply chat template to prompt."""
         prompt = self._concat_image_info(prompt)
         if sequence_start:
             return f'{self.system} {self.user} {prompt}{self.eoh} {self.assistant}'  # noqa
@@ -57,6 +60,7 @@ class InternLMXComposerTemplate(BaseModel):
             return f' {self.user} {prompt}{self.eoh} {self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True):
+        """Apply chat template to history."""
         if isinstance(messages, str) or isinstance(messages[0], str):
             return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
@@ -76,6 +80,7 @@ class InternLMXComposerTemplate(BaseModel):
 
 
 class InternLMXComposer:
+    """Internlm-xcomposer preprocessor to prepare the inputs for a model."""
 
     def __init__(self, pretrained_model_name_or_path, **kwargs):
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
@@ -112,6 +117,7 @@ class InternLMXComposer:
 
     @torch.no_grad()
     def encode_img(self, paths):
+        """Extract image features."""
         if len(paths) == 0:
             return None
         features = []
@@ -141,6 +147,8 @@ class InternLMXComposer:
         return input_ids, features, ranges
 
     def prepare_query(self, query, sequence_start=True):
+        """Convert query to input_ids, features and the ranges of features to
+        input_ids."""
         image_paths = []
         if not isinstance(query, str):
             query, image_paths = query[0], query[1:]
@@ -152,6 +160,8 @@ class InternLMXComposer:
         return self._to_inputs(decorate_text, image_paths, sequence_start)
 
     def prepare_message(self, messages):
+        """Convert messages to input_ids, features and the ranges of features
+        to input_ids."""
         decorate_text = self.decorator.messages2prompt(messages, True)
         image_paths = []
         for msg in messages:

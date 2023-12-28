@@ -12,6 +12,7 @@ from lmdeploy.model import MODELS, Qwen7BChat
 
 @MODELS.register_module(name='qwen-vl-chat')
 class QwenVLChatTemplate(Qwen7BChat):
+    """Qwen vl chat template."""
 
     def __init__(self,
                  session_len=8192,
@@ -34,6 +35,7 @@ class QwenVLChatTemplate(Qwen7BChat):
         self.stop_words = stop_words
 
     def _concat_image_info(self, prompt):
+        """Append image placeholder."""
         if isinstance(prompt, str):
             return prompt
         prompt, nimg = prompt
@@ -44,10 +46,12 @@ class QwenVLChatTemplate(Qwen7BChat):
         return prompt
 
     def decorate_prompt(self, prompt, sequence_start=True):
+        """Apply chat template to prompt."""
         prompt = self._concat_image_info(prompt)
         return super().decorate_prompt(prompt, sequence_start)
 
     def messages2prompt(self, messages, sequence_start=True):
+        """Apply chat template to history."""
         if isinstance(messages, str) or isinstance(messages[0], str):
             return self.decorate_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
@@ -66,6 +70,7 @@ class QwenVLChatTemplate(Qwen7BChat):
 
 
 class QwenVLChat:
+    """Qwen vl preprocessor to prepare the inputs for a model."""
 
     def __init__(self, pretrained_model_name_or_path, **kwargs):
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
@@ -101,6 +106,7 @@ class QwenVLChat:
 
     @torch.no_grad()
     def encode_img(self, paths):
+        """Extract image features."""
         if len(paths) == 0:
             return None
         features = []
@@ -123,6 +129,8 @@ class QwenVLChat:
         return input_ids, features, ranges
 
     def prepare_query(self, query, sequence_start=True):
+        """Convert query to input_ids, features and the ranges of features to
+        input_ids."""
         image_paths = []
         if not isinstance(query, str):
             query, image_paths = query[0], query[1:]
@@ -131,6 +139,8 @@ class QwenVLChat:
         return self._to_inputs(decorate_text, image_paths, sequence_start)
 
     def prepare_message(self, messages):
+        """Convert messages to input_ids, features and the ranges of features
+        to input_ids."""
         decorate_text = self.decorator.messages2prompt(messages, True)
         image_paths = []
         for msg in messages:

@@ -90,6 +90,7 @@ def parse_args():
 
 
 def load_preprocessor_model(args):
+    """Load preprocessor and llm inference engine."""
     assert args.model_name in SUPPORTED_MODELS
     llm_ckpt = args.hf_ckpt if args.llm_ckpt is None else args.llm_ckpt
     preprocessor = SUPPORTED_MODELS[args.model_name](args.hf_ckpt)
@@ -100,6 +101,7 @@ def load_preprocessor_model(args):
 def launch_demo(args, preprocessor, model):
 
     def add_image(chatbot, session, file):
+        """Append image to query."""
         chatbot = chatbot + [((file.name, ), None)]
         history = session._message
         # [([user, url, url], assistant), ...]
@@ -110,6 +112,7 @@ def launch_demo(args, preprocessor, model):
         return chatbot, session
 
     def add_text(chatbot, session, text):
+        """User query."""
         chatbot = chatbot + [(text, None)]
         history = session._message
         if len(history) == 0 or history[-1][-1] is not None:
@@ -123,6 +126,7 @@ def launch_demo(args, preprocessor, model):
         session,
         request_output_len=512,
     ):
+        """Chat with AI assistant."""
         generator = model.create_instance()
         history = session._message
         sequence_start = len(history) == 1
@@ -167,6 +171,7 @@ def launch_demo(args, preprocessor, model):
             yield chatbot, session, enable_btn, disable_btn, enable_btn
 
     def stop(session):
+        """Stop the session."""
         generator = model.create_instance()
         for _ in generator.stream_infer(session_id=session.session_id,
                                         input_ids=[0],
@@ -177,10 +182,12 @@ def launch_demo(args, preprocessor, model):
             pass
 
     def cancel(chatbot, session):
+        """Stop the session and keey chat history."""
         stop(session)
         return chatbot, session, disable_btn, enable_btn, enable_btn
 
     def reset(session):
+        """Reset a new session."""
         stop(session)
         session._step = 0
         session._message = []
