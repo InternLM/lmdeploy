@@ -2,6 +2,7 @@ fastapi
 fire
 mmengine-lite
 numpy
+pycuda
 pydantic>2.0.0
 safetensors
 sentencepiece
