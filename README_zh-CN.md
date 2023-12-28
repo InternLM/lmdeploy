@@ -52,21 +52,23 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 # 性能
 
-## 请求处理性能(req/s)
+LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型上，每秒处理的请求数是 vLLM 的 1.36 ~ 1.85 倍。在静态推理能力方面，TurboMind 4bit 模型推理速度（out token/s) 远高于 FP16/BF16 推理。在小 batch 时，提高到 2.4 倍。
 
-## 静态推理性能(out tok/s)
+![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/f4d218f9-db3b-4ceb-ab50-97cb005b3ac9)
 
-更多设备、更多计算精度的推理 benchmark，请阅读以下链接：
-
+<!-- 更多设备、更多计算精度、更多setting下的的推理 benchmark，请参考以下链接：
+- [A100]()
 - [Geforce 2080](<>)
 - [Geforce RTX 3090](<>)
-- [Geforce RTX 4090](<>)
+- [Geforce RTX 4090](<>) -->
 
 # 支持的模型
 
 `LMDeploy` 支持 2 种推理引擎： `TurboMind` 和 `PyTorch`，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
-不同的推理引擎在支持的模型类别、计算精度方面有所差别。用户可根据实际需求选择合适的。有关两个推理引擎的架构，在[此处](<>)可以找到。
+不同的推理引擎在支持的模型类别、计算精度方面有所差别。用户可根据实际需求选择合适的。
+
+<!-- 有关两个推理引擎的架构，在[此处](<>)可以找到。 -->
 
 ## TurboMind 支持的模型
 
@@ -124,7 +126,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-支持多卡并行处理，只用修改`tp`参数。关于 pipeline 的更多推理参数说明，请参考[这里](<>)
+支持多卡并行处理，只用修改`tp`参数。关于 pipeline 的更多推理参数说明，请参考[这里(TODO)](<>)
 
 ## 推理服务
 
@@ -137,7 +139,7 @@ lmdeploy serve api_server internlm/internlm-chat-7b --server-port 8080 --tp 1
 lmdeploy serve api_client http://0.0.0.0:8080
 ```
 
-在上述例子中，服务启动后，在浏览器输入 `http://0.0.0.0:8080`，可在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](<>)，了解各接口的定义和使用方法。
+在上述例子中，服务启动后，在浏览器输入 `http://0.0.0.0:8080`，可在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](./docs/zh_cn/restful_api.md)，了解各接口的定义和使用方法。
 
 ## 模型量化
 
@@ -165,6 +167,8 @@ LMDeploy 4bit 量化和推理支持的显卡包括：
 [点击这里](./docs/zh_cn/kv_int8.md) 查看 kv int8 使用方法、实现公式和测试结果。
 
 ### W8A8 量化
+
+TODO
 
 ## 好用的工具
 
