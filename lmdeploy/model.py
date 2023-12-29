@@ -803,7 +803,7 @@ def best_match_model(query: str, similarity_cutoff: float = 0.4):
     """
     model_names = list(MODELS.module_dict.keys())
     if query.endswith('/'):
-        query = query.removesuffix('/')
+        query = query[:-1]
     base_name = os.path.basename(query).lower()
     matches = difflib.get_close_matches(base_name,
                                         model_names,
