@@ -60,7 +60,7 @@ def test_internlm_chat():
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is not None
-    assert model.system == ''
+    assert model.system == '<|System|>:'
     assert model.session_len == 2048
 
     model = MODELS.get('internlm-chat-7b')(capability='chat',
