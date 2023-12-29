@@ -453,8 +453,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - interactive_mode (bool): turn on interactive mode or not. On interactive
         mode, session history is kept on the server (and vice versa).
     - stream: whether to stream the results or not.
-    - stop: whether to stop the session response or not. Different from openai
-        argument, this is a signal to pause the session, instead of stop words.
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
     - request_output_len (int): output token nums
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
@@ -482,7 +482,7 @@ async def chat_interactive_v1(request: GenerateRequest,
         request_output_len=request.request_output_len,
         top_p=request.top_p,
         top_k=request.top_k,
-        stop=request.stop,
+        stop_words=request.stop,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)

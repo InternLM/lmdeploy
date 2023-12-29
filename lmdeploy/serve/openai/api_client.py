@@ -141,7 +141,7 @@ class APIClient:
                             session_id: int = -1,
                             interactive_mode: bool = False,
                             stream: bool = False,
-                            stop: bool = False,
+                            stop: Optional[Union[str, List[str]]] = None,
                             request_output_len: int = 512,
                             top_p: float = 0.8,
                             top_k: int = 40,
@@ -165,9 +165,8 @@ class APIClient:
                 interactive mode, session history is kept on the server (and
                 vice versa).
             stream: whether to stream the results or not.
-            stop: whether to stop the session response or not. Different from
-                openai argument, this is a signal to pause the session, instead
-                of stop words.
+            stop (str | List[str] | None): To stop generating further tokens.
+                Only accept stop words that's encoded to one token idex.
             request_output_len (int): output token nums
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or

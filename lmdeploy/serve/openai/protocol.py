@@ -211,7 +211,7 @@ class GenerateRequest(BaseModel):
     session_id: int = -1
     interactive_mode: bool = False
     stream: bool = False
-    stop: bool = False
+    stop: Optional[Union[str, List[str]]] = None
     request_output_len: int = 512
     top_p: float = 0.8
     top_k: int = 40
