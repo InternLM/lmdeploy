@@ -24,5 +24,5 @@ THEME = gr.themes.Soft(
     secondary_hue=gr.themes.colors.sky,
     font=[gr.themes.GoogleFont('Inconsolata'), 'Arial', 'sans-serif'])
 
-enable_btn = gr.Button.update(interactive=True)
-disable_btn = gr.Button.update(interactive=False)
+enable_btn = gr.update(interactive=True)
+disable_btn = gr.update(interactive=False)
