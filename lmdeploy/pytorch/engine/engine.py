@@ -274,6 +274,8 @@ class Engine:
             sess = self.scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             if len(sess.sequences) == 0:
+                assert len(
+                    req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(
                     req.data['token_ids'],
                     max_output_len=req.data['max_request_output_len'],
