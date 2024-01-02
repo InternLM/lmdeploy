@@ -470,7 +470,8 @@ async def completions_v1(request: CompletionRequest,
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 10086,
-          strategy: str = 'min_observed_latency'):
+          strategy: str = 'min_expected_latency',
+          **kwargs):
     node_manager.strategy = Strategy.from_str(strategy)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 
