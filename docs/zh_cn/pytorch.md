@@ -4,7 +4,7 @@
 
 ## 设计
 
-[PLACEHOLDER]
+\[PLACEHOLDER\]
 
 ## API
 
