@@ -120,7 +120,7 @@ def evaluate(models: List[str], model_root: str, workspace: str):
         do_lite = precision in ['w4a16', 'w4kv8', 'w8a8']
         if do_lite:
             model = model_
-        engine_type, model = models.split('_', 1)
+        engine_type, model = model.split('_', 1)
         assert engine_type in ['tb', 'pt', 'hf']
         if model not in MODEL_CFGS:
             logging.error(f'Model {model} is not in {MODEL_CFGS.keys()}')
