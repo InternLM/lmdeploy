@@ -92,8 +92,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |  Llama2   | 7B - 70B  |    Yes    |   No    | Yes  |
 | InternLM  | 7B - 20B  |    Yes    |   No    | Yes  |
 | Baichuan2 | 7B - 13B  |    Yes    |   No    | Yes  |
-| ChatGLM2  |    6B     |    Yes    |   No    | Yes  |
-|  Falcon   | 7B - 180B |    Yes    |   No    | Yes  |
+| ChatGLM2  |    6B     |    Yes    |   No    |  No  |
+|  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
 
 # 快速上手
 
@@ -121,7 +121,7 @@ pip install lmdeploy
 
 ```shell
 import lmdeploy
-pipe = lmdeploy.pipeline("InternLM/internlm-chat-7b", tp=1)
+pipe = lmdeploy.pipeline("internlm/internlm-chat-7b", tp=1)
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
@@ -160,7 +160,7 @@ LMDeploy 4bit 量化和推理支持的显卡包括：
 - 安培架构（sm80,sm86）：30系列、A10、A16、A30、A100
 - Ada Lovelace架构（sm90）：40 系列
 
-量化模型在各型号显卡上的推理速度可以从[这里](./docs/zh_cn/w4a16.md)找到。
+<!-- 量化模型在各型号显卡上的推理速度可以从[这里](./docs/zh_cn/w4a16.md)找到。 -->
 
 ### KV INT8 量化
 
