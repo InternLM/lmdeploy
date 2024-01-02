@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
+import difflib
+import os
 from abc import abstractmethod
 from typing import List
 
@@ -815,6 +817,26 @@ class Yi(BaseModel):
             ret += f'{eval(f"self.{role}")}{content}{eox_map[role]}'
         ret += f'{self.assistant}'
         return ret
+
+
+def best_match_model(query: str, similarity_cutoff: float = 0.4):
+    """Get the model that match the query.
+
+    Args:
+        query (str): the input query. Could be a model path.
+        similarity_cutoff (float): similarities below to the limit are ignored.
+
+    Return:
+        List[str] | None: the possible model names or none.
+    """
+    model_names = list(MODELS.module_dict.keys())
+    if query.endswith('/'):
+        query = query[:-1]
+    base_name = os.path.basename(query).lower()
+    matches = difflib.get_close_matches(base_name,
+                                        model_names,
+                                        cutoff=similarity_cutoff)
+    return matches if matches else None
 
 
 def main(model_name: str = 'test'):

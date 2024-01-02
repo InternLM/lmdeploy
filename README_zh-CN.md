@@ -123,7 +123,7 @@ pip install lmdeploy
 #### 使用 turbomind 推理
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
+lmdeploy chat turbomind internlm/internlm-chat-7b
 ```
 
 > **Note**<br /> internlm/internlm-chat-7b 会自动下载到 `.cache` 文件夹，这里也可以传下载好的路径。
@@ -141,7 +141,7 @@ lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
 # 安装lmdeploy额外依赖
 pip install lmdeploy[serve]
 
-lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
+lmdeploy serve gradio internlm/internlm-chat-7b
 ```
 
 ![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
@@ -154,7 +154,7 @@ lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
 # 安装lmdeploy额外依赖
 pip install lmdeploy[serve]
 
-lmdeploy serve api_server internlm/internlm-chat-7b --model-name internlm-chat-7b --instance_num 32 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b --instance_num 32 --tp 1
 ```
 
 你可以通过命令行方式与推理服务进行对话：
