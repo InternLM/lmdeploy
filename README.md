@@ -43,13 +43,11 @@ ______________________________________________________________________
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
 
-- **Efficient Inference Engine (TurboMind)**: Supports  several features such as blocked KV-caching, continuous batching, Dynamic SplitFuse, tensor parallelism, and high-performance CUDA kernels to support fast high throughput text-generation for LLMs such as Llama-2-70B. MII delivers up to 2.3 times higher effective throughput compared to leading systems such as vLLM.
+- **Efficient Inference Engine (TurboMind)**: It developes key features like persistent batch(a.k.a continuous batching), blocked KV cache, dynamic split&fuse, tensor paramllelism, high-performance CUDA kernels and so on, ensuring the high throughput and low latency during LLMs inference.
 
-- **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, it remembers dialogue history, thus avoiding repetitive processing of historical sessions.
+- **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
-- **Multi-GPU Model Deployment and Quantization**: We provide comprehensive model deployment and quantification support, and have been validated at different scales.
-
-- **Persistent Batch Inference**: Further optimization of model execution efficiency.
+- **Quantization**: LMDeploy supports various quantization methods and efficient inference of quantized models. The reliability of quantization has been verified on models of different scales.
 
 # Performance
 
@@ -57,9 +55,13 @@ The TurboMind engine achieves up to 1.36 ~ 1.85 times higher request throughput 
 
 ![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/f4d218f9-db3b-4ceb-ab50-97cb005b3ac9)
 
+For inference benchmarks in more devices and more settings, please refer to the following link:
+
+- [A100](./docs/en/benchmark/a100_fp16.md)
+
 # Supported Models
 
-`LMDeploy` has developed two inference engines - `Pytorch` and `TurboMind`, each with different emphases. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
+`LMDeploy` has developed two inference engines - `Pytorch` and `TurboMind`, each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
 As shown in the next tables, the inference engines differ in the types of supported models and the inference data type. Users can choose the one that best fits their actual needs.
 
@@ -88,80 +90,23 @@ As shown in the next tables, the inference engines differ in the types of suppor
 | ChatGLM2  |    6B     |    Yes    |   No    |  No  |
 |  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
 
-# Quick Start
+# Getting Started
 
-LMDeploy offers functionalities such as model quantization, offline batch inference, online serving, etc. Each function can be completed with just a few simple lines of code or commands.
+Please overview [getting_started](<>) section for the basic usage of LMDeploy.
 
-<!-- toc -->
+For detailed user guides and advanced guides, please refer to our [tutorials](<>):
 
-- [Installation](#Installation)
-- [Offline Batch Inference](#offline-batch-inference)
-- [Serving](#serving)
-- [Quantization](#quantization)
-- [Utilities](#utilities)
-
-<!-- tocstop -->
-
-## Installation
-
-Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
-
-```shell
-pip install lmdeploy
-```
-
-## Offline batch inference
-
-```shell
-import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b", tp=1)
-response = pipe(["Hi, pls intro yourself", "Shanghai is"])
-print(response)
-```
-
-Tensor parallelism is supported, and can be invoked by setting the `tp` parameter. For more information on inference pipeline parameters, please refer to [here(TODO)](<>).
-
-## Serving
-
-LMDeploy's `api_server` allows for one-click encapsulation of models into services. The provided RESTful API is compatible with OpenAI's interface. Below are examples of service startup and request handling:
-
-```shell
-# launch api_server
-lmdeploy serve api_server internlm/internlm-chat-7b --server-port 8080 --tp 1
-# send request to api_server and receive the server's response
-lmdeploy serve api_client http://0.0.0.0:8080
-```
-
-在上述例子中，服务启动后，在浏览器输入 `http://0.0.0.0:8080`，可在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](./docs/en/restful_api.md)，了解各接口的定义和使用方法。
-After launching the server, users can overview and try out `api_server` APIs online by entering `http://0.0.0.0:8080`  in the browser. Besides,
-
-## Quantization
-
-#### Weight INT4 Quantization
-
-LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
-
-只用两行命令，就可以把一个 LLM 模型权重量化为 4bit，并在控制台与模型进行交互式对话。
-
-```shell
-lmdeploy lite auto_awq internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --group-size 128
-```
-
-LMDeploy 4bit 量化和推理支持的显卡包括：
-
-- 图灵架构（sm75）：20系列、T4
-- 安培架构（sm80,sm86）：30系列、A10、A16、A30、A100
-- Ada Lovelace架构（sm90）：40 系列
-
-[Click here](./docs/en/w4a16.md) to view the test results for weight int4 usage.
-
-#### KV Cache INT8 Quantization
-
-[Click here](./docs/en/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
-
-> **Warning**<br />
-> runtime Tensor Parallel for quantized model is not available. Please setup `--tp` on `deploy` to enable static TP.
+- User Guide
+  - Inference pipeline
+  - [Inference Engine - TurboMind](<>)
+  - Inference Engine - PyTorch
+  - [Serving](<>)
+  - [Quantization](<>)
+- Advance Guide
+  - Add chat template
+  - Add a new model
+  - gemm tuning
+  - Long context inference
 
 ## Contributing
 
@@ -171,6 +116,8 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
+- [vLLM](https://github.com/vllm-project/vllm)
+- [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
 ## License
 
