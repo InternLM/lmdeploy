@@ -89,7 +89,7 @@ tb_internlm_chat_7b_w4kv8 = dict(
 )
 
 pt_internlm_chat_7b = dict(
-    type=TurboMindModel,
+    type=PytorchModel,
     abbr='internlm-chat-7b-pytorch',
     path='internlm-chat-7b',
     max_out_len=100,
@@ -101,7 +101,7 @@ pt_internlm_chat_7b = dict(
 )
 
 pt_internlm_chat_7b_w8a8 = dict(
-    type=TurboMindModel,
+    type=PytorchModel,
     abbr='internlm-chat-7b-pytorch-w8a8',
     path='internlm-chat-7b-w8a8',
     max_out_len=100,
