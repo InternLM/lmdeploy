@@ -3,22 +3,22 @@ from opencompass.models.turbomind import PytorchModel, TurboMindModel
 
 with read_base():
     # choose a list of datasets
-    from .datasets.ceval.ceval_gen_5f30c7 import \
-        ceval_datasets  # noqa: F401, E501
-    from .datasets.crowspairs.crowspairs_gen_381af0 import \
-        crowspairs_datasets  # noqa: F401, E501
-    from .datasets.gsm8k.gsm8k_gen_1d7fe4 import \
-        gsm8k_datasets  # noqa: F401, E501
-    from .datasets.mmlu.mmlu_gen_a484b3 import \
-        mmlu_datasets  # noqa: F401, E501
+    # from .datasets.ceval.ceval_gen_5f30c7 import \
+    #     ceval_datasets  # noqa: F401, E501
+    # from .datasets.crowspairs.crowspairs_gen_381af0 import \
+    #     crowspairs_datasets  # noqa: F401, E501
+    # from .datasets.gsm8k.gsm8k_gen_1d7fe4 import \
+    #     gsm8k_datasets  # noqa: F401, E501
+    # from .datasets.mmlu.mmlu_gen_a484b3 import \
+    #     mmlu_datasets  # noqa: F401, E501
     from .datasets.race.race_gen_69ee4f import \
         race_datasets  # noqa: F401, E501
-    from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
-        WiC_datasets  # noqa: F401, E501
-    from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
-        WSC_datasets  # noqa: F401, E501
-    from .datasets.triviaqa.triviaqa_gen_2121ce import \
-        triviaqa_datasets  # noqa: F401, E501
+    # from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
+    #     WiC_datasets  # noqa: F401, E501
+    # from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
+    #     WSC_datasets  # noqa: F401, E501
+    # from .datasets.triviaqa.triviaqa_gen_2121ce import \
+    #     triviaqa_datasets  # noqa: F401, E501
     # and output the results in a chosen format
     from .summarizers.medium import summarizer  # noqa: F401, E501
 
