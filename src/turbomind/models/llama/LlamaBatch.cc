@@ -1100,7 +1100,7 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
             FT_CHECK(model_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = model_->vocab_size_padded_ / tp;
             local_context_logits_buf_ =
-                (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
+                (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * max_context_token_num_);
         }
     }
 
