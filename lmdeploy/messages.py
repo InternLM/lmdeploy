@@ -23,16 +23,8 @@ class GenerationConfig:
 
 
 @dataclass
-class EngineGenerationConfig:
+class EngineGenerationConfig(GenerationConfig):
     """generation parameter used by the inference engines."""
-    n: int = 1
-    max_new_tokens: int = 512
-    top_p: float = 1.0
-    top_k: int = 1
-    temperature: float = 0.8
-    repetition_penalty: float = 1.0
-    ignore_eos: bool = False
-    random_seed: int = None
     stop_words: List[int] = None
     bad_words: List[int] = None
 
@@ -58,6 +50,8 @@ class EngineGenerationConfig:
                 all(isinstance(elem, str) for elem in stop_words), \
                 f'stop_words must be a list of str but got {type(stop_words)}'
             stop_words = [tokenizer(word).input_ids for word in stop_words]
+            assert all(len(word) == 1 for word in stop_words)
+            stop_words = [word[0] for word in stop_words]
 
         bad_words = gen_config.bad_words
         if bad_words is not None:
@@ -65,6 +59,8 @@ class EngineGenerationConfig:
                 all(isinstance(elem, str) for elem in bad_words), \
                 f'bad_words must be a list of str but got {type(bad_words)}'
             bad_words = [tokenizer(word).input_ids for word in bad_words]
+            assert all(len(word) == 1 for word in bad_words)
+            bad_words = [word[0] for word in bad_words]
 
         return EngineGenerationConfig(
             n=gen_config.n,
