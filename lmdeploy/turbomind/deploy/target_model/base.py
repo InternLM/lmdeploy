@@ -1,15 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import configparser
+import copy
 import inspect
+import io
+import json
 import os.path as osp
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from configparser import ConfigParser
 
 import torch
 import tqdm
 from mmengine import Registry
+from pydantic.dataclasses import dataclass
 
 from lmdeploy.model import MODELS
+from lmdeploy.turbomind import EngineConfig
 
 from ..source_model.base import BaseInputModel, BaseReader
 
@@ -30,18 +35,18 @@ def tprint(*args, **kwargs):
 @dataclass
 class TurbomindModelConfig:
     """Config for turbomind model."""
-    model_name: str
-    tensor_para_size: int
-    head_num: int
-    kv_head_num: int
-    vocab_size: int
-    num_layer: int
-    inter_size: int
-    norm_eps: float
-    attn_bias: int
-    start_id: int
-    end_id: int
-    session_len: int
+    model_name: str = None
+    tensor_para_size: int = None
+    head_num: int = None
+    kv_head_num: int = None
+    vocab_size: int = None
+    num_layer: int = None
+    inter_size: int = None
+    norm_eps: float = None
+    attn_bias: int = None
+    start_id: int = None
+    end_id: int = None
+    session_len: int = None
     weight_type: str = 'fp16'
     rotary_embedding: int = 128
     rope_theta: float = 10000.0
@@ -67,15 +72,31 @@ class TurbomindModelConfig:
         """Construct from dict."""
         params = inspect.signature(cls).parameters
         used = {k: v for k, v in env.items() if k in params and v is not None}
+        res = cls(**used)
         if not allow_none:
-            return cls(**used)
-        else:
-            default = {
-                k: None
-                for k in params.keys() if params[k].default is inspect._empty
-            }
-            default.update(used)
-            return cls(**default)
+            assert res.valid
+        return res
+
+    @classmethod
+    def from_engine_config(cls, config: EngineConfig):
+        env = copy.deepcopy(config.__dict__)
+        env['tensor_para_size'] = env['tp']
+        ret = TurbomindModelConfig.from_dict(env, allow_none=True)
+        ret.rotary_embedding = ret.size_per_head
+        return ret
+
+    def toini(self):
+        config = copy.deepcopy(self.__dict__)
+        parser = ConfigParser()
+        parser['llama'] = config
+        with io.StringIO() as ss:
+            parser.write(ss)
+            ss.seek(0)
+            ini = ss.read()
+        return ini
+
+    def __str__(self):
+        return json.dumps(self.__dict__, indent=2)
 
     @property
     def valid(self):

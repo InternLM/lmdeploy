@@ -16,6 +16,7 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
+from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
@@ -54,6 +55,14 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     stop_word_offsets = range(1, len(stop_words) + 1)
     stop_words = np.array([[stop_words, stop_word_offsets]]).astype(np.int32)
     return stop_words
+
+
+def _construct_stop_or_bad_words(words: List[int] = None):
+    if words is None:
+        return None
+    offsets = range(1, len(words) + 1)
+    combined = np.array([[words, offsets]]).astype(np.int32)
+    return combined
 
 
 def _np_dict_to_tm_dict(np_dict: dict):
@@ -368,7 +377,7 @@ class TurboMind:
                 logger.warning(f'Please input a model_name for {model_source}')
             else:
                 model_name = potential_names[0]
-                logger.warning(f'model_name: {model_name}')
+                logger.warning(f'Guessed model_name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
@@ -469,23 +478,32 @@ class TurboMindInstance:
             t.start()
             self.threads[device_id] = t
 
+    def _update_generation_config(self, config: EngineGenerationConfig,
+                                  **kwargs: dict):
+        if config is None:
+            config = EngineGenerationConfig()
+            # backward compatibility
+            if self.stop_words is not None:
+                config.stop_words = self.stop_words[0][0].tolist()
+            config.bad_words = [self.eos_id]
+
+        for k, v in kwargs.items():
+            if k in config.__dict__:
+                config.__dict__[k] = v
+        if kwargs.get('request_output_len'):
+            config.max_new_tokens = kwargs['request_output_len']
+        return config
+
     def prepare_inputs(self,
                        session_id,
                        input_ids,
                        input_embeddings=None,
                        input_embedding_ranges=None,
-                       request_output_len: int = 512,
                        sequence_start: bool = True,
                        sequence_end: bool = False,
                        step=0,
                        stop=False,
-                       top_p=0.8,
-                       top_k=40,
-                       temperature=0.8,
-                       repetition_penalty=1.0,
-                       ignore_eos=False,
-                       random_seed=None,
-                       stream_output=False):
+                       generation_config: EngineGenerationConfig = None):
         """Convert inputs format."""
         if len(input_ids) == 0:
             input_ids = [[]]
@@ -517,19 +535,17 @@ class TurboMindInstance:
             input_ids=input_ids,
             input_lengths=input_lengths,
             request_output_len=np.full(input_lengths.shape,
-                                       request_output_len,
+                                       generation_config.max_new_tokens,
                                        dtype=np.uint32),
-            runtime_top_k=_broadcast_np(top_k, np.uint32),
-            runtime_top_p=_broadcast_np(top_p, np.float32),
-            temperature=_broadcast_np(temperature, np.float32),
-            repetition_penalty=_broadcast_np(repetition_penalty, np.float32),
+            runtime_top_k=_broadcast_np(generation_config.top_k, np.uint32),
+            runtime_top_p=_broadcast_np(generation_config.top_p, np.float32),
+            temperature=_broadcast_np(generation_config.temperature,
+                                      np.float32),
+            repetition_penalty=_broadcast_np(
+                generation_config.repetition_penalty, np.float32),
             step=step,
 
             # session input
-            session_len=self.session_len *
-            np.ones([
-                batch_size,
-            ], dtype=np.uint32),
             START=_broadcast_np((1 if sequence_start else 0), np.int32),
             END=_broadcast_np((1 if sequence_end else 0), np.int32),
             CORRID=np.array(session_id, dtype=np.uint64),
@@ -573,11 +589,13 @@ class TurboMindInstance:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
-        if ignore_eos:
+        if generation_config.ignore_eos:
             stop_words = None
-            bad_words = torch.tensor([[[self.eos_id], [1]]], dtype=torch.int32)
+            bad_words = _construct_stop_or_bad_words(
+                generation_config.bad_words)
         else:
-            stop_words = self.stop_words
+            stop_words = _construct_stop_or_bad_words(
+                generation_config.stop_words)
             bad_words = None
 
         if stop_words is not None:
@@ -585,27 +603,24 @@ class TurboMindInstance:
         if bad_words is not None:
             inputs['bad_words_list'] = bad_words
 
-        if random_seed is not None:
-            inputs['random_seed'] = _broadcast_np(random_seed, np.uint64)
+        if generation_config.random_seed is not None:
+            inputs['random_seed'] = _broadcast_np(
+                generation_config.random_seed, np.uint64)
         return inputs, input_lengths
 
-    async def async_stream_infer(self,
-                                 session_id,
-                                 input_ids,
-                                 input_embeddings=None,
-                                 input_embedding_ranges=None,
-                                 request_output_len: int = 512,
-                                 sequence_start: bool = True,
-                                 sequence_end: bool = False,
-                                 step=0,
-                                 stop=False,
-                                 top_p=0.8,
-                                 top_k=40,
-                                 temperature=0.8,
-                                 repetition_penalty=1.0,
-                                 ignore_eos=False,
-                                 random_seed=None,
-                                 stream_output=False):
+    async def async_stream_infer(
+            self,
+            session_id,
+            input_ids,
+            input_embeddings=None,
+            input_embedding_ranges=None,
+            sequence_start: bool = True,
+            sequence_end: bool = False,
+            step=0,
+            stop=False,
+            generation_config: EngineGenerationConfig = None,
+            stream_output=False,
+            **kwargs):
         """Perform model inference.
 
         Args:
@@ -614,42 +629,29 @@ class TurboMindInstance:
             input_embeddings (List[numpy.ndarray]): embeddings features
             input_embedding_ranges (List[Tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            request_output_len (int): the max number of to-be-generated tokens
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): indicator for cancelling the session
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-            top_k (int): The number of the highest probability vocabulary
-              tokens to keep for top-k-filtering
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-              1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
-            random_seed (int): seed used by sampling
+            generation_config (EngineGenerationConfig): generation config
             stream_output (bool): indicator for stream output
+            kwargs (dict): kwargs for backward compatibility
         """
         if stream_output and not stop:
             self.model_insts[0].register_callback(self._forward_callback)
+
+        generation_config = self._update_generation_config(
+            generation_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
             input_ids=input_ids,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
-            request_output_len=request_output_len,
             sequence_start=sequence_start,
             sequence_end=sequence_end,
             step=step,
             stop=stop,
-            top_p=top_p,
-            top_k=top_k,
-            temperature=temperature,
-            repetition_penalty=repetition_penalty,
-            ignore_eos=ignore_eos,
-            random_seed=random_seed,
-            stream_output=stream_output)
+            generation_config=generation_config)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
@@ -683,10 +685,12 @@ class TurboMindInstance:
             outputs = []
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item(
-                ) == self.eos_id and not ignore_eos:
+                if len(output) > 0 and output[-1].item() == self.eos_id \
+                        and not generation_config.ignore_eos:
                     outputs.append((output[:-1], len_ - 1))
-                elif len(output) > 0 and output[-1].item() in self.stop_tokens:
+                elif len(output) > 0 and \
+                    generation_config.stop_words is not None and \
+                        output[-1].item() in generation_config.stop_words:
                     outputs.append((output[:-1], len_))
                 else:
                     outputs.append((output, len_))
@@ -707,18 +711,13 @@ class TurboMindInstance:
                      input_ids,
                      input_embeddings=None,
                      input_embedding_ranges=None,
-                     request_output_len: int = 512,
                      sequence_start: bool = True,
                      sequence_end: bool = False,
                      step=0,
                      stop=False,
-                     top_p=0.8,
-                     top_k=40,
-                     temperature=0.8,
-                     repetition_penalty=1.0,
-                     ignore_eos=False,
-                     random_seed=None,
-                     stream_output=False):
+                     generation_config: EngineGenerationConfig = None,
+                     stream_output=False,
+                     **kwargs):
         """Perform model inference.
 
         Args:
@@ -727,42 +726,29 @@ class TurboMindInstance:
             input_embeddings (List[numpy.ndarray]): embeddings features
             input_embedding_ranges (List[Tuple[int,int]]): the begin/end
               offsets of input_embeddings to input_ids
-            request_output_len (int): the max number of to-be-generated tokens
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): indicator for cancelling the session
-            top_p (float): If set to float < 1, only the smallest set of most
-              probable tokens with probabilities that add up to top_p or higher
-            are kept for generation.
-            top_k (int): The number of the highest probability vocabulary
-              tokens to keep for top-k-filtering
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-              1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
-            random_seed (int): seed used by sampling
+            generation_config (EngineGenerationConfig): generation config
             stream_output (bool): indicator for stream output
+            kwargs (dict): kwargs for backward compatibility
         """
         if stream_output and not stop:
             self.model_insts[0].register_callback(self._forward_callback)
+
+        generation_config = self._update_generation_config(
+            generation_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
             input_ids=input_ids,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
-            request_output_len=request_output_len,
             sequence_start=sequence_start,
             sequence_end=sequence_end,
             step=step,
             stop=stop,
-            top_p=top_p,
-            top_k=top_k,
-            temperature=temperature,
-            repetition_penalty=repetition_penalty,
-            ignore_eos=ignore_eos,
-            random_seed=random_seed,
-            stream_output=stream_output)
+            generation_config=generation_config)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
@@ -791,10 +777,12 @@ class TurboMindInstance:
             outputs = []
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item(
-                ) == self.eos_id and not ignore_eos:
+                if len(output) > 0 and output[-1].item() == self.eos_id \
+                        and not generation_config.ignore_eos:
                     outputs.append((output[:-1], len_ - 1))
-                elif len(output) > 0 and output[-1].item() in self.stop_tokens:
+                elif len(output) > 0 and \
+                    generation_config.stop_words is not None and \
+                        output[-1].item() in generation_config.stop_words:
                     outputs.append((output[:-1], len_))
                 else:
                     outputs.append((output, len_))
