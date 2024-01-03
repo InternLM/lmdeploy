@@ -28,6 +28,7 @@ Welcome to LMDeploy's tutorials!
 .. toctree::
    :maxdepth: 1
    :caption: Inference
+
    inference/pipeline.md
    inference/turbomind.md
    inference/turbomind_config.md

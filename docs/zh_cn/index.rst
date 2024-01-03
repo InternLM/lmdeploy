@@ -29,6 +29,7 @@
 .. toctree::
    :maxdepth: 1
    :caption: 推理
+
    inference/pipeline.md
    inference/turbomind.md
    inference/turbomind_config.md
