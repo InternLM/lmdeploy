@@ -98,7 +98,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 请阅读[快速上手](./docs/zh_cn/get_started.md)章节，了解 LMDeploy 的基本用法。
 
-为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/en/latest/)：
+为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 
 - 用户指南
   - 推理pipeline
