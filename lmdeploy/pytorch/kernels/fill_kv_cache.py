@@ -221,6 +221,9 @@ def fill_kv_cache(k_states: Tensor,
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
+    k_states = k_states.contiguous()
+    v_states = v_states.contiguous()
+
     fill_cache_info = getattr(context, 'fill_cache_info', None)
 
     if fill_cache_info is None:

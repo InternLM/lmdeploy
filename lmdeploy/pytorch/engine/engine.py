@@ -95,6 +95,17 @@ def _build_model_config(model_path: str, hf_config: Any):
                                    eos_token_id=hf_config.eos_token_id,
                                    dtype=torch_dtype,
                                    json_config=hf_config.to_dict())
+    elif hf_config.architectures[0] == 'InternLM2ForCausalLM':
+        num_key_value_groups = hf_config.num_attention_heads \
+            // hf_config.num_key_value_heads
+        model_config = ModelConfig(
+            hf_config.hidden_size // num_key_value_groups,
+            hf_config.num_hidden_layers,
+            hf_config.num_attention_heads // num_key_value_groups,
+            bos_token_id=hf_config.bos_token_id,
+            eos_token_id=hf_config.eos_token_id,
+            dtype=torch_dtype,
+            json_config=hf_config.to_dict())
     else:
         model_config = ModelConfig(hf_config.hidden_size,
                                    hf_config.num_hidden_layers,
