@@ -4,7 +4,7 @@
 
 ## 设计
 
-\[PLACEHOLDER\]
+![pytorch arch](https://github.com/grimoire/lmdeploy/blob/media/lmdeploy_pytorch_arch.png?raw=true)
 
 ## API
 
