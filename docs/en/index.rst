@@ -1,43 +1,59 @@
-Welcome to LMDeploy's documentation!
+Welcome to LMDeploy's tutorials!
 ====================================
 
-You can switch between Chinese and English documents in the lower-left corner of the layout.
-
+.. _get_started:
 .. toctree::
    :maxdepth: 2
-   :caption: Build
+   :caption: Get Started
 
+   get_started.md
+
+.. _build:
+.. toctree::
+   :maxdepth: 1
+   :caption: Build
    build.md
 
+.. _benchmark:
 .. toctree::
-   :maxdepth: 2
-   :caption: Chatting with PyTorch
+   :maxdepth: 1
+   :caption: Benchmark
 
-   pytorch.md
+   benchmark/profile_generation.md
+   benchmark/profile_throughput.md
+   benchmark/profile_api_server.md
+   benchmark/profile_triton_server.md
 
+.. _inference:
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
+   :caption: Inference
+   inference/pipeline.md
+   inference/turbomind.md
+   inference/turbomind_config.md
+   inference/pytorch.md
+
+.. _serving:
+.. toctree::
+   :maxdepth: 1
+   :caption: serving
+
+   serving/restful_api.md
+
+.. _quantization:
+.. toctree::
+   :maxdepth: 1
    :caption: Quantization
 
-   quantization.md
+   quantization/w4a16.md
+   quantization/kv_int8.md
+   quantization/w8a8.md
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Serving
+   :maxdepth: 1
+   :caption: Advanced Guide
 
-   serving.md
-
-.. toctree::
-   :maxdepth: 2
-   :caption: TurboMind
-
-   turbomind.md
-
-.. toctree::
-   :caption: Switch Language
-
-   switch_language.md
-
+   serving/qos.md
 
 Indices and tables
 ==================

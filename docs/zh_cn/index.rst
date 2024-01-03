@@ -4,11 +4,10 @@
 
 .. _快速上手:
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
    :caption: 快速上手
 
    get_started.md
-   faq.md
 
 .. _编译和安装:
 .. toctree::
@@ -30,17 +29,17 @@
 .. toctree::
    :maxdepth: 1
    :caption: 推理
-   pipeline.md
-   turbomind.md
-   turbomind_config.md
-   pytorch.md
+   inference/pipeline.md
+   inference/turbomind.md
+   inference/turbomind_config.md
+   inference/pytorch.md
 
 .. _服务:
 .. toctree::
    :maxdepth: 1
    :caption: 服务
 
-   serving.md
+   serving/restful_api.md
 
 
 .. _量化:
@@ -48,18 +47,15 @@
    :maxdepth: 1
    :caption: 量化
 
-   w4a16.md
-   kv_int8.md
+   quantization/w4a16.md
+   quantization/kv_int8.md
+   quantization/w8a8.md
 
 .. toctree::
    :maxdepth: 1
    :caption: 进阶指南
 
-
-.. toctree::
-   :caption: 语言切换
-
-   switch_language.md
+   serving/qos.md
 
 
 索引与表格
