@@ -1,7 +1,7 @@
 <div align="center">
   <img src="docs/en/_static/image/lmdeploy-logo.svg" width="450"/>
 
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy-zh-cn.readthedocs.io/latest/)
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/zh-cn/latest/)
 [![badge](https://github.com/InternLM/lmdeploy/workflows/lint/badge.svg)](https://github.com/InternLM/lmdeploy/actions)
 [![PyPI](https://img.shields.io/pypi/v/lmdeploy)](https://pypi.org/project/lmdeploy)
 [![license](https://img.shields.io/github/license/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/tree/main/LICENSE)
