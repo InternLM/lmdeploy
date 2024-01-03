@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
-import io
-import json
 import logging
 import os.path as osp
 import sys
@@ -26,8 +24,9 @@ from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .engine_config import EngineConfig
 from .utils import (ModelSource, check_tm_model_input, create_hf_download_args,
-                    get_hf_config_content, get_model_source)
+                    get_model_source)
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -77,6 +76,25 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
+def _update_engine_config(config: EngineConfig, **kwargs):
+    if config is None:
+        config = EngineConfig()
+    for k, v in kwargs.items():
+        if v and hasattr(config, k):
+            setattr(config, k, v)
+    return config
+
+
+def _update_tm_config(dst: TurbomindModelConfig, src: EngineConfig):
+    dst_dict = copy.deepcopy(dst.__dict__)
+    src_dict = copy.deepcopy(src.__dict__)
+    src_dict['tensor_para_size'] = src_dict['tp']
+    for k, v in src_dict.items():
+        if v is not None and k in dst_dict:
+            dst_dict[k] = v
+    return TurbomindModelConfig.from_dict(dst_dict)
+
+
 @contextmanager
 def cuda_ctx(device_id):
     old_device = torch.cuda.current_device()
@@ -102,30 +120,35 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
+                 engine_config: EngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
                  model_name: Optional[str] = None,
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
                  **kwargs):
-        if tp is not None:
-            assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
-        self.gpu_count = tp if tp is not None else 1
+
+        engine_config = _update_engine_config(engine_config,
+                                              model_name=model_name,
+                                              model_format=model_format,
+                                              group_size=group_size,
+                                              tp=tp,
+                                              **kwargs)
+        tp = engine_config.tp
+        assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
+        self.gpu_count = tp
 
         if model_source == ModelSource.WORKSPACE:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
                                             'tokenizer')
             self.tokenizer = Tokenizer(tokenizer_model_path)
-            self.model_comm = self._from_workspace(model_path)
+            self.model_comm = self._from_workspace(model_path=model_path,
+                                                   engine_config=engine_config)
         else:
             self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
-                                            model_name=model_name,
-                                            model_format=model_format,
-                                            group_size=group_size,
-                                            tp=tp,
-                                            **kwargs)
+                                            engine_config=engine_config)
 
         self.eos_id = self.tokenizer.eos_token_id
         self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
@@ -194,68 +217,42 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _from_hf(self,
-                 model_source: ModelSource,
-                 model_path: str,
-                 model_name: Optional[str] = None,
-                 model_format: Optional[str] = None,
-                 group_size: Optional[int] = None,
-                 tp: Optional[int] = None,
-                 **kwargs):
+    def _from_hf(self, model_source: ModelSource, model_path: str,
+                 engine_config: EngineConfig):
         """Load model which is in hf format."""
-        # get model_name, group_size if is lmdeploy managed.
-        if model_source == ModelSource.HF_LMDEPLOY:
-            config = get_hf_config_content(model_path, local_files_only=True)
-            tm_config = config['turbomind']
-            tm_config.update(kwargs)
-            var_shoud_be_none = dict(model_name=model_name,
-                                     model_format=model_format,
-                                     group_size=group_size)
-            for key, value in var_shoud_be_none.items():
-                assert value is None, f'{key} should be None when model is '\
-                    f'from {model_source}'
-            model_name = tm_config['model_name']
-            group_size = tm_config['group_size']
-            if tm_config['weight_type'] == 'int4':
-                model_format = 'awq'
-        else:
-            assert model_name is not None, 'please supply model_name when ' \
-                f'model is form {model_source}'
-            if osp.exists(osp.join(model_path, 'outputs_stats.pth')):
-                model_format = 'awq' if model_format is None else model_format
-                group_size = 128 if group_size is None else group_size
-            tm_config = kwargs
-
-        assert model_name in MODELS.module_dict.keys(), \
-            f"'{model_name}' is not supported. " \
+        assert model_source == ModelSource.HF_MODEL, \
+            f'{model_source} is not supported'
+        assert engine_config.model_name in MODELS.module_dict.keys(), \
+            f"'{engine_config.model_name}' is not supported. " \
             f'The supported models are: {MODELS.module_dict.keys()}'
-        assert model_format in supported_formats, 'the model format ' \
-            f'should be in {supported_formats}'
+        assert engine_config.model_format in supported_formats, \
+            f'The model format should be in {supported_formats}'
+
+        # update model_format if not supplied and outputs_stats.pth exists
+        if osp.exists(osp.join(model_path, 'outputs_stats.pth')) and \
+                engine_config.model_format is None:
+            engine_config.model_format = 'awq'
 
         data_type = 'fp16'
         output_format = 'fp16'
-        inferred_model_format = get_model_format(model_name, model_format)
-        cfg = TurbomindModelConfig.from_dict(tm_config, allow_none=True)
-
-        # overwrite with input params
-        cfg.model_name = model_name
-        cfg.tensor_para_size = 1 if tp is None else tp
-        cfg.rotary_embedding = cfg.size_per_head
-        cfg.group_size = group_size
+        inferred_model_format = get_model_format(engine_config.model_name,
+                                                 engine_config.model_format)
+        cfg = TurbomindModelConfig.from_engine_config(engine_config)
         if inferred_model_format.find('awq') != -1:
             cfg.weight_type = 'int4'
             output_format = 'w4'
             data_type = 'int4'
-            assert group_size > 0, f'group_size: {group_size} should > 0'
+            assert cfg.group_size > 0, \
+                f'group_size: {cfg.group_size} should > 0'
         else:
-            output_format = update_output_format(model_name,
+            output_format = update_output_format(engine_config.model_name,
                                                  inferred_model_format,
                                                  model_path, output_format)
             data_type = output_format
             update_config_weight_type(output_format, cfg)
 
         self.config = cfg
-        self.model_name = model_name
+        self.model_name = engine_config.model_name
         self.data_type = data_type
 
         input_model = INPUT_MODELS.get(inferred_model_format)(
@@ -264,18 +261,11 @@ class TurboMind:
         output_model = OUTPUT_MODELS.get(output_format)(
             input_model=input_model, cfg=cfg, to_file=False, out_dir='')
 
-        config = copy.deepcopy(output_model.cfg.__dict__)
-        logger.warning(f'model_config:\n{json.dumps(config, indent=2)}')
-        parser = ConfigParser()
-        parser['llama'] = config
-        with io.StringIO() as ss:
-            parser.write(ss)
-            ss.seek(0)
-            config = ss.read()
+        logger.warning(f'model_config:\n\n{output_model.cfg.toini()}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=config,
+            config=output_model.cfg.toini(),
             tensor_para_size=self.gpu_count,
             data_type=data_type)
 
@@ -289,35 +279,48 @@ class TurboMind:
         output_model.export()
 
         # load kv qparams
-        self._load_kv_qparams(model_path, tm_params, **kwargs)
+        self._load_kv_qparams(model_path,
+                              tm_params,
+                              kv_sym=engine_config.kv_sym,
+                              kv_bits=engine_config.kv_bits)
         assert len(tm_params) == 0, f'missing {tm_params.keys()}'
 
         return model_comm
 
-    def _from_workspace(self, model_path: str):
+    def _from_workspace(self, model_path: str, engine_config: EngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
         ini_path = osp.join(model_path, 'triton_models', 'weights',
                             'config.ini')
+        # load cfg
         with open(ini_path, 'r') as f:
             parser = ConfigParser()
             parser.read_file(f)
-            section_name = 'llama'
-            tp_cfg = parser.getint(section_name, 'tensor_para_size')
+        section_name = 'llama'
+        _cfg = parser._sections[section_name]
+        cfg = TurbomindModelConfig.from_dict(_cfg)
 
-            if tp_cfg != 1 and tp_cfg != self.gpu_count:
-                get_logger('turbomind').info(
-                    f'found tp={tp_cfg} in config.ini.')
-                self.gpu_count = tp_cfg
-            self.model_name = parser.get(section_name, 'model_name')
-            self.data_type = parser.get(section_name, 'weight_type')
-            cfg = parser._sections[section_name]
-            cfg = TurbomindModelConfig.from_dict(cfg)
-            self.config = cfg
+        # check whether input tp is valid
+        if cfg.tensor_para_size != 1 and \
+                engine_config.tp != cfg.tensor_para_size:
+            get_logger('turbomind').info(
+                f'found tp={cfg.tensor_para_size} in config.ini.')
+            self.gpu_count = cfg.tensor_para_size
+            engine_config.tp = cfg.tensor_para_size
+
+        # update cfg
+        cfg = _update_tm_config(cfg, engine_config)
+
+        # update cls
+        self.config = cfg
+        self.model_name = cfg.model_name
+        self.data_type = cfg.weight_type
 
         # create model
+        logger.warning(f'model_config:\n\n{cfg.toini()}')
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            weight_dir,
+            model_dir=weight_dir,
+            config=cfg.toini(),
             tensor_para_size=self.gpu_count,
             data_type=self.data_type)
 
@@ -328,6 +331,7 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
+                        engine_config: EngineConfig = None,
                         model_name: Optional[str] = None,
                         model_format: Optional[str] = None,
                         group_size: Optional[int] = None,
@@ -379,8 +383,9 @@ class TurboMind:
                 local_path = pretrained_model_name_or_path
 
         logger.warning(f'model_source: {model_source}')
-        return cls(model_source=model_source,
-                   model_path=local_path,
+        return cls(model_path=local_path,
+                   engine_config=engine_config,
+                   model_source=model_source,
                    model_name=model_name,
                    model_format=model_format,
                    group_size=group_size,
