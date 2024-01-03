@@ -188,7 +188,7 @@ TurboMind 根据 `session_len`、 `cache_chunk_size` 和 `cache_max_entry_count`
 
 ### kv int8 开关
 
-当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](./kv_int8.md) 部署文档。
+当启动 8bit k/v 推理时，需要修改参数 `quant_policy` 和 `use_context_fmha`。详细内容请查阅 [kv int8](../quantization/kv_int8.md) 部署文档。
 
 ### 外推能力开关
 
