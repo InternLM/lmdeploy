@@ -21,14 +21,14 @@ class SamplingParam:
 @dataclasses.dataclass
 class ModelConfig:
     """parameters for chat templates."""
-    model_name: str
-    system: Optional[str] = None
-    meta_instruction: Optional[str] = None
-    eosys: Optional[str] = None
-    user: Optional[str] = None
-    eoh: Optional[str] = None
-    assistant: Optional[str] = None
-    eoa: Optional[str] = None
+    model_name: str  # determine which chat template will be applied
+    system: Optional[str] = None  # begin of the system prompt
+    meta_instruction: Optional[str] = None  # system prompt
+    eosys: Optional[str] = None  # end of the system prompt
+    user: Optional[str] = None  # begin of the user prompt
+    eoh: Optional[str] = None  # end of the user prompt
+    assistant: Optional[str] = None  # begin of the assistant prompt
+    eoa: Optional[str] = None  # end of the assistant prompt
     capability: Optional[str] = None
 
     @property
@@ -37,7 +37,7 @@ class ModelConfig:
             attr: getattr(self, attr)
             for attr in dir(self) if not attr.startswith('_')
             and attr != 'model' and getattr(self, attr) is not None
-        }
+        }  # get all customized parameters
         model: BaseModel = MODELS.get(
             self.model_name).from_config(**attrs_dict)
         return model
@@ -68,6 +68,7 @@ class BaseModel:
 
     @classmethod
     def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
         return cls(**kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -160,6 +161,7 @@ class Vicuna(BaseModel):
 
     @classmethod
     def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
         mapping = {'meta_instruction': 'system'}
         new_kwargs = {
             mapping.get(key, key): value
@@ -452,6 +454,7 @@ If a question does not make any sense, or is not factually coherent, explain why
 
     @classmethod
     def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
         mapping = {
             'system': 'b_sys',
             'eosys': 'e_sys',
@@ -535,6 +538,7 @@ class Qwen7BChat(BaseModel):
 
     @classmethod
     def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
         # TODO system, eosys, user, eoh, assistant, eoa.
         mapping = {'meta_instruction': 'system'}
         new_kwargs = {
