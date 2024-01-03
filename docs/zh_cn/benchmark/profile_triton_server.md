@@ -15,7 +15,7 @@ wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/r
 ```
 
 测速时，需输入具体的模型。我们推荐把模型下载到本地，并通过 `lmdeploy convert` 把模型转换为 turbomind 格式，然后再进行测试。
-这么做的原因是，方便调节推理引擎参数，以达到比较好的推理性能，比如批处理大小（max_batch_size），K/V cache缓存大小（max_cache_entry_count）等等。有关这些参数的详细说明，请参考[这里](../turbomind_config.md).
+这么做的原因是，方便调节推理引擎参数，以达到比较好的推理性能，比如批处理大小（max_batch_size），K/V cache缓存大小（max_cache_entry_count）等等。有关这些参数的详细说明，请参考[这里](../inference/turbomind_config.md).
 
 以下章节中，我们默认模型是 turbomind 格式的。
 
@@ -44,7 +44,7 @@ $$
 我们用 `internlm-7b` 为例，api_server的速度测试全流程如下：
 
 ```shell
-pip install 'lmdeploy[serve]>=0.1.0a1'
+pip install lmdeploy
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json

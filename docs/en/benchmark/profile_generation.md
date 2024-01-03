@@ -10,7 +10,7 @@ git clone --depth=1 https://github.com/InternLM/lmdeploy
 ```
 
 During performance test, a specific model needs to be inputted. We recommend converting the model into turbomind format via `lmdeploy convert`, then proceed with testing.
-The reason is to conveniently adjust the parameters of the inference engine in order to achieve better performance, such as batch size (max_batch_size), K/V cache size (max_cache_entry_count), etc. For detailed explanations of these parameters, please refer to [here](../turbomind_config.md).
+The reason is to conveniently adjust the parameters of the inference engine in order to achieve better performance, such as batch size (max_batch_size), K/V cache size (max_cache_entry_count), etc. For detailed explanations of these parameters, please refer to [here](../inference/turbomind_config.md).
 
 In the following sections, we assume the model is in turbomind format.
 
@@ -58,7 +58,7 @@ Optional arguments are listed as below:
 
 - `--concurrency`
 
-  It represents the number of request threads. Requests of concurrent threads will be batched by the inference engine. It is a list with default value `[1, 16, 32, 64]`, which implies that the performance under 4 different levels of concurrency is tested. The level of concurrency should not exceed `max_batch_size` in [turbomind config](../turbomind_config.md#turbomind-20-config). Otherwise, there will be `max_batch_size - concurrency` number of threads randomly waiting almost at any time during test.
+  It represents the number of request threads. Requests of concurrent threads will be batched by the inference engine. It is a list with default value `[1, 16, 32, 64]`, which implies that the performance under 4 different levels of concurrency is tested. The level of concurrency should not exceed `max_batch_size` in [turbomind config](../inference/turbomind_config.md#turbomind-20-config). Otherwise, there will be `max_batch_size - concurrency` number of threads randomly waiting almost at any time during test.
 
 - `--prompt-tokens` and `--completion-tokens`
 

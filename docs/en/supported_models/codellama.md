@@ -109,4 +109,4 @@ or through webui after launching gradio,
 lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
-Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../restful_api.md).
+Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../serving/restful_api.md).
