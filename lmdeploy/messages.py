@@ -3,7 +3,11 @@
 from dataclasses import dataclass
 from typing import List
 
+from lmdeploy.utils import get_logger
+
 from .tokenizer import Tokenizer
+
+logger = get_logger('lmdeploy')
 
 
 @dataclass
@@ -44,23 +48,19 @@ class EngineGenerationConfig(GenerationConfig):
             >>> gen_config = GenerationConfig(stop_words=['<eoa>'])
             >>> gen_config = EngineGenerationConfig.From(gen_config, tokenizer)
         """ # noqa E501
-        stop_words = gen_config.stop_words
-        if stop_words is not None:
-            assert isinstance(stop_words, List) and \
-                all(isinstance(elem, str) for elem in stop_words), \
-                f'stop_words must be a list of str but got {type(stop_words)}'
-            stop_words = [tokenizer(word).input_ids for word in stop_words]
-            assert all(len(word) == 1 for word in stop_words)
-            stop_words = [word[0] for word in stop_words]
 
-        bad_words = gen_config.bad_words
-        if bad_words is not None:
-            assert isinstance(bad_words, List) and \
-                all(isinstance(elem, str) for elem in bad_words), \
-                f'bad_words must be a list of str but got {type(bad_words)}'
-            bad_words = [tokenizer(word).input_ids for word in bad_words]
-            assert all(len(word) == 1 for word in bad_words)
-            bad_words = [word[0] for word in bad_words]
+        def special_word_token_ids(words):
+            if words is not None:
+                assert isinstance(words, List) and \
+                    all(isinstance(elem, str) for elem in words), \
+                    f'stop_words must be a list of str but got {type(words)}'
+                token_ids = tokenizer(words).input_ids
+                if sum(len(_) for _ in token_ids) != len(words):
+                    logger.warning(f'words token num over 1: '
+                                   f'token_ids({token_ids}), words({words})')
+                    return None
+                return [token_id[0] for token_id in token_ids]
+            return None
 
         return EngineGenerationConfig(
             n=gen_config.n,
@@ -71,5 +71,5 @@ class EngineGenerationConfig(GenerationConfig):
             repetition_penalty=gen_config.repetition_penalty,
             ignore_eos=gen_config.ignore_eos,
             random_seed=gen_config.random_seed,
-            stop_words=stop_words,
-            bad_words=bad_words)
+            stop_words=special_word_token_ids(gen_config.stop_words),
+            bad_words=special_word_token_ids(gen_config.bad_words))
