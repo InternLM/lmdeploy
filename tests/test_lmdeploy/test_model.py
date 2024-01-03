@@ -20,6 +20,19 @@ def test_best_match_model(model_path_and_name):
             1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
 
 
+@pytest.mark.parametrize('model_name',
+                         ['llama2', 'base', 'yi', 'qwen-7b', 'vicuna'])
+@pytest.mark.parametrize('meta_instruction', ['[fake meta_instruction]'])
+def test_model_config(model_name, meta_instruction):
+    from lmdeploy.model import ModelConfig
+    model = ModelConfig(model_name, meta_instruction=meta_instruction).model
+    prompt = model.get_prompt('')
+    if model_name == 'base':
+        assert prompt == ''
+    else:
+        assert meta_instruction in prompt
+
+
 def test_base_model():
     model = MODELS.get('llama')()
     assert model is not None

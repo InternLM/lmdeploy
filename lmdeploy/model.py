@@ -3,7 +3,7 @@ import dataclasses
 import difflib
 import os
 from abc import abstractmethod
-from typing import List
+from typing import List, Optional
 
 from mmengine import Registry
 
@@ -16,6 +16,31 @@ class SamplingParam:
     top_k: float = None
     temperature: float = 0.8
     repetition_penalty: float = 1.0
+
+
+@dataclasses.dataclass
+class ModelConfig:
+    """parameters for chat templates."""
+    model_name: str
+    system: Optional[str] = None
+    meta_instruction: Optional[str] = None
+    eosys: Optional[str] = None
+    user: Optional[str] = None
+    eoh: Optional[str] = None
+    assistant: Optional[str] = None
+    eoa: Optional[str] = None
+    capability: Optional[str] = None
+
+    @property
+    def model(self):
+        attrs_dict = {
+            attr: getattr(self, attr)
+            for attr in dir(self) if not attr.startswith('_')
+            and attr != 'model' and getattr(self, attr) is not None
+        }
+        model: BaseModel = MODELS.get(
+            self.model_name).from_config(**attrs_dict)
+        return model
 
 
 @MODELS.register_module(name='internlm')
@@ -40,6 +65,10 @@ class BaseModel:
         self.repetition_penalty = repetition_penalty
         self.stop_words = stop_words
         self.capability = capability
+
+    @classmethod
+    def from_config(cls, **kwargs):
+        return cls(**kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -128,6 +157,15 @@ class Vicuna(BaseModel):
         self.system = system
         self.user = user
         self.assistant = assistant
+
+    @classmethod
+    def from_config(cls, **kwargs):
+        mapping = {'meta_instruction': 'system'}
+        new_kwargs = {
+            mapping.get(key, key): value
+            for key, value in kwargs.items()
+        }
+        return cls(**new_kwargs)
 
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -412,6 +450,19 @@ If a question does not make any sense, or is not factually coherent, explain why
         self.default_sys_prompt = system
         self.session_len = session_len
 
+    @classmethod
+    def from_config(cls, **kwargs):
+        mapping = {
+            'system': 'b_sys',
+            'eosys': 'e_sys',
+            'meta_instruction': 'system'
+        }
+        new_kwargs = {
+            mapping.get(key, key): value
+            for key, value in kwargs.items()
+        }
+        return cls(**new_kwargs)
+
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
@@ -481,6 +532,16 @@ class Qwen7BChat(BaseModel):
         self.im_end = im_end
         self.system = system
         self.stop_words = stop_words
+
+    @classmethod
+    def from_config(cls, **kwargs):
+        # TODO system, eosys, user, eoh, assistant, eoa.
+        mapping = {'meta_instruction': 'system'}
+        new_kwargs = {
+            mapping.get(key, key): value
+            for key, value in kwargs.items()
+        }
+        return cls(**new_kwargs)
 
     def decorate_prompt(self, prompt, sequence_start=True):
         assert self.capability == 'chat', \
@@ -619,23 +680,23 @@ class SOLAR(BaseModel):
     """
 
     def __init__(self,
-                 b_sys='### System:\n',
-                 e_sys='\n\n',
+                 system='### System:\n',
+                 eosys='\n\n',
                  user='### User:\n',
                  eoh='\n\n',
                  assistant='### Assistant:\n',
                  eoa='\n\n',
-                 system='',
+                 meta_instruction='',
                  session_len=2048,
                  **kwargs):
         super().__init__(**kwargs)
-        self.b_sys = b_sys
-        self.e_sys = e_sys
+        self.system = system
+        self.eosys = eosys
         self.user = user
         self.eoh = eoh
         self.assistant = assistant
         self.eoa = eoa
-        self.system = system
+        self.meta_instruction = meta_instruction
         self.session_len = session_len
 
     def decorate_prompt(self, prompt, sequence_start=True):
@@ -652,7 +713,7 @@ class SOLAR(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.b_sys}{self.system}{self.e_sys}' \
+            return f'{self.system}{self.meta_instruction}{self.eosys}' \
                    f'{self.user}{prompt}{self.eoh}{self.assistant}'
 
         return f'{self.user}{prompt}{self.eoh}{self.assistant}'
@@ -669,8 +730,8 @@ class SOLAR(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        system = self.system if not system else system
-        ret = f'{self.b_sys}{system}{self.e_sys}'
+        system = self.meta_instruction if not system else system
+        ret = f'{self.system}{system}{self.eosys}'
         for i, (user, assistant) in enumerate(zip(users, assistants)):
             ret += f'{self.user}{user}{self.eoh}{self.assistant}'
             if assistant:
@@ -689,14 +750,14 @@ class UltraChat(BaseModel):
 
     def __init__(
             self,
-            system="""User: A one-turn chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, very detailed, and polite answers to the user's questions.</s>""",  # noqa: E501
+            meta_instruction="""User: A one-turn chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, very detailed, and polite answers to the user's questions.</s>""",  # noqa: E501
             eos='</s>',
             user='User: ',
             assistant='Assistant: ',
             session_len=2048,
             **kwargs):
         super().__init__(**kwargs)
-        self.system = system
+        self.meta_instruction = meta_instruction
         self.eos = eos
         self.session_len = session_len
         self.user = user
@@ -716,7 +777,7 @@ class UltraChat(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.system}\n{self.user}{prompt}{self.eos}' \
+            return f'{self.meta_instruction}\n{self.user}{prompt}{self.eos}' \
                    f'\n{self.assistant}'
 
         return f'\n{self.user}{prompt}{self.eos}' \
@@ -734,7 +795,7 @@ class UltraChat(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        system = self.system if not system else system
+        system = self.meta_instruction if not system else system
         ret = f'{system}'
         for user, assistant in zip(users, assistants):
             if assistant:
