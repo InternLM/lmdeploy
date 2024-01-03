@@ -4,10 +4,9 @@ import os
 import random
 from typing import List
 
+from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import MODELS
 from lmdeploy.tokenizer import Tokenizer
-
-from .messages import SamplingParam
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -69,10 +68,10 @@ def main(
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
     """
-    from . import engine as tm
-    tm_model = tm.Engine(model_path,
-                         tp=tp,
-                         trust_remote_code=trust_remote_code)
+    from lmdeploy.pytorch.engine.engine import Engine, EngineConfig
+    tm_model = Engine(model_path,
+                      engine_config=EngineConfig(tp=tp),
+                      trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
 
@@ -101,7 +100,8 @@ def main(
 
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
-            sampling_param = SamplingParam(
+            gen_config = EngineGenerationConfig(
+                max_new_tokens=512,
                 top_k=top_k,
                 top_p=top_p,
                 temperature=temperature,
@@ -109,12 +109,9 @@ def main(
                 ignore_eos=False,
                 random_seed=seed,
                 stop_words=stop_words)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=input_ids,
-                    request_output_len=512,
-                    step=step,
-                    sampling_param=sampling_param):
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=input_ids,
+                                                  gen_config=gen_config):
                 status, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res, offset=response_size)

@@ -8,7 +8,7 @@ class SchedulerConfig:
 
     max_batches: int
     max_session_len: int
-    max_request_output_len: int
+    max_request_output_len: int = 512
     eviction_type: str = 'copy'
     prefill_interval: int = 16
 
