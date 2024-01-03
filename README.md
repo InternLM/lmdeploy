@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/lmdeploy-logo.svg" width="450"/>
+  <img src="docs/en/_static/image/lmdeploy-logo.svg" width="450"/>
 
 [![docs](https://img.shields.io/badge/docs-latest-blue)](https://lmdeploy.readthedocs.io/en/latest/)
 [![badge](https://github.com/InternLM/lmdeploy/workflows/lint/badge.svg)](https://github.com/InternLM/lmdeploy/actions)
@@ -18,10 +18,10 @@ English | [简体中文](README_zh-CN.md)
 
 ______________________________________________________________________
 
-## News 🎉
+## Latest News 🎉
 
 - \[2023/12\] Turbomind supports multimodal input. [Gradio Demo](./examples/vl/README.md)
-- \[2023/11\] Turbomind supports loading hf model directly. Click [here](./docs/en/load_hf.md) for details.
+- \[2023/11\] Turbomind supports loading hf model directly. Click [here](docs/en/inference/load_hf.md) for details.
 - \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
@@ -30,7 +30,7 @@ ______________________________________________________________________
 - \[2023/08\] TurboMind supports flash-attention2.
 - \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
 - \[2023/08\] TurboMind supports Windows (tp=1)
-- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](./docs/en/w4a16.md) guide for detailed info
+- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](docs/en/quantization/w4a16.md) guide for detailed info
 - \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
 - \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
 - \[2023/07\] TurboMind supports Llama-2 70B with GQA.
@@ -39,188 +39,77 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-## Introduction
+# Introduction
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
 
-- **Efficient Inference Engine (TurboMind)**: Based on [FasterTransformer](https://github.com/NVIDIA/FasterTransformer), we have implemented an efficient inference engine - TurboMind, which supports the inference of LLaMA and its variant models on NVIDIA GPUs.
+- **Efficient Inference Engine (TurboMind)**: It develops key features like persistent batch(a.k.a. continuous batching), blocked KV cache, dynamic split&fuse, tensor parallelism, high-performance CUDA kernels and so on, ensuring the high throughput and low latency during LLMs inference.
 
-- **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, it remembers dialogue history, thus avoiding repetitive processing of historical sessions.
+- **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
-- **Multi-GPU Model Deployment and Quantization**: We provide comprehensive model deployment and quantification support, and have been validated at different scales.
+- **Quantization**: LMDeploy supports various quantization methods and efficient inference of quantized models. The reliability of quantization has been verified on models of different scales.
 
-- **Persistent Batch Inference**: Further optimization of model execution efficiency.
+# Performance
 
-![PersistentBatchInference](https://github.com/InternLM/lmdeploy/assets/67539920/e3876167-0671-44fc-ac52-5a0f9382493e)
+The TurboMind engine achieves up to 1.36 ~ 1.85 times higher request throughput compared to vLLM across models of various size. In terms of static inference capabilities, the token throughput (`out token/s`) of TurboMind's 4bit model inference significantly outperforms FP16/BF16 inference, with an improvement of up to 2.4 times.
 
-## Supported Models
+![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/8e455cf1-a792-4fa8-91a2-75df96a2a5ba)
 
-`LMDeploy` has two inference backends, `Pytorch` and `TurboMind`. You can run `lmdeploy list` to check the supported model names.
+For inference benchmarks in more devices and more settings, please refer to the following link:
 
-### TurboMind
+- [A100](./docs/en/benchmark/a100_fp16.md)
+- 4090
+- 3090
+- 2080
 
-> **Note**<br />
-> W4A16 inference requires Nvidia GPU with Ampere architecture or above.
+# Supported Models
 
-|    Models    | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
-| :----------: | :-------------: | :--: | :-----: | :---: | :--: |
-|    Llama     |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|    Llama2    |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|    SOLAR     |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| InternLM-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| InternLM-20B |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|   QWen-7B    |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|   QWen-14B   |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan-7B  |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-| Baichuan2-7B |       Yes       | Yes  |   Yes   |  Yes  |  No  |
-|  Code Llama  |       Yes       | Yes  |   No    |  No   |  No  |
+`LMDeploy` has developed two inference engines - `Pytorch` and `TurboMind`, each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
-### Pytorch
+As shown in the next tables, the inference engines differ in the types of supported models and the inference data type. Users can choose the one that best fits their actual needs.
 
-|   Models    | Tensor Parallel | FP16 | KV INT8 | W4A16 | W8A8 |
-| :---------: | :-------------: | :--: | :-----: | :---: | :--: |
-|    Llama    |       Yes       | Yes  |   No    |  No   |  No  |
-|   Llama2    |       Yes       | Yes  |   No    |  No   |  No  |
-| InternLM-7B |       Yes       | Yes  |   No    |  No   |  No  |
+## TurboMind
 
-## Performance
+|       Model        |   Size   | FP16/BF16 | KV INT8 | W4A16 |
+| :----------------: | :------: | :-------: | :-----: | :---: |
+|       Llama        | 7B - 65B |    Yes    |   Yes   |  Yes  |
+|       Llama2       | 7B - 70B |    Yes    |   Yes   |  Yes  |
+|      InternLM      | 7B - 20B |    Yes    |   Yes   |  Yes  |
+| InternLM-XComposer |    7B    |    Yes    |   Yes   |  Yes  |
+|        QWen        | 7B - 72B |    Yes    |   Yes   |  Yes  |
+|      QWen-VL       |    7B    |    Yes    |   Yes   |  Yes  |
+|      Baichuan      |    7B    |    Yes    |   Yes   |  Yes  |
+|     Baichuan2      |    7B    |    Yes    |   Yes   |  Yes  |
+|     Code Llama     | 7B - 34B |    Yes    |   No    |  No   |
 
-**Case I**: output token throughput with fixed input token and output token number (1, 2048)
+## Pytorch
 
-**Case II**: request throughput with real conversation data
+|   Model   |   Size    | FP16/BF16 | KV INT8 | W8A8 |
+| :-------: | :-------: | :-------: | :-----: | :--: |
+|   Llama   | 7B - 65B  |    Yes    |   No    | Yes  |
+|  Llama2   | 7B - 70B  |    Yes    |   No    | Yes  |
+| InternLM  | 7B - 20B  |    Yes    |   No    | Yes  |
+| Baichuan2 | 7B - 13B  |    Yes    |   No    | Yes  |
+| ChatGLM2  |    6B     |    Yes    |   No    |  No  |
+|  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
 
-Test Setting: LLaMA-7B, NVIDIA A100(80G)
+# Getting Started
 
-The output token throughput of TurboMind exceeds 2000 tokens/s, which is about 5% - 15% higher than DeepSpeed overall and outperforms huggingface transformers by up to 2.3x.
-And the request throughput of TurboMind is 30% higher than vLLM.
+Please overview [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
 
-![benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/7775c518-608e-4e5b-be73-7645a444e774)
+For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
-## Quick Start
-
-### Installation
-
-Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
-
-```shell
-pip install lmdeploy
-```
-
-> **Note**<br />
-> `pip install lmdeploy` can only install the runtime required packages. If users want to run codes from modules like `lmdeploy.lite` and `lmdeploy.serve`, they need to install the extra required packages.
-> For instance, running `pip install lmdeploy[lite]` would install extra dependencies for `lmdeploy.lite` module.
->
-> - `all`: Install lmdeploy with all dependencies in `requirements.txt`
-> - `lite`: Install lmdeploy with extra dependencies in `requirements/lite.txt`
-> - `serve`: Install lmdeploy with dependencies in `requirements/serve.txt`
-
-### Deploy InternLM
-
-To use TurboMind inference engine, you need to first convert the model into TurboMind format. Currently, we support online conversion and offline conversion. With online conversion, TurboMind can load the Huggingface model directly. While with offline conversion, you should save the converted model first before using it.
-
-The following use [internlm/internlm-chat-7b](https://huggingface.co/internlm/internlm-chat-7b) as a example to show how to use turbomind with online conversion. You can refer to [load_hf.md](docs/en/load_hf.md) for other methods.
-
-#### Inference by TurboMind
-
-```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b --model-name internlm-chat-7b
-```
-
-> **Note**<br /> The internlm/internlm-chat-7b model will be downloaded under `.cache` folder. You can also use a local path here.
-
-> **Note**<br />
-> When inferring with FP16 precision, the InternLM-7B model requires at least 15.7G of GPU memory overhead on TurboMind. <br />
-> It is recommended to use NVIDIA cards such as 3090, V100, A100, etc.
-> Disable GPU ECC can free up 10% memory, try `sudo nvidia-smi --ecc-config=0` and reboot system.
-
-> **Note**<br />
-> Tensor parallel is available to perform inference on multiple GPUs. Add `--tp=<num_gpu>` on `chat` to enable runtime TP.
-
-#### Serving with gradio
-
-```shell
-# install lmdeploy with extra dependencies
-pip install lmdeploy[serve]
-
-lmdeploy serve gradio internlm/internlm-chat-7b --model-name internlm-chat-7b
-```
-
-![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)
-
-#### Serving with Restful API
-
-Launch inference server by:
-
-```shell
-# install lmdeploy with extra dependencies
-pip install lmdeploy[serve]
-
-lmdeploy serve api_server internlm/internlm-chat-7b --model-name internlm-chat-7b --instance_num 32 --tp 1
-```
-
-Then, you can communicate with it by command line,
-
-```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client api_server_url
-```
-
-or webui,
-
-```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
-```
-
-Refer to [restful_api.md](docs/en/restful_api.md) for more details.
-
-### Inference with PyTorch
-
-For detailed instructions on Inference pytorch models, see [here](docs/en/pytorch.md).
-
-#### Single GPU
-
-```shell
-lmdeploy chat torch $NAME_OR_PATH_TO_HF_MODEL \
-    --max_new_tokens 64 \
-    --temperature 0.8 \
-    --top_p 0.95 \
-    --seed 0
-```
-
-#### Tensor Parallel with DeepSpeed
-
-```shell
-deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
-    $NAME_OR_PATH_TO_HF_MODEL \
-    --max_new_tokens 64 \
-    --temperature 0.8 \
-    --top_p 0.95 \
-    --seed 0
-```
-
-You need to install deepspeed first to use this feature.
-
-```
-pip install deepspeed
-```
-
-## Quantization
-
-#### Weight INT4 Quantization
-
-LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
-
-[Click here](./docs/en/w4a16.md) to view the test results for weight int4 usage.
-
-#### KV Cache INT8 Quantization
-
-[Click here](./docs/en/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
-
-> **Warning**<br />
-> runtime Tensor Parallel for quantized model is not available. Please setup `--tp` on `deploy` to enable static TP.
+- User Guide
+  - Inference pipeline
+  - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
+  - Inference Engine - PyTorch
+  - [Serving](docs/en/serving/restful_api.md)
+  - [Quantization](docs/en/quantization)
+- Advance Guide
+  - Add chat template
+  - Add a new model
+  - gemm tuning
+  - Long context inference
 
 ## Contributing
 
@@ -230,6 +119,8 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 
 - [FasterTransformer](https://github.com/NVIDIA/FasterTransformer)
 - [llm-awq](https://github.com/mit-han-lab/llm-awq)
+- [vLLM](https://github.com/vllm-project/vllm)
+- [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
 ## License
 

@@ -30,6 +30,7 @@ def valid_str(string, coding='utf-8'):
 
 
 def main(model_path,
+         model_name: str = None,
          session_id: int = 1,
          cap: str = 'chat',
          tp: int = 1,
@@ -50,6 +51,7 @@ def main(model_path,
     """
     from lmdeploy import turbomind as tm
     tm_model = tm.TurboMind.from_pretrained(model_path,
+                                            model_name=model_name,
                                             tp=tp,
                                             capability=cap,
                                             **kwargs)

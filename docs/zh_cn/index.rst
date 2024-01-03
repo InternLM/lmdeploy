@@ -1,45 +1,65 @@
-欢迎来到 LMDeploy 的中文文档！
+欢迎来到 LMDeploy 的中文教程！
 ====================================
 
-点击页面左下角切换中英文。
 
+.. _快速上手:
 .. toctree::
    :maxdepth: 2
-   :caption: 编译
+   :caption: 快速上手
 
+   get_started.md
+
+.. _编译和安装:
+.. toctree::
+   :maxdepth: 1
+   :caption: 编译和安装
    build.md
 
+.. _测试基准:
 .. toctree::
-   :maxdepth: 2
-   :caption: 使用PyTorch对话
+   :maxdepth: 1
+   :caption: 测试基准
 
-   pytorch.md
+   benchmark/profile_generation.md
+   benchmark/profile_throughput.md
+   benchmark/profile_api_server.md
+   benchmark/profile_triton_server.md
 
+.. _推理:
 .. toctree::
-   :maxdepth: 2
-   :caption: 量化
+   :maxdepth: 1
+   :caption: 推理
 
-   quantization.md
+   inference/pipeline.md
+   inference/turbomind.md
+   inference/turbomind_config.md
+   inference/pytorch.md
 
+.. _服务:
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: 服务
 
-   serving.md
+   serving/restful_api.md
+
+
+.. _量化:
+.. toctree::
+   :maxdepth: 1
+   :caption: 量化
+
+   quantization/w4a16.md
+   quantization/kv_int8.md
+   quantization/w8a8.md
 
 .. toctree::
-   :maxdepth: 2
-   :caption: TurboMind
+   :maxdepth: 1
+   :caption: 进阶指南
 
-   turbomind.md
-
-.. toctree::
-   :caption: 语言切换
-
-   switch_language.md
+   serving/qos.md
 
 
-Indices and tables
+索引与表格
 ==================
 
 * :ref:`genindex`

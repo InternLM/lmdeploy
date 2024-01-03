@@ -18,7 +18,7 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -357,6 +357,14 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
+        # try fuzzy matching to get a model_name
+        if model_name is None and model_source == ModelSource.HF_MODEL:
+            potential_names = best_match_model(pretrained_model_name_or_path)
+            if potential_names is None:
+                logger.warning(f'Please input a model_name for {model_source}')
+            else:
+                model_name = potential_names[0]
+                logger.warning(f'model_name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:

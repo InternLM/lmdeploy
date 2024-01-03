@@ -82,7 +82,7 @@ lmdeploy chat turbomind ./workspace
 
 相对于直接量化 Weight（如 [GPTQ-for-LLaMa](https://github.com/qwopqwop200/GPTQ-for-LLaMa/)），我们做了两种方案在 7B 模型中的内存增长对比预估，部分数据来自 [llama.cpp](https://github.com/ggerganov/llama.cpp)。
 
-![](../../resources/batch_memory.png)
+![](../../../resources/batch_memory.png)
 
 可以看到，fp16 版本每个并发需要 1030MB 显存，因此量化 kv_cache 能显著降低运行时的显存增长速度。
 
