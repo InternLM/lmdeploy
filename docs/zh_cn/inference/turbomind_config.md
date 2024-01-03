@@ -100,7 +100,7 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 ### kv int8 开关
 
-`quant_policy`是 KV-int8 推理开关。具体使用方法，请参考 [kv int8](./kv_int8.md) 部署文档
+`quant_policy`是 KV-int8 推理开关。具体使用方法，请参考 [kv int8](../quantization/kv_int8.md) 部署文档
 
 ### 外推能力开关
 

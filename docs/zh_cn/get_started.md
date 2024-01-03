@@ -19,7 +19,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-支持多卡并行处理，只用修改`tp`参数。关于 pipeline 的更多推理参数说明，请参考[这里](./pipeline.md)
+支持多卡并行处理，只用修改`tp`参数。关于 pipeline 的更多推理参数说明，请参考[这里](./inference/pipeline.md)
 
 ## 推理服务
 
