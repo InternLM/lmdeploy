@@ -168,6 +168,7 @@ class HuggingFaceTokenizer:
         # TODO maybe lack a constant.py
         self._indexes_tokens_deque = deque(maxlen=10)
         self.max_indexes_num = 5
+        self.token2id = {}
 
     @property
     def vocab_size(self):
@@ -227,19 +228,22 @@ class HuggingFaceTokenizer:
         for _token, _indexes in self._indexes_tokens_deque:
             if token == _token:
                 return _indexes
-        # decode is slower than convert_ids_to_tokens
-        if self.maybe_decode_bytes:
-            indexes = [
-                i for i in range(self.vocab_size)
-                if token in self.model.decode(i)
-            ]
-        else:
-            if token == ' ':  # ' ' is special
-                token = '▁'
-            indexes = [
-                i for i in range(self.vocab_size)
-                if token in self.model.convert_ids_to_tokens([i])[0]
-            ]
+
+        if self.token2id == {}:
+            # decode is slower than convert_ids_to_tokens
+            if self.maybe_decode_bytes:
+                self.token2id = {
+                    self.model.decode(i): i
+                    for i in range(self.vocab_size)
+                }
+            else:
+                self.token2id = {
+                    self.model.convert_ids_to_tokens(i): i
+                    for i in range(self.vocab_size)
+                }
+        if token == ' ':  # ' ' is special
+            token = '▁'
+        indexes = [i for _token, i in self.token2id.items() if token in _token]
         if len(indexes) > self.max_indexes_num:
             indexes = self.encode(token, add_bos=False)[-1:]
             logger.warning(
