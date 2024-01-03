@@ -35,7 +35,7 @@ lmdeploy serve api_server internlm/internlm-chat-7b --server-port 8080 --tp 1
 lmdeploy serve api_client http://0.0.0.0:8080
 ```
 
-除了`api_client`，你还可以通过 Swagger UI `http://0.0.0.0:8080` 在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](./restful_api.md)，了解各接口的定义和使用方法。
+除了`api_client`，你还可以通过 Swagger UI `http://0.0.0.0:8080` 在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](serving/restful_api.md)，了解各接口的定义和使用方法。
 
 ## 模型量化
 
@@ -57,11 +57,11 @@ LMDeploy 4bit 量化和推理支持的显卡包括：
 - 安培架构（sm80,sm86）：30系列、A10、A16、A30、A100
 - Ada Lovelace架构（sm90）：40 系列
 
-更多关于量化模型的推理和服务介绍，请参考[这里](./w4a16.md)
+更多关于量化模型的推理和服务介绍，请参考[这里](quantization/w4a16.md)
 
 ### KV INT8 量化
 
-点击[这里](./kv_int8.md)查看 kv int8 使用方法、实现公式和测试结果。
+点击[这里](quantization/kv_int8.md)查看 kv int8 使用方法、实现公式和测试结果。
 
 ### W8A8 量化
 

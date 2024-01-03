@@ -37,7 +37,7 @@ After launching the server, you can communicate with server on terminal through 
 lmdeploy serve api_client http://0.0.0.0:8080
 ```
 
-Besides the `api_client`, you can overview and try out `api_server` APIs online by swagger UI `http://0.0.0.0:8080`. And you can also read the API specification from [here](./restful_api.md).
+Besides the `api_client`, you can overview and try out `api_server` APIs online by swagger UI `http://0.0.0.0:8080`. And you can also read the API specification from [here](serving/restful_api.md).
 
 ## Quantization
 
@@ -59,11 +59,11 @@ LMDeploy 4bit inference supports the following NVIDIA GPU:
 - Ampere(sm80,sm86): 30 series, A10, A16, A30, A100
 - Ada Lovelace(sm90): 40 series
 
-Click [here](./w4a16.md) to view more infermation about the inference of quantized models.
+Click [here](quantization/w4a16.md) to view more infermation about the inference of quantized models.
 
 ### KV Cache INT8 Quantization
 
-Click [here](./kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
+Click [here](quantization/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
 
 ### W8A8 Quantization
 

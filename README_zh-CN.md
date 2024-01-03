@@ -21,7 +21,7 @@ ______________________________________________________________________
 ## 最新进展 🎉
 
 - \[2023/12\] Turbomind 支持多模态输入。[Gradio Demo](./examples/vl/README.md)
-- \[2023/11\] Turbomind 支持直接读取 Huggingface 模型。点击[这里](./docs/en/load_hf.md)查看使用方法
+- \[2023/11\] Turbomind 支持直接读取 Huggingface 模型。点击[这里](docs/en/inference/load_hf.md)查看使用方法
 - \[2023/11\] TurboMind 重磅升级。包括：Paged Attention、更快的且不受序列最大长度限制的 attention kernel、2+倍快的 KV8 kernels、Split-K decoding (Flash Decoding) 和 支持 sm_75 架构的 W4A16
 - \[2023/09\] TurboMind 支持 Qwen-14B
 - \[2023/09\] TurboMind 支持 InternLM-20B 模型
@@ -30,7 +30,7 @@ ______________________________________________________________________
 - \[2023/08\] TurboMind 支持 flash-attention2
 - \[2023/08\] TurboMind 支持 Qwen-7B，动态NTK-RoPE缩放，动态logN缩放
 - \[2023/08\] TurboMind 支持 Windows (tp=1)
-- \[2023/08\] TurboMind 支持 4-bit 推理，速度是 FP16 的 2.4 倍，是目前最快的开源实现🚀。部署方式请看[这里](./docs/zh_cn/w4a16.md)
+- \[2023/08\] TurboMind 支持 4-bit 推理，速度是 FP16 的 2.4 倍，是目前最快的开源实现🚀。部署方式请看[这里](docs/zh_cn/quantization/w4a16.md)
 - \[2023/08\] LMDeploy 开通了 [HuggingFace Hub](https://huggingface.co/lmdeploy) ，提供开箱即用的 4-bit 模型
 - \[2023/08\] LMDeploy 支持使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法进行 4-bit 量化
 - \[2023/07\] TurboMind 支持使用 GQA 的 Llama-2 70B 模型
@@ -54,11 +54,14 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型上，每秒处理的请求数是 vLLM 的 1.36 ~ 1.85 倍。在静态推理能力方面，TurboMind 4bit 模型推理速度（out token/s）远高于 FP16/BF16 推理。在小 batch 时，提高到 2.4 倍。
 
-![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/f4d218f9-db3b-4ceb-ab50-97cb005b3ac9)
+![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/8e455cf1-a792-4fa8-91a2-75df96a2a5ba)
 
 更多设备、更多计算精度、更多setting下的的推理 benchmark，请参考以下链接：
 
 - [A100](./docs/en/benchmark/a100_fp16.md)
+- 4090
+- 3090
+- 2080
 
 # 支持的模型
 
@@ -93,16 +96,16 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 # 用户教程
 
-请阅读[快速上手](<>)章节，了解 LMDeploy 的基本用法。
+请阅读[快速上手](./docs/zh_cn/get_started.md)章节，了解 LMDeploy 的基本用法。
 
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](<>)：
 
 - 用户指南
   - 推理pipeline
-  - [推理引擎 - TurboMind](<>)
+  - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
   - 推理引擎 - PyTorch
-  - [推理服务](<>)
-  - [模型量化](<>)
+  - [推理服务](./docs/zh_cn/serving/restful_api.md)
+  - [模型量化](./docs/zh_cn/quantization)
 - 进阶指南
   - 增加对话模板
   - 支持新模型

@@ -21,7 +21,7 @@ ______________________________________________________________________
 ## Latest News 🎉
 
 - \[2023/12\] Turbomind supports multimodal input. [Gradio Demo](./examples/vl/README.md)
-- \[2023/11\] Turbomind supports loading hf model directly. Click [here](./docs/en/load_hf.md) for details.
+- \[2023/11\] Turbomind supports loading hf model directly. Click [here](docs/en/inference/load_hf.md) for details.
 - \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
 - \[2023/09\] TurboMind supports Qwen-14B
 - \[2023/09\] TurboMind supports InternLM-20B
@@ -30,7 +30,7 @@ ______________________________________________________________________
 - \[2023/08\] TurboMind supports flash-attention2.
 - \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
 - \[2023/08\] TurboMind supports Windows (tp=1)
-- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](./docs/en/w4a16.md) guide for detailed info
+- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](docs/en/quantization/w4a16.md) guide for detailed info
 - \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
 - \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
 - \[2023/07\] TurboMind supports Llama-2 70B with GQA.
@@ -43,7 +43,7 @@ ______________________________________________________________________
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
 
-- **Efficient Inference Engine (TurboMind)**: It developes key features like persistent batch(a.k.a continuous batching), blocked KV cache, dynamic split&fuse, tensor paramllelism, high-performance CUDA kernels and so on, ensuring the high throughput and low latency during LLMs inference.
+- **Efficient Inference Engine (TurboMind)**: It develops key features like persistent batch(a.k.a. continuous batching), blocked KV cache, dynamic split&fuse, tensor parallelism, high-performance CUDA kernels and so on, ensuring the high throughput and low latency during LLMs inference.
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
@@ -53,11 +53,14 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 The TurboMind engine achieves up to 1.36 ~ 1.85 times higher request throughput compared to vLLM across models of various size. In terms of static inference capabilities, the token throughput (`out token/s`) of TurboMind's 4bit model inference significantly outperforms FP16/BF16 inference, with an improvement of up to 2.4 times.
 
-![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/f4d218f9-db3b-4ceb-ab50-97cb005b3ac9)
+![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/8e455cf1-a792-4fa8-91a2-75df96a2a5ba)
 
 For inference benchmarks in more devices and more settings, please refer to the following link:
 
 - [A100](./docs/en/benchmark/a100_fp16.md)
+- 4090
+- 3090
+- 2080
 
 # Supported Models
 
@@ -92,16 +95,16 @@ As shown in the next tables, the inference engines differ in the types of suppor
 
 # Getting Started
 
-Please overview [getting_started](<>) section for the basic usage of LMDeploy.
+Please overview [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
 
-For detailed user guides and advanced guides, please refer to our [tutorials](<>):
+For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
   - Inference pipeline
-  - [Inference Engine - TurboMind](<>)
+  - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
   - Inference Engine - PyTorch
-  - [Serving](<>)
-  - [Quantization](<>)
+  - [Serving](docs/en/serving/restful_api.md)
+  - [Quantization](docs/en/quantization)
 - Advance Guide
   - Add chat template
   - Add a new model

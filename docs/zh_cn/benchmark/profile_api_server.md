@@ -58,7 +58,7 @@ python3 ./profile_restful_api.py http://0.0.0.0:23333 ./internlm-7b/triton_model
 
 ## 测试方法
 
-请参考[这里](../restful_api.md) 启动推理服务。启动时的参数 `--instance-num` 表示推理服务中的推理实例数量。当同一时刻到达 api_server 的请求数超过它时，请求会在推理队列中等待。
+请参考[这里](../serving/restful_api.md) 启动推理服务。启动时的参数 `--instance-num` 表示推理服务中的推理实例数量。当同一时刻到达 api_server 的请求数超过它时，请求会在推理队列中等待。
 
 ```shell
 python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optional arguments>
