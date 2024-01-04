@@ -7,7 +7,7 @@ class EngineConfig:
     model_name: str = None
     model_format: str = None
     tp: int = 1
-    session_len: int = 2048
+    session_len: int = None
     max_batch_size: int = 64
     group_size: int = 128
     kv_sym: bool = False

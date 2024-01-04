@@ -149,6 +149,12 @@ class TurboMind:
         tp = engine_config.tp
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
+        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
+        if engine_config.session_len is None:
+            engine_config.session_len = self.model.session_len
+        else:
+            self.model.session_len = engine_config.session_len
+        self.session_len = engine_config.session_len
 
         if model_source == ModelSource.WORKSPACE:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
@@ -163,8 +169,6 @@ class TurboMind:
                                             engine_config=engine_config)
 
         self.eos_id = self.tokenizer.eos_token_id
-        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
-        self.session_len = self.model.session_len
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
     def _create_weight(self, model_comm):
