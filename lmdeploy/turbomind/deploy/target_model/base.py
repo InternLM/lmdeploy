@@ -7,7 +7,6 @@ import json
 import os.path as osp
 from abc import ABC, abstractmethod
 from configparser import ConfigParser
-from typing import Optional
 
 import torch
 import tqdm
@@ -48,25 +47,25 @@ class TurbomindModelConfig:
     start_id: int = None
     end_id: int = None
     session_len: int = None
-    weight_type: Optional[str] = 'fp16'
-    rotary_embedding: Optional[int] = 128
-    rope_theta: Optional[float] = 10000.0
-    size_per_head: Optional[int] = 128
-    group_size: Optional[int] = 0
-    max_batch_size: Optional[int] = 64
-    max_context_token_num: Optional[int] = 1
-    step_length: Optional[int] = 1
-    cache_max_entry_count: Optional[float] = 0.5
-    cache_block_seq_len: Optional[int] = 128
-    cache_chunk_size: Optional[int] = -1
-    num_tokens_per_iter: Optional[int] = 0
-    max_prefill_iters: Optional[int] = 1
-    extra_tokens_per_iter: Optional[int] = 0
-    use_context_fmha: Optional[int] = 1
-    quant_policy: Optional[int] = 0
-    max_position_embeddings: Optional[int] = 0
-    rope_scaling_factor: Optional[float] = 0.0
-    use_logn_attn: Optional[int] = 0
+    weight_type: str = 'fp16'
+    rotary_embedding: int = 128
+    rope_theta: float = 10000.0
+    size_per_head: int = 128
+    group_size: int = 0
+    max_batch_size: int = 64
+    max_context_token_num: int = 1
+    step_length: int = 1
+    cache_max_entry_count: float = 0.5
+    cache_block_seq_len: int = 128
+    cache_chunk_size: int = -1
+    num_tokens_per_iter: int = 0
+    max_prefill_iters: int = 1
+    extra_tokens_per_iter: int = 0
+    use_context_fmha: int = 1
+    quant_policy: int = 0
+    max_position_embeddings: int = 0
+    rope_scaling_factor: float = 0.0
+    use_logn_attn: int = 0
 
     @classmethod
     def from_dict(cls, env, allow_none=False):
