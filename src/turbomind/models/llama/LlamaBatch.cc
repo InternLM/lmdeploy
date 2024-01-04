@@ -365,6 +365,9 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
                     // scaling_factor = std::max(exp2f(ceilf(log2f((float)max_seq_len / max_pos_emb) + 1.f))
                     // - 1.f, 1.f);
                 }
+                else {
+                    scaling_factor = 1.f;
+                }
             }
             if (scaling_factor != 1.f) {
                 float rope_dim = model_->attn_params_.rotary_embedding_dim;
