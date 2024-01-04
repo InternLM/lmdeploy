@@ -849,7 +849,7 @@ class EngineInstance:
             prompt_token_ids (List[int]): The input token ids.
             request_output_len (int): The max output length of this request.
             step (int): No use for now.
-            sampling_param (SamplingParam): The sampling param of the output.
+            gen_config (EngineGenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
@@ -859,7 +859,7 @@ class EngineInstance:
         token_ids = []
         for outputs in self.stream_infer(session_id,
                                          prompt_token_ids,
-                                         sampling_param=gen_config,
+                                         gen_config=gen_config,
                                          **kwargs):
             status, tmp_ids, _ = outputs
             if status != 0:
