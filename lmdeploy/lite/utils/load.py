@@ -3,7 +3,7 @@
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from lmdeploy.pytorch.model import LoadWoInit
+from lmdeploy.pytorch.accel import LoadNoInit
 
 
 def load_hf_from_pretrained(pretrained_model_name_or_path,
@@ -26,7 +26,7 @@ def load_hf_from_pretrained(pretrained_model_name_or_path,
     elif dtype == torch.bfloat16:
         hf_config.bf16 = True
 
-    with LoadWoInit():
+    with LoadNoInit():
         # Load model
         model = AutoModelForCausalLM.from_pretrained(
             pretrained_model_name_or_path, config=hf_config, **kwargs)

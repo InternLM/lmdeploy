@@ -1,6 +1,36 @@
 import pytest
 
-from lmdeploy.model import MODELS, SamplingParam
+from lmdeploy.model import MODELS, SamplingParam, best_match_model
+
+
+@pytest.mark.parametrize('model_path_and_name',
+                         [('internlm/internlm-chat-7b', 'internlm-chat-7b'),
+                          ('Qwen/Qwen-7B-Chat', 'qwen-7b'),
+                          ('baichuan-inc/Baichuan-7B', 'baichuan-7b'),
+                          ('codellama/CodeLlama-7b-hf', 'codellama'),
+                          ('upstage/SOLAR-0-70b-16bit', 'solar'),
+                          ('workspace', None)])
+def test_best_match_model(model_path_and_name):
+    deduced_name = best_match_model(model_path_and_name[0])
+    if deduced_name is not None:
+        assert deduced_name[0] == model_path_and_name[
+            1], f'expect {model_path_and_name[1]}, but got {deduced_name[0]}'
+    else:
+        assert deduced_name == model_path_and_name[
+            1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
+
+
+@pytest.mark.parametrize('model_name',
+                         ['llama2', 'base', 'yi', 'qwen-7b', 'vicuna'])
+@pytest.mark.parametrize('meta_instruction', ['[fake meta_instruction]'])
+def test_model_config(model_name, meta_instruction):
+    from lmdeploy.model import ModelConfig
+    model = ModelConfig(model_name, meta_instruction=meta_instruction).model
+    prompt = model.get_prompt('')
+    if model_name == 'base':
+        assert prompt == ''
+    else:
+        assert meta_instruction in prompt
 
 
 def test_base_model():
@@ -43,7 +73,7 @@ def test_internlm_chat():
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is not None
-    assert model.system == ''
+    assert model.system == '<|System|>:'
     assert model.session_len == 2048
 
     model = MODELS.get('internlm-chat-7b')(capability='chat',

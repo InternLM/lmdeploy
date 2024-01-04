@@ -9,6 +9,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+triton-rerope/
 develop-eggs/
 dist/
 downloads/
@@ -61,6 +62,7 @@ work_dir*/
 !lmdeploy/turbomind/hf_repo/config.json
 
 # Pytorch
+*.pt
 *.pth
 *.py~
 *.sh~

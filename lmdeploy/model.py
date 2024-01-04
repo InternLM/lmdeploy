@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
+import difflib
+import os
 from abc import abstractmethod
-from typing import List
+from typing import List, Optional
 
 from mmengine import Registry
 
@@ -14,6 +16,30 @@ class SamplingParam:
     top_k: float = None
     temperature: float = 0.8
     repetition_penalty: float = 1.0
+
+
+@dataclasses.dataclass
+class ModelConfig:
+    """parameters for chat templates."""
+    model_name: str  # determine which chat template will be applied
+    system: Optional[str] = None  # begin of the system prompt
+    meta_instruction: Optional[str] = None  # system prompt
+    eosys: Optional[str] = None  # end of the system prompt
+    user: Optional[str] = None  # begin of the user prompt
+    eoh: Optional[str] = None  # end of the user prompt
+    assistant: Optional[str] = None  # begin of the assistant prompt
+    eoa: Optional[str] = None  # end of the assistant prompt
+    capability: Optional[str] = None
+
+    @property
+    def model(self):
+        attrs = {
+            key: value
+            for key, value in dataclasses.asdict(self).items()
+            if value is not None
+        }
+        model: BaseModel = MODELS.get(self.model_name).from_config(**attrs)
+        return model
 
 
 @MODELS.register_module(name='internlm')
@@ -38,6 +64,11 @@ class BaseModel:
         self.repetition_penalty = repetition_penalty
         self.stop_words = stop_words
         self.capability = capability
+
+    @classmethod
+    def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
+        return cls(**kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -126,6 +157,16 @@ class Vicuna(BaseModel):
         self.system = system
         self.user = user
         self.assistant = assistant
+
+    @classmethod
+    def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
+        mapping = {'meta_instruction': 'system'}
+        new_kwargs = {
+            mapping.get(key, key): value
+            for key, value in kwargs.items()
+        }
+        return cls(**new_kwargs)
 
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -410,6 +451,20 @@ If a question does not make any sense, or is not factually coherent, explain why
         self.default_sys_prompt = system
         self.session_len = session_len
 
+    @classmethod
+    def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
+        mapping = {
+            'system': 'b_sys',
+            'eosys': 'e_sys',
+            'meta_instruction': 'system'
+        }
+        new_kwargs = {
+            mapping.get(key, key): value
+            for key, value in kwargs.items()
+        }
+        return cls(**new_kwargs)
+
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
         chat template.
@@ -479,6 +534,17 @@ class Qwen7BChat(BaseModel):
         self.im_end = im_end
         self.system = system
         self.stop_words = stop_words
+
+    @classmethod
+    def from_config(cls, **kwargs):
+        """Build model from ModelConfig parameters."""
+        # TODO system, eosys, user, eoh, assistant, eoa.
+        mapping = {'meta_instruction': 'system'}
+        new_kwargs = {
+            mapping.get(key, key): value
+            for key, value in kwargs.items()
+        }
+        return cls(**new_kwargs)
 
     def decorate_prompt(self, prompt, sequence_start=True):
         assert self.capability == 'chat', \
@@ -581,6 +647,34 @@ class CodeLlama(Llama2):
         return super().messages2prompt(messages, sequence_start)
 
 
+@MODELS.register_module(name='falcon')
+class Falcon(BaseModel):
+
+    def __init__(self):
+        super().__init__()
+
+    def get_prompt(self, prompt, sequence_start=True):
+        prompt = super().get_prompt(prompt, sequence_start)
+        if len(prompt) == 0:
+            return '<|endoftext|>'
+        return prompt
+
+
+@MODELS.register_module(name='chatglm2-6b')
+class ChatGLM2(BaseModel):
+
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def get_prompt(self, prompt, sequence_start=True):
+        # need more check
+        # https://github.com/THUDM/ChatGLM2-6B/issues/48
+        # [64790, 64792] to be prepended
+        self.count += 1
+        return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+
+
 @MODELS.register_module(name='solar')
 class SOLAR(BaseModel):
     """Chat template of SOLAR model.
@@ -589,23 +683,23 @@ class SOLAR(BaseModel):
     """
 
     def __init__(self,
-                 b_sys='### System:\n',
-                 e_sys='\n\n',
+                 system='### System:\n',
+                 eosys='\n\n',
                  user='### User:\n',
                  eoh='\n\n',
                  assistant='### Assistant:\n',
                  eoa='\n\n',
-                 system='',
+                 meta_instruction='',
                  session_len=2048,
                  **kwargs):
         super().__init__(**kwargs)
-        self.b_sys = b_sys
-        self.e_sys = e_sys
+        self.system = system
+        self.eosys = eosys
         self.user = user
         self.eoh = eoh
         self.assistant = assistant
         self.eoa = eoa
-        self.system = system
+        self.meta_instruction = meta_instruction
         self.session_len = session_len
 
     def decorate_prompt(self, prompt, sequence_start=True):
@@ -622,7 +716,7 @@ class SOLAR(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.b_sys}{self.system}{self.e_sys}' \
+            return f'{self.system}{self.meta_instruction}{self.eosys}' \
                    f'{self.user}{prompt}{self.eoh}{self.assistant}'
 
         return f'{self.user}{prompt}{self.eoh}{self.assistant}'
@@ -639,8 +733,8 @@ class SOLAR(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        system = self.system if not system else system
-        ret = f'{self.b_sys}{system}{self.e_sys}'
+        system = self.meta_instruction if not system else system
+        ret = f'{self.system}{system}{self.eosys}'
         for i, (user, assistant) in enumerate(zip(users, assistants)):
             ret += f'{self.user}{user}{self.eoh}{self.assistant}'
             if assistant:
@@ -659,14 +753,14 @@ class UltraChat(BaseModel):
 
     def __init__(
             self,
-            system="""User: A one-turn chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, very detailed, and polite answers to the user's questions.</s>""",  # noqa: E501
+            meta_instruction="""User: A one-turn chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, very detailed, and polite answers to the user's questions.</s>""",  # noqa: E501
             eos='</s>',
             user='User: ',
             assistant='Assistant: ',
             session_len=2048,
             **kwargs):
         super().__init__(**kwargs)
-        self.system = system
+        self.meta_instruction = meta_instruction
         self.eos = eos
         self.session_len = session_len
         self.user = user
@@ -686,7 +780,7 @@ class UltraChat(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.system}\n{self.user}{prompt}{self.eos}' \
+            return f'{self.meta_instruction}\n{self.user}{prompt}{self.eos}' \
                    f'\n{self.assistant}'
 
         return f'\n{self.user}{prompt}{self.eos}' \
@@ -704,7 +798,7 @@ class UltraChat(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         system, users, assistants = self._translate_messages(messages)
-        system = self.system if not system else system
+        system = self.meta_instruction if not system else system
         ret = f'{system}'
         for user, assistant in zip(users, assistants):
             if assistant:
@@ -789,17 +883,21 @@ class Yi(BaseModel):
         return ret
 
 
-def main(model_name: str = 'test'):
-    assert model_name in MODELS.module_dict.keys(), \
-        f"'{model_name}' is not supported. " \
-        f'The supported models are: {MODELS.module_dict.keys()}'
-    model = MODELS.get(model_name)()
-    prompt = model.get_prompt(prompt='hi')
-    print(prompt)
-    print(f'session_len: {model.session_len}')
+def best_match_model(query: str, similarity_cutoff: float = 0.4):
+    """Get the model that match the query.
 
+    Args:
+        query (str): the input query. Could be a model path.
+        similarity_cutoff (float): similarities below to the limit are ignored.
 
-if __name__ == '__main__':
-    import fire
-
-    fire.Fire(main)
+    Return:
+        List[str] | None: the possible model names or none.
+    """
+    model_names = list(MODELS.module_dict.keys())
+    if query.endswith('/'):
+        query = query[:-1]
+    base_name = os.path.basename(query).lower()
+    matches = difflib.get_close_matches(base_name,
+                                        model_names,
+                                        cutoff=similarity_cutoff)
+    return matches if matches else None

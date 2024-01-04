@@ -7,6 +7,7 @@ on:
       - ".github/workflows/test.yml"
       - "cmake/**"
       - "src/**"
+      - "autotest/**"
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
@@ -62,13 +63,13 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+          python3 -m pip install torch==2.0.1 torchvision==0.15.2 --extra-index-url https://download.pytorch.org/whl/cu117
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
           # use cached build
-          cp -r ../../build build
+          mkdir build
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -84,7 +85,10 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0
+          # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install -r requirements.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
@@ -93,17 +97,14 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         run: |
-          echo "TODO: awaiting PR of adding autotest"
-          # pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
+          pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
-          if test -D "allure-results"; then
-            export date_today="$(date +'%Y%m%d-%H%M%S')"
-            export report_dir="$REPORT_DIR/$date_today"
-            echo "Save report to $ALLURE_DIR"
-            allure generate -c -o $report_dir
-          fi
+          export date_today="$(date +'%Y%m%d-%H%M%S')"
+          export report_dir="$REPORT_DIR/$date_today"
+          echo "Save report to $ALLURE_DIR"
+          allure generate -c -o $report_dir
       - name: Clear workfile
         if: always()
         run: |
@@ -129,14 +130,13 @@ jobs:
         run: |
           export CONTAINER_ID=$(docker create \
             --rm \
-            --gpus='"device=0,1"' \
+            --gpus='"device=4,5"' \
             --shm-size 16g \
             --cap-add=SYS_PTRACE \
             --cap-add=SYS_ADMIN \
             --security-opt seccomp=unconfined \
-            --name lmdeploy-ci-triton \
+            --name "lmdeploy-ci-triton-$GITHUB_RUN_ID" \
             --workdir /__w/lmdeploy/lmdeploy \
-            --env PIP_CACHE_DIR=/root/.cache/pip \
             --env NCCL_LAUNCH_MODE=GROUP \
             -v $(pwd)/../../:/__w \
             -v ${HF_MODEL}:/root/workspace/hf_model \
@@ -150,10 +150,14 @@ jobs:
           echo "CONTAINER_ID=$CONTAINER_ID"  >> $GITHUB_ENV
       - name: Build lmdeploy from source
         run: |
-          docker exec $CONTAINER_ID cp -r ../../build build
+          docker exec $CONTAINER_ID mkdir build
           docker exec --workdir /__w/lmdeploy/lmdeploy/build \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
+            --env HTTP_PROXY=${{secrets.PROXY}} \
+            --env HTTPS_PROXY=${{secrets.PROXY}} \
+            --env no_proxy="localhost,127.0.0.1" \
+            --env NO_PROXY="localhost,127.0.0.1" \
             $CONTAINER_ID  cmake .. \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
@@ -172,13 +176,19 @@ jobs:
           docker exec \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
-            $CONTAINER_ID python3 -m pip install tritonclient[grpc]
+            $CONTAINER_ID python3 -m pip install tritonclient[grpc] protobuf
+
           docker exec \
             --env http_proxy=${{secrets.PROXY}} \
             --env https_proxy=${{secrets.PROXY}} \
             $CONTAINER_ID python3 -m pip install -r requirements/test.txt
-          docker exec $CONTAINER_ID python3 -m pip install .
-          # docker exec $CONTAINER_ID check_env
+
+          docker exec \
+            --env http_proxy=${{secrets.PROXY}} \
+            --env https_proxy=${{secrets.PROXY}} \
+            $CONTAINER_ID python3 -m pip install .
+
+          docker exec $CONTAINER_ID lmdeploy check_env
       - name: Convert to turbomind model
         run: |
           docker exec $CONTAINER_ID \
@@ -189,21 +199,27 @@ jobs:
             --dst-path /root/workspace/workdir/${TB_MODEL}
       - name: Start triton server service
         run: |
-          docker exec --detach $CONTAINER_ID \
-            tritonserver \
+          docker exec --detach $CONTAINER_ID bash -c \
+            "tritonserver \
             --model-repository=/root/workspace/workdir/${TB_MODEL}/model_repository \
             --allow-http=0 \
             --allow-grpc=1 \
             --grpc-port=${GRPC_PORT} \
             --log-verbose=0 \
-            --allow-metrics=1
+            --allow-metrics=1 > run.log 2>&1 ; touch finish.txt"
           # wait for triton server to fully start up
           sleep 180s
+          # print triton server log file
+          cat run.log
+          python3 -c 'import os; assert not os.path.exists("finish.txt"), "Failed to start tritonserver"'
       - name: Test triton server
         run: |
           docker exec \
-            --env no_proxy=localhost,127.0.0.1 \
+            --env no_proxy="localhost,127.0.0.1" \
+            --env NO_PROXY="localhost,127.0.0.1" \
             $CONTAINER_ID python3 .github/scripts/test_triton_server.py --port ${GRPC_PORT}
+          # print triton server log file
+          cat run.log
       - name: Clear workfile
         if: always()
         run: |
