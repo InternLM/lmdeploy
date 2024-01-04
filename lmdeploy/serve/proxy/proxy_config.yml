@@ -1,2 +1,8 @@
 nodes:
   {}
+  # http://0.0.0.0:23333:
+  #   latency: []
+  #   models:
+  #   - internlm-chat-7b
+  #   speed: null
+  #   unfinished: 0
