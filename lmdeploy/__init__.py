@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from lmdeploy.api import client, pipeline, serve
-from lmdeploy.messages import EngineGenerationConfig, GenerationConfig
-from lmdeploy.tokenizer import Tokenizer
+from .api import client, pipeline, serve
+from .messages import EngineGenerationConfig, GenerationConfig
+from .tokenizer import Tokenizer
+from .version import __version__, version_info
 
 __all__ = [
     'pipeline', 'serve', 'client', 'Tokenizer', 'GenerationConfig',
-    'EngineGenerationConfig'
+    'EngineGenerationConfig', '__version__', 'version_info'
 ]
 
 
