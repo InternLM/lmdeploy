@@ -51,22 +51,17 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 sys.argv.remove(arg)
                 break
 
-        cuda_ver = ''
         cuda_pkgs = []
         if arg_value == '11':
             cuda_pkgs = [
                 'nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11',
                 'nvidia-cublas-cu11'
             ]
-            cuda_ver = '11.x'
         elif arg_value == '12':
             cuda_pkgs = [
                 'nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12',
                 'nvidia-cublas-cu12'
             ]
-            cuda_ver = '12.x'
-        with open('lmdeploy/version.py', 'a') as f:
-            f.write(cuda_ver + '\n')
         return cuda_pkgs
 
     def parse_line(line):
