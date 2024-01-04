@@ -33,13 +33,12 @@ class ModelConfig:
 
     @property
     def model(self):
-        attrs_dict = {
-            attr: getattr(self, attr)
-            for attr in dir(self) if not attr.startswith('_')
-            and attr != 'model' and getattr(self, attr) is not None
-        }  # get all customized parameters
-        model: BaseModel = MODELS.get(
-            self.model_name).from_config(**attrs_dict)
+        attrs = {
+            key: value
+            for key, value in dataclasses.asdict(self).items()
+            if value is not None
+        }
+        model: BaseModel = MODELS.get(self.model_name).from_config(**attrs)
         return model
 
 
