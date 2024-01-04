@@ -9,7 +9,7 @@ class EngineConfig:
     tp: int = 1
     session_len: int = 2048
     max_batch_size: int = 64
-    gropu_size: int = 128
+    group_size: int = 128
     kv_sym: bool = False
     kv_bits: int = 8
     max_context_token_num: int = 1

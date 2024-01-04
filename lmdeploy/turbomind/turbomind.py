@@ -380,7 +380,8 @@ class TurboMind:
                 logger.warning(f'Please input a model_name for {model_source}')
             else:
                 model_name = potential_names[0]
-                logger.warning(f'Guessed model_name: {model_name}')
+                logger.warning(
+                    f'Best matched chat template name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
