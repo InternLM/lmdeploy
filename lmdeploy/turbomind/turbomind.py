@@ -91,6 +91,9 @@ def _update_engine_config(config: EngineConfig, **kwargs):
     for k, v in kwargs.items():
         if v and hasattr(config, k):
             setattr(config, k, v)
+            get_logger('turbomind').warning(
+                f'kwargs {k} is deprecated to initialize model, '
+                'use EngineConfig instead.')
     return config
 
 
@@ -487,11 +490,18 @@ class TurboMindInstance:
                 config.stop_words = self.stop_words[0][0].tolist()
             config.bad_words = [self.eos_id]
 
+        deprecated_kwargs = []
         for k, v in kwargs.items():
             if k in config.__dict__:
                 config.__dict__[k] = v
+                deprecated_kwargs.append(k)
         if kwargs.get('request_output_len'):
             config.max_new_tokens = kwargs['request_output_len']
+            deprecated_kwargs.append('request_output_len')
+        for k in deprecated_kwargs:
+            get_logger('turbomind').warning(
+                f'kwargs {k} is deprecated for inference, '
+                'use GenerationConfig instead.')
         return config
 
     def prepare_inputs(self,
