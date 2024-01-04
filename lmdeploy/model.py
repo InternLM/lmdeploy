@@ -901,19 +901,3 @@ def best_match_model(query: str, similarity_cutoff: float = 0.4):
                                         model_names,
                                         cutoff=similarity_cutoff)
     return matches if matches else None
-
-
-def main(model_name: str = 'test'):
-    assert model_name in MODELS.module_dict.keys(), \
-        f"'{model_name}' is not supported. " \
-        f'The supported models are: {MODELS.module_dict.keys()}'
-    model = MODELS.get(model_name)()
-    prompt = model.get_prompt(prompt='hi')
-    print(prompt)
-    print(f'session_len: {model.session_len}')
-
-
-if __name__ == '__main__':
-    import fire
-
-    fire.Fire(main)
