@@ -490,10 +490,11 @@ class TurboMindInstance:
                                   **kwargs: dict):
         if config is None:
             config = EngineGenerationConfig()
-            # backward compatibility
-            if self.stop_words is not None:
-                config.stop_words = self.stop_words[0][0].tolist()
-            config.bad_words = [self.eos_id]
+        # backward compatibility
+        # if doesn't supply stop/bad words, use default
+        if self.stop_words is not None:
+            config.stop_words = self.stop_words[0][0].tolist()
+        config.bad_words = [self.eos_id]
 
         deprecated_kwargs = []
         for k, v in kwargs.items():
