@@ -508,13 +508,13 @@ class TurboMindInstance:
     def prepare_inputs(self,
                        session_id,
                        input_ids,
+                       generation_config: EngineGenerationConfig,
                        input_embeddings=None,
                        input_embedding_ranges=None,
                        sequence_start: bool = True,
                        sequence_end: bool = False,
                        step=0,
-                       stop=False,
-                       generation_config: EngineGenerationConfig = None):
+                       stop=False):
         """Convert inputs format."""
         if len(input_ids) == 0:
             input_ids = [[]]
