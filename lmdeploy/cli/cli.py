@@ -1,77 +1,113 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import argparse
 import os
 
-import fire
-
-from .chat import SubCliChat
-from .lite import SubCliLite
-from .serve import SubCliServe
+from ..version import __version__
+from .utils import DefaultsAndTypesHelpFormatter, convert_args
 
 
 class CLI(object):
-    """LMDeploy Command Line Interface.
+    _desc = 'The CLI provides a unified API for converting, ' \
+            'compressing and deploying large language models.'
+    parser = argparse.ArgumentParser(prog='lmdeploy',
+                                     description=_desc,
+                                     add_help=True)
+    parser.add_argument('-v',
+                        '--version',
+                        action='version',
+                        version=__version__)
+    subparsers = parser.add_subparsers(
+        title='Commands', description='lmdeploy has following commands:')
 
-    The CLI provides a unified API for converting, compressing and deploying
-    large language models.
-    """
+    @staticmethod
+    def add_parser_convert():
+        parser = CLI.subparsers.add_parser(
+            'convert',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=CLI.convert.__doc__,
+            help=CLI.convert.__doc__)
+        # define arguments
+        parser.add_argument(
+            'model_name',
+            type=str,
+            help='The name of the to-be-deployed model, such as llama-7b, '
+            'llama-13b, vicuna-7b and etc')
+        parser.add_argument('model_path',
+                            type=str,
+                            help='The directory path of the model')
+        parser.add_argument(
+            '--model-format',
+            type=str,
+            default=None,
+            help='The format of the model, should choose from ["llama", "hf",'
+            ' "awq", none]. "llama" stands for meta"s llama format, "hf"'
+            ' means huggingface llama format, and "awq" means llama(hf) '
+            'model quantized by lmdeploy/lite/quantization/awq.py. the '
+            'default value is none, which means the model_format will '
+            'be inferred based on model_name')
+        parser.add_argument('--tokenizer-path',
+                            type=str,
+                            default=None,
+                            help='The path of tokenizer model')
+        parser.add_argument('--dst-path',
+                            type=str,
+                            default='workspace',
+                            help='The destination path that saves outputs')
+        parser.add_argument(
+            '--tp',
+            type=int,
+            default=1,
+            help='The number of gpus used for tensor parallelism, '
+            'should be 2^n')
+        parser.add_argument(
+            '--quant-path',
+            type=str,
+            default=None,
+            help='Path of the quantized model, which can be none')
+        parser.add_argument(
+            '--group-size',
+            type=int,
+            default=0,
+            help='A parameter used in awq to quantize fp16 weights '
+            'to 4 bits')
 
-    def convert(self,
-                model_name: str,
-                model_path: str,
-                model_format: str = None,
-                tokenizer_path: str = None,
-                dst_path: str = './workspace',
-                tp: int = 1,
-                quant_path: str = None,
-                group_size: int = 0,
-                **kwargs):
-        """Convert LLMs to lmdeploy format.
+        parser.set_defaults(run=CLI.convert)
 
-        Args:
-            model_name (str): The name of the to-be-deployed model, such as
-                llama-7b, llama-13b, vicuna-7b and etc.
-            model_path (str): The directory path of the model or huggingface
-                repo_id like 'internlm/internlm-chat-20b'
-            model_format (str): the format of the model, should choose from
-                ['llama', 'hf', 'awq', None]. 'llama' stands for META's llama
-                format, 'hf' means huggingface llama format, and 'awq' means
-                llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
-                the default value is None, which means the model_format will be
-                inferred based on model_name
-            tokenizer_path (str): The path of tokenizer model.
-            dst_path (str): The destination path that saves outputs.
-            tp (int): The number of GPUs used for tensor parallelism, which
-                should be 2^n.
-            quant_path (str): Path of the quantized model, which can be None.
-            group_size (int): A parameter used in AWQ to quantize fp16 weights
-                to 4 bits.
-            kwargs (dict): other params for convert
-        """
-        from lmdeploy.turbomind.deploy.converter import main as convert
+    @staticmethod
+    def add_parser_list():
+        parser = CLI.subparsers.add_parser(
+            'list',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=CLI.list.__doc__,
+            help=CLI.list.__doc__)
+        parser.set_defaults(run=CLI.list)
+        # define arguments
+        parser.add_argument('--engine',
+                            type=str,
+                            default='turbomind',
+                            choices=['turbomind', 'pytorch'],
+                            help='Select inference engine type')
 
-        convert(model_name,
-                model_path,
-                model_format=model_format,
-                tokenizer_path=tokenizer_path,
-                dst_path=dst_path,
-                tp=tp,
-                quant_path=quant_path,
-                group_size=group_size,
-                **kwargs)
+    @staticmethod
+    def add_parser_checkenv():
+        parser = CLI.subparsers.add_parser(
+            'check_env',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=CLI.check_env.__doc__,
+            help=CLI.check_env.__doc__)
+        parser.set_defaults(run=CLI.check_env)
 
-    def list(self, engine: str = 'turbomind'):
-        """List supported model names.
+    @staticmethod
+    def convert(args):
+        """Convert LLMs to turbomind format."""
+        from lmdeploy.turbomind.deploy.converter import main
+        kwargs = convert_args(args)
+        main(**kwargs)
 
-        Examples 1:
-            lmdeploy list
-
-        Examples 2:
-            lmdeploy list --engine pytorch
-
-        Args:
-            engine (str): The backend for the model to run. Choice from
-                ['turbomind', 'pytorch'].
-        """
+    @staticmethod
+    def list(args):
+        """List the supported model names."""
+        engine = args.engine
         assert engine in ['turbomind', 'pytorch']
         if engine == 'pytorch':
             model_names = ['llama', 'llama2', 'internlm-7b']
@@ -83,13 +119,9 @@ class CLI(object):
         print('Supported model names:')
         print('\n'.join(model_names))
 
-    def check_env(self, dump_file: str = None):
-        """Check env information.
-
-        Args:
-            dump_file (str): Output file to save env info.
-        """
-
+    @staticmethod
+    def check_env(args):
+        """Check the environmental information."""
         import importlib
 
         import mmengine
@@ -121,19 +153,16 @@ class CLI(object):
             print(f'{k}: {v}')
 
         # dump to local file
+        dump_file = args.dump_file
         if dump_file is not None:
             work_dir, _ = os.path.split(dump_file)
             if work_dir:
                 os.makedirs(work_dir, exist_ok=True)
             mmengine.dump(env_info, dump_file)
 
-
-def run():
-    """The entry point of running LMDeploy CLI."""
-
-    cli = CLI()
-    cli.lite = SubCliLite()
-    cli.chat = SubCliChat()
-    cli.serve = SubCliServe()
-
-    fire.Fire(cli, name='lmdeploy')
+    @staticmethod
+    def add_parsers():
+        """Add all parsers."""
+        CLI.add_parser_convert()
+        CLI.add_parser_list()
+        CLI.add_parser_checkenv()
