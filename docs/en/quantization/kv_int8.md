@@ -82,7 +82,7 @@ Below shows the comparison of GPU memory between the two versions:
 
 Compared to directly quantizing Weight (such as [GPTQ-for-LLaMa](https://github.com/qwopqwop200/GPTQ-for-LLaMa/)), we have done a comparative estimation of memory growth in the 7B model for both methods, with some data from [llama.cpp](https://github.com/ggerganov/llama.cpp).
 
-![](../../resources/batch_memory.png)
+![](../../../resources/batch_memory.png)
 
 As can be seen, the fp16 version requires 1030MB of GPU memory for each concurrency, so quantizing kv_cache can significantly reduce the rate of increase of runtime memory.
 

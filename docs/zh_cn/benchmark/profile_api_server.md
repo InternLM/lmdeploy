@@ -12,7 +12,7 @@ wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/r
 ```
 
 测速时，需输入具体的模型。我们推荐把模型下载到本地，并通过 `lmdeploy convert` 把模型转换为 turbomind 格式，然后再进行测试。
-这么做的原因是，方便调节推理引擎参数，以达到比较好的推理性能，比如批处理大小（max_batch_size），K/V cache缓存大小（max_cache_entry_count）等等。有关这些参数的详细说明，请参考[这里](../turbomind_config.md).
+这么做的原因是，方便调节推理引擎参数，以达到比较好的推理性能，比如批处理大小（max_batch_size），K/V cache缓存大小（max_cache_entry_count）等等。有关这些参数的详细说明，请参考[这里](../inference/turbomind_config.md).
 
 以下章节中，我们默认模型是 turbomind 格式的。
 
@@ -58,7 +58,7 @@ python3 ./profile_restful_api.py http://0.0.0.0:23333 ./internlm-7b/triton_model
 
 ## 测试方法
 
-请参考[这里](../restful_api.md) 启动推理服务。启动时的参数 `--instance-num` 表示推理服务中的推理实例数量。当同一时刻到达 api_server 的请求数超过它时，请求会在推理队列中等待。
+请参考[这里](../serving/restful_api.md) 启动推理服务。启动时的参数 `--instance-num` 表示推理服务中的推理实例数量。当同一时刻到达 api_server 的请求数超过它时，请求会在推理队列中等待。
 
 ```shell
 python3 profile_restful_api.py <server_addr> <tokenizer_path> <dataset> <optional arguments>

@@ -111,4 +111,4 @@ lmdeploy serve api_client api_server_url
 lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
 ```
 
-关于 RESTful API的详细介绍，请参考[这份](../restful_api.md)文档。
+关于 RESTful API的详细介绍，请参考[这份](../serving/restful_api.md)文档。
