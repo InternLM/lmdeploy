@@ -45,7 +45,7 @@ class EngineConfig:
     """
     model_name: str = ''
     tp: int = 1
-    session_len: int = 4096
+    session_len: int = None
     max_batch_size: int = 128
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
@@ -445,6 +445,8 @@ class Engine:
             return msg.remain_output_len <= 0
 
         def _check_session_len(msg, max_session_len):
+            if max_session_len is None:
+                return False
             session_len = msg.logical_blocks.num_tokens()
             return session_len >= max_session_len
 

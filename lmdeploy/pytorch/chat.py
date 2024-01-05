@@ -68,7 +68,7 @@ def main(
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
     """
-    from lmdeploy.pytorch.engine.engine import Engine, EngineConfig
+    from lmdeploy.pytorch.engine import Engine, EngineConfig
     tm_model = Engine(model_path,
                       engine_config=EngineConfig(tp=tp),
                       trust_remote_code=trust_remote_code)
