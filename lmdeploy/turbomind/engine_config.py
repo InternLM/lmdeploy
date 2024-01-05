@@ -6,31 +6,29 @@ from pydantic.dataclasses import dataclass
 class EngineConfig:
     """TurboMind Engine config.
 
-    Please read https://github.com/InternLM/lmdeploy/blob/main/docs/en/inference/turbomind_config.md for more details. # noqa: E501
-
-    Args:
-        model_name (str): name of the given model.
-        model_format (str): should select from [None, hf, awq, llama].
-        tp (int): tensor parallelism.
-        session_len (int): max session length.
-        max_batch_szie (int): max batch size.
-        group_size (int): quantization parameter for awq.
-        kv_sym (bool): quantization parameter for awq.
-        kv_bits (bool): quantization parameter for awq.
-        max_context_token_num (int): max context token num.
-        step_length (int): generate step interval to read next request.
-        cache_max_entry_count (int): number of cache blocks.
-        cache_block_seq_len (int): sequence len for each cache block.
-        cache_chunk_size (int): cache chunk size.
-        num_tokens_per_iter (int): num tokens per iter.
-        max_prefill_iters (int): max perfill iters.
-        extra_tokens_per_iter (int): extra tokens per iter.
-        use_context_fmha (int): whether use flashattention.
-        quant_policy: (int): whether use kv int8.
-        rope_scaling_factor (float): rope scaling factor.
-        use_dynamic_ntk (bool): whether use dynamic ntk.
-        use_logn_attn (bool): whether use logn attention scaling.
-    """
+    Args:​
+        model_name (str): the name of the deployed model​
+        model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq], `hf` meaning `hf_llama`, `llama` meaning `meta_llama`, `awq` meaning the quantized model by AWQ.​
+        group_size (int): the group size used when quantizing weights to 4bit, default to 128​
+        tp (int): the number of GPU cards used in tensor parallelism, default to 1​
+        session_len (int): the max session length of a sequence, default to None​
+        max_batch_size (int): the max batch size during inference, default to 128​
+        max_context_token_num (int): the max number of tokens to be processed in each forward pass, default to 1​
+        step_length (int): the decoding step size, default to 1. ​
+        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache, default to 0.5​
+        cache_block_seq_len (int): the length of a sequence in a k/v block, default to 128​
+        cache_chunk_size (int): the number of blocks each time TurboMind engine tries to realloc from gpu memory, default to -1. When it is -1, ​
+        num_tokens_per_iter (int): the number of tokens to be processed in one iteration of prefill, default to 0​
+        max_prefill_iters (int): the max times of running `prefill forward`, default to 1​
+        extra_tokens_per_iter (int): default to 0​
+        use_context_fmha (int): whether or not to use fmha in context decoding, default to 1​
+        quant_policy: (int): , default to 0. When k/v is quantized into 8 bit, set it to 4​
+        rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention​
+        use_dynamic_ntk (bool): whether or not to use dynamic ntk, default to False​
+        use_logn_attn (bool): whether or not to use log attn: default to False​
+        kv_sym (bool): whether to use symmetric or asymmetric quantization method to quantize k/v, default to False​
+        kv_bits (int): the number of bits of k/v after quantization, default to 8
+    """  # noqa: E501
 
     model_name: str = None
     model_format: str = None
