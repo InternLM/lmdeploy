@@ -105,9 +105,11 @@ struct RotaryEmbedding {
     static_assert(N % 2 == 0);
 
     Array<float, N> cs_;
+    float           scale_;
 
-    __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset)
+    __device__ RotaryEmbedding(float base, int dims, int timestep, int2 offset, float scaling_factor)
     {
+        scale_ = scaling_factor == 0.f ? 1.f : scaling_factor;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
             const float2 tmp = get_coefficient(offset.x + i, dims, base, timestep);
@@ -116,9 +118,9 @@ struct RotaryEmbedding {
         }
     }
 
-    static __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
+    __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
     {
-        const float inv_freq = timestep / powf(base, idx / (float)dims);
+        const float inv_freq = timestep / (powf(base, idx / (float)dims) * scale_);
         float2      cs;
         sincosf(inv_freq, &cs.y, &cs.x);
         return cs;

@@ -49,7 +49,9 @@ struct DecoderMultiHeadAttentionParams {
     int   rotary_embedding_dim;
     float rotary_embedding_base;
     int   max_position_embeddings;
-    // bool  use_dynamic_ntk;
+    // scaling factor used by linear scaling rotary embedding, referring to:
+    // https://github.com/huggingface/transformers/blob/633215ba58fe5114d8c8d32e415a04600e010701/src/transformers/models/llama/modeling_llama.py#L158-L174
+    float scaling_factor;
 
     // log(n) attention
     bool use_logn_attn;
