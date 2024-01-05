@@ -5,7 +5,7 @@ import random
 from typing import List
 
 from lmdeploy.messages import EngineGenerationConfig
-from lmdeploy.model import MODELS
+from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -47,17 +47,16 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     return stop_words
 
 
-def main(
-        model_path,
-        model_name: str,  # can not get model_name from hf model
-        session_id: int = 1,
-        top_k=40,
-        top_p=0.8,
-        temperature=0.8,
-        repetition_penalty: float = 1.0,
-        tp: int = 1,
-        stream_output=True,
-        trust_remote_code=True):
+def main(model_path,
+         model_name: str = None,
+         session_id: int = 1,
+         top_k=40,
+         top_p=0.8,
+         temperature=0.8,
+         repetition_penalty: float = 1.0,
+         tp: int = 1,
+         stream_output=True,
+         trust_remote_code=True):
     """An example to perform model inference through the command line
     interface.
 
@@ -78,6 +77,10 @@ def main(
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
+    if model_name is None:
+        model_name = best_match_model(model_path)[0]
+        assert model_name is not None, 'Can not find match model template'
+        print(f'match template: <{model_name}>')
     model = MODELS.get(model_name)()
     stop_words = _stop_words(model.stop_words, tokenizer)
 
@@ -93,7 +96,10 @@ def main(
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt, nth_round == 1)
-            if step >= tm_model.session_len:
+            session_len = model.session_len
+            if session_len is None:
+                session_len = tm_model.session_len
+            if step >= session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
