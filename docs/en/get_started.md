@@ -39,29 +39,8 @@ Besides the `api_client`, you can overview and try out `api_server` APIs online 
 
 ## Quantization
 
-### Weight INT4 Quantization
+LMDeploy provides the following quantization methods. Please visit the following links for the detailed guide
 
-LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
-
-Using the following commands, you can quantize a LLM model into 4bit, and communicate with it with command line:
-
-```shell
-lmdeploy lite auto_awq internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq
-```
-
-LMDeploy 4bit inference supports the following NVIDIA GPU:
-
-- Turing(sm75): 20 series, T4
-- Ampere(sm80,sm86): 30 series, A10, A16, A30, A100
-- Ada Lovelace(sm90): 40 series
-
-Click [here](quantization/w4a16.md) to view more infermation about the inference of quantized models.
-
-### KV Cache INT8 Quantization
-
-Click [here](quantization/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
-
-### W8A8 Quantization
-
-TODO
+- [4bit weight-only quantization](quantization/w4a16.md)
+- [k/v quantization](quantization/kv_int8.md)
+- [w8a8 quantization](quantization/w8a8.md)

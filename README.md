@@ -43,21 +43,21 @@ ______________________________________________________________________
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
 
-- **Efficient Inference Engine (TurboMind)**: It develops key features like persistent batch(a.k.a. continuous batching), blocked KV cache, dynamic split&fuse, tensor parallelism, high-performance CUDA kernels and so on, ensuring the high throughput and low latency during LLMs inference.
+- **Efficiency**: LMDeploy delivers up to 1.8x higher request throughput than vLLM, by introducing key features like persistent batch(a.k.a. continuous batching), blocked KV cache, dynamic split&fuse, tensor parallelism, high-performance CUDA kernels and so on.
+
+- **Quantization**: LMDeploy supports weight-only and k/v quantization, and the 4-bit inference performance is 2.4x higher than FP16. The quantization quality has been confirmed via OpenCompass evaluation.
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
-- **Quantization**: LMDeploy supports various quantization methods and efficient inference of quantized models. The reliability of quantization has been verified on models of different scales.
-
 # Performance
-
-The TurboMind engine achieves up to 1.36 ~ 1.85 times higher request throughput compared to vLLM across models of various size. In terms of static inference capabilities, the token throughput (`out token/s`) of TurboMind's 4bit model inference significantly outperforms FP16/BF16 inference, with an improvement of up to 2.4 times.
 
 ![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/8e455cf1-a792-4fa8-91a2-75df96a2a5ba)
 
-For inference benchmarks in more devices and more settings, please refer to the following link:
+For detailed inference benchmarks in more devices and more settings, please refer to the following link:
 
-- [A100](./docs/en/benchmark/a100_fp16.md)
+- [A100-FP16](./docs/en/benchmark/a100_fp16.md)
+- [A100-W4A16](./docs/en/benchmark/a100_w4a16.md)
+- V100
 - 4090
 - 3090
 - 2080
