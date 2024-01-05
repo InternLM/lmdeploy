@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from torch import Tensor
+from triton.runtime.jit import get_cuda_stream
 
 
 def _next_pow_of_2(x):
@@ -17,8 +18,9 @@ def _x_a_mm_kernel(
     XA,
     B_start_loc,
     B_seq_lens,
-    B_rank_id,
+    B_adapter_id,
     Rank_page_table,
+    Rank_page_start,
     Ranks,
     stride_xs,
     stride_xh,
@@ -27,6 +29,7 @@ def _x_a_mm_kernel(
     stride_xas,
     stride_xar,
     stride_ptb,
+    rank_step,
     BLOCK_M: tl.constexpr,
     BLOCK_R: tl.constexpr,
     BLOCK_H: tl.constexpr,
@@ -43,17 +46,16 @@ def _x_a_mm_kernel(
         return
 
     start_loc = tl.load(B_start_loc + cur_batch)
-    rank_id = tl.load(B_rank_id + cur_batch)
-    rank = tl.load(Ranks + rank_id)
+    adapter_id = tl.load(B_adapter_id + cur_batch)
+    rank = tl.load(Ranks + adapter_id) // rank_step
+    page_start = tl.load(Rank_page_start + adapter_id)
 
-    page_table_off = rank_id * stride_ptb + r_off
+    page_table_off = adapter_id * stride_ptb + r_off + page_start
     rank_mask = r_off < rank
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     m_off = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    r_off = tl.arange(0, BLOCK_R)
     dm_off = tl.arange(0, BLOCK_DMODEL)
-    rank_mask = r_off < rank
 
     x_off = (start_loc + m_off) * stride_xs
     xs_mask = m_off < seq_len
@@ -98,8 +100,9 @@ def _acc_b_mm_kernel(
     Out,
     B_start_loc,
     B_seq_lens,
-    B_rank_id,
+    B_adapter_id,
     Rank_page_table,
+    Rank_page_start,
     Ranks,
     stride_xas,
     stride_xar,
@@ -123,16 +126,16 @@ def _acc_b_mm_kernel(
         return
 
     start_loc = tl.load(B_start_loc + cur_batch)
-    rank_id = tl.load(B_rank_id + cur_batch)
-    rank = tl.load(Ranks + rank_id)
+    adapter_id = tl.load(B_adapter_id + cur_batch)
+    rank = tl.load(Ranks + adapter_id)
+    page_start = tl.load(Rank_page_start + adapter_id)
 
-    page_table_off = rank_id * stride_ptb + r_off
+    page_table_off = adapter_id * stride_ptb + r_off + page_start
     rank_mask = r_off < rank
     page_table = tl.load(Rank_page_table + page_table_off, mask=rank_mask)
 
     m_off = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     dm_off = tl.arange(0, BLOCK_DMODEL)
-    rank_mask = r_off < rank
     lb_page_off = page_table * stride_lbs
 
     xs_mask = m_off < seq_len
@@ -169,16 +172,33 @@ def _acc_b_mm_kernel(
 
 
 @torch.inference_mode()
-def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
-            b_rank_ids: Tensor, rank_page_table: Tensor, ranks: Tensor,
-            max_seq_len: int, max_rank: int):
+def mbgmm_a(x: Tensor,
+            lora_a: Tensor,
+            b_start_loc: Tensor,
+            b_seq_lens: Tensor,
+            b_adapter_ids: Tensor,
+            rank_page_table: Tensor,
+            ranks: Tensor,
+            rank_page_start: Tensor,
+            max_seq_len: int,
+            max_rank: int,
+            rank_step: int = 1):
     """mbgmm_a."""
+
+    def _kernel_meta():
+        device = x.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     assert x.dim() == 2
     assert lora_a.dim() == 2
     assert rank_page_table.dim() == 2
 
     head_size = x.size(-1)
     batch_size = len(b_seq_lens)
+    max_rank = max_rank // rank_step
 
     BLOCK_M = 32
     BLOCK_R = _next_pow_of_2(max_rank)
@@ -189,79 +209,97 @@ def mbgmm_a(x: Tensor, lora_a: Tensor, b_start_loc: Tensor, b_seq_lens: Tensor,
 
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
-    xa = x.new_empty((x.size(0), BLOCK_R))
-    _x_a_mm_kernel[grid](
-        x,
-        lora_a,
-        xa,
-        b_start_loc,
-        b_seq_lens,
-        b_rank_ids,
-        Rank_page_table=rank_page_table,
-        Ranks=ranks,
-        stride_xs=x.stride(0),
-        stride_xh=x.stride(1),
-        stride_las=lora_a.stride(0),
-        stride_lah=lora_a.stride(1),
-        stride_xas=xa.stride(0),
-        stride_xar=xa.stride(1),
-        stride_ptb=rank_page_table.stride(0),
-        BLOCK_M=BLOCK_M,
-        BLOCK_R=BLOCK_R,
-        BLOCK_H=BLOCK_H,
-        BLOCK_DMODEL=BLOCK_DMODEL,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    xa = x.new_empty((x.size(0), max_rank))
+    kernel_meta = _kernel_meta()
+    _x_a_mm_kernel[grid](x,
+                         lora_a,
+                         xa,
+                         b_start_loc,
+                         b_seq_lens,
+                         b_adapter_ids,
+                         Rank_page_table=rank_page_table,
+                         Rank_page_start=rank_page_start,
+                         Ranks=ranks,
+                         stride_xs=x.stride(0),
+                         stride_xh=x.stride(1),
+                         stride_las=lora_a.stride(0),
+                         stride_lah=lora_a.stride(1),
+                         stride_xas=xa.stride(0),
+                         stride_xar=xa.stride(1),
+                         stride_ptb=rank_page_table.stride(0),
+                         rank_step=rank_step,
+                         BLOCK_M=BLOCK_M,
+                         BLOCK_R=BLOCK_R,
+                         BLOCK_H=BLOCK_H,
+                         BLOCK_DMODEL=BLOCK_DMODEL,
+                         num_warps=num_warps,
+                         num_stages=1,
+                         **kernel_meta)
     return xa
 
 
 @torch.inference_mode()
-def mbgmm_b(xa: Tensor, lora_b: Tensor, b_start_loc: Tensor,
-            b_seq_lens: Tensor, b_rank_ids: Tensor, rank_page_table: Tensor,
-            ranks: Tensor, max_seq_len: int, max_rank: int):
+def mbgmm_b(xa: Tensor,
+            lora_b: Tensor,
+            b_start_loc: Tensor,
+            b_seq_lens: Tensor,
+            b_adapter_ids: Tensor,
+            rank_page_table: Tensor,
+            ranks: Tensor,
+            rank_page_start: Tensor,
+            max_seq_len: int,
+            max_rank: int,
+            out_size: int = None):
     """mbgmm_b."""
+
+    def _kernel_meta():
+        device = xa.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
 
     assert xa.dim() == 2
     assert lora_b.dim() == 2
     assert rank_page_table.dim() == 2
 
-    head_o_size = lora_b.size(-1)
+    if out_size is None:
+        out_size = lora_b.size(-1)
     batch_size = len(b_seq_lens)
 
     BLOCK_M = 32
     BLOCK_R = _next_pow_of_2(max_rank)
     if BLOCK_R < 16:
         BLOCK_R = 16
-    BLOCK_HO = head_o_size
+    BLOCK_HO = out_size
     BLOCK_DMODEL = 64
 
     num_warps = 4
     grid = [batch_size, triton.cdiv(max_seq_len, BLOCK_M)]
     output = xa.new_empty((xa.size(0), BLOCK_HO))
-
-    _acc_b_mm_kernel[grid](
-        xa,
-        lora_b,
-        output,
-        b_start_loc,
-        b_seq_lens,
-        b_rank_ids,
-        Rank_page_table=rank_page_table,
-        Ranks=ranks,
-        stride_xas=xa.stride(0),
-        stride_xar=xa.stride(1),
-        stride_os=output.stride(0),
-        stride_oh=output.stride(1),
-        stride_lbs=lora_b.stride(0),
-        stride_lbh=lora_b.stride(1),
-        stride_ptb=rank_page_table.stride(0),
-        BLOCK_M=BLOCK_M,
-        BLOCK_R=BLOCK_R,
-        BLOCK_HO=BLOCK_HO,
-        BLOCK_DMODEL=BLOCK_DMODEL,
-        num_warps=num_warps,
-        num_stages=1,
-    )
+    kernel_meta = _kernel_meta()
+    _acc_b_mm_kernel[grid](xa,
+                           lora_b,
+                           output,
+                           b_start_loc,
+                           b_seq_lens,
+                           b_adapter_ids,
+                           Rank_page_table=rank_page_table,
+                           Rank_page_start=rank_page_start,
+                           Ranks=ranks,
+                           stride_xas=xa.stride(0),
+                           stride_xar=xa.stride(1),
+                           stride_os=output.stride(0),
+                           stride_oh=output.stride(1),
+                           stride_lbs=lora_b.stride(0),
+                           stride_lbh=lora_b.stride(1),
+                           stride_ptb=rank_page_table.stride(0),
+                           BLOCK_M=BLOCK_M,
+                           BLOCK_R=BLOCK_R,
+                           BLOCK_HO=BLOCK_HO,
+                           BLOCK_DMODEL=BLOCK_DMODEL,
+                           num_warps=num_warps,
+                           num_stages=1,
+                           **kernel_meta)
 
     return output

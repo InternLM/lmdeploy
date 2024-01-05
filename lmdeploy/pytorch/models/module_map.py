@@ -84,3 +84,9 @@ MODULE_MAP.update({
     'modeling_internlm.InternLMMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
 })
+
+# peft
+MODULE_MAP.update({
+    'peft.tuners.lora.layer.Linear':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
+})

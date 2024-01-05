@@ -58,7 +58,8 @@ def main(
         repetition_penalty: float = 1.0,
         tp: int = 1,
         stream_output=True,
-        trust_remote_code=True):
+        trust_remote_code=True,
+        adapter: str = None):
     """An example to perform model inference through the command line
     interface.
 
@@ -70,9 +71,14 @@ def main(
         stream_output (bool): indicator for streaming output or not
     """
     from . import engine as tm
-    tm_model = tm.Engine(model_path,
-                         tp=tp,
-                         trust_remote_code=trust_remote_code)
+    adapter_name = None
+    if adapter is not None:
+        adapter_name = 'default'
+        adapter = {adapter_name: adapter}
+    tm_model = tm.Engine.from_pretrained(model_path,
+                                         tp=tp,
+                                         trust_remote_code=trust_remote_code,
+                                         adapters=adapter)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
 
@@ -114,7 +120,8 @@ def main(
                     input_ids=input_ids,
                     request_output_len=512,
                     step=step,
-                    sampling_param=sampling_param):
+                    sampling_param=sampling_param,
+                    adapter_name=adapter_name):
                 status, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res, offset=response_size)
