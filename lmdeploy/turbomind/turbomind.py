@@ -58,7 +58,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):
-    if words is None:
+    if words is None or len(words) == 0:
         return None
     offsets = range(1, len(words) + 1)
     combined = np.array([[words, offsets]]).astype(np.int32)
@@ -438,8 +438,6 @@ class TurboMindInstance:
         self.gpu_count = tm_model.gpu_count
 
         self.stop_words = tm_model.stop_words
-        self.stop_tokens = [] if self.stop_words is None else \
-            self.stop_words.flatten().tolist()
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
 
@@ -493,11 +491,9 @@ class TurboMindInstance:
         if config is None:
             config = EngineGenerationConfig()
         # backward compatibility
-        # if doesn't supply stop/bad words, use default
+        # if doesn't supply stop words, use default
         if config.stop_words is None and self.stop_words is not None:
             config.stop_words = self.stop_words[0][0].tolist()
-        if config.bad_words is None:
-            config.bad_words = [self.eos_id]
 
         deprecated_kwargs = []
         for k, v in kwargs.items():
@@ -608,14 +604,16 @@ class TurboMindInstance:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
+        bad_words = []
+        if generation_config.bad_words is not None:
+            bad_words.extend(generation_config.bad_words)
         if generation_config.ignore_eos:
             stop_words = None
-            bad_words = _construct_stop_or_bad_words(
-                generation_config.bad_words)
+            bad_words.append(self.eos_id)
         else:
-            stop_words = _construct_stop_or_bad_words(
-                generation_config.stop_words)
-            bad_words = None
+            stop_words = generation_config.stop_words
+        stop_words = _construct_stop_or_bad_words(stop_words)
+        bad_words = _construct_stop_or_bad_words(bad_words)
 
         if stop_words is not None:
             inputs['stop_words_list'] = stop_words
