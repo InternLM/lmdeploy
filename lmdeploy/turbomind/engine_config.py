@@ -9,8 +9,8 @@ class EngineConfig:
     Please read https://github.com/InternLM/lmdeploy/blob/main/docs/en/inference/turbomind_config.md for more details. # noqa: E501
 
     Args:
-        model_name (str): Name of the given model.
-        model_format (str): Should select from [None, hf, awa, llama].
+        model_name (str): name of the given model.
+        model_format (str): should select from [None, hf, awq, llama].
         tp (int): tensor parallelism.
         session_len (int): max session length.
         max_batch_szie (int): max batch size.
