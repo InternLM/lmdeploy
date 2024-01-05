@@ -9,8 +9,8 @@ class EngineConfig:
     Args:
         model_name (str): name of the given model.
         tp (int): Tensor Parallelism. default 1.
-        session_len (int): Max session length. Default 4096.
-        max_batch_szie: (int): Max batch size. Default 128.
+        session_len (int): Max session length. Default None.
+        max_batch_size: (int): Max batch size. Default 128.
         eviction_type (str): What action to perform when kv cache
             is full, ['recompute', 'copy'], Default 'recompute'.
         prefill_interval (int): Interval to perform prefill,

@@ -6,6 +6,7 @@ from typing import List
 
 from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import MODELS, best_match_model
+from lmdeploy.pytorch import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -47,29 +48,24 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     return stop_words
 
 
-def main(model_path,
-         model_name: str = None,
-         session_id: int = 1,
-         top_k=40,
-         top_p=0.8,
-         temperature=0.8,
-         repetition_penalty: float = 1.0,
-         tp: int = 1,
-         stream_output=True,
-         trust_remote_code=True):
+def run_chat(model_path,
+             engine_config: EngineConfig,
+             gen_config: EngineGenerationConfig = None,
+             session_id: int = 1,
+             trust_remote_code=True):
     """An example to perform model inference through the command line
     interface.
 
     Args:
-        model_path (str): the huggingface model path
-        session_id (int): the identical id of a session
-        repetition_penalty (float): parameter to penalize repetition
-        tp (int): GPU number used in tensor parallelism
-        stream_output (bool): indicator for streaming output or not
+        model_path (str): the huggingface model path.
+        engine_config (EngineConfig): Config of engine.
+        gen_config (EngineGenerationConfig): Config of generation.
+        session_id (int): the identical id of a session.
+        trust_remote_code (bool): trust remote code.
     """
-    from lmdeploy.pytorch.engine import Engine, EngineConfig
+    from lmdeploy.pytorch.engine import Engine
     tm_model = Engine(model_path,
-                      engine_config=EngineConfig(tp=tp),
+                      engine_config=engine_config,
                       trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
@@ -77,6 +73,7 @@ def main(model_path,
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
+    model_name = engine_config.model_name
     if model_name is None:
         model_name = best_match_model(model_path)[0]
         assert model_name is not None, 'Can not find match model template'
@@ -106,15 +103,8 @@ def main(model_path,
 
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
-            gen_config = EngineGenerationConfig(
-                max_new_tokens=512,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=False,
-                random_seed=seed,
-                stop_words=stop_words)
+            gen_config.random_seed = seed
+            gen_config.stop_words = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=input_ids,
                                                   gen_config=gen_config):
@@ -135,6 +125,45 @@ def main(model_path,
             print()
 
             nth_round += 1
+
+
+def main(model_path,
+         model_name: str = None,
+         session_id: int = 1,
+         top_k=40,
+         top_p=0.8,
+         temperature=0.8,
+         repetition_penalty: float = 1.0,
+         tp: int = 1,
+         stream_output: bool = True,
+         trust_remote_code=True):
+    """An example to perform model inference through the command line
+    interface.
+
+    Args:
+        model_path (str): the huggingface model path
+        model_name (str): name of the model.
+        session_id (int): the identical id of a session
+        top_k (int): sampling top k.
+        top_p (int): sampling top p.
+        temperature (float): sampling temperature.
+        repetition_penalty (float): parameter to penalize repetition
+        tp (int): GPU number used in tensor parallelism
+        stream_output (bool): indicator for streaming output or not
+        trust_remote_code (bool): Trust remote code.
+    """
+    engine_config = EngineConfig(model_name=model_name, tp=tp)
+    gen_config = EngineGenerationConfig(max_new_tokens=512,
+                                        top_k=top_k,
+                                        top_p=top_p,
+                                        temperature=temperature,
+                                        repetition_penalty=repetition_penalty,
+                                        ignore_eos=False)
+    return run_chat(model_path,
+                    engine_config,
+                    gen_config,
+                    session_id=session_id,
+                    trust_remote_code=trust_remote_code)
 
 
 if __name__ == '__main__':
