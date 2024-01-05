@@ -1100,7 +1100,7 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
             FT_CHECK(model_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = model_->vocab_size_padded_ / tp;
             local_context_logits_buf_ =
-                (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
+                (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * max_context_token_num_);
         }
     }
 
@@ -1115,13 +1115,22 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
             int  num_new_token = 0;
             if (sequences[k]->cache_len < sequences[k]->tokens.size()) {
                 num_new_token = sequences[k]->cache_len + lengths[k] - sequences[k]->tokens.size();
-                src_ptr += (lengths[k] - num_new_token) * model_->vocab_size_;
+                src_ptr += (lengths[k] - num_new_token) * model_->vocab_size_padded_;
             }
             else {
                 num_new_token = lengths[k];
                 dst_ptr += (sequences[k]->cache_len - sequences[k]->tokens.size()) * model_->vocab_size_;
             }
-            Copy(src_ptr, model_->vocab_size_ * num_new_token, dst_ptr);
+            if (model_->vocab_size_padded_ == model_->vocab_size_) {
+                Copy(src_ptr, model_->vocab_size_ * num_new_token, dst_ptr);
+            }
+            else {
+                for (int tok = 0; tok < num_new_token; tok++) {
+                    Copy(src_ptr, model_->vocab_size_, dst_ptr);
+                    src_ptr += model_->vocab_size_padded_;
+                    dst_ptr += model_->vocab_size_;
+                }
+            }
         }
         logits += model_->vocab_size_padded_ * lengths[k];
     }
