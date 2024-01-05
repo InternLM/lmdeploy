@@ -149,12 +149,6 @@ class TurboMind:
         tp = engine_config.tp
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
-        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
-        if engine_config.session_len is None:
-            engine_config.session_len = self.model.session_len
-        else:
-            self.model.session_len = engine_config.session_len
-        self.session_len = engine_config.session_len
 
         if model_source == ModelSource.WORKSPACE:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
@@ -168,6 +162,8 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
+        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
+        self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
 
@@ -267,21 +263,25 @@ class TurboMind:
             data_type = output_format
             update_config_weight_type(output_format, cfg)
 
-        self.config = cfg
-        self.model_name = engine_config.model_name
-        self.data_type = data_type
-
         input_model = INPUT_MODELS.get(inferred_model_format)(
             model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
 
         output_model = OUTPUT_MODELS.get(output_format)(
             input_model=input_model, cfg=cfg, to_file=False, out_dir='')
 
-        logger.warning(f'model_config:\n\n{output_model.cfg.toini()}')
+        cfg = output_model.cfg
+        if engine_config.session_len is not None:
+            cfg.session_len = engine_config.session_len
+
+        self.config = cfg
+        self.model_name = engine_config.model_name
+        self.data_type = data_type
+
+        logger.warning(f'model_config:\n\n{cfg.toini()}')
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(
             model_dir='',
-            config=output_model.cfg.toini(),
+            config=cfg.toini(),
             tensor_para_size=self.gpu_count,
             data_type=data_type)
 
@@ -325,6 +325,8 @@ class TurboMind:
 
         # update cfg
         cfg = _update_tm_config(cfg, engine_config)
+        if engine_config.session_len is not None:
+            cfg.session_len = engine_config.session_len
 
         # update cls
         self.config = cfg
