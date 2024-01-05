@@ -5,6 +5,10 @@ LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
 # llama
 MODULE_MAP = {
+    'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
+    'transformers.models.llama.modeling_llama.LlamaSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
