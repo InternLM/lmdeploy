@@ -102,12 +102,12 @@ class QwenModel(LlamaModel):
             else:
                 kv_head_num = config['num_attention_heads']
             seq_length = config['seq_length']
-            use_dynamic_ntk = int(config['use_dynamic_ntk'])
+            rope_scaling_factor = int(config['use_dynamic_ntk'])
             use_logn_attn = int(config['use_logn_attn'])
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=seq_length,
-                    use_dynamic_ntk=int(use_dynamic_ntk),
+                    rope_scaling_factor=int(rope_scaling_factor),
                     use_logn_attn=use_logn_attn)
