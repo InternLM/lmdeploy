@@ -27,6 +27,7 @@ enum class RepetitionPenaltyType
 {
     Additive,        // the presence penalty
     Multiplicative,  // the repetition penalty
+    MultiAdditive,   // the frequency penalty
     None             // No repetition penalty.
 };
 
@@ -37,6 +38,8 @@ inline float getDefaultPenaltyValue(RepetitionPenaltyType penalty_type)
             return 0.0f;
         case RepetitionPenaltyType::Multiplicative:
             return 1.0f;
+        case RepetitionPenaltyType::MultiAdditive:
+            return 0.0f;
         default:
             break;
     }
