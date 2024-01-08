@@ -44,7 +44,7 @@ def pipeline(model_path: str,
 
     Examples:
         >>> import lmdeploy
-        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1')
+        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b')
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
     """ # noqa E501
@@ -98,7 +98,7 @@ def serve(model_path: str,
 
     Examples:
         >>> import lmdeploy
-        >>> client = lmdeploy.serve('InternLM/internlm-chat-7b-v1_1', 'internlm-chat-7b')
+        >>> client = lmdeploy.serve('InternLM/internlm-chat-7b', 'internlm-chat-7b')
         >>> for output in client.chat('hi', 1):
         ...    print(output)
     """ # noqa E501
