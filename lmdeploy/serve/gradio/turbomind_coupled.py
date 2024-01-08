@@ -1,11 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from threading import Lock
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence, Union
 
 import gradio as gr
 
+from lmdeploy.messages import GenerationConfig
+from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
+from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 class InterFace:
@@ -31,15 +35,16 @@ async def chat_stream_local(instruction: str, state_chatbot: Sequence,
 
     yield (state_chatbot, state_chatbot, disable_btn, enable_btn)
 
+    gen_config = GenerationConfig(max_new_tokens=request_output_len,
+                                  top_p=top_p,
+                                  temperature=temperature)
     async for outputs in InterFace.async_engine.generate(
             instruction,
             session_id,
             stream_response=True,
             sequence_start=(len(state_chatbot) == 1),
             sequence_end=False,
-            request_output_len=request_output_len,
-            top_p=top_p,
-            temperature=temperature):
+            gen_config=gen_config):
         response = outputs.response
         if outputs.finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
@@ -104,6 +109,10 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
 
 def run_local(model_path: str,
               model_name: Optional[str] = None,
+              backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+              backend_config: Optional[Union[PytorchEngineConfig,
+                                             TurbomindEngineConfig]] = None,
+              chat_template_config: Optional[ChatTemplateConfig] = None,
               server_name: str = 'localhost',
               server_port: int = 6006,
               batch_size: int = 4,
@@ -128,16 +137,25 @@ def run_local(model_path: str,
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "InternLM/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (EngineConfig): beckend config. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
         tp (int): tensor parallel for Turbomind
     """
-    InterFace.async_engine = AsyncEngine(model_path=model_path,
-                                         model_name=model_name,
-                                         instance_num=batch_size,
-                                         tp=tp,
-                                         **kwargs)
+    InterFace.async_engine = AsyncEngine(
+        model_path=model_path,
+        backend=backend,
+        backend_config=backend_config,
+        chat_template_config=chat_template_config,
+        model_name=model_name,
+        instance_num=batch_size,
+        tp=tp,
+        **kwargs)
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
         state_chatbot = gr.State([])
