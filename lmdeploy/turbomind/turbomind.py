@@ -512,7 +512,7 @@ class TurboMindInstance:
     def prepare_inputs(self,
                        session_id,
                        input_ids,
-                       generation_config: EngineGenerationConfig,
+                       gen_config: EngineGenerationConfig,
                        input_embeddings=None,
                        input_embedding_ranges=None,
                        sequence_start: bool = True,
@@ -550,14 +550,13 @@ class TurboMindInstance:
             input_ids=input_ids,
             input_lengths=input_lengths,
             request_output_len=np.full(input_lengths.shape,
-                                       generation_config.max_new_tokens,
+                                       gen_config.max_new_tokens,
                                        dtype=np.uint32),
-            runtime_top_k=_broadcast_np(generation_config.top_k, np.uint32),
-            runtime_top_p=_broadcast_np(generation_config.top_p, np.float32),
-            temperature=_broadcast_np(generation_config.temperature,
-                                      np.float32),
-            repetition_penalty=_broadcast_np(
-                generation_config.repetition_penalty, np.float32),
+            runtime_top_k=_broadcast_np(gen_config.top_k, np.uint32),
+            runtime_top_p=_broadcast_np(gen_config.top_p, np.float32),
+            temperature=_broadcast_np(gen_config.temperature, np.float32),
+            repetition_penalty=_broadcast_np(gen_config.repetition_penalty,
+                                             np.float32),
             step=step,
 
             # session input
@@ -605,13 +604,13 @@ class TurboMindInstance:
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
         bad_words = []
-        if generation_config.bad_words is not None:
-            bad_words.extend(generation_config.bad_words)
-        if generation_config.ignore_eos:
+        if gen_config.bad_words is not None:
+            bad_words.extend(gen_config.bad_words)
+        if gen_config.ignore_eos:
             stop_words = None
             bad_words.append(self.eos_id)
         else:
-            stop_words = generation_config.stop_words
+            stop_words = gen_config.stop_words
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 
@@ -620,24 +619,23 @@ class TurboMindInstance:
         if bad_words is not None:
             inputs['bad_words_list'] = bad_words
 
-        if generation_config.random_seed is not None:
-            inputs['random_seed'] = _broadcast_np(
-                generation_config.random_seed, np.uint64)
+        if gen_config.random_seed is not None:
+            inputs['random_seed'] = _broadcast_np(gen_config.random_seed,
+                                                  np.uint64)
         return inputs, input_lengths
 
-    async def async_stream_infer(
-            self,
-            session_id,
-            input_ids,
-            input_embeddings=None,
-            input_embedding_ranges=None,
-            sequence_start: bool = True,
-            sequence_end: bool = False,
-            step=0,
-            stop=False,
-            generation_config: EngineGenerationConfig = None,
-            stream_output=False,
-            **kwargs):
+    async def async_stream_infer(self,
+                                 session_id,
+                                 input_ids,
+                                 input_embeddings=None,
+                                 input_embedding_ranges=None,
+                                 sequence_start: bool = True,
+                                 sequence_end: bool = False,
+                                 step=0,
+                                 stop=False,
+                                 gen_config: EngineGenerationConfig = None,
+                                 stream_output=False,
+                                 **kwargs):
         """Perform model inference.
 
         Args:
@@ -650,15 +648,14 @@ class TurboMindInstance:
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): indicator for cancelling the session
-            generation_config (EngineGenerationConfig): generation config
+            gen_config (EngineGenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         if stream_output and not stop:
             self.model_insts[0].register_callback(self._forward_callback)
 
-        generation_config = self._update_generation_config(
-            generation_config, **kwargs)
+        gen_config = self._update_generation_config(gen_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
             input_ids=input_ids,
@@ -668,7 +665,7 @@ class TurboMindInstance:
             sequence_end=sequence_end,
             step=step,
             stop=stop,
-            generation_config=generation_config)
+            gen_config=gen_config)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
@@ -703,11 +700,11 @@ class TurboMindInstance:
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not generation_config.ignore_eos:
+                        and not gen_config.ignore_eos:
                     outputs.append((output[:-1], len_ - 1))
                 elif len(output) > 0 and \
-                    generation_config.stop_words is not None and \
-                        output[-1].item() in generation_config.stop_words:
+                    gen_config.stop_words is not None and \
+                        output[-1].item() in gen_config.stop_words:
                     outputs.append((output[:-1], len_))
                 else:
                     outputs.append((output, len_))
@@ -732,7 +729,7 @@ class TurboMindInstance:
                      sequence_end: bool = False,
                      step=0,
                      stop=False,
-                     generation_config: EngineGenerationConfig = None,
+                     gen_config: EngineGenerationConfig = None,
                      stream_output=False,
                      **kwargs):
         """Perform model inference.
@@ -747,15 +744,14 @@ class TurboMindInstance:
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
             stop (bool): indicator for cancelling the session
-            generation_config (EngineGenerationConfig): generation config
+            gen_config (EngineGenerationConfig): generation config
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
         if stream_output and not stop:
             self.model_insts[0].register_callback(self._forward_callback)
 
-        generation_config = self._update_generation_config(
-            generation_config, **kwargs)
+        gen_config = self._update_generation_config(gen_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
             session_id=session_id,
             input_ids=input_ids,
@@ -765,7 +761,7 @@ class TurboMindInstance:
             sequence_end=sequence_end,
             step=step,
             stop=stop,
-            generation_config=generation_config)
+            gen_config=gen_config)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
@@ -795,11 +791,11 @@ class TurboMindInstance:
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not generation_config.ignore_eos:
+                        and not gen_config.ignore_eos:
                     outputs.append((output[:-1], len_ - 1))
                 elif len(output) > 0 and \
-                    generation_config.stop_words is not None and \
-                        output[-1].item() in generation_config.stop_words:
+                    gen_config.stop_words is not None and \
+                        output[-1].item() in gen_config.stop_words:
                     outputs.append((output[:-1], len_))
                 else:
                     outputs.append((output, len_))
