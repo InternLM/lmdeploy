@@ -45,7 +45,8 @@ class AsyncEngine:
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "InternLM/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
-        backend ('turbomind' | 'pytorch'): default to turbomind,
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
         backend_config (EngineConfig): beckend config. Default to none.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
@@ -120,12 +121,15 @@ class AsyncEngine:
                  temperature=0.8,
                  repetition_penalty=1.0,
                  ignore_eos=False,
-                 do_preprocess=True,
                  **kwargs):
         """Inference a batch of prompts.
 
         Args:
             prompts (List[str]): a batch of prompts
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            chat_template_config (ChatTemplateConfig | None):a instance of
+                ChatTemplateConfig. Default to None.
             request_output_len (int): output token nums
             top_k (int): The number of the highest probability vocabulary
               tokens to keep for top-k-filtering
@@ -136,7 +140,6 @@ class AsyncEngine:
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
-            do_preprocess (bool): whether pre-process the messages.
         """
         return self.batch_infer(prompts,
                                 gen_config=gen_config,
@@ -147,7 +150,6 @@ class AsyncEngine:
                                 temperature=temperature,
                                 repetition_penalty=repetition_penalty,
                                 ignore_eos=ignore_eos,
-                                do_preprocess=do_preprocess,
                                 **kwargs)
 
     def stop_session(self, session_id: int):
@@ -177,12 +179,6 @@ class AsyncEngine:
                 session_id)] not in self.gens_set:
             self.gens_set.add(self.id2generator[str(session_id)])
 
-    async def get_embeddings(self, prompt, do_prerpocess=False):
-        if do_prerpocess:
-            prompt = self.chat_template.get_prompt(prompt)
-        input_ids = self.tokenizer.encode(prompt)
-        return input_ids
-
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
         if stop:
@@ -203,12 +199,15 @@ class AsyncEngine:
                     temperature=0.8,
                     repetition_penalty=1.0,
                     ignore_eos=False,
-                    do_preprocess=True,
                     **kwargs):
         """Inference a batch of prompts.
 
         Args:
             prompts (List[str] | str): a batch of prompts
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            chat_template_config (ChatTemplateConfig | None):a instance of
+                ChatTemplateConfig. Default to None.
             request_output_len (int): output token nums
             top_k (int): The number of the highest probability vocabulary
               tokens to keep for top-k-filtering
@@ -219,7 +218,6 @@ class AsyncEngine:
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
-            do_preprocess (bool): whether pre-process the messages.
         """
         input_str = isinstance(prompts, str)
         prompts = [prompts] if input_str else prompts
@@ -242,7 +240,6 @@ class AsyncEngine:
                               temperature=temperature,
                               ignore_eos=ignore_eos,
                               repetition_penalty=repetition_penalty,
-                              do_preprocess=do_preprocess,
                               **kwargs))
 
         async def _inner_call(i, generator):
@@ -281,6 +278,10 @@ class AsyncEngine:
         Args:
             messages (str | List): chat history or prompt
             session_id (int): the session id
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            chat_template_config (ChatTemplateConfig | None):a instance of
+                ChatTemplateConfig. Default to None.
             stream_response (bool): whether return responses streamingly
             request_output_len (int): output token nums
             sequence_start (bool): indicator for starting a sequence

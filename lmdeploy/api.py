@@ -35,13 +35,16 @@ def pipeline(model_path: str,
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "InternLM/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (EngineConfig): beckend config. Default to none.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Examples:
         >>> import lmdeploy
-        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1', 'internlm-chat-7b')
+        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1')
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
     """ # noqa E501
