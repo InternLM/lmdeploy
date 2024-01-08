@@ -7,11 +7,12 @@ from typing import Any, Dict, List
 
 import torch
 
+from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
-from ..config import CacheConfig, SchedulerConfig
+from ..config import CacheConfig, EngineConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
 from ..paging import Scheduler
@@ -96,32 +97,30 @@ class Engine:
 
     Args:
         model_path (str): The hugging face model path.
-        scheduler_config (SchedulerConfig): The config of the scheduler.
-        cache_config (CacheConfig): The config of the cache info.
-        tp (int): Number of tensor parallel.
+        engine_config (EngineConfig): The config of the Engine.
     """
 
     def __init__(self,
                  model_path: str,
-                 scheduler_config: SchedulerConfig = None,
-                 cache_config: CacheConfig = None,
-                 tp: int = 1,
-                 model_name: str = None,
-                 trust_remote_code=True,
-                 adapters: dict = None) -> None:
+                 engine_config: EngineConfig,
+                 trust_remote_code: bool = True) -> None:
+        self.engine_config = engine_config
+        model_name = engine_config.model_name
+        tp = engine_config.tp
 
         self.tp = tp
         self.model_name = model_name
 
-        scheduler_config = scheduler_config or SchedulerConfig(
-            max_batches=128,
-            max_session_len=4096,
-            max_request_output_len=512,
+        scheduler_config = SchedulerConfig(
+            max_batches=engine_config.max_batch_size,
+            max_session_len=engine_config.session_len,
             eviction_type='recompute')
 
         # block_size = 1 to enable unified paging
-        cache_config = cache_config or CacheConfig(
-            block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
+        adapters = engine_config.adapters
+        cache_config = CacheConfig(block_size=engine_config.block_size,
+                                   num_cpu_blocks=engine_config.num_cpu_blocks,
+                                   num_gpu_blocks=engine_config.num_gpu_blocks)
         cache_config = _update_blocksize(cache_config,
                                          adapters=adapters,
                                          tp=tp)
@@ -158,12 +157,8 @@ class Engine:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        scheduler_config: SchedulerConfig = None,
-                        cache_config: CacheConfig = None,
-                        tp: int = 1,
-                        model_name: str = None,
-                        adapters: dict = None,
-                        trust_remote_code=True,
+                        engine_config: EngineConfig,
+                        trust_remote_code: bool = True,
                         **kwargs):
         """lmdeploy python inference engine.
 
@@ -189,11 +184,7 @@ class Engine:
         """
         logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
-                   scheduler_config=scheduler_config,
-                   cache_config=cache_config,
-                   tp=tp,
-                   model_name=model_name,
-                   adapters=adapters,
+                   engine_config=engine_config,
                    trust_remote_code=trust_remote_code)
 
     def _create_buffers(self):
@@ -445,6 +436,8 @@ class Engine:
             return msg.remain_output_len <= 0
 
         def _check_session_len(msg, max_session_len):
+            if max_session_len is None:
+                return False
             session_len = msg.logical_blocks.num_tokens()
             return session_len >= max_session_len
 
@@ -576,8 +569,7 @@ class Engine:
     def batched_infer(self,
                       session_ids: List[int],
                       token_ids: List[List[int]] = None,
-                      request_output_len: int = 512,
-                      sampling_param: SamplingParam = SamplingParam(),
+                      gen_config: EngineGenerationConfig = None,
                       adapter_names: List[str] = None,
                       keep_cache: bool = False):
         """Send inference request.
@@ -610,6 +602,8 @@ class Engine:
 
         def _add_messages(session_ids, token_ids):
             add_msgs = []
+            request_output_len = gen_config.max_new_tokens
+            sampling_param = SamplingParam.from_gen_config(gen_config)
             for session_id, token_id, adapter_name in zip(
                     session_ids, token_ids, adapter_names):
                 msg = dict(token_ids=token_id,
@@ -787,10 +781,8 @@ class EngineInstance:
 
     def stream_infer(self,
                      session_id: int,
-                     input_ids: List[int] = None,
-                     request_output_len: int = None,
-                     step: int = 0,
-                     sampling_param: SamplingParam = SamplingParam(),
+                     input_ids: List[int],
+                     gen_config: EngineGenerationConfig = None,
                      adapter_name: str = None,
                      **kwargs):
         """Send stream inference request.
@@ -800,13 +792,18 @@ class EngineInstance:
             input_ids (List[int]): The input token ids.
             request_output_len (int): The max output length of this request.
             step (int): No use for now.
-            sampling_param (SamplingParam): The sampling param of the output.
+            gen_config (EngineGenerationConfig): The sampling parameters.
 
         Yields:
             int: Error flags. 0 if success.
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
+
+        # TODO: support input embedding, step
+        gen_config = gen_config or EngineGenerationConfig()
+        request_output_len = gen_config.max_new_tokens
+        sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         self._try_add_session(session_id)
         msg = dict(
             token_ids=input_ids,
@@ -837,14 +834,11 @@ class EngineInstance:
                 yield (1, [], 0)
                 break
 
-    def infer(
-            self,
-            session_id: int,
-            prompt_token_ids: List[int] = None,
-            request_output_len: int = None,
-            step: int = 0,
-            sampling_param: SamplingParam = SamplingParam(),
-    ):
+    def infer(self,
+              session_id: int,
+              prompt_token_ids: List[int] = None,
+              gen_config: EngineGenerationConfig = None,
+              **kwargs):
         """Send inference request.
 
         Args:
@@ -852,7 +846,7 @@ class EngineInstance:
             prompt_token_ids (List[int]): The input token ids.
             request_output_len (int): The max output length of this request.
             step (int): No use for now.
-            sampling_param (SamplingParam): The sampling param of the output.
+            gen_config (EngineGenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
@@ -862,9 +856,8 @@ class EngineInstance:
         token_ids = []
         for outputs in self.stream_infer(session_id,
                                          prompt_token_ids,
-                                         request_output_len=request_output_len,
-                                         step=step,
-                                         sampling_param=sampling_param):
+                                         gen_config=gen_config,
+                                         **kwargs):
             status, tmp_ids, _ = outputs
             if status != 0:
                 return (status, token_ids, len(token_ids))

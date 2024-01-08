@@ -730,9 +730,20 @@ def _start_tp_process(rank: int,
         args (List): The arguments of the func.
         kwargs (Dict): The keyword arguments of the func.
     """
+
+    def __find_available_port() -> bool:
+        """find available port."""
+        import socket
+        port = 29500
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('localhost', port)) != 0:
+                return port
+            port += 1
+
     try:
+        port = __find_available_port()
         os.environ['MASTER_ADDR'] = '127.0.0.1'
-        os.environ['MASTER_PORT'] = '29500'
+        os.environ['MASTER_PORT'] = str(port)
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
 
         with torch.cuda.device(rank), torch.no_grad():

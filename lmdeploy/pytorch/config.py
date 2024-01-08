@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict
 
 import torch
 
@@ -17,13 +17,44 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
 
 
 @dataclass
+class EngineConfig:
+    """PyTorch Engine Config.
+
+    Args:
+        model_name (str): name of the given model.
+        tp (int): Tensor Parallelism. default 1.
+        session_len (int): Max session length. Default None.
+        max_batch_size: (int): Max batch size. Default 128.
+        eviction_type (str): What action to perform when kv cache
+            is full, ['recompute', 'copy'], Default 'recompute'.
+        prefill_interval (int): Interval to perform prefill,
+            Default 16.
+        block_size (int): paging cache block size, default 64.
+        num_cpu_blocks (int): Num cpu blocks. If num is 0, cache
+            would be allocate according to current environment.
+        num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
+            would be allocate according to current environment.
+    """
+    model_name: str = ''
+    tp: int = 1
+    session_len: int = None
+    max_batch_size: int = 128
+    eviction_type: str = 'recompute'
+    prefill_interval: int = 16
+    block_size: int = 64
+    num_cpu_blocks: int = 0
+    num_gpu_blocks: int = 0
+    adapters: Dict[str, str] = None
+
+
+@dataclass
 class SchedulerConfig:
     """Config of scheduler."""
 
     max_batches: int
     max_session_len: int
-    max_request_output_len: int
-    eviction_type: str = 'copy'
+    max_request_output_len: int = 512
+    eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
 

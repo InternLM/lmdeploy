@@ -1,8 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from lmdeploy.api import client, pipeline, serve
+from .api import client, pipeline, serve
+from .messages import EngineGenerationConfig, GenerationConfig
+from .tokenizer import Tokenizer
+from .version import __version__, version_info
 
-__all__ = ['pipeline', 'serve', 'client']
+__all__ = [
+    'pipeline', 'serve', 'client', 'Tokenizer', 'GenerationConfig',
+    'EngineGenerationConfig', '__version__', 'version_info'
+]
 
 
 def bootstrap():

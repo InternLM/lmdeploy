@@ -12,8 +12,9 @@ import fire
 import numpy as np
 from tqdm import tqdm
 
+from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.pytorch.engine import Engine as LMEngine
-from lmdeploy.pytorch.messages import SamplingParam
+from lmdeploy.pytorch.engine import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 
@@ -63,7 +64,8 @@ class Engine:
     def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
         # avoid turbomind checking chat template name by setting
         # `model_name='llama'`
-        tm_model = LMEngine(model_path, tp=tp, model_name='llama')
+        tm_model = LMEngine(model_path, EngineConfig(tp=tp,
+                                                     model_name='llama'))
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
         self.csv = csv
@@ -84,15 +86,14 @@ class Engine:
 
             input_ids = self.tokenizer(prompt).input_ids
             # TODO: share same stream infer
-            sampling_param = SamplingParam(top_k=1,
-                                           top_p=1.0,
-                                           temperature=1.0,
-                                           ignore_eos=True)
-            for outputs in model_inst.stream_infer(
-                    session_id,
-                    input_ids=input_ids,
-                    request_output_len=output_seqlen,
-                    sampling_param=sampling_param):
+            gen_config = EngineGenerationConfig(max_new_tokens=output_seqlen,
+                                                top_k=1,
+                                                top_p=1.0,
+                                                temperature=1.0,
+                                                ignore_eos=True)
+            for outputs in model_inst.stream_infer(session_id,
+                                                   input_ids=input_ids,
+                                                   gen_config=gen_config):
                 if len(outputs) > 1:
                     res, n_token = outputs[-2:]
                 else:

@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 import torch
 from torch import Tensor
 
+from lmdeploy.messages import EngineGenerationConfig
+
 from .block import LogicalTokenBlocks
 
 
@@ -33,6 +35,19 @@ class SamplingParam:
         self.random_seed = random_seed
         self.stop_words = stop_words
         self.bad_words = bad_words
+
+    @classmethod
+    def from_gen_config(self, gen_config: EngineGenerationConfig):
+        """from gen config."""
+
+        return SamplingParam(top_p=gen_config.top_p,
+                             top_k=gen_config.top_k,
+                             temperature=gen_config.temperature,
+                             repetition_penalty=gen_config.repetition_penalty,
+                             ignore_eos=gen_config.ignore_eos,
+                             random_seed=gen_config.random_seed,
+                             stop_words=gen_config.stop_words,
+                             bad_words=gen_config.bad_words)
 
 
 class MessageStatus(enum.Enum):
