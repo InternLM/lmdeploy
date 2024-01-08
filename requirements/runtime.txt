@@ -10,4 +10,5 @@ shortuuid
 tiktoken
 torch
 transformers>=4.33.0
+triton>=2.1.0
 uvicorn
