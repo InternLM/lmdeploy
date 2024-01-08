@@ -732,8 +732,11 @@ class EngineInstance:
 
     def __del__(self):
         """Destructor."""
-        for session_id in self.owned_sessions:
-            self.end(session_id)
+        try:
+            for session_id in self.owned_sessions:
+                self.end(session_id)
+        except:  # noqa
+            pass
 
     def _try_add_session(self, session_id: int):
         """Add new session.
@@ -870,7 +873,8 @@ class EngineInstance:
             logger.warning(f'session {session_id} is not owned '
                            'by this instance')
         resp = self.req_sender.send(RequestType.END_SESSION,
-                                    dict(session_id=session_id))
+                                    dict(session_id=session_id),
+                                    que_timeout=3)  # temperare way to exit
         if _check_resp_success(resp, (f'Failed to end session: {session_id}. '
                                       f'Error: {resp.type}.')):
             self.owned_sessions.remove(session_id)
