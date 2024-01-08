@@ -50,6 +50,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
 
 def run_chat(model_path,
              engine_config: EngineConfig,
+             gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
              trust_remote_code: bool = True):
     """An example to perform model inference through the command line
@@ -58,6 +59,7 @@ def run_chat(model_path,
     Args:
         model_path (str): the huggingface model path.
         engine_config (EngineConfig): Config of engine.
+        gen_config (EngineGenerationConfig): Config of generation.
         session_id (int): the identical id of a session.
         trust_remote_code (bool): trust remote code.
     """
@@ -72,7 +74,6 @@ def run_chat(model_path,
     if engine_config.adapters is not None:
         adapter_name = next(iter(engine_config.adapters.keys()))
 
-    gen_config = EngineGenerationConfig.From(engine_config, tokenizer)
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
@@ -131,12 +132,12 @@ def run_chat(model_path,
             nth_round += 1
 
 
-def main(model_path: str,
+def main(model_path,
          model_name: str = None,
          session_id: int = 1,
-         top_k: float = 40,
-         top_p: float = 0.8,
-         temperature: float = 0.8,
+         top_k=40,
+         top_p=0.8,
+         temperature=0.8,
          repetition_penalty: float = 1.0,
          tp: int = 1,
          stream_output: bool = True,

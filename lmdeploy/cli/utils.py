@@ -67,7 +67,7 @@ def get_engine_parser(add_pytorch: bool = False,
                            help='The format of input model')
         group.add_argument('--group-size',
                            type=int,
-                           default=128,
+                           default=0,
                            help='The quantization parameter for awq')
         group.add_argument('--quant-policy',
                            type=int,

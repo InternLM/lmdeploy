@@ -94,12 +94,12 @@ class SubCliChat(object):
     @staticmethod
     def torch(args):
         """Chat with PyTorch inference engine through terminal."""
+        from lmdeploy.messages import EngineGenerationConfig
         from lmdeploy.pytorch.chat import run_chat
         from lmdeploy.pytorch.config import EngineConfig
 
-        engine_config = EngineConfig(
-            model_name=args.model_name,
-            tp=args.tp,
+        engine_config = EngineConfig(model_name=args.model_name, tp=args.tp)
+        gen_config = EngineGenerationConfig(
             top_k=args.top_k,
             top_p=args.top_p,
             temperature=args.temperature,
@@ -107,6 +107,7 @@ class SubCliChat(object):
         )
         run_chat(args.model_path,
                  engine_config,
+                 gen_config=gen_config,
                  session_id=args.session_id,
                  trust_remote_code=args.trust_remote_code)
 
