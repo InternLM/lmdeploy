@@ -720,7 +720,8 @@ def _start_tp_process(rank: int,
                       world_size: int,
                       func: Callable,
                       args: List = None,
-                      kwargs: Dict = None):
+                      kwargs: Dict = None,
+                      port: int = 29500):
     """Start the tensor parallel process.
 
     Args:
@@ -730,18 +731,7 @@ def _start_tp_process(rank: int,
         args (List): The arguments of the func.
         kwargs (Dict): The keyword arguments of the func.
     """
-
-    def __find_available_port() -> bool:
-        """find available port."""
-        import socket
-        port = 29500
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) != 0:
-                return port
-            port += 1
-
     try:
-        port = __find_available_port()
         os.environ['MASTER_ADDR'] = '127.0.0.1'
         os.environ['MASTER_PORT'] = str(port)
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
@@ -829,6 +819,17 @@ class TPModelAgent(AutoModelAgent):
             out_que (mp.Queue): Output queue. Used to send the model output.
             world_size (int): The distribution world size.
         """
+
+        def __find_available_port() -> bool:
+            """find available port."""
+            import socket
+            port = 29500
+            while True:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    if s.connect_ex(('localhost', port)) != 0:
+                        return port
+                    port += 1
+
         self.mp_context = mp.spawn(
             _start_tp_process,
             args=(
@@ -842,6 +843,7 @@ class TPModelAgent(AutoModelAgent):
                      out_que=out_que,
                      world_size=world_size,
                      trust_remote_code=trust_remote_code),
+                __find_available_port(),
             ),
             nprocs=world_size,
             join=False,
