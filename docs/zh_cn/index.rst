@@ -57,6 +57,7 @@
    :caption: 进阶指南
 
    serving/qos.md
+   advance/pytorch_new_model.md
 
 
 索引与表格
