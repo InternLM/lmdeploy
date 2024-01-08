@@ -1,5 +1,5 @@
 from mmengine.config import read_base
-from opencompass.models.turbomind import PytorchModel, TurboMindModel
+from opencompass.models import PytorchModel, TurboMindModel
 
 with read_base():
     # choose a list of datasets
