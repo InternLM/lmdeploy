@@ -71,7 +71,7 @@ MODULE_MAP.update({
 
 ## 特性
 
-- **Continuous Batching**: 由于输入序列的长度不一样，batching 通常需要打击输入进行 padding，这种 padding 会导致后续运算的计算量增加、影响速度，也会使得显存的占用大幅增加。遵循许多其他成熟框架的方案，lmdeploy.pytorch 采用了 continuous batching 的方式对输入做了连续化处理，避免了多余的资源占用。
+- **Continuous Batching**: 由于输入序列的长度不一样，batching 通常需要对输入进行 padding，这种 padding 会导致后续运算的计算量增加、影响速度，也会使得显存的占用大幅增加。遵循许多其他成熟框架的方案，lmdeploy.pytorch 采用了 continuous batching 的方式对输入做了连续化处理，避免了多余的资源占用。
 
 - **Tensor Parallelism**: 大模型可能会占用远超一张显卡的显存量，为了支持这样的大模型的推理，我们实现了 Tensor 并发，模型的权重会被分布在不同的设备中，每张 GPU 设备负责一部分计算，减少了单卡显存占用，也充分利用了多显卡的计算优势。
 
