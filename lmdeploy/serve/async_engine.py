@@ -2,8 +2,17 @@
 import asyncio
 import dataclasses
 import random
+from argparse import ArgumentError
 from contextlib import contextmanager
 from typing import List, Literal, Optional, Union
+
+from lmdeploy.messages import EngineGenerationConfig, GenerationConfig
+from lmdeploy.model import ChatTemplateConfig, best_match_model
+from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
+from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 @dataclasses.dataclass
@@ -36,6 +45,8 @@ class AsyncEngine:
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "InternLM/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        backend ('turbomind' | 'pytorch'): default to turbomind,
+        backend_config (EngineConfig): beckend config. Default to none.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
     """
@@ -43,26 +54,66 @@ class AsyncEngine:
     def __init__(self,
                  model_path: str,
                  model_name: Optional[str] = None,
+                 backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+                 backend_config: Optional[Union[TurbomindEngineConfig,
+                                                PytorchEngineConfig]] = None,
+                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  instance_num: int = 32,
                  tp: int = 1,
                  **kwargs) -> None:
-        from lmdeploy import turbomind as tm
-        self.tm_model = tm.TurboMind.from_pretrained(model_path,
-                                                     model_name=model_name,
-                                                     tp=tp,
-                                                     **kwargs)
-        self.tokenizer = self.tm_model.tokenizer
+        if backend == 'turbomind':
+            if backend_config is None:
+                backend_config = TurbomindEngineConfig(model_name=model_name,
+                                                       tp=tp)
+            from lmdeploy import turbomind as tm
+            self.engine = tm.TurboMind.from_pretrained(
+                model_path,
+                engine_config=backend_config,
+                chat_template_config=chat_template_config,
+                **kwargs)
+            self.chat_template = self.engine.model
+        elif backend == 'pytorch':
+            self.model_name = model_name
+            from lmdeploy.pytorch.engine import Engine
+
+            # try fuzzy matching to get a model_name
+            if self.model_name is None and backend_config is None:
+                potential_names = best_match_model(model_path)
+                if potential_names is None:
+                    raise ArgumentError(
+                        'Please set model_name or backend_config.')
+                else:
+                    self.model_name = potential_names[0]
+                    logger.warning(
+                        f'Best matched chat template name: {self.model_name}')
+            elif self.model_name is not None and backend_config is not None:
+                if self.model_name != backend_config.model_name:
+                    raise ArgumentError(
+                        f'Got different model names from model_name = '
+                        f'{self.model_name}, backend_config = {backend_config}'
+                    )
+            if self.model_name is not None and backend_config is None:
+                backend_config = PytorchEngineConfig(self.model_name)
+            self.engine = Engine(model_path=model_path,
+                                 engine_config=backend_config)
+            if chat_template_config is None:
+                chat_template_config = ChatTemplateConfig(self.model_name)
+            self.chat_template = chat_template_config.chat_template
+        else:
+            raise ValueError(f'unsupported backend {backend}')
+        self.tokenizer = self.engine.tokenizer
         self.instance_num = instance_num
-        self.model = self.tm_model.model
         self.id2step = {}
         self.id2generator = {}
         self.loop = asyncio.get_event_loop()
         self.gens_set = set()
         for i in range(instance_num):
-            self.gens_set.add(self.tm_model.create_instance())
+            self.gens_set.add(self.engine.create_instance())
 
     def __call__(self,
                  prompts: List[str],
+                 gen_config: Optional[GenerationConfig] = None,
+                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  request_output_len=512,
                  top_k=40,
                  top_p=0.8,
@@ -88,6 +139,8 @@ class AsyncEngine:
             do_preprocess (bool): whether pre-process the messages.
         """
         return self.batch_infer(prompts,
+                                gen_config=gen_config,
+                                chat_template_config=chat_template_config,
                                 request_output_len=request_output_len,
                                 top_k=top_k,
                                 top_p=top_p,
@@ -99,29 +152,14 @@ class AsyncEngine:
 
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        input_ids = [self.tm_model.eos_id]
-        stop_generator = self.tm_model.create_instance()
-        for outputs in stop_generator.stream_infer(session_id,
-                                                   input_ids,
-                                                   request_output_len=0,
-                                                   sequence_start=False,
-                                                   sequence_end=False,
-                                                   stop=True):
-            pass
+        self.engine.cancel(session_id)
         if str(session_id) in self.id2generator and self.id2generator[str(
                 session_id)] not in self.gens_set:
             self.gens_set.add(self.id2generator[str(session_id)])
 
     def end_session(self, session_id: int):
         """Clear a session by a session_id."""
-        input_ids = [self.tm_model.eos_id]
-        end_generator = self.tm_model.create_instance()
-        for outputs in end_generator.stream_infer(session_id,
-                                                  input_ids,
-                                                  request_output_len=0,
-                                                  sequence_start=False,
-                                                  sequence_end=True):
-            pass
+        self.engine.end(session_id)
         self.id2step[str(session_id)] = 0
         if str(session_id) in self.id2generator and self.id2generator[str(
                 session_id)] not in self.gens_set:
@@ -141,14 +179,14 @@ class AsyncEngine:
 
     async def get_embeddings(self, prompt, do_prerpocess=False):
         if do_prerpocess:
-            prompt = self.model.get_prompt(prompt)
+            prompt = self.chat_template.get_prompt(prompt)
         input_ids = self.tokenizer.encode(prompt)
         return input_ids
 
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
         if stop:
-            return self.tm_model.create_instance()
+            return self.engine.create_instance()
         while self.gens_set == set():
             await asyncio.sleep(0)
         generator = self.gens_set.pop()
@@ -157,6 +195,8 @@ class AsyncEngine:
 
     def batch_infer(self,
                     prompts: Union[List[str], str],
+                    gen_config: Optional[GenerationConfig] = None,
+                    chat_template_config: Optional[ChatTemplateConfig] = None,
                     request_output_len=512,
                     top_k=40,
                     top_p=0.8,
@@ -191,6 +231,8 @@ class AsyncEngine:
             generators.append(
                 self.generate(prompt,
                               i,
+                              gen_config=gen_config,
+                              chat_template_config=chat_template_config,
                               stream_response=True,
                               sequence_start=True,
                               sequence_end=True,
@@ -218,19 +260,21 @@ class AsyncEngine:
     async def generate(
             self,
             messages,
-            session_id,
-            stream_response=True,
-            sequence_start=True,
-            sequence_end=True,  # no interactive mode by default
-            step=0,
-            request_output_len=512,
-            stop=False,
-            top_k=40,
-            top_p=0.8,
-            temperature=0.8,
-            repetition_penalty=1.0,
-            ignore_eos=False,
-            do_preprocess=True,
+            session_id: int,
+            gen_config: Optional[GenerationConfig] = None,
+            chat_template_config: Optional[ChatTemplateConfig] = None,
+            stream_response: bool = True,
+            sequence_start: bool = True,
+            sequence_end: bool = True,  # no interactive mode by default
+            step: int = 0,
+            request_output_len: int = 512,
+            stop: bool = False,
+            stop_words: Optional[List[str]] = None,
+            top_k: int = 40,
+            top_p: float = 0.8,
+            temperature: float = 0.8,
+            repetition_penalty: float = 1.0,
+            ignore_eos: bool = False,
             **kwargs):
         """Generate responses.
 
@@ -252,7 +296,6 @@ class AsyncEngine:
             repetition_penalty (float): The parameter for repetition penalty.
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
-            do_preprocess (bool): whether pre-process the messages.
         """
         if str(session_id) not in self.id2step:
             self.id2step[str(session_id)] = 0
@@ -260,8 +303,11 @@ class AsyncEngine:
             self.id2step[str(session_id)] = step
         seed = random.getrandbits(64)
         prompt = messages
-        if do_preprocess:
-            prompt = self.model.messages2prompt(prompt, sequence_start)
+        if chat_template_config is not None:
+            chat_template = chat_template_config.chat_template
+        else:
+            chat_template = self.chat_template
+        prompt = chat_template.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
         if stop is True:
@@ -269,35 +315,40 @@ class AsyncEngine:
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
         elif self.id2step[str(session_id)] + len(
-                input_ids) + request_output_len >= self.tm_model.session_len:
+                input_ids) + request_output_len >= self.engine.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
             if sequence_end is True and sequence_start is False:
                 self.end_session(session_id)
         else:
+            if gen_config is None:
+                gen_config = GenerationConfig(
+                    max_new_tokens=request_output_len,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                    ignore_eos=ignore_eos,
+                    random_seed=seed if sequence_start else None,
+                    stop_words=stop_words)
+            gen_config = EngineGenerationConfig.From(gen_config,
+                                                     self.tokenizer)
             generator = await self.get_generator(stop, session_id)
             with self.safe_run(session_id):
                 response_size = 0
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
-                        input_ids=[input_ids],
+                        input_ids=input_ids,
+                        gen_config=gen_config,
                         stream_output=stream_response,
-                        request_output_len=request_output_len,
                         sequence_start=(sequence_start),
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)],
-                        stop=stop,
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                        repetition_penalty=repetition_penalty,
-                        ignore_eos=ignore_eos,
-                        random_seed=seed if sequence_start else None):
-                    res, tokens = outputs[0]
+                        stop=stop):
+                    status, res, tokens = outputs
                     # decode res
-                    response = self.tokenizer.decode(res.tolist(),
-                                                     offset=response_size)
+                    response = self.tokenizer.decode(res, offset=response_size)
                     # utf-8 char at the end means it's a potential unfinished
                     # byte sequence, continue to concate it with the next
                     # sequence and decode them together

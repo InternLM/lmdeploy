@@ -19,7 +19,7 @@ import lmdeploy
 from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import ResponseType, get_logger
 
 from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
@@ -509,6 +509,29 @@ class TurboMindInstance:
                 'use GenerationConfig instead.')
         return config
 
+    def end(self, session_id: int):
+        """End the given session."""
+        input_ids = [self.tm_model.tokenizer.eos_token_id]
+        end_generator = self.tm_model.create_instance()
+        for outputs in end_generator.stream_infer(session_id,
+                                                  input_ids,
+                                                  request_output_len=0,
+                                                  sequence_start=False,
+                                                  sequence_end=True):
+            pass
+
+    def cancel(self, session_id: int):
+        """Stop current streaming inference."""
+        input_ids = [self.tm_model.tokenizer.eos_token_id]
+        stop_generator = self.engine.create_instance()
+        for outputs in stop_generator.stream_infer(session_id,
+                                                   input_ids,
+                                                   request_output_len=0,
+                                                   sequence_start=False,
+                                                   sequence_end=False,
+                                                   stop=True):
+            pass
+
     def prepare_inputs(self,
                        session_id,
                        input_ids,
@@ -697,17 +720,18 @@ class TurboMindInstance:
             sequence_length -= seq_start.to(sequence_length.device)
 
             outputs = []
+            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs.append((output[:-1], len_ - 1))
+                    outputs = (status, output[:-1], len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs.append((output[:-1], len_))
+                    outputs = (status, output[:-1], len_)
                 else:
-                    outputs.append((output, len_))
+                    outputs = (status, output, len_)
             yield outputs
 
             if finish:

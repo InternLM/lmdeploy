@@ -39,7 +39,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.tm_model.model_name]
+    return [VariableInterface.async_engine.engine.model_name]
 
 
 @app.get('/v1/models')
@@ -702,7 +702,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.model.get_prompt(
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(
                 prompt, sequence_start=add_bos)
         input_ids = VariableInterface.async_engine.tokenizer.encode(
             prompt, add_bos=add_bos)

@@ -19,7 +19,7 @@ class SamplingParam:
 
 
 @dataclasses.dataclass
-class ModelConfig:
+class ChatTemplateConfig:
     """parameters for chat templates."""
     model_name: str  # determine which chat template will be applied
     system: Optional[str] = None  # begin of the system prompt
@@ -32,7 +32,7 @@ class ModelConfig:
     capability: Optional[str] = None
 
     @property
-    def model(self):
+    def chat_template(self):
         attrs = {
             key: value
             for key, value in dataclasses.asdict(self).items()

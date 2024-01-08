@@ -24,9 +24,10 @@ def test_best_match_model(model_path_and_name):
                          ['llama2', 'base', 'yi', 'qwen-7b', 'vicuna'])
 @pytest.mark.parametrize('meta_instruction', ['[fake meta_instruction]'])
 def test_model_config(model_name, meta_instruction):
-    from lmdeploy.model import ModelConfig
-    model = ModelConfig(model_name, meta_instruction=meta_instruction).model
-    prompt = model.get_prompt('')
+    from lmdeploy.model import ChatTemplateConfig
+    chat_template = ChatTemplateConfig(
+        model_name, meta_instruction=meta_instruction).chat_template
+    prompt = chat_template.get_prompt('')
     if model_name == 'base':
         assert prompt == ''
     else:

@@ -108,7 +108,7 @@ def main(model_path,
                     **dataclasses.asdict(gen_param),
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
-                res, tokens = outputs[0]
+                _, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res.tolist(), offset=response_size)
                 # utf-8 char at the end means it's a potential unfinished
