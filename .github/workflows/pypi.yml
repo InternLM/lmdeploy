@@ -13,7 +13,7 @@ jobs:
   linux-build:
     strategy:
       matrix:
-        pyver: [py38, py39, py310, py311]
+        pyver: [py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -51,51 +51,11 @@ jobs:
           path: builder/manywheel/${{ env.OUTPUT_FOLDER }}/*
           retention-days: 1
 
-  windows-build:
-    strategy:
-      matrix:
-        pyver: ['3.8', '3.9', '3.10', '3.11']
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Set up python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.pyver }}
-      - name: Install python packages
-        run: |
-          pip install pybind11 wheel
-      - uses: Jimver/cuda-toolkit@v0.2.11
-        id: cuda-toolkit
-        with:
-          cuda: '11.8.0'
-          use-github-cache: false
-      - name: Build wheel
-        run: |
-          mkdir build
-          cd build
-          # https://github.com/pypa/setuptools/issues/1631
-          pip install -U setuptools
-          ..\builder\windows\generate.ps1
-          cmake --build . --config Release -- /m > build.log.txt
-          cmake --install . --config Release
-          cd ..
-          rm build -Force -Recurse
-          python setup.py bdist_wheel -d build/wheel
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          if-no-files-found: error
-          path: build/wheel/*
-          retention-days: 1
-
   publish:
     runs-on: ubuntu-latest
     environment: 'prod'
     needs:
       - linux-build
-      - windows-build
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v3
