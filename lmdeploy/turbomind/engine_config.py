@@ -14,19 +14,16 @@ class EngineConfig:
         session_len (int): the max session length of a sequence, default to None​
         max_batch_size (int): the max batch size during inference, default to 128​
         max_context_token_num (int): the max number of tokens to be processed in each forward pass, default to 1​
-        step_length (int): the decoding step size, default to 1. ​
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache, default to 0.5​
         cache_block_seq_len (int): the length of a sequence in a k/v block, default to 128​
         cache_chunk_size (int): the number of blocks each time TurboMind engine tries to realloc from gpu memory, default to -1. When it is -1, ​
-        num_tokens_per_iter (int): the number of tokens to be processed in one iteration of prefill, default to 0​
-        max_prefill_iters (int): the max times of running `prefill forward`, default to 1​
-        extra_tokens_per_iter (int): default to 0​
+        num_tokens_per_iter (int): number of tokens to be processed per iteration, default to 0
+        max_prefill_iters (int): max prefill iters for a single request, default to 1
         use_context_fmha (int): whether or not to use fmha in context decoding, default to 1​
         quant_policy: (int): , default to 0. When k/v is quantized into 8 bit, set it to 4​
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention​
         use_dynamic_ntk (bool): whether or not to use dynamic ntk, default to False​
         use_logn_attn (bool): whether or not to use log attn: default to False​
-        kv_sym (bool): whether to use symmetric or asymmetric quantization method to quantize k/v, default to False​
         kv_bits (int): the number of bits of k/v after quantization, default to 8
     """  # noqa: E501
 
@@ -36,16 +33,13 @@ class EngineConfig:
     session_len: int = None
     max_batch_size: int = 128
     group_size: int = 128
-    kv_sym: bool = False
     kv_bits: int = 8
     max_context_token_num: int = 1
-    step_length: int = 1
     cache_max_entry_count: float = 0.5
     cache_block_seq_len: int = 128
     cache_chunk_size: int = -1
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
-    extra_tokens_per_iter: int = 0
     use_context_fmha: int = 1
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0

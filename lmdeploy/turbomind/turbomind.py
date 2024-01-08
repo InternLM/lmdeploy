@@ -297,7 +297,7 @@ class TurboMind:
         # load kv qparams
         self._load_kv_qparams(model_path,
                               tm_params,
-                              kv_sym=engine_config.kv_sym,
+                              kv_sym=False,
                               kv_bits=engine_config.kv_bits)
         assert len(tm_params) == 0, f'missing {tm_params.keys()}'
 
