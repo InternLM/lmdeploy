@@ -73,10 +73,10 @@ ModelAgent would load and patch `LlamaAttention` with `CustomLlamaAttention` and
 
 lmdeploy.pytorch support new features include:
 
-- Continuous Batching: Since the sequence length in a batch might be different, padding is required to support batching inference. Large padding leads to extra memory usage and useless computation. We use continuous batching, concatenate all sequence into a single long sequence to avoid padding.
+- **Continuous Batching**: Since the sequence length in a batch might be different, padding is required to support batching inference. Large padding leads to extra memory usage and useless computation. We use continuous batching, concatenate all sequence into a single long sequence to avoid padding.
 
-- Tensor Parallelism: The GPU memory usage of LLM might be larger than the memory of a single GPU. Tensor parallelism can be used to fit such model on multiple devices. Each device has parts of the model and can be computed simultaneous, the result would be gathered to ensure the correctness.
+- **Tensor Parallelism**: The GPU memory usage of LLM might be larger than the memory of a single GPU. Tensor parallelism can be used to fit such model on multiple devices. Each device has parts of the model and can be computed simultaneous, the result would be gathered to ensure the correctness.
 
-- S-LoRA: LoRA adapter can be used to support training LLM on device with limited memory. It is a common practice to merge adapter into weights of the model before deployment, load multiple adapter in such way would consume a lot of memory. We have support S-LoRA, adapters would be paged and swapped in when necessary, special kernels are developed to support inference with unmerged adapters. Which made it possible to load a lot of different adapters.
+- **S-LoRA**: LoRA adapter can be used to support training LLM on device with limited memory. It is a common practice to merge adapter into weights of the model before deployment, load multiple adapter in such way would consume a lot of memory. We have support S-LoRA, adapters would be paged and swapped in when necessary, special kernels are developed to support inference with unmerged adapters. Which made it possible to load a lot of different adapters.
 
-- Quantization: Model quantization perform computation with low precision. lmdeploy.pytorch has support w8a8 quantization. Read [w8a8](../quantization/w8a8.md) for more details.
+- **Quantization**: Model quantization perform computation with low precision. lmdeploy.pytorch has support w8a8 quantization. Read [w8a8](../quantization/w8a8.md) for more details.

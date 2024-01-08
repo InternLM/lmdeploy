@@ -271,11 +271,11 @@ class StepContext:
 
 ### FAQ
 
-- 如何访问 patch 前的模块？
+- **如何访问 patch 前的模块？**
 
 有时我们只希望在函数前后加一个 hook 代码，不希望大段的拷贝函数，可以通过 `self.origin_mod` 访问 patch 前的模块。
 
-- 非 transformers 官方的模型该如何注册？
+- **非 transformers 官方的模型该如何注册？**
 
 一些模型的实现代码可能是以 remote code 的形式添加的，这样的模块无法通过完整的 qualname 来定位。lmdeploy.pytorch 支持使用缩写的模块名进行注册：
 
@@ -290,7 +290,7 @@ MODULE_MAP.update({
 >
 > 缩写的优先级会更低，有条件的话还是鼓励使用完整的 qualname 进行注册。
 
-- 模块出现同名但不同实现怎么处理？
+- **模块出现同名但不同实现怎么处理？**
 
 目前推荐的做法是同名就映射到同一个实现中，然后在实现内部根据模块的固有参数来判断模型该使用的类型，以 baichuan2 7b/13b 为例：
 
@@ -303,7 +303,7 @@ class BaichuanModel(nn.Module):
             return forward_default(...)
 ```
 
-- 如果希望在推理前对模块进行初始化?
+- **如果希望在推理前对模块进行初始化?**
 
 可以实现模块的 `_update_model_fn` 函数，它会在模块的权重都加载完，完成 TP 权重切分后被调用
 

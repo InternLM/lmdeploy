@@ -277,11 +277,11 @@ class StepContext:
 
 ### FAQ
 
-- How to call origin forward?
+- **How to call origin forward?**
 
 It is a common practice to add hooks to a method instead a full rewrite. You can use `self.origin_mod` to visit the unpatched module.
 
-- How to register modules in remote code?
+- **How to register modules in remote code?**
 
 Some modules are contained in remote code, it is hard to locate the module with `qualname`. `lmdeploy.pytorch` support register them with abbreviation:
 
@@ -296,7 +296,7 @@ MODULE_MAP.update({
 >
 > Abbreviation tends to have a low priority. It is recommend to register modules with `qualname`.
 
-- How to support different modules with same name?
+- **How to support different modules with same name?**
 
 You can support them in the same rewrite module, and give them different implement by their attribute, take `baichuan2` 7b/13b as example:
 
@@ -309,7 +309,7 @@ class BaichuanModel(nn.Module):
             return forward_default(...)
 ```
 
-- How to do post-initialization for rewrite module?
+- **How to do post-initialization for rewrite module?**
 
 Add a `_update_model_fn` method, it will be called after weight loading.
 
