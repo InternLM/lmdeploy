@@ -1,4 +1,4 @@
-# Pytorch
+# lmdeploy.pytorch 架构
 
 `lmdeploy.pytorch` 是 LMDeploy 提供的推理后端之一。与着重于性能的 turbomind 相比，lmdeploy.pytorch 以较小的性能开销为代价，提供了一套更容易开发与扩展的大模型推理实现。
 
@@ -14,7 +14,7 @@ EngineInstance 是推理请求的发起者，它会将推理请求组织成特�
 
 Engine 是推理请求的接收与执行者。它包含如下的组件来完成这项任务：
 
-- ModelAgent 对象负责模型的加载、缓存管理以及 TensorParallelism 的管理。
+- ModelAgent 对象负责模型的加载、缓存管理以及 tensor parallelism 的管理。
 - Scheduler 对象负责 session 的管理，sequence 与 lora adapter 所需要的资源的分配。
 - RequestManager 负责请求的发送与接收，可以通过它与 EngineInstance 交互。
 
@@ -44,7 +44,7 @@ lmdeploy.pytorch 中对 Tensor Parallelism（TP）进行了支持，不同的 TP
 
 ModelAgent 有两个重要组件：
 
-1. patched_model 是更新后的 huggingface 模型，更新后的模型添加了各种功能的支持，包括更高性能的子模块实现、TP、量化等等
+1. patched_model 是更新后的 transformer 模型，更新后的模型添加了各种功能的支持，包括更高性能的子模块实现、TP、量化等等
 2. cache_engine 是缓存的分配与交换模块。它接收来自 scheduler 的交换请求，执行 host-device 间显存交换，adapter 加载等工作
 
 ## Patching
@@ -69,12 +69,12 @@ MODULE_MAP.update({
 
 经过 patch 后的模型就会使用新的 forward 实现。TP、量化等功能也依赖 patch 机制，这里不做太多展开。
 
-## 能力
+## 特性
 
-- continuous batching: 由于输入序列的长度不一样，batching 通常需要打击输入进行 padding，这种 padding 会导致后续运算的计算量增加、影响速度，也会使得显存的占用大幅增加。遵循许多其他成熟框架的方案，lmdeploy.pytorch 采用了 continuous batching 的方式对输入做了连续化处理，避免了多余的资源占用。
+- Continuous Batching: 由于输入序列的长度不一样，batching 通常需要打击输入进行 padding，这种 padding 会导致后续运算的计算量增加、影响速度，也会使得显存的占用大幅增加。遵循许多其他成熟框架的方案，lmdeploy.pytorch 采用了 continuous batching 的方式对输入做了连续化处理，避免了多余的资源占用。
 
 - Tensor Parallelism: 大模型可能会占用远超一张显卡的显存量，为了支持这样的大模型的推理，我们实现了 Tensor 并发，模型的权重会被分布在不同的设备中，每张 GPU 设备负责一部分计算，减少了单卡显存占用，也充分利用了多显卡的计算优势。
 
 - S-LoRA: LoRA adapter 可以帮助我们使用有限的显存来调优大模型，S-LoRA 可以帮助我们在有限的显存中同时使用复数个 LoRA 权重，扩展模型的能力。
 
-- Quantization: 量化可以帮助我们进一步减少显存占用，提高推理性能。lmdeploy.pytorch 分支中添加了 w8a8 模型量化的支持，可以阅读 [w8a8.md](w8a8.md) 了解更多细节。
+- Quantization: 量化可以帮助我们进一步减少显存占用，提高推理性能。lmdeploy.pytorch 分支中添加了 w8a8 模型量化的支持，可以阅读 [w8a8](../quantization/w8a8.md) 了解更多细节。
