@@ -31,7 +31,7 @@ backend_config = EngineConfig(tp = 1, session_len= 1024)
 gen_config = GenerationConfig(max_new_tokens=224)
 
 # Initialize pipeline
-pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b',  backend='pytorch', backend_config = backend_config)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',  backend='pytorch', backend_config = backend_config)
 
 # Perform inference on multiple inputs
 response = pipe(['hi','say this is a test'], gen_config=gen_config)
@@ -54,7 +54,7 @@ backend_config = EngineConfig(tp = 1, session_len= 1024)
 gen_config = GenerationConfig(max_new_tokens=224)
 
 # Initialize pipeline
-pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b',  backend='turbomind', backend_config = backend_config)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',  backend='turbomind', backend_config = backend_config)
 
 # Perform inference on multiple inputs
 response = pipe(['hi','say this is a test'], gen_config=gen_config)

@@ -34,14 +34,14 @@ class ChatTemplateConfig:
         capability: ('completion' | 'infilling' | 'chat' | 'python') = None
     """  # noqa: E501
 
-    model_name: str  # determine which chat template will be applied
-    system: Optional[str] = None  # begin of the system prompt
-    meta_instruction: Optional[str] = None  # system prompt
-    eosys: Optional[str] = None  # end of the system prompt
-    user: Optional[str] = None  # begin of the user prompt
-    eoh: Optional[str] = None  # end of the user prompt
-    assistant: Optional[str] = None  # begin of the assistant prompt
-    eoa: Optional[str] = None  # end of the assistant prompt
+    model_name: str
+    system: Optional[str] = None
+    meta_instruction: Optional[str] = None
+    eosys: Optional[str] = None
+    user: Optional[str] = None
+    eoh: Optional[str] = None
+    assistant: Optional[str] = None
+    eoa: Optional[str] = None
     capability: Optional[Literal['completion', 'infilling', 'chat',
                                  'python']] = None
 

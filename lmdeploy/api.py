@@ -29,11 +29,11 @@ def pipeline(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
@@ -44,7 +44,7 @@ def pipeline(model_path: str,
 
     Examples:
         >>> import lmdeploy
-        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b')
+        >>> pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
     """ # noqa E501
@@ -81,11 +81,11 @@ def serve(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         server_name (str): host ip for serving
         server_port (int): server port
@@ -98,7 +98,7 @@ def serve(model_path: str,
 
     Examples:
         >>> import lmdeploy
-        >>> client = lmdeploy.serve('InternLM/internlm-chat-7b', 'internlm-chat-7b')
+        >>> client = lmdeploy.serve('internlm/internlm-chat-7b', 'internlm-chat-7b')
         >>> for output in client.chat('hi', 1):
         ...    print(output)
     """ # noqa E501
