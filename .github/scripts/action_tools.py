@@ -152,7 +152,7 @@ def evaluate(models: List[str], model_root: str, workspace: str):
                 if ret != 0:
                     continue
                 hf_model_path = tmp_hf_model
-                extra_kwargs['model-formart'] = 'awq'
+                extra_kwargs['model-format'] = 'awq'
                 extra_kwargs['group-size'] = 128
 
             target_model = './turbomind'
@@ -204,7 +204,7 @@ def evaluate(models: List[str], model_root: str, workspace: str):
         config_path_new = os.path.join(opencompass_dir, 'configs',
                                        'eval_lmdeploy.py')
         if os.path.exists(config_path_new):
-            shutil.rmtree(config_path_new)
+            os.remove(config_path_new)
         shutil.copy(config_path, config_path_new)
         with open(config_path_new, 'a') as f:
             f.write(f'\nmodels = [ {ori_model} ]\n')

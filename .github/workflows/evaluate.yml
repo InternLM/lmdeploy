@@ -10,9 +10,9 @@ on:
         default: 'main'
       models:
         required: true
-        description: 'Tested models list.'
+        description: 'Tested models list. eg. [tb_internlm_chat_7b,tb_internlm_chat_7b_w8a16,pt_internlm_chat_7b_w8a8]'
         type: string
-        default: '[internlm_chat_7b]'
+        default: '[tb_internlm_chat_7b]'
       devices:
         required: true
         description: 'CUDA_VISIBLE_DEVICES.'
