@@ -77,3 +77,4 @@ work_dir*/
 *.pkl
 
 !CMakeLists.txt
+proxy_config.yml
