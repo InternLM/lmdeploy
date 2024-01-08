@@ -47,12 +47,20 @@
 
 ```python
 import lmdeploy
+from lmdeploy.messages import GenerationConfig
+from lmdeploy.pytorch import EngineConfig
+
+# there are more arguments in EngineConfig set by default
+backend_config = EngineConfig(tp = 1, session_len= 1024)
+
+# there are more arguments in GenerationConfig set by default
+gen_config = GenerationConfig(max_new_tokens=224)
 
 # Initialize pipeline
-pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1')
+pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1',  backend='pytorch', backend_config = backend_config)
 
 # Perform inference on multiple inputs
-response = pipe(['hi','say this is a test'])
+response = pipe(['hi','say this is a test'], gen_config=gen_config)
 
 print(response)
 

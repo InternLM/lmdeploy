@@ -78,7 +78,8 @@ class AsyncEngine:
             from lmdeploy.pytorch.engine import Engine
 
             # try fuzzy matching to get a model_name
-            if self.model_name is None and backend_config is None:
+            if self.model_name is None and (backend_config is None or
+                                            backend_config.model_name == ''):
                 potential_names = best_match_model(model_path)
                 if potential_names is None:
                     raise ArgumentError(
@@ -94,7 +95,8 @@ class AsyncEngine:
                         f'{self.model_name}, backend_config = {backend_config}'
                     )
             if self.model_name is not None and backend_config is None:
-                backend_config = PytorchEngineConfig(self.model_name)
+                backend_config = PytorchEngineConfig(self.model_name,
+                                                     session_len=2048)
             self.engine = Engine(model_path=model_path,
                                  engine_config=backend_config)
             if chat_template_config is None:
