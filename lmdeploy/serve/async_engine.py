@@ -68,6 +68,9 @@ class AsyncEngine:
             if backend_config is None:
                 backend_config = TurbomindEngineConfig(model_name=model_name,
                                                        tp=tp)
+            assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
+                ' use EngineConfig imported from lmdeploy.turbomind for ' \
+                'turbomind backend'
             from lmdeploy import turbomind as tm
             self.engine = tm.TurboMind.from_pretrained(
                 model_path,
@@ -99,6 +102,9 @@ class AsyncEngine:
             if self.model_name is not None and backend_config is None:
                 backend_config = PytorchEngineConfig(self.model_name,
                                                      session_len=2048)
+            assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
+                'use EngineConfig imported from lmdeploy.pytorch for pytorch' \
+                ' backend'
             self.engine = Engine(model_path=model_path,
                                  engine_config=backend_config)
             if chat_template_config is None:
