@@ -191,13 +191,20 @@ def evaluate(models: List[str], model_root: str, workspace: str):
                     f.write(content)
 
         elif engine_type == 'pt':
-            pass
+            if precision == '':
+                _, model_path_link = os.path.split(hf_model_path)
+                if not os.path.exists(model_path_link):
+                    os.symlink(hf_model_path, model_path_link)
+            elif precision == 'w8a8':
+                pass
         opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
         config_path = os.path.join(
             lmdeploy_dir, '.github/scripts/eval_opencompass_config.py')
         config_path_new = os.path.join(opencompass_dir, 'configs',
                                        'eval_lmdeploy.py')
+        if os.path.exists(config_path_new):
+            shutil.rmtree(config_path_new)
         shutil.copy(config_path, config_path_new)
         with open(config_path_new, 'a') as f:
             f.write(f'\nmodels = [ {ori_model} ]\n')
@@ -238,11 +245,12 @@ def evaluate(models: List[str], model_root: str, workspace: str):
                 acc = json.load(f)['accuracy']
                 acc = f'{float(acc):.2f}'
                 data.append(('crows_pairs', acc))
-
-        row = ','.join([ori_model] + [_[1] for _ in data])
+        prec = '-' if precision == '' else precision
+        row = ','.join([model, engine_type, prec] + [_[1] for _ in data])
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
-                header = ','.join(['Model'] + [_[0] for _ in data])
+                header = ','.join(['Model', 'Engine', 'Precision'] +
+                                  [_[0] for _ in data])
                 f.write(header + '\n')
                 f.write(row + '\n')
         else:
