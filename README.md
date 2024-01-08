@@ -102,7 +102,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
 - User Guide
   - Inference pipeline
   - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
-  - [Inference Engine - PyTorch](docs/zh_cn/inference/pytorch.md)
+  - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
   - [Serving](docs/en/serving/restful_api.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide

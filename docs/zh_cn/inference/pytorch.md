@@ -75,6 +75,6 @@ MODULE_MAP.update({
 
 - **Tensor Parallelism**: 大模型可能会占用远超一张显卡的显存量，为了支持这样的大模型的推理，我们实现了 Tensor 并发，模型的权重会被分布在不同的设备中，每张 GPU 设备负责一部分计算，减少了单卡显存占用，也充分利用了多显卡的计算优势。
 
-- **S-LoRA: LoRA adapter**: 可以帮助我们使用有限的显存来调优大模型，S-LoRA 可以帮助我们在有限的显存中同时使用复数个 LoRA 权重，扩展模型的能力。
+- **S-LoRA**: LoRA adapter 可以帮助我们使用有限的显存来调优大模型，S-LoRA 可以帮助我们在有限的显存中同时使用复数个 LoRA 权重，扩展模型的能力。
 
 - **Quantization**: 量化可以帮助我们进一步减少显存占用，提高推理性能。lmdeploy.pytorch 分支中添加了 w8a8 模型量化的支持，可以阅读 [w8a8](../quantization/w8a8.md) 了解更多细节。
