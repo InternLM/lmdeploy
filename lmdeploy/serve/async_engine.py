@@ -48,6 +48,8 @@ class AsyncEngine:
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
         backend_config (EngineConfig): beckend config. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
     """
@@ -156,18 +158,18 @@ class AsyncEngine:
 
     def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        self.engine.cancel(session_id)
-        if str(session_id) in self.id2generator and self.id2generator[str(
-                session_id)] not in self.gens_set:
-            self.gens_set.add(self.id2generator[str(session_id)])
+        if str(session_id) in self.id2generator:
+            self.id2generator[str(session_id)].cancel(session_id)
+            if self.id2generator[str(session_id)] not in self.gens_set:
+                self.gens_set.add(self.id2generator[str(session_id)])
 
     def end_session(self, session_id: int):
         """Clear a session by a session_id."""
-        self.engine.end(session_id)
-        self.id2step[str(session_id)] = 0
-        if str(session_id) in self.id2generator and self.id2generator[str(
-                session_id)] not in self.gens_set:
-            self.gens_set.add(self.id2generator[str(session_id)])
+        if str(session_id) in self.id2generator:
+            self.id2generator[str(session_id)].end(session_id)
+            self.id2step[str(session_id)] = 0
+            if self.id2generator[str(session_id)] not in self.gens_set:
+                self.gens_set.add(self.id2generator[str(session_id)])
 
     @contextmanager
     def safe_run(self, session_id: Optional[int] = None):

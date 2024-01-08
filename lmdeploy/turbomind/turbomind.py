@@ -523,7 +523,7 @@ class TurboMindInstance:
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
-        stop_generator = self.engine.create_instance()
+        stop_generator = self.tm_model.create_instance()
         for outputs in stop_generator.stream_infer(session_id,
                                                    input_ids,
                                                    request_output_len=0,
