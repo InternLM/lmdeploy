@@ -10,16 +10,6 @@ __all__ = [
 ]
 
 
-def find_win_cuda_path(cuda_ver, start, stop, step):
-    import os
-    for i in range(start, stop, step):
-        env_name = 'CUDA_PATH_V' + cuda_ver.replace('.x', '_' + str(i))
-        cuda_path = os.getenv(env_name)
-        if cuda_path is not None:
-            return cuda_path
-    return None
-
-
 def bootstrap():
     import os
     import sys
@@ -30,16 +20,12 @@ def bootstrap():
         has_turbomind = True
     if os.name == 'nt' and has_turbomind:
         if sys.version_info[:2] >= (3, 8):
-            cuda_path = find_win_cuda_path('11.x', 8, 2, -1)
-            if cuda_path is not None:
-                dll_path = os.path.join(cuda_path, 'bin')
-                print(f'Add cuda dll path: {dll_path}')
-                os.add_dll_directory(dll_path)
-            cuda_path = find_win_cuda_path('12.x', 0, 9, 1)
-            if cuda_path is not None:
-                dll_path = os.path.join(cuda_path, 'bin')
-                print(f'Add cuda dll path: {dll_path}')
-                os.add_dll_directory(dll_path)
+            CUDA_PATH = os.getenv('CUDA_PATH')
+            assert CUDA_PATH is not None, 'Can not find $env:CUDA_PATH'
+            dll_path = os.path.join(CUDA_PATH, 'bin')
+            print('Add dll path {dll_path}, please note cuda version '
+                  'should >= 11.3 when compiled with cuda 11')
+            os.add_dll_directory(dll_path)
 
 
 bootstrap()
