@@ -55,4 +55,4 @@ Please check your disk space. This error is due to insufficient disk space when 
 
 ### ModuleNotFoundError: No module named 'flash_attn'
 
-Quantizing `qwen` requires to install `flash-attn`. But according to the community users's feedback, `flash-attn` is hard to install. So we remove it from lmdeploy dependencies and let users to install it manually when it is needed.
+Quantizing `qwen` requires the installation of `flash-attn`. But based on feedback from community users, `flash-attn` can be challenging to install. Therefore, we have removed it from lmdeploy dependencies and now recommend that users install it it manually as needed.
