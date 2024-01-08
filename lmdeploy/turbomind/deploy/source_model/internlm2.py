@@ -13,13 +13,15 @@ class InternLM2Reader(LlamaReader):
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'output.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
-        super().__init__(new_params, unused_params, last_bin)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
         """Get q, k, v, o kind for layer i."""
         qkv = self.params[f'model.layers.{i}.attention.wqkv.{kind}']
-        gs = 4
+        gs = int(self.model_cfg['attn_head_num'] /
+                 self.model_cfg['kv_head_num'])
         qkv = qkv.view(8, gs + 2, 128, -1)
         hidden_dim = qkv.shape[-1]
         q, k, v = torch.split(qkv, [gs, 1, 1], dim=1)

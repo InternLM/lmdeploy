@@ -9,8 +9,9 @@ from .llama import LlamaModel, LlamaReader
 class BaichuanReader(LlamaReader):
     """BaichuanReader."""
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
-        super().__init__(new_params, unused_params, last_bin)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def _attn(self, i: int, kind: str, size_dim: int, dim: int = 0):
         """Get q, k, v, o kind for layer i."""
