@@ -9,9 +9,9 @@ from typing import Any, Dict, List
 import torch
 from transformers import AutoConfig
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, ResponseType
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import ResponseType, get_logger
+from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, EngineConfig, ModelConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,

@@ -18,7 +18,7 @@
 
 - **call**(prompts, gen_config, chat_template_config, request_output_len, top_k, top_p, temperature, repetition_penalty, ignore_eos, kwargs): 对一批提示进行推理。
 
-- **stop_session**(session_id): 停止具有给定 id 的会话。
+- **stop_session**(session_id): 停止一个正在响应的具有给定 id 的会话。
 
 - **end_session**(session_id): 清除具有给定 id 的会话。
 

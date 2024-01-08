@@ -16,10 +16,10 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, ResponseType
 from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import ResponseType, get_logger
+from lmdeploy.utils import get_logger
 
 from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)

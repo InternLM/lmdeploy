@@ -5,7 +5,8 @@ from queue import Queue
 from threading import Lock
 from typing import Any, Callable, Dict, List
 
-from lmdeploy.utils import ResponseType, get_logger
+from lmdeploy.messages import ResponseType
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
