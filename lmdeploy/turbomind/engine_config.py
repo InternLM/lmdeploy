@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional
+
 from pydantic.dataclasses import dataclass
 
 
@@ -27,10 +29,10 @@ class EngineConfig:
         kv_bits (int): the number of bits of k/v after quantization, default to 8
     """  # noqa: E501
 
-    model_name: str = None
-    model_format: str = None
+    model_name: Optional[str] = None
+    model_format: Optional[str] = None
     tp: int = 1
-    session_len: int = None
+    session_len: Optional[int] = None
     max_batch_size: int = 128
     group_size: int = 128
     kv_bits: int = 8

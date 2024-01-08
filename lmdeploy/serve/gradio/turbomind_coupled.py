@@ -148,7 +148,7 @@ def run_local(model_path: str,
 
             chatbot = gr.Chatbot(
                 elem_id='chatbot',
-                label=InterFace.async_engine.tm_model.model_name)
+                label=InterFace.async_engine.engine.model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')

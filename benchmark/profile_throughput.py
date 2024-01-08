@@ -95,7 +95,7 @@ class Engine:
                     sequence_end=True,
                     ignore_eos=True,
                     stream_output=stream_output):
-                res, n_token = outputs[0]
+                _, res, n_token = outputs
                 self.tokenizer.decode(res, offset)
                 offset = n_token
                 now = time.perf_counter()

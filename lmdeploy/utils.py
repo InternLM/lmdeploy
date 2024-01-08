@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import enum
 import logging
 from typing import List, Optional
 
@@ -95,3 +96,14 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
         if response.endswith(item):
             response = response[:len(response) - len(item)]
     return response
+
+
+class ResponseType(enum.Enum):
+    """Response type."""
+
+    SUCCESS = enum.auto()
+    FINISH = enum.auto()
+    ENGINE_STOP_ERROR = enum.auto()
+    SESSION_REPEAT = enum.auto()
+    SESSION_NOT_EXIST = enum.auto()
+    HANDLER_NOT_EXIST = enum.auto()
