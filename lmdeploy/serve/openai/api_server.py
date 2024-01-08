@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from lmdeploy.messages import GenerationConfig
+from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
@@ -270,20 +272,26 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     request_id = str(request.session_id)
     created_time = int(time.time())
 
-    result_generator = VariableInterface.async_engine.generate(
-        request.messages,
-        request.session_id,
-        True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
-        request_output_len=request.max_tokens if request.max_tokens else 512,
-        stop=request.stop,
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens if request.max_tokens else 512,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
-        do_preprocess=not isinstance(request.messages,
-                                     str),  # text completion for string input
+        ignore_eos=request.ignore_eos)
+    if isinstance(request.messages, str):
+        chat_template = ChatTemplateConfig('base')
+    else:
+        chat_template = ChatTemplateConfig(model_name)
+
+    result_generator = VariableInterface.async_engine.generate(
+        request.messages,
+        request.session_id,
+        stream_response=True,  # always use stream to enable batching
+        sequence_start=True,
+        sequence_end=True,
+        stop=request.stop,
+        gen_config=gen_config,
+        chat_template_config=chat_template,
     )
 
     def create_stream_response_json(
@@ -568,23 +576,25 @@ async def completions_v1(request: CompletionRequest,
     created_time = int(time.time())
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        top_k=request.top_k,
+        top_p=request.top_p,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos)
+    chat_template = ChatTemplateConfig('base')
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
             request.prompt[i],
             request.session_id + i,
-            True,  # always use stream to enable batching
+            stream_response=True,  # always use stream to enable batching
             sequence_start=True,
             sequence_end=True,
-            request_output_len=request.max_tokens
-            if request.max_tokens else 512,
             stop=False,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            temperature=request.temperature,
-            repetition_penalty=request.repetition_penalty,
-            ignore_eos=request.ignore_eos,
-            do_preprocess=False)
+            gen_config=gen_config,
+            chat_template_config=chat_template)
         generators.append(result_generator)
 
     def create_stream_response_json(
