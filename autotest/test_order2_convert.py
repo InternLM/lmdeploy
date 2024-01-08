@@ -4,6 +4,7 @@ from subprocess import PIPE
 
 import allure
 import pytest
+from utils.get_run_config import get_command_with_extra
 
 
 @pytest.mark.convert
@@ -111,32 +112,25 @@ def convert(config, model_case):
     model_map = config.get('model_map')
 
     if model_case not in model_map.keys():
-        return {'success': False, 'msg': 'the model is incorrect'}
+        assert False, 'the model is incorrect'
     model_name = model_map.get(model_case)
 
     if 'w4' in model_case:
-        cmd = [
+        cmd = get_command_with_extra(
             'lmdeploy convert ' + model_name + ' ' + model_path + '/' +
             model_case + ' --model-format awq --group-size 128 --dst_path ' +
-            dst_path + '/workspace_' + model_case
-        ]
+            dst_path + '/workspace_' + model_case, config, model_name)
     else:
-        cmd = [
+        cmd = get_command_with_extra(
             'lmdeploy convert ' + model_name + ' ' + model_path + '/' +
-            model_case + ' --dst_path ' + dst_path + '/workspace_' + model_case
-        ]
+            model_case + ' --dst_path ' + dst_path + '/workspace_' +
+            model_case, config, model_name)
 
     convert_log = os.path.join(log_path, 'convert_' + model_case + '.log')
     with open(convert_log, 'w') as f:
-        subprocess.run(['pwd'],
-                       stdout=f,
-                       stderr=f,
-                       shell=True,
-                       text=True,
-                       encoding='utf-8')
-        f.writelines('commondLine: ' + ' '.join(cmd) + '\n')
+        f.writelines('commondLine: ' + cmd + '\n')
         # convert
-        convertRes = subprocess.run(cmd,
+        convertRes = subprocess.run([cmd],
                                     stdout=f,
                                     stderr=PIPE,
                                     shell=True,

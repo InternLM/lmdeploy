@@ -29,7 +29,6 @@ Then generate the test report and view the corresponding HTML page by using the 
 
 ```bash
 allure generate -c -o allure-reports
-
 allure open ./allure-reports
 ```
 
@@ -47,7 +46,7 @@ If you want to create a test environment, you need to prepare the above content 
 
 The test cases cover the following functionalities:
 
-![image](https://github.com/InternLM/lmdeploy/assets/145004780/19737e19-5798-4be0-b809-119da4cc65e5)
+![image](https://github.com/InternLM/lmdeploy/assets/145004780/bcabbf83-d853-4448-bf98-d3a3a9a3d354)
 
 The relationship between functionalities and test cases is as follows:
 
@@ -65,7 +64,7 @@ The modules and models currently covered by the test cases are listed below:
 | :------------------------------------------------------------------------: | :----------------: | :-----: | :--------------: | :--------------: | :-------------: |
 |   [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)   |         No         |   Yes   |       Yes        |        No        |       Yes       |
 |    [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)    |         No         |   Yes   |       Yes        |        No        |       Yes       |
-|   [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)   |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
+|   [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)   |        Yes         |   Yes   |       Yes        |       Yes        |       Yes       |
 |          [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)          |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
 |         [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)         |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
 | [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) |        Yes         |   Yes   |       Yes        |        No        |       Yes       |

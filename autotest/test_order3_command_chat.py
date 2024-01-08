@@ -12,6 +12,7 @@ def getCaseList():
 
 
 @pytest.mark.usefixtures('case_config')
+@pytest.mark.timeout(60)
 @pytest.mark.command_chat
 class TestCommandChat:
 

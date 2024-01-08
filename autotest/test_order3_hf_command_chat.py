@@ -12,6 +12,7 @@ def getCaseList():
 
 
 @pytest.mark.usefixtures('case_config')
+@pytest.mark.timeout(60)
 @pytest.mark.hf_command_chat
 class TestCommandChat:
 
@@ -107,7 +108,7 @@ def run_command_line_test(config, case, case_info, model_case):
     model_map = config.get('model_map')
 
     if model_case not in model_map.keys():
-        return {'success': False, 'msg': 'the model is incorrect'}
+        assert False, 'the model is incorrect'
     model_name = model_map.get(model_case)
 
     result, chat_log, msg = hf_command_line_test(config, case, case_info,
