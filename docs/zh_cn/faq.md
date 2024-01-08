@@ -54,3 +54,7 @@ export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 请检查你的硬盘空间。
 
 这个错误是因为保存权重时硬盘空间不足导致的，在量化 70B 模型时可能会遇到
+
+### ModuleNotFoundError: No module named 'flash_attn'
+
+量化 `qwen` 模型需要安装 `flash-attn`。但是，根据社区用户的反馈，`flash-attn` 比较难安装。所以，lmdeploy 从依赖列表中移除 `flash-attn`，用户在用到的时候，可以进行手动安装。
