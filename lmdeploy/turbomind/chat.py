@@ -31,7 +31,7 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def main(model_path,
+def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
          cap: str = 'chat',
@@ -45,11 +45,14 @@ def main(model_path,
 
     Args:
         model_path (str): the path of the deployed model
+        model_name (str): the name of deployed model
         session_id (int): the identical id of a session
         cap (str): the capability of a model. For example, codellama has
             the ability among ['completion', 'infilling', 'chat', 'python']
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
+        request_output_len (int): output token nums
+        engine_config (EngineConfig): The config for turbomind engine
         **kwarg (dict): other arguments for initializing model's chat template
     """
     from lmdeploy import turbomind as tm

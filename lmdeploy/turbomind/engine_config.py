@@ -15,7 +15,7 @@ class EngineConfig:
         session_len (int): the max session length of a sequence, default to None​
         max_batch_size (int): the max batch size during inference, default to 128​
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache, default to 0.5​
-        quant_policy: (int): , default to 0. When k/v is quantized into 8 bit, set it to 4​
+        quant_policy (int): , default to 0. When k/v is quantized into 8 bit, set it to 4​
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention​
         use_logn_attn (bool): whether or not to use log attn: default to False​
     """  # noqa: E501

@@ -38,29 +38,51 @@ def get_engine_parser(add_pytorch: bool = False,
     assert add_pytorch or add_turbomind, 'Should at least include one engine'
     parser = argparse.ArgumentParser(
         add_help=False, formatter_class=DefaultsAndTypesHelpFormatter)
-    parser.add_argument('--model-name',
-                        type=str,
-                        default='',
-                        help='Model name ')
-    parser.add_argument('--session-len', type=int, default=2048, help='sess')
+    parser.add_argument(
+        '--tp',
+        type=int,
+        default=1,
+        help='GPU number used in tensor parallelism. Should be 2^n')
     parser.add_argument('--max-batch-size',
                         type=int,
-                        default=64,
-                        help='batch-size')
+                        default=128,
+                        help='Maximum batch size')
 
     if add_pytorch:
-        group = parser.add_argument_group('PyTorch arguments')
-        group.add_argument('--num-cpu-blocks', type=int, default=0, help='x')
-        group.add_argument('--num-gpu-blocks', type=int, default=0, help='x')
-
+        name = 'engine arguments' if not add_turbomind \
+            else 'pytorch engine arguments'
+        group = parser.add_argument_group(name)
+        group.add_argument('--block-size',
+                           type=int,
+                           default=64,
+                           help='The block size for paging cache')
     if add_turbomind:
-        group = parser.add_argument_group('TurboMind arguments')
-        group.add_argument('--cache_max_entry_count',
-                           type=float,
-                           default=0.5,
-                           help='x')
-        group.add_argument('--cache_block_seq_len',
+        name = 'engine arguments' if not add_pytorch \
+            else 'turbomind engine arguments'
+        group = parser.add_argument_group(name)
+        group.add_argument('--model-format',
+                           type=str,
+                           default=None,
+                           choices=['hf', 'llama', 'awq'],
+                           help='The format of input model')
+        group.add_argument('--group-size',
                            type=int,
                            default=128,
-                           help='x')
+                           help='The quantization parameter for awq')
+        group.add_argument('--quant-policy',
+                           type=int,
+                           default=0,
+                           help='Whether to use kv int8')
+        group.add_argument('--rope-scaling-factor',
+                           type=float,
+                           default=0.0,
+                           help='Rope scaling factor')
+        group.add_argument('--use-dynamic-ntk',
+                           action='store_true',
+                           default=False,
+                           help='Whether to use dynamic ntk')
+        group.add_argument('--use-logn-attn',
+                           action='store_true',
+                           default=False,
+                           help='Whether to use logn attention scaling')
     return parser
