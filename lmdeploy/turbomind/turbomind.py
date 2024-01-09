@@ -732,13 +732,13 @@ class TurboMindInstance:
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs = (status, output[:-1], len_ - 1)
+                    outputs = (status, output[:-1].tolist(), len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs = (status, output[:-1], len_)
+                    outputs = (status, output[:-1].tolist(), len_)
                 else:
-                    outputs = (status, output, len_)
+                    outputs = (status, output.tolist(), len_)
             yield outputs
 
             if finish:
