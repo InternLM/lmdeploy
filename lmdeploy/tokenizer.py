@@ -192,8 +192,6 @@ class HuggingFaceTokenizer:
         Returns:
             str: text of decoding tokens
         """
-        if isinstance(t, torch.Tensor):
-            t = t.tolist()
         skip_special_tokens = True
         t = t[offset:]
         out_string = self.model.decode(t,

@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from lmdeploy.messages import GenerationConfig
-from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
@@ -278,20 +277,17 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
-    if isinstance(request.messages, str):
-        chat_template = ChatTemplateConfig('base')
-    else:
-        chat_template = ChatTemplateConfig(model_name)
 
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
+        gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
         stop=request.stop,
-        gen_config=gen_config,
-        chat_template_config=chat_template,
+        do_preprocess=not isinstance(request.messages,
+                                     str),  # text completion for string input
     )
 
     def create_stream_response_json(
@@ -583,18 +579,17 @@ async def completions_v1(request: CompletionRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
-    chat_template = ChatTemplateConfig('base')
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
             request.prompt[i],
             request.session_id + i,
+            gen_config=gen_config,
             stream_response=True,  # always use stream to enable batching
             sequence_start=True,
             sequence_end=True,
             stop=False,
-            gen_config=gen_config,
-            chat_template_config=chat_template)
+            do_preprocess=False)
         generators.append(result_generator)
 
     def create_stream_response_json(
@@ -839,19 +834,21 @@ async def chat_interactive_v1(request: GenerateRequest,
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
     sequence_end = not request.interactive_mode
 
-    generation = async_engine.generate(
-        request.prompt,
-        request.session_id,
-        stream_response=True,  # always use stream to enable batching
-        sequence_start=sequence_start,
-        sequence_end=sequence_end,
-        request_output_len=request.request_output_len,
+    gen_config = GenerationConfig(
+        max_new_tokens=request.request_output_len,
         top_p=request.top_p,
         top_k=request.top_k,
-        stop=request.stop,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
+    generation = async_engine.generate(
+        request.prompt,
+        request.session_id,
+        gen_config=gen_config,
+        stream_response=True,  # always use stream to enable batching
+        sequence_start=sequence_start,
+        sequence_end=sequence_end,
+        stop=request.stop)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
