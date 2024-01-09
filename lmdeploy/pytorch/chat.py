@@ -2,7 +2,7 @@
 
 import os
 import random
-from typing import List
+from typing import Dict, List
 
 from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import MODELS, best_match_model
@@ -48,7 +48,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     return stop_words
 
 
-def run_chat(model_path,
+def run_chat(model_path: str,
              engine_config: EngineConfig,
              gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
@@ -132,16 +132,16 @@ def run_chat(model_path,
             nth_round += 1
 
 
-def main(model_path,
+def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
-         top_k=40,
-         top_p=0.8,
-         temperature=0.8,
+         top_k: float = 40,
+         top_p: float = 0.8,
+         temperature: float = 0.8,
          repetition_penalty: float = 1.0,
          tp: int = 1,
          stream_output: bool = True,
-         adapter: str = None,
+         adapter: Dict[str, str] = None,
          trust_remote_code: bool = True):
     """An example to perform model inference through the command line
     interface.
@@ -159,12 +159,9 @@ def main(model_path,
         adapter (str): path to lora adapter.
         trust_remote_code (bool): Trust remote code.
     """
-    adapters = None
-    if adapter is not None:
-        adapters = dict(default=adapter)
     engine_config = EngineConfig(model_name=model_name,
                                  tp=tp,
-                                 adapters=adapters)
+                                 adapters=adapter)
     gen_config = EngineGenerationConfig(max_new_tokens=512,
                                         top_k=top_k,
                                         top_p=top_p,

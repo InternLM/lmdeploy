@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from mmengine.config import DictAction
+
 from .cli import CLI
 from .utils import (DefaultsAndTypesHelpFormatter, convert_args,
                     get_engine_parser)
@@ -48,6 +50,12 @@ class SubCliChat(object):
                             type=float,
                             default=1.0,
                             help='Parameter to penalize repetition')
+        parser.add_argument('--adapter',
+                            nargs='*',
+                            default=None,
+                            action=DictAction,
+                            help='Used key-values pairs in xxx=yyy format'
+                            ' to set the path lora adapter')
         parser.add_argument('--trust-remote-code',
                             action='store_false',
                             default=True,
@@ -98,7 +106,9 @@ class SubCliChat(object):
         from lmdeploy.pytorch.chat import run_chat
         from lmdeploy.pytorch.config import EngineConfig
 
-        engine_config = EngineConfig(model_name=args.model_name, tp=args.tp)
+        engine_config = EngineConfig(model_name=args.model_name,
+                                     tp=args.tp,
+                                     adapters=args.adapter)
         gen_config = EngineGenerationConfig(
             top_k=args.top_k,
             top_p=args.top_p,
