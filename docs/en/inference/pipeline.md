@@ -70,7 +70,11 @@ response = pipe(prompts,
 print(response)
 ```
 
-An example for pytorch backend:
+Below is an example for pytorch backend. Please install triton first.
+
+```shell
+pip install triton>=2.1.0
+```
 
 ```python
 import lmdeploy

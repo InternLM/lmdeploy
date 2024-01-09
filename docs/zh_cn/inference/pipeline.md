@@ -70,7 +70,11 @@ response = pipe(prompts,
 print(response)
 ```
 
-展示 pytorch 后端的例子:
+展示 pytorch 后端的例子,需要先安装 triton:
+
+```shell
+pip install triton>=2.1.0
+```
 
 ```python
 import lmdeploy
