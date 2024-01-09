@@ -21,3 +21,20 @@ model_map:
     Llama-2-7b-chat-hf-inner-w4: llama2
     llama-2-7b-chat: llama2
     llama-2-7b-chat-inner-w4: llama2
+
+
+quantization_cuda_allocate:
+    enable: true
+    llama-2-7b-chat: 1
+    Qwen-14B-Chat: 2
+    Baichuan2-7B-Chat: 3
+    Qwen-7B-Chat: 4
+    internlm-chat-20b: 0,5
+    disable_models:
+        - internlm-chat-20b
+        - internlm-chat-20b-inner-w4
+
+
+tp_config:
+    internlm-chat-20b: 2
+    internlm-chat-20b-inner-w4: 2

@@ -7,6 +7,8 @@ def get_conda_allcate_prefix(config, model, case_type: str = ''):
     cuda_allocate = config.get('quantization_cuda_allocate')
     tp_config = config.get('tp_config')
     cuda_prefix = ''
+    if cuda_allocate is None or tp_config is None:
+        return cuda_prefix
     if case_type == 'quantization':
         if cuda_allocate.get(model) is not None:
             cuda_prefix = 'CUDA_VISIBLE_DEVICES=' + str(
