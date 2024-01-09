@@ -110,7 +110,9 @@ class AsyncEngine:
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
-        self.chat_template = self.engine.model
+        if chat_template_config is None:
+            chat_template_config = ChatTemplateConfig(self.engine.model_name)
+        self.chat_template = chat_template_config.chat_template
 
     def _build_pytorch(
             self,
