@@ -52,7 +52,7 @@ def run_chat(model_path,
              engine_config: EngineConfig,
              gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
-             trust_remote_code=True):
+             trust_remote_code: bool = True):
     """An example to perform model inference through the command line
     interface.
 
@@ -64,11 +64,15 @@ def run_chat(model_path,
         trust_remote_code (bool): trust remote code.
     """
     from lmdeploy.pytorch.engine import Engine
-    tm_model = Engine(model_path,
-                      engine_config=engine_config,
-                      trust_remote_code=trust_remote_code)
+    tm_model = Engine.from_pretrained(model_path,
+                                      engine_config=engine_config,
+                                      trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
+
+    adapter_name = None
+    if engine_config.adapters is not None:
+        adapter_name = next(iter(engine_config.adapters.keys()))
 
     nth_round = 1
     step = 0
@@ -107,7 +111,8 @@ def run_chat(model_path,
             gen_config.stop_words = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=input_ids,
-                                                  gen_config=gen_config):
+                                                  gen_config=gen_config,
+                                                  adapter_name=adapter_name):
                 status, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res, offset=response_size)
@@ -136,7 +141,8 @@ def main(model_path,
          repetition_penalty: float = 1.0,
          tp: int = 1,
          stream_output: bool = True,
-         trust_remote_code=True):
+         adapter: str = None,
+         trust_remote_code: bool = True):
     """An example to perform model inference through the command line
     interface.
 
@@ -150,9 +156,15 @@ def main(model_path,
         repetition_penalty (float): parameter to penalize repetition
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
+        adapter (str): path to lora adapter.
         trust_remote_code (bool): Trust remote code.
     """
-    engine_config = EngineConfig(model_name=model_name, tp=tp)
+    adapters = None
+    if adapter is not None:
+        adapters = dict(default=adapter)
+    engine_config = EngineConfig(model_name=model_name,
+                                 tp=tp,
+                                 adapters=adapters)
     gen_config = EngineGenerationConfig(max_new_tokens=512,
                                         top_k=top_k,
                                         top_p=top_p,

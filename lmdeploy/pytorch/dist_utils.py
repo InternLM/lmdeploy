@@ -6,6 +6,13 @@ from torch import Tensor, nn
 from torch.distributed._tensor import (DeviceMesh, DTensor, Replicate, Shard,
                                        distribute_tensor)
 
+try:
+    from peft.tuners.lora import Linear as LoRALinear
+except ImportError:
+
+    class LoRALinear:
+        pass
+
 
 def try_to_local(tensor: Union[Tensor, DTensor]):
     """Try to convert DTensor to Tensor.
@@ -34,9 +41,9 @@ def module_to_local(module: nn.Module):
         module.register_buffer(name, try_to_local(buf))
 
 
-def rowwise_parallelize_linear_fn(module: nn.Module,
-                                  device_mesh: DeviceMesh,
-                                  to_local: bool = False) -> None:
+def rowwise_parallelize_linear(module: nn.Module,
+                               device_mesh: DeviceMesh,
+                               to_local: bool = False) -> None:
     """
     This function parallelizes the input :class:`nn.Linear` module in
     :class:`RowwiseParallel` style.
@@ -84,9 +91,58 @@ def rowwise_parallelize_linear_fn(module: nn.Module,
         module.register_buffer(name, dist_tensor)
 
 
-def colwise_parallelize_linear_fn(module: nn.Module,
+def rowwise_parallelize_loralinear(module: LoRALinear,
+                                   device_mesh: DeviceMesh,
+                                   to_local: bool = False) -> None:
+    """rowwize parallelize lora linear.
+
+    Read S-LoRA for more detail.
+    """
+    rowwise_parallelize_linear(module.base_layer,
+                               device_mesh=device_mesh,
+                               to_local=to_local)
+    for mod in module.lora_A.values():
+        rowwise_parallelize_linear(mod,
+                                   device_mesh=device_mesh,
+                                   to_local=to_local)
+    for mod in module.lora_B.values():
+        colwise_parallelize_linear(mod,
+                                   device_mesh=device_mesh,
+                                   to_local=to_local)
+    module._tp_mode = 'rowwise'
+
+
+def rowwise_parallelize_linear_fn(module: nn.Module,
                                   device_mesh: DeviceMesh,
                                   to_local: bool = False) -> None:
+    """
+    This function parallelizes the input :Linear module in
+    :class:`RowwiseParallel` style.
+
+    Args:
+        module (:class:`nn.Module`):
+            The :class:`nn.Linear` module to be parallelized.
+        device_mesh (:class:`DeviceMesh`):
+            Object which describes the mesh topology of devices.
+
+    Returns:
+        None
+    """
+    if isinstance(module, torch.nn.Linear):
+        return rowwise_parallelize_linear(module,
+                                          device_mesh=device_mesh,
+                                          to_local=to_local)
+    elif isinstance(module, LoRALinear):
+        return rowwise_parallelize_loralinear(module,
+                                              device_mesh=device_mesh,
+                                              to_local=to_local)
+    else:
+        raise TypeError(f'Unsupported module: {type(module)}')
+
+
+def colwise_parallelize_linear(module: nn.Module,
+                               device_mesh: DeviceMesh,
+                               to_local: bool = False) -> None:
     """
     This function parallelizes the input :class:`nn.Linear` module in
     :class:`ColwiseParallel` style.
@@ -107,13 +163,58 @@ def colwise_parallelize_linear_fn(module: nn.Module,
             dist_tensor = try_to_local(dist_tensor)
         dist_param = torch.nn.Parameter(dist_tensor)
         module.register_parameter(name, dist_param)
-
     # Weight, bias and scale are registered as buffer in QLinear
     for name, buffer in module.named_buffers():
         dist_tensor = distribute_tensor(buffer, device_mesh, [Shard(0)])
         if to_local:
             dist_tensor = try_to_local(dist_tensor)
         module.register_buffer(name, dist_tensor)
+
+
+def colwise_parallelize_loralinear(module: nn.Module,
+                                   device_mesh: DeviceMesh,
+                                   to_local: bool = False) -> None:
+    """colwise parallelize lora linear."""
+    colwise_parallelize_linear(module.base_layer,
+                               device_mesh=device_mesh,
+                               to_local=to_local)
+    for mod in module.lora_A.values():
+        colwise_parallelize_linear(mod,
+                                   device_mesh=device_mesh,
+                                   to_local=to_local)
+    for mod in module.lora_B.values():
+        colwise_parallelize_linear(mod,
+                                   device_mesh=device_mesh,
+                                   to_local=to_local)
+    module._tp_mode = 'colwise'
+
+
+def colwise_parallelize_linear_fn(module: nn.Module,
+                                  device_mesh: DeviceMesh,
+                                  to_local: bool = False) -> None:
+    """
+    This function parallelizes the input :Linear module in
+    :class:`ColwiseParallel` style.
+
+    Args:
+        module (:class:`nn.Module`):
+            The :class:`nn.Linear` module to be parallelized.
+        device_mesh (:class:`DeviceMesh`):
+            Object which describes the mesh topology of devices.
+
+    Returns:
+        None
+    """
+    if isinstance(module, torch.nn.Linear):
+        return colwise_parallelize_linear(module,
+                                          device_mesh=device_mesh,
+                                          to_local=to_local)
+    elif isinstance(module, LoRALinear):
+        return colwise_parallelize_loralinear(module,
+                                              device_mesh=device_mesh,
+                                              to_local=to_local)
+    else:
+        raise TypeError(f'Unsupported module: {type(module)}')
 
 
 def _partition_module(
