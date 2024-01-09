@@ -4,7 +4,7 @@ import dataclasses
 import random
 from argparse import ArgumentError
 from contextlib import contextmanager
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import EngineGenerationConfig, GenerationConfig
 from lmdeploy.model import ChatTemplateConfig, best_match_model
@@ -235,39 +235,44 @@ class AsyncEngine:
               1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
         """
-        input_str = isinstance(prompts, str)
-        prompts = [prompts] if input_str else prompts
+        need_list_wrap = isinstance(prompts, str) or isinstance(
+            prompts[0], Dict)
+        prompts = [prompts] if need_list_wrap else prompts
         assert isinstance(prompts, List), 'prompts should be a list'
-        batch_size = len(prompts)
-        outputs = [''] * batch_size
-        generators = []
-        for i, prompt in enumerate(prompts):
-            generators.append(
-                self.generate(prompt,
-                              i,
-                              gen_config=gen_config,
-                              chat_template_config=chat_template_config,
-                              stream_response=True,
-                              sequence_start=True,
-                              sequence_end=True,
-                              request_output_len=request_output_len,
-                              top_k=top_k,
-                              top_p=top_p,
-                              temperature=temperature,
-                              ignore_eos=ignore_eos,
-                              repetition_penalty=repetition_penalty,
-                              **kwargs))
+        prompt_num = len(prompts)
+        outputs = [''] * prompt_num
+        for j in range(0, prompt_num, self.instance_num):
+            batch_prompts = prompts[j:j + self.instance_num]
+            generators = []
+            for i, prompt in enumerate(batch_prompts):
+                generators.append(
+                    self.generate(prompt,
+                                  i,
+                                  gen_config=gen_config,
+                                  chat_template_config=chat_template_config,
+                                  stream_response=True,
+                                  sequence_start=True,
+                                  sequence_end=True,
+                                  request_output_len=request_output_len,
+                                  top_k=top_k,
+                                  top_p=top_p,
+                                  temperature=temperature,
+                                  ignore_eos=ignore_eos,
+                                  repetition_penalty=repetition_penalty,
+                                  **kwargs))
 
-        async def _inner_call(i, generator):
-            async for out in generator:
-                outputs[i] += out.response
+            async def _inner_call(i, generator):
+                async for out in generator:
+                    outputs[i + j] += out.response
 
-        async def gather():
-            await asyncio.gather(
-                *[_inner_call(i, generators[i]) for i in range(batch_size)])
+            async def gather():
+                await asyncio.gather(*[
+                    _inner_call(i, generators[i])
+                    for i in range(len(batch_prompts))
+                ])
 
-        self.loop.run_until_complete(gather())
-        outputs = outputs[0] if input_str else outputs
+            self.loop.run_until_complete(gather())
+        outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
     async def generate(
