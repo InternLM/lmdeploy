@@ -13,17 +13,29 @@ from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
+    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
 }
+
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
+    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
+}
+
+HEAD_NAME_MAP = {
+    'InternLMForCausalLM': 'lm_head',
+    'InternLM2ForCausalLM': 'output',
+    'QWenLMHeadModel': 'lm_head',
+    'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
+    'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
+    'LlamaForCausalLM': 'lm_head',
 }
 
 
@@ -152,7 +164,8 @@ def calibrate(model: str,
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
 
-    _prepare_for_calibrate(model, layer_type, 'lm_head', device)
+    _prepare_for_calibrate(model, layer_type,
+                           HEAD_NAME_MAP[type(model).__name__], device)
 
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,
