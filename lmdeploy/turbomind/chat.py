@@ -5,6 +5,8 @@ import random
 
 from lmdeploy.turbomind.utils import get_gen_param
 
+from .engine_config import EngineConfig
+
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
@@ -36,6 +38,7 @@ def main(model_path,
          tp: int = 1,
          stream_output: bool = True,
          request_output_len: int = 512,
+         engine_config: EngineConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -51,6 +54,7 @@ def main(model_path,
     """
     from lmdeploy import turbomind as tm
     tm_model = tm.TurboMind.from_pretrained(model_path,
+                                            engine_config=engine_config,
                                             model_name=model_name,
                                             tp=tp,
                                             capability=cap,
