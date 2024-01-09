@@ -34,7 +34,7 @@ class EngineConfig:
     tp: int = 1
     session_len: Optional[int] = None
     max_batch_size: int = 128
-    group_size: int = 128
+    group_size: int = 0
     kv_bits: int = 8
     max_context_token_num: int = 1
     cache_max_entry_count: float = 0.5
