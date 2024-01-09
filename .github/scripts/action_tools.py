@@ -42,11 +42,12 @@ MODEL_CFGS = {
 }
 
 
-def run_cmd(cmd_lines: List[str], log_path: str):
+def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
     """
     Args:
         cmd_lines: (list[str]): A command in multiple line style.
         log_path (str): Path to log file.
+        cwd (str): Path to the current working directory.
 
     Returns:
         int: error code.
@@ -66,6 +67,7 @@ def run_cmd(cmd_lines: List[str], log_path: str):
         file_handler.flush()
         process_res = subprocess.Popen(cmd_for_run,
                                        shell=True,
+                                       cwd=cwd,
                                        stdout=file_handler,
                                        stderr=file_handler)
         process_res.wait()
@@ -214,7 +216,7 @@ def evaluate(models: List[str], model_root: str, workspace: str):
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir}'
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
-        ret = run_cmd(cmd_eval, log_path=eval_log)
+        ret = run_cmd(cmd_eval, log_path=eval_log, cwd=lmdeploy_dir)
         if ret != 0:
             continue
         csv_files = glob.glob(f'{work_dir}/*/summary/summary_*.csv')
