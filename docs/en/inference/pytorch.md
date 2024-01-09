@@ -8,9 +8,9 @@
 
 ## API
 
-`lmdeploy.pytorch` share service interfaces with `Turbomind`, these interfaces perform inference through `Engine` and `EngineInstance` in lmdeploy.pytorch.
+`lmdeploy.pytorch` shares service interfaces with `Turbomind`, and the inference service is implemented by `Engine` and `EngineInstance`.
 
-EngineInstance is the inference request sender, it will pack the inference request and send the packed request to Engine. EngineInstance is thread-safe, multiple threads can send request through their own EngineInstance simultaneously. Engine will perform batching automatically according to resources usage.
+EngineInstance is the sender of  the inference requests, and it sends the encapsulated request to the Engine to achieve streaming inference. The inference interface of EngineInstance is thread-safe, and EngineInstances in different threads can initiate requests simultaneously. The Engine will automatically perform batch processing based on the current system resources.
 
 Engine is the request receiver and executor. It contain modules that support the task as follow:
 
@@ -67,7 +67,7 @@ MODULE_MAP.update({
 'qualname.to.CustomLlamaAttention'})
 ```
 
-ModelAgent would load and patch `LlamaAttention` with `CustomLlamaAttention` and leave anything other unchanged. Than you can perform inference with the new implementation.
+ModelAgent would load and patch `LlamaAttention` with `CustomLlamaAttention` and leave anything other unchanged. Than you can perform inference with the new implementation. Read [support new model](../advance/pytorch_new_model.md) for more detail about model patching.
 
 ## Features
 

@@ -67,7 +67,7 @@ MODULE_MAP.update({
 'qualname.to.CustomLlamaAttention'})
 ```
 
-经过 patch 后的模型就会使用新的 forward 实现。TP、量化等功能也依赖 patch 机制，这里不做太多展开。
+经过 patch 后的模型就会使用新的 forward 实现。TP、量化等功能也依赖 patch 机制，请阅读 [lmdeploy.pytorch 新模型支持](../advance/pytorch_new_model.md) 了解更多细节。
 
 ## 特性
 
