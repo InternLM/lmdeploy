@@ -1,10 +1,10 @@
-## Pipeline
+# Pipeline
 
-### `pipeline` API
+## `pipeline` API
 
 `pipeline`函数是一个更高级别的 API，设计用于让用户轻松实例化和使用 AsyncEngine。
 
-#### 参数:
+### 初始化参数:
 
 | Parameter            | Type                                                 | Description                                                                                              | Default     |
 | -------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------- |
@@ -14,10 +14,24 @@
 | backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | 后端的配置对象。根据所选后端，可以是 TurbomindEngineConfig 或 PytorchEngineConfig。                      | None        |
 | chat_template_config | Optional\[ChatTemplateConfig\]                       | 聊天模板的配置。                                                                                         | None        |
 | instance_num         | int                                                  | 处理并发请求时要创建的实例数。                                                                           | 32          |
-| tp                   | int                                                  | 张量并行单位的数量。                                                                                     | 1           |
+| tp                   | int                                                  | 张量并行单位的数量。后期会弃用，请改用 backend_config 参数                                               | 1           |
 | log_level            | str                                                  | 日志级别。                                                                                               | 'ERROR'     |
 
-### 示例
+### 调用
+
+| 参数名称           | 数据类型                   | 默认值 | 描述                                                                                                                                      |
+| ------------------ | -------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| prompts            | List\[str\]                | None   | 批处理的提示信息。                                                                                                                        |
+| gen_config         | GenerationConfig 或者 None | None   | GenerationConfig 的一个实例。默认为None。                                                                                                 |
+| do_preprocess      | bool                       | True   | 是否预处理消息。默认为True，表示将应用chat_template。                                                                                     |
+| request_output_len | int                        | 512    | 输出的token数。后期会弃用，请改用 gen_config 参数                                                                                         |
+| top_k              | int                        | 40     | 在进行top-k过滤时，保留概率最高的词汇token的数量。后期会弃用，请改用 gen_config 参数                                                      |
+| top_p              | float                      | 0.8    | 如果设置为小于1的浮点数，则只有那些最有可能的token集合（其概率累加到top_p或更高）才会被保留以用于生成。后期会弃用，请改用 gen_config 参数 |
+| temperature        | float                      | 0.8    | 用于调节下一个token的概率。后期会弃用，请改用 gen_config 参数                                                                             |
+| repetition_penalty | float                      | 1.0    | 重复惩罚的参数。1.0表示没有惩罚。后期会弃用，请改用 gen_config 参数                                                                       |
+| ignore_eos         | bool                       | False  | 是否忽略结束符的指示器。后期会弃用，请改用 gen_config 参数                                                                                |
+
+## 示例
 
 使用默认参数的例子:
 
@@ -113,13 +127,13 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
-### EngineConfig(pytorch)
+## EngineConfig(pytorch)
 
-#### 描述
+### 描述
 
 此类是PyTorch引擎的配置对象。
 
-#### 参数
+### 参数
 
 | Parameter        | Type | Description                                                  | Default     |
 | ---------------- | ---- | ------------------------------------------------------------ | ----------- |
@@ -133,13 +147,13 @@ print(response)
 | num_cpu_blocks   | int  | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 | num_gpu_blocks   | int  | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 
-### EngineConfig (turbomind)
+## EngineConfig (turbomind)
 
-#### 描述
+### 描述
 
 这个类提供了TurboMind引擎的配置参数。
 
-#### 参数
+### 参数
 
 | Parameter             | Type          | Description                                                            | Default |
 | --------------------- | ------------- | ---------------------------------------------------------------------- | ------- |
@@ -161,13 +175,13 @@ print(response)
 | use_dynamic_ntk       | bool          | 是否使用动态ntk。                                                      | False   |
 | use_logn_attn         | bool          | 是否使用对数注意力。                                                   | False   |
 
-### GenerationConfig
+## GenerationConfig
 
-#### 描述
+### 描述
 
 这个类包含了由推理引擎使用的生成参数。
 
-#### 参数
+### 参数
 
 | Parameter          | Type        | Description                                           | Default |
 | ------------------ | ----------- | ----------------------------------------------------- | ------- |
