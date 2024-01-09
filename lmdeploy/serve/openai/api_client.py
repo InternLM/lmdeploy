@@ -25,6 +25,7 @@ def json_loads(content):
         return content
     except:  # noqa
         logger.warning(f'weird json content {content}')
+        return ''
 
 
 class APIClient:
