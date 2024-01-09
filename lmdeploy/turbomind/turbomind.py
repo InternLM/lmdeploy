@@ -140,6 +140,7 @@ class TurboMind:
                  tp: Optional[int] = None,
                  **kwargs):
 
+        is_engine_config_none = engine_config is None
         engine_config = _update_engine_config(engine_config,
                                               model_name=model_name,
                                               model_format=model_format,
@@ -154,8 +155,9 @@ class TurboMind:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
                                             'tokenizer')
             self.tokenizer = Tokenizer(tokenizer_model_path)
+            _engine_config = None if is_engine_config_none else engine_config
             self.model_comm = self._from_workspace(model_path=model_path,
-                                                   engine_config=engine_config)
+                                                   engine_config=_engine_config)
         else:
             self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
@@ -317,16 +319,17 @@ class TurboMind:
 
         # check whether input tp is valid
         if cfg.tensor_para_size != 1 and \
-                engine_config.tp != cfg.tensor_para_size:
+                self.gpu_count != cfg.tensor_para_size:
             get_logger('turbomind').info(
                 f'found tp={cfg.tensor_para_size} in config.ini.')
             self.gpu_count = cfg.tensor_para_size
-            engine_config.tp = cfg.tensor_para_size
 
         # update cfg
-        cfg = _update_tm_config(cfg, engine_config)
-        if engine_config.session_len is not None:
-            cfg.session_len = engine_config.session_len
+        if engine_config is not None:
+            engine_config.tp = cfg.tensor_para_size
+            cfg = _update_tm_config(cfg, engine_config)
+            if engine_config.session_len is not None:
+                cfg.session_len = engine_config.session_len
 
         # update cls
         self.config = cfg
