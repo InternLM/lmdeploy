@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from mmengine.config import DictAction
+
 from .cli import CLI
 from .utils import DefaultsAndTypesHelpFormatter, convert_args
 
@@ -126,11 +128,13 @@ class SubCliLite(object):
                             type=int,
                             default=1,
                             help='Number of tensor parallelism')
-        # TODO tm_params accept dict in lmdeploy<0.2.0
         parser.add_argument('--tm-params',
-                            type=str,
+                            nargs='*',
                             default=None,
-                            help='Turbomind model weights')
+                            action=DictAction,
+                            help='Used key-values pairs in xxx=yyy format'
+                            ' to update the turbomind model weights'
+                            ' config')
 
     @staticmethod
     def auto_awq(args):
