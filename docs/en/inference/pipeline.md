@@ -1,36 +1,5 @@
 # Pipeline
 
-## `pipeline` API
-
-The `pipeline` function is a higher-level API designed for users to easily instantiate and use the AsyncEngine.
-
-### Init parameters:
-
-| Parameter            | Type                                                 | Description                                                                                                                          | Default     |
-| -------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| model_path           | str                                                  | Path to the model. Can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on huggingface.co.  | N/A         |
-| model_name           | Optional\[str\]                                      | Name of the model when the model_path points to a Pytorch model on huggingface.co.                                                   | None        |
-| backend              | Literal\['turbomind', 'pytorch'\]                    | Specifies the backend to use, either turbomind or pytorch.                                                                           | 'turbomind' |
-| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None        |
-| chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None        |
-| instance_num         | int                                                  | The number of instances to be created for handling concurrent requests.                                                              | 32          |
-| tp                   | int                                                  | Number of tensor parallelunits. Will be deprecated later, please use backend_config.                                                 | 1           |
-| log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'     |
-
-### Invocation
-
-| Parameter Name     | Data Type                | Default Value | Description                                                                                                                                                                                                                      |
-| ------------------ | ------------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| prompts            | List\[str\]              | None          | A batch of prompts.                                                                                                                                                                                                              |
-| gen_config         | GenerationConfig or None | None          | An instance of GenerationConfig. Default is None.                                                                                                                                                                                |
-| do_preprocess      | bool                     | True          | Whether to pre-process the messages. Default is True, which means chat_template will be applied.                                                                                                                                 |
-| request_output_len | int                      | 512           | The number of output tokens. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                                     |
-| top_k              | int                      | 40            | The number of the highest probability vocabulary tokens to keep for top-k-filtering. This parameter will be deprecated. Please use the gen_config parameter instead.                                                             |
-| top_p              | float                    | 0.8           | If set to a float \< 1, only the smallest set of most probable tokens with probabilities that add up to top_p or higher are kept for generation. This parameter will be deprecated. Please use the gen_config parameter instead. |
-| temperature        | float                    | 0.8           | Used to modulate the next token probability. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                     |
-| repetition_penalty | float                    | 1.0           | The parameter for repetition penalty. 1.0 means no penalty. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                      |
-| ignore_eos         | bool                     | False         | Indicator for ignoring end-of-string (eos). This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                      |
-
 ## Example
 
 An example using default parameters:
@@ -126,6 +95,37 @@ prompts = [[{
 response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
+
+## `pipeline` API
+
+The `pipeline` function is a higher-level API designed for users to easily instantiate and use the AsyncEngine.
+
+### Init parameters:
+
+| Parameter            | Type                                                 | Description                                                                                                                          | Default     |
+| -------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
+| model_path           | str                                                  | Path to the model. Can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on huggingface.co.  | N/A         |
+| model_name           | Optional\[str\]                                      | Name of the model when the model_path points to a Pytorch model on huggingface.co.                                                   | None        |
+| backend              | Literal\['turbomind', 'pytorch'\]                    | Specifies the backend to use, either turbomind or pytorch.                                                                           | 'turbomind' |
+| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None        |
+| chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None        |
+| instance_num         | int                                                  | The number of instances to be created for handling concurrent requests.                                                              | 32          |
+| tp                   | int                                                  | Number of tensor parallelunits. Will be deprecated later, please use backend_config.                                                 | 1           |
+| log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'     |
+
+### Invocation
+
+| Parameter Name     | Data Type                | Default Value | Description                                                                                                                                                                                                                      |
+| ------------------ | ------------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| prompts            | List\[str\]              | None          | A batch of prompts.                                                                                                                                                                                                              |
+| gen_config         | GenerationConfig or None | None          | An instance of GenerationConfig. Default is None.                                                                                                                                                                                |
+| do_preprocess      | bool                     | True          | Whether to pre-process the messages. Default is True, which means chat_template will be applied.                                                                                                                                 |
+| request_output_len | int                      | 512           | The number of output tokens. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                                     |
+| top_k              | int                      | 40            | The number of the highest probability vocabulary tokens to keep for top-k-filtering. This parameter will be deprecated. Please use the gen_config parameter instead.                                                             |
+| top_p              | float                    | 0.8           | If set to a float \< 1, only the smallest set of most probable tokens with probabilities that add up to top_p or higher are kept for generation. This parameter will be deprecated. Please use the gen_config parameter instead. |
+| temperature        | float                    | 0.8           | Used to modulate the next token probability. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                     |
+| repetition_penalty | float                    | 1.0           | The parameter for repetition penalty. 1.0 means no penalty. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                      |
+| ignore_eos         | bool                     | False         | Indicator for ignoring end-of-string (eos). This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                      |
 
 ## EngineConfig (turbomind)
 
