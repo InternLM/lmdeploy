@@ -6,99 +6,112 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 
 #### Parameters:
 
-- **model_path** (str): Path to the model. This can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on huggingface.co.
-
-- **model_name** (Optional\[str\]): Name of the model when the model_path points to a Pytorch model on huggingface.co. Default is None.
-
-- **backend** (Literal\['turbomind', 'pytorch'\]): Specifies the backend to use, either turbomind or pytorch. Default is set to turbomind.
-
-- **backend_config** (Optional\[Union\[TurbomindEngineConfig, PytorchEngineConfig\]\]): Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. Default is None.
-
-- **chat_template_config** (Optional\[ChatTemplateConfig\]): Configuration for chat template. Default is None.
-
-- **instance_num** (int): The number of instances to be created for handling concurrent requests. Default is 32.
-
-- **tp** (int): Number of tensor parallel units. Default is 1.
-
-- **log_level** (str): The level of logging. Default is 'ERROR'.
+| Parameter            | Type                                                 | Description                                                                                                                          | Default     |
+| -------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
+| model_path           | str                                                  | Path to the model. Can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on huggingface.co.  | N/A         |
+| model_name           | Optional\[str\]                                      | Name of the model when the model_path points to a Pytorch model on huggingface.co.                                                   | None        |
+| backend              | Literal\['turbomind', 'pytorch'\]                    | Specifies the backend to use, either turbomind or pytorch.                                                                           | 'turbomind' |
+| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None        |
+| chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None        |
+| instance_num         | int                                                  | The number of instances to be created for handling concurrent requests.                                                              | 32          |
+| tp                   | int                                                  | Number of tensor parallel units.                                                                                                     | 1           |
+| log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'     |
 
 ### Example
 
-A example for pytorch backend:
+An example using default parameters:
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.pytorch import EngineConfig
 
-# there are more arguments in EngineConfig set by default
-backend_config = EngineConfig(tp = 1, session_len= 1024)
-
-# there are more arguments in GenerationConfig set by default
-gen_config = GenerationConfig(max_new_tokens=224)
-
-# Initialize pipeline
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',  backend='pytorch', backend_config = backend_config)
-
-# Perform inference on multiple inputs
-response = pipe(['hi','say this is a test'], gen_config=gen_config)
-
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
-
 ```
 
-A example for turbomind backend:
+An example showing how to set tensor parallel num:
+
+```python
+import lmdeploy
+from lmdeploy.turbomind import EngineConfig
+
+backend_config = EngineConfig(tp=2)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                         backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+print(response)
+```
+
+An example for setting sampling parameters:
 
 ```python
 import lmdeploy
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.turbomind import EngineConfig
 
-# there are more arguments in EngineConfig set by default
-backend_config = EngineConfig(tp = 1, session_len= 1024)
-
-# there are more arguments in GenerationConfig set by default
-gen_config = GenerationConfig(max_new_tokens=224)
-
-# Initialize pipeline
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',  backend='turbomind', backend_config = backend_config)
-
-# Perform inference on multiple inputs
-response = pipe(['hi','say this is a test'], gen_config=gen_config)
-
+backend_config = EngineConfig(tp=2)
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                         backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
+                gen_config=gen_config)
 print(response)
-
 ```
 
-In the above example, pipeline function initializes an AsyncEngine with the model specified by the 'model_path'. It then performs inference on the list of prompts using the engine's `__call__` method and prints out the responses generated by the model.
+An example for OpenAI format prompt input:
 
-### `AsyncEngine` API
+```python
+import lmdeploy
+from lmdeploy.messages import GenerationConfig
+from lmdeploy.turbomind import EngineConfig
 
-The `AsyncEngine` class provides an asynchronous inference engine, which maintains multiple instances of a specified model for efficient processing.
+backend_config = EngineConfig(tp=2)
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                         backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': 'Hi, pls intro yourself'
+}], [{
+    'role': 'user',
+    'content': 'Shanghai is'
+}]]
+response = pipe(prompts,
+                gen_config=gen_config)
+print(response)
+```
 
-#### Initialization parameters:
+An example for pytorch backend:
 
-- **model_path** (str): Path to the model. This can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on (huggingface.co)\[https://huggingface.co\].
-- **model_name** (Optional\[str\]): Name of the model when the model_path points to a Pytorch model on huggingface.co. Default is None.
-- **backend** (Literal\['turbomind', 'pytorch'\]): Specifies the backend to use, either turbomind or pytorch. Default is set to turbomind.
-- **backend_config** (Optional\[Union\[TurbomindEngineConfig, PytorchEngineConfig\]\]): Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. Default is None.
-- **chat_template_config** (Optional\[ChatTemplateConfig\]): Configuration for chat template. Default is None.
-- **instance_num** (int): The number of instances to be created for handling concurrent requests. Default is 32.
-- **tp** (int): Number of tensor parallel units. Default is 1.
+```python
+import lmdeploy
+from lmdeploy.messages import GenerationConfig
+from lmdeploy.pytorch import EngineConfig
 
-#### Methods:
-
-- **call**(prompts, gen_config, chat_template_config, request_output_len, top_k, top_p, temperature, repetition_penalty, ignore_eos, kwargs): Inference on a batch of prompts.
-
-- **stop_session**(session_id): Stop a session with a given id.
-
-- **end_session**(session_id): Clear a session with a given id.
-
-- **get_generator**(stop, session_id): Get generator for a given session.
-
-- **batch_infer**(prompts, gen_config, chat_template_config, request_output_len, top_k, top_p, temperature, repetition_penalty, ignore_eos, kwargs): Inference on a batch of prompts.
-
-- **generate**(messages, session_id, gen_config, chat_template_config, stream_response, sequence_start, sequence_end, step, request_output_len, stop, stop_words, top_k, top_p, temperature, repetition_penalty, ignore_eos, kwargs): Generate responses.
+backend_config = EngineConfig(session_len=2048)
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                         backend='pytorch',
+                         backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': 'Hi, pls intro yourself'
+}], [{
+    'role': 'user',
+    'content': 'Shanghai is'
+}]]
+response = pipe(prompts, gen_config=gen_config)
+print(response)
+```
 
 ### EngineConfig (turbomind)
 
@@ -108,24 +121,26 @@ This class provides the configuration parameters for TurboMind backend.
 
 #### Arguments
 
-- **model_name** (str, Optional): The name of the deployed model. Default is None.
-- **model_format** (str, Optional): The layout of the deployed model. Can be one of the following values: hf, llama, awq. Default is None.
-- **group_size** (int): The group size used when quantizing weights to 4-bit. Default is 128.
-- **tp** (int): The number of GPU cards used in tensor parallelism. Default is 1.
-- **session_len** (int, Optional): The maximum session length of a sequence. Default is None.
-- **max_batch_size** (int): The maximum batch size during inference. Default is 128.
-- **max_context_token_num** (int): The maximum number of tokens to be processed in each forward pass. Default is 1.
-- **cache_max_entry_count** (float): The percentage of GPU memory occupied by the k/v cache. Default is 0.5.
-- **cache_block_seq_len** (int): The length of a sequence in a k/v block. Default is 128.
-- **cache_chunk_size** (int): The number of blocks each time the TurboMind engine tries to realloc from GPU memory. Default is -1.
-- **num_tokens_per_iter** (int): Number of tokens to be processed per iteration. Default is 0.
-- **max_prefill_iters** (int): Maximum prefill iterations for a single request. Default is 1.
-- **use_context_fmha** (int): Whether or not to use fmha in context decoding. Default is 1.
-- **quant_policy** (int): Default is 0. Set it to 4 when k/v is quantized into 8 bits.
-- **rope_scaling_factor** (float): Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention. Default is 0.0.
-- **use_dynamic_ntk** (bool): Whether or not to use dynamic ntk. Default is False.
-- **use_logn_attn** (bool): Whether or not to use logarithmic attention. Default is False.
-- **kv_bits** (int): The number of bits of k/v after quantization. Default is 8.
+| Parameter             | Type          | Description                                                                                              | Default |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------- | ------- |
+| model_name            | str, Optional | The name of the deployed model.                                                                          | None    |
+| model_format          | str, Optional | The layout of the deployed model. Can be one of the following values: hf, llama, awq.                    | None    |
+| group_size            | int           | The group size used when quantizing weights to 4-bit.                                                    | 0       |
+| tp                    | int           | The number of GPU cards used in tensor parallelism.                                                      | 1       |
+| session_len           | int, Optional | The maximum session length of a sequence.                                                                | None    |
+| max_batch_size        | int           | The maximum batch size during inference.                                                                 | 128     |
+| max_context_token_num | int           | The maximum number of tokens to be processed in each forward pass.                                       | 1       |
+| cache_max_entry_count | float         | The percentage of GPU memory occupied by the k/v cache.                                                  | 0.5     |
+| cache_block_seq_len   | int           | The length of a sequence in a k/v block.                                                                 | 128     |
+| cache_chunk_size      | int           | The number of blocks each time the TurboMind engine tries to realloc from GPU memory.                    | -1      |
+| num_tokens_per_iter   | int           | Number of tokens to be processed per iteration.                                                          | 0       |
+| max_prefill_iters     | int           | Maximum prefill iterations for a single request.                                                         | 1       |
+| use_context_fmha      | int           | Whether or not to use fmha in context decoding.                                                          | 1       |
+| quant_policy          | int           | Set it to 4 when k/v is quantized into 8 bits.                                                           | 0       |
+| rope_scaling_factor   | float         | Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention. | 0.0     |
+| use_dynamic_ntk       | bool          | Whether or not to use dynamic ntk.                                                                       | False   |
+| use_logn_attn         | bool          | Whether or not to use logarithmic attention.                                                             | False   |
+| kv_bits               | int           | The number of bits of k/v after quantization.                                                            | 8       |
 
 ### EngineConfig (pytorch)
 
@@ -135,15 +150,17 @@ This class provides the configuration parameters for Pytorch backend.
 
 #### Arguments
 
-- **model_name** (str): Name of the given model. Default is ''.
-- **tp** (int): Tensor Parallelism. Default is 1.
-- **session_len** (int): Maximum session length. Default is None.
-- **max_batch_size** (int): Maximum batch size. Default is 128.
-- **eviction_type** (str): Action to perform when kv cache is full. Options are \['recompute', 'copy'\]. Default is 'recompute'.
-- **prefill_interval** (int): Interval to perform prefill. Default is 16.
-- **block_size** (int): Paging cache block size. Default is 64.
-- **num_cpu_blocks** (int): Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment. Default is 0.
-- **num_gpu_blocks** (int): Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment. Default is 0.
+| Parameter        | Type | Description                                                                                              | Default     |
+| ---------------- | ---- | -------------------------------------------------------------------------------------------------------- | ----------- |
+| model_name       | str  | Name of the given model.                                                                                 | ''          |
+| tp               | int  | Tensor Parallelism.                                                                                      | 1           |
+| session_len      | int  | Maximum session length.                                                                                  | None        |
+| max_batch_size   | int  | Maximum batch size.                                                                                      | 128         |
+| eviction_type    | str  | Action to perform when kv cache is full. Options are \['recompute', 'copy'\].                            | 'recompute' |
+| prefill_interval | int  | Interval to perform prefill.                                                                             | 16          |
+| block_size       | int  | Paging cache block size.                                                                                 | 64          |
+| num_cpu_blocks   | int  | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
+| num_gpu_blocks   | int  | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
 
 ### GenerationConfig
 
@@ -153,13 +170,15 @@ This class contains the generation parameters used by inference engines.
 
 #### Arguments
 
-- **n** (int): Number of chat completion choices to generate for each input message. Default is 1.
-- **max_new_tokens** (int): Maximum number of tokens that can be generated in chat completion. Default is 512.
-- **top_p** (float): Nucleus sampling, where the model considers the tokens with top_p probability mass. Default is 1.0.
-- **top_k** (int): The model considers the top_k tokens with the highest probability. Default is 1.
-- **temperature** (float): Sampling temperature. Default is 0.8.
-- **repetition_penalty** (float): Penalty to prevent the model from generating repeated words or phrases. A value larger than 1 discourages repetition. Default is 1.0.
-- **ignore_eos** (bool): Indicator to ignore the eos_token_id or not. Default is False.
-- **random_seed** (int): Seed used when sampling a token. Default is None.
-- **stop_words** (List\[str\]): Words that stop generating further tokens. Default is None.
-- **bad_words** (List\[str\]): Words that the engine will never generate. Default is None.
+| Parameter          | Type        | Description                                                                                                           | Default |
+| ------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
+| n                  | int         | Number of chat completion choices to generate for each input message.                                                 | 1       |
+| max_new_tokens     | int         | Maximum number of tokens that can be generated in chat completion.                                                    | 512     |
+| top_p              | float       | Nucleus sampling, where the model considers the tokens with top_p probability mass.                                   | 1.0     |
+| top_k              | int         | The model considers the top_k tokens with the highest probability.                                                    | 1       |
+| temperature        | float       | Sampling temperature.                                                                                                 | 0.8     |
+| repetition_penalty | float       | Penalty to prevent the model from generating repeated words or phrases. A value larger than 1 discourages repetition. | 1.0     |
+| ignore_eos         | bool        | Indicator to ignore the eos_token_id or not.                                                                          | False   |
+| random_seed        | int         | Seed used when sampling a token.                                                                                      | None    |
+| stop_words         | List\[str\] | Words that stop generating further tokens.                                                                            | None    |
+| bad_words          | List\[str\] | Words that the engine will never generate.                                                                            | None    |
