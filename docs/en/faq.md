@@ -48,3 +48,11 @@ It's probably due to a low-version cuda toolkit. LMDeploy runtime requires a min
 ## Serve
 
 ## Quantization
+
+### RuntimeError: \[enforce fail at inline_container.cc:337\] . unexpected pos 4566829760 vs 4566829656
+
+Please check your disk space. This error is due to insufficient disk space when saving weights, which might be encountered when quantizing the 70B model
+
+### ModuleNotFoundError: No module named 'flash_attn'
+
+Quantizing `qwen` requires the installation of `flash-attn`. But based on feedback from community users, `flash-attn` can be challenging to install. Therefore, we have removed it from lmdeploy dependencies and now recommend that users install it it manually as needed.
