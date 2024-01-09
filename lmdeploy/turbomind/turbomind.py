@@ -379,6 +379,13 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
+        if engine_config is not None and engine_config.model_name is not None:
+            if model_name is None:
+                model_name = engine_config.model_name
+            else:
+                assert model_name == engine_config.model_name, 'Got different'
+                f' model names. model_name: {model_name}, engine_config model '
+                f'name: {engine_config.model_name}'
         # try fuzzy matching to get a model_name
         if model_name is None and model_source == ModelSource.HF_MODEL:
             potential_names = best_match_model(pretrained_model_name_or_path)
