@@ -22,9 +22,7 @@ class EngineConfig:
         use_context_fmha (int): whether or not to use fmha in context decoding, default to 1​
         quant_policy: (int): , default to 0. When k/v is quantized into 8 bit, set it to 4​
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention​
-        use_dynamic_ntk (bool): whether or not to use dynamic ntk, default to False​
         use_logn_attn (bool): whether or not to use log attn: default to False​
-        kv_bits (int): the number of bits of k/v after quantization, default to 8
     """  # noqa: E501
 
     model_name: str = None
@@ -33,7 +31,6 @@ class EngineConfig:
     session_len: int = None
     max_batch_size: int = 128
     group_size: int = 128
-    kv_bits: int = 8
     max_context_token_num: int = 1
     cache_max_entry_count: float = 0.5
     cache_block_seq_len: int = 128
@@ -43,5 +40,4 @@ class EngineConfig:
     use_context_fmha: int = 1
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
-    use_dynamic_ntk: bool = False
     use_logn_attn: bool = False
