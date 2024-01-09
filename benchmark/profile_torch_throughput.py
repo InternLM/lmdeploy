@@ -146,7 +146,8 @@ class Engine:
         # start threads
         for i in range(concurrency):
             t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, stream_output))
+                       args=(req_queue, res_queue, i, stream_output),
+                       daemon=True)
             t.start()
             threads.append(t)
 

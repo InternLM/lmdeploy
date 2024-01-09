@@ -102,7 +102,7 @@ def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
     _start = time.perf_counter()
     procs = []
     for i in range(concurrency):
-        proc = Thread(target=_infer, args=(model, i + 1))
+        proc = Thread(target=_infer, args=(model, i + 1), daemon=True)
         procs.append(proc)
         proc.start()
 
@@ -139,7 +139,8 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
     for i in range(concurrency):
         proc = Thread(target=infer,
                       args=(tm_model, i + 1, input_ids, output_seqlen, top_k,
-                            top_p, temperature, test_round, que))
+                            top_p, temperature, test_round, que),
+                      daemon=True)
         procs.append(proc)
         proc.start()
 
@@ -256,7 +257,7 @@ class MemoryMonitor:
     def start(cls):
         cls._running = True
         from multiprocessing import Process
-        cls.proc = Process(target=cls.mem_monitor)
+        cls.proc = Process(target=cls.mem_monitor, daemon=True)
         cls.proc.start()
 
     @classmethod

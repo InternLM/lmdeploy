@@ -28,6 +28,10 @@ class TestMBGMM:
         yield torch.tensor([2, 4]).cuda()
 
     @pytest.fixture
+    def page_start(self, ranks):
+        yield torch.zeros_like(ranks)
+
+    @pytest.fixture
     def start_loc(self, seq_lens):
         yield seq_lens.cumsum(0) - seq_lens
 
@@ -37,7 +41,7 @@ class TestMBGMM:
         yield torch.rand(total_len, head_size, dtype=dtype).cuda()
 
     @pytest.fixture
-    def rank_ids(self, seq_lens, ranks):
+    def adapter_ids(self, seq_lens, ranks):
         num_ranks = len(ranks)
         num_seqs = len(seq_lens)
         ret = torch.randint(0, num_ranks, (num_seqs, )).cuda()
@@ -84,9 +88,9 @@ class TestMBGMM:
         yield cache
 
     @pytest.fixture
-    def gt(self, input, start_loc, seq_lens, rank_ids, lora_a, lora_b):
+    def gt(self, input, start_loc, seq_lens, adapter_ids, lora_a, lora_b):
         out = []
-        for loc, s_len, r_id in zip(start_loc, seq_lens, rank_ids):
+        for loc, s_len, r_id in zip(start_loc, seq_lens, adapter_ids):
             inp = input[loc:loc + s_len]
             l_a = lora_a[r_id]
             l_b = lora_b[r_id]
@@ -95,7 +99,8 @@ class TestMBGMM:
         yield torch.cat(out)
 
     def test_mbgmm(self, input, paged_lora_a, paged_lora_b, out_head_size,
-                   start_loc, seq_lens, rank_ids, page_table, ranks, gt):
+                   start_loc, seq_lens, adapter_ids, page_table, ranks,
+                   page_start, gt):
         max_seq_len = max(seq_lens).item()
         max_rank = page_table.size(-1)
 
@@ -103,8 +108,9 @@ class TestMBGMM:
                      paged_lora_a,
                      b_start_loc=start_loc,
                      b_seq_lens=seq_lens,
-                     b_rank_ids=rank_ids,
+                     b_adapter_ids=adapter_ids,
                      rank_page_table=page_table,
+                     rank_page_start=page_start,
                      ranks=ranks,
                      max_seq_len=max_seq_len,
                      max_rank=max_rank)
@@ -113,8 +119,9 @@ class TestMBGMM:
                          paged_lora_b[..., :out_head_size],
                          b_start_loc=start_loc,
                          b_seq_lens=seq_lens,
-                         b_rank_ids=rank_ids,
+                         b_adapter_ids=adapter_ids,
                          rank_page_table=page_table,
+                         rank_page_start=page_start,
                          ranks=ranks,
                          max_seq_len=max_seq_len,
                          max_rank=max_rank)
