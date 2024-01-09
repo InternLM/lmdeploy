@@ -29,6 +29,21 @@ class SubCliLite(object):
         parser.add_argument('work_dir',
                             type=str,
                             help='The working directory to save results')
+        parser.add_argument(
+            '--calib-dataset',
+            type=str,
+            default='c4',
+            help='The calibration dataset name. defaults to "c4"')
+        parser.add_argument(
+            '--calib-samples',
+            type=int,
+            default=128,
+            help='The number of samples for calibration. defaults to 128')
+        parser.add_argument(
+            '--calib-seqlen',
+            type=int,
+            default=2048,
+            help='The sequence length for calibration. defaults to 2048')
         parser.add_argument('--w-bits',
                             type=int,
                             default=4,
