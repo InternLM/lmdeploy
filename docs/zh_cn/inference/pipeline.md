@@ -160,7 +160,6 @@ print(response)
 | rope_scaling_factor   | float         | 用于动态ntk的缩放因子。TurboMind遵循transformer LlamaAttention的实现。 | 0.0     |
 | use_dynamic_ntk       | bool          | 是否使用动态ntk。                                                      | False   |
 | use_logn_attn         | bool          | 是否使用对数注意力。                                                   | False   |
-| kv_bits               | int           | 量化后的k/v的位数。                                                    | 8       |
 
 ### GenerationConfig
 

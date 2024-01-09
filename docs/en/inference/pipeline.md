@@ -140,7 +140,6 @@ This class provides the configuration parameters for TurboMind backend.
 | rope_scaling_factor   | float         | Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention. | 0.0     |
 | use_dynamic_ntk       | bool          | Whether or not to use dynamic ntk.                                                                       | False   |
 | use_logn_attn         | bool          | Whether or not to use logarithmic attention.                                                             | False   |
-| kv_bits               | int           | The number of bits of k/v after quantization.                                                            | 8       |
 
 ### EngineConfig (pytorch)
 

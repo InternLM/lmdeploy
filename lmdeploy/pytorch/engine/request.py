@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
-from queue import Queue
-from threading import Lock
-from typing import Any, Callable, Dict, List
+from dataclasses import dataclass, field
+from queue import Empty, Queue
+from threading import Lock, Thread, ThreadError
+from typing import Any, Callable, ClassVar, Dict, List
 
 from lmdeploy.messages import ResponseType
 from lmdeploy.utils import get_logger
@@ -43,6 +43,7 @@ class Response:
     err_msg: str = ''
 
 
+@dataclass
 class RequestSender:
     """Request sender.
 
@@ -50,12 +51,33 @@ class RequestSender:
         sender_id (int): The id of the sender
     """
 
-    def __init__(self, sender_id: int, req_que: Queue):
-        self._next_req_id = 0
-        self.sender_id = sender_id
-        self.req_que = req_que
-        self.resp_que = Queue()
-        self.resp_dict = dict()
+    sender_id: int
+    req_que: Queue
+    resp_que: Queue = field(default_factory=Queue)
+    resp_dict: Dict[int, List[Response]] = field(default_factory=dict)
+    THREAD_ALIVE_INTERVAL: ClassVar[float] = 1.0
+    _next_req_id: int = 0
+    _thread: Thread = None
+
+    @classmethod
+    def new(cls, sender_id: int, req_que: Queue, thread: Thread):
+        """new sender."""
+        return cls(sender_id=sender_id, req_que=req_que, _thread=thread)
+
+    def _resp_que_get(self, block: bool = True, timeout: float = None):
+        """warp of resp_que.get."""
+        if not block:
+            return self.resp_que(block=block, timeout=timeout)
+        timeout_counter = timeout or float(1 << 30)
+        while timeout_counter > self.THREAD_ALIVE_INTERVAL:
+            try:
+                return self.resp_que.get(timeout=self.THREAD_ALIVE_INTERVAL)
+            except Empty:
+                timeout_counter -= self.THREAD_ALIVE_INTERVAL
+            if self._thread and not self._thread.is_alive():
+                raise ThreadError('Engine main loop stopped.')
+
+        return self.resp_que.get(timeout=timeout_counter)
 
     def _push_resp(self, req_id: int, resp: Response):
         """push response."""
@@ -76,13 +98,19 @@ class RequestSender:
         """prefetch from resp que."""
         num_resps = self.resp_que.qsize()
         for _ in range(num_resps):
-            resp: Response = self.resp_que.get()
+            resp: Response = self._resp_que_get()
             req_id = resp.req_id
             self._push_resp(req_id, resp)
+
+    def is_thread_alive(self):
+        """is thread alive."""
+        return self._thread and self._thread.is_alive()
 
     def batched_send_async(self, req_types: List[RequestType],
                            data: List[Any]) -> List[int]:
         """Batched send request asynchronize."""
+        if self._thread and not self._thread.is_alive():
+            raise ThreadError('Engine main loop stopped.')
         assert len(req_types) == len(data)
         batch_size = len(req_types)
 
@@ -115,7 +143,7 @@ class RequestSender:
                 return ret
 
         # check resp que
-        return self.resp_que.get(timeout=que_timeout)
+        return self._resp_que_get(timeout=que_timeout)
 
     def recv_all(self, req_id: int):
         """revceive all response with req_id."""
@@ -132,7 +160,7 @@ class RequestSender:
 
         # check resp que
         while True:
-            resp: Response = self.resp_que.get(timeout=que_timeout)
+            resp: Response = self._resp_que_get(timeout=que_timeout)
             if resp.req_id != req_id:
                 self._push_resp(req_id, resp)
             else:
@@ -163,12 +191,12 @@ class RequestManager:
         self.requests = Queue()
         self.mutex = Lock()
 
-    def build_sender(self):
+    def build_sender(self, thread: Thread = None):
         """create a new sender."""
         with self.mutex:
             sender_id = self._next_sender_id
             self._next_sender_id += 1
-            new_sender = RequestSender(sender_id, self.requests)
+            new_sender = RequestSender.new(sender_id, self.requests, thread)
             self.senders[sender_id] = new_sender
             return new_sender
 

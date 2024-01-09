@@ -10,12 +10,16 @@ assert triton.__version__ >= '2.1.0'
 
 
 @triton.jit
-def _load_block_offsets(offset_ptr, block_id, is_unified_paging: tl.constexpr,
+def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
                         BLOCK: tl.constexpr):
-    offs_n = tl.arange(0, BLOCK)
-    if is_unified_paging:
-        return tl.load(offset_ptr + block_id * BLOCK + offs_n)
+    if num_sub_blocks > 1:
+        offs_sub = tl.arange(0, num_sub_blocks)
+        offs_n = tl.arange(0, BLOCK // num_sub_blocks)
+        ret = tl.load(offset_ptr + block_id * num_sub_blocks + offs_sub)[
+            None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
+        return tl.ravel(ret)
     else:
+        offs_n = tl.arange(0, BLOCK)
         return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
@@ -44,7 +48,7 @@ def _fwd_split_kernel(
     stride_boffb,
     kv_group_num,
     block_per_cta,
-    is_unified_paging: tl.constexpr,
+    num_sub_blocks: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -86,7 +90,7 @@ def _fwd_split_kernel(
     # load block offset
     start_block_id = loop_start // BLOCK_N
     b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   is_unified_paging, BLOCK_N)
+                                   num_sub_blocks, BLOCK_N)
 
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -110,7 +114,7 @@ def _fwd_split_kernel(
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
             b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           is_unified_paging, BLOCK_N)
+                                           num_sub_blocks, BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -219,7 +223,7 @@ def _fwd_kernel(
     stride_od,
     stride_boffb,
     kv_group_num,
-    is_unified_paging: tl.constexpr,
+    num_sub_blocks: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -261,7 +265,7 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    b_offset = _load_block_offsets(block_offset_ptrs, 0, is_unified_paging,
+    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks,
                                    BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -281,7 +285,7 @@ def _fwd_kernel(
         if start_n + BLOCK_N < cur_batch_kv_len:
             start_block_id = start_n // BLOCK_N + 1
             b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           is_unified_paging, BLOCK_N)
+                                           num_sub_blocks, BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -362,8 +366,8 @@ def paged_attention_fwd(
 
     num_warps = 4 if Lk <= 64 else 8
 
-    is_unified_paging = k.size(1) == 1
-    BLOCK = 64 if is_unified_paging else k.size(1)
+    BLOCK = 64 if k.size(1) < 16 else k.size(1)
+    num_sub_blocks = BLOCK // k.size(1)
 
     kernel_meta = _kernel_meta()
     is_decoding = q.shape[-3] == b_seq_len.size(0)
@@ -392,7 +396,7 @@ def paged_attention_fwd(
                           o.stride(-1),
                           block_offsets.stride(0),
                           kv_group_num=kv_group_num,
-                          is_unified_paging=is_unified_paging,
+                          num_sub_blocks=num_sub_blocks,
                           BLOCK_M=BLOCK,
                           BLOCK_DMODEL=Lk,
                           BLOCK_N=BLOCK,
@@ -427,7 +431,7 @@ def paged_attention_fwd(
                                 stride_boffb=block_offsets.stride(0),
                                 kv_group_num=kv_group_num,
                                 block_per_cta=block_per_cta,
-                                is_unified_paging=is_unified_paging,
+                                num_sub_blocks=num_sub_blocks,
                                 BLOCK_DMODEL=Lk,
                                 BLOCK_N=BLOCK,
                                 num_warps=4,
