@@ -3,7 +3,7 @@ import dataclasses
 import difflib
 import os
 from abc import abstractmethod
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from mmengine import Registry
 
@@ -19,20 +19,34 @@ class SamplingParam:
 
 
 @dataclasses.dataclass
-class ModelConfig:
-    """parameters for chat templates."""
-    model_name: str  # determine which chat template will be applied
-    system: Optional[str] = None  # begin of the system prompt
-    meta_instruction: Optional[str] = None  # system prompt
-    eosys: Optional[str] = None  # end of the system prompt
-    user: Optional[str] = None  # begin of the user prompt
-    eoh: Optional[str] = None  # end of the user prompt
-    assistant: Optional[str] = None  # begin of the assistant prompt
-    eoa: Optional[str] = None  # end of the assistant prompt
-    capability: Optional[str] = None
+class ChatTemplateConfig:
+    """Parameters for chat template.
+
+    Args:
+        model_name (str): the name of the deployed model. Determine which chat template will be applied
+        system (str | None): begin of the system prompt
+        meta_instruction (str | None): system prompt
+        eosys (str | None): end of the system prompt
+        user (str | None): begin of the user prompt
+        eoh (str | None): end of the user prompt
+        assistant (str | None): begin of the assistant prompt
+        eoa (str | None): end of the assistant prompt
+        capability: ('completion' | 'infilling' | 'chat' | 'python') = None
+    """  # noqa: E501
+
+    model_name: str
+    system: Optional[str] = None
+    meta_instruction: Optional[str] = None
+    eosys: Optional[str] = None
+    user: Optional[str] = None
+    eoh: Optional[str] = None
+    assistant: Optional[str] = None
+    eoa: Optional[str] = None
+    capability: Optional[Literal['completion', 'infilling', 'chat',
+                                 'python']] = None
 
     @property
-    def model(self):
+    def chat_template(self):
         attrs = {
             key: value
             for key, value in dataclasses.asdict(self).items()

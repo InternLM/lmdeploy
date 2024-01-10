@@ -4,6 +4,10 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 
 import requests
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
 
 def get_model_list(api_url: str):
     response = requests.get(api_url)
@@ -12,6 +16,16 @@ def get_model_list(api_url: str):
         model_list = model_list.pop('data', [])
         return [item['id'] for item in model_list]
     return None
+
+
+def json_loads(content):
+    """Loads content to json format."""
+    try:
+        content = json.loads(content)
+        return content
+    except:  # noqa
+        logger.warning(f'weird json content {content}')
+        return ''
 
 
 class APIClient:
@@ -38,7 +52,7 @@ class APIClient:
             return self._available_models
         response = requests.get(self.models_v1_url)
         if hasattr(response, 'text'):
-            model_list = json.loads(response.text)
+            model_list = json_loads(response.text)
             model_list = model_list.pop('data', [])
             self._available_models = [item['id'] for item in model_list]
             return self._available_models
@@ -65,7 +79,7 @@ class APIClient:
                                            add_bos=add_bos),
                                  stream=False)
         if hasattr(response, 'text'):
-            output = json.loads(response.text)
+            output = json_loads(response.text)
             return output['input_ids'], output['length']
         return None, None
 
@@ -126,11 +140,11 @@ class APIClient:
                         continue
                     if decoded[:6] == 'data: ':
                         decoded = decoded[6:]
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
                 else:
                     decoded = chunk.decode('utf-8')
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
 
     def chat_interactive_v1(self,
@@ -192,7 +206,7 @@ class APIClient:
                                          delimiter=b'\n'):
             if chunk:
                 decoded = chunk.decode('utf-8')
-                output = json.loads(decoded)
+                output = json_loads(decoded)
                 yield output
 
     def completions_v1(
@@ -258,11 +272,11 @@ class APIClient:
                         continue
                     if decoded[:6] == 'data: ':
                         decoded = decoded[6:]
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
                 else:
                     decoded = chunk.decode('utf-8')
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
 
     def chat(self,
@@ -367,7 +381,7 @@ def get_streaming_response(prompt: str,
                                      decode_unicode=False,
                                      delimiter=b'\n'):
         if chunk:
-            data = json.loads(chunk.decode('utf-8'))
+            data = json_loads(chunk.decode('utf-8'))
             output = data.pop('text', '')
             tokens = data.pop('tokens', 0)
             finish_reason = data.pop('finish_reason', None)

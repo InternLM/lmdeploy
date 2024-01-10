@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+import enum
 from dataclasses import dataclass
 from typing import List
 
@@ -73,3 +73,14 @@ class EngineGenerationConfig(GenerationConfig):
             random_seed=gen_config.random_seed,
             stop_words=special_word_token_ids(gen_config.stop_words),
             bad_words=special_word_token_ids(gen_config.bad_words))
+
+
+class ResponseType(enum.Enum):
+    """Response type."""
+
+    SUCCESS = enum.auto()
+    FINISH = enum.auto()
+    ENGINE_STOP_ERROR = enum.auto()
+    SESSION_REPEAT = enum.auto()
+    SESSION_NOT_EXIST = enum.auto()
+    HANDLER_NOT_EXIST = enum.auto()

@@ -64,45 +64,55 @@ For inference benchmarks in more devices and more settings, please refer to the 
 
 # Supported Models
 
-`LMDeploy` has developed two inference engines - `Pytorch` and `TurboMind`, each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
+|       Model        |   Size    |
+| :----------------: | :-------: |
+|       Llama        | 7B - 65B  |
+|       Llama2       | 7B - 70B  |
+|      InternLM      | 7B - 20B  |
+| InternLM-XComposer |    7B     |
+|        QWen        | 7B - 72B  |
+|      QWen-VL       |    7B     |
+|      Baichuan      | 7B - 13B  |
+|     Baichuan2      | 7B - 13B  |
+|     Code Llama     | 7B - 34B  |
+|      ChatGLM2      |    6B     |
+|       Falcon       | 7B - 180B |
 
-As shown in the next tables, the inference engines differ in the types of supported models and the inference data type. Users can choose the one that best fits their actual needs.
+`LMDeploy` has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
-## TurboMind
+They differ in the types of supported models and the inference data type. Please refer to [this table](./docs/en/supported_models/supported_models.md) for each engine's capability and choose the proper one that best fits your actual needs.
 
-|       Model        |   Size   | FP16/BF16 | KV INT8 | W4A16 |
-| :----------------: | :------: | :-------: | :-----: | :---: |
-|       Llama        | 7B - 65B |    Yes    |   Yes   |  Yes  |
-|       Llama2       | 7B - 70B |    Yes    |   Yes   |  Yes  |
-|      InternLM      | 7B - 20B |    Yes    |   Yes   |  Yes  |
-| InternLM-XComposer |    7B    |    Yes    |   Yes   |  Yes  |
-|        QWen        | 7B - 72B |    Yes    |   Yes   |  Yes  |
-|      QWen-VL       |    7B    |    Yes    |   Yes   |  Yes  |
-|      Baichuan      |    7B    |    Yes    |   Yes   |  Yes  |
-|     Baichuan2      |    7B    |    Yes    |   Yes   |  Yes  |
-|     Code Llama     | 7B - 34B |    Yes    |   No    |  No   |
+# Quick Start
 
-## Pytorch
+## Installation
 
-|   Model   |   Size    | FP16/BF16 | KV INT8 | W8A8 |
-| :-------: | :-------: | :-------: | :-----: | :--: |
-|   Llama   | 7B - 65B  |    Yes    |   No    | Yes  |
-|  Llama2   | 7B - 70B  |    Yes    |   No    | Yes  |
-| InternLM  | 7B - 20B  |    Yes    |   No    | Yes  |
-| Baichuan2 | 7B - 13B  |    Yes    |   No    | Yes  |
-| ChatGLM2  |    6B     |    Yes    |   No    |  No  |
-|  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
+Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 
-# Getting Started
+```shell
+pip install lmdeploy
+```
+
+## Offline Batch Inference
+
+```shell
+import lmdeploy
+pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+print(response)
+```
+
+For more information on inference pipeline parameters, please refer to [here](./docs/en/inference/pipeline.md).
+
+# Tutorials
 
 Please overview [getting_started](./docs/en/get_started.md) section for the basic usage of LMDeploy.
 
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - Inference pipeline
+  - [Inference pipeline](./docs/en/inference/pipeline.md)
   - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
-  - Inference Engine - PyTorch
+  - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
   - [Serving](docs/en/serving/restful_api.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide
