@@ -55,6 +55,7 @@ Welcome to LMDeploy's tutorials!
    :caption: Advanced Guide
 
    serving/qos.md
+   advance/pytorch_new_model.md
 
 Indices and tables
 ==================

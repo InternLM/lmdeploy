@@ -103,7 +103,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 - 用户指南
   - [推理pipeline](./docs/zh_cn/inference/pipeline.md)
   - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
-  - 推理引擎 - PyTorch
+  - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
   - [推理服务](./docs/zh_cn/serving/restful_api.md)
   - [模型量化](./docs/zh_cn/quantization)
 - 进阶指南
