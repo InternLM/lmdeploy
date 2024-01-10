@@ -142,7 +142,7 @@ class BaseModel:
                              repetition_penalty=self.repetition_penalty)
 
 
-@MODELS.register_module(name='wizardlM')
+@MODELS.register_module(name='wizardlm')
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):
     """Chat template of vicuna model."""
