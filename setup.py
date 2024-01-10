@@ -26,6 +26,32 @@ def check_ext_modules():
     return False
 
 
+def get_cuda_pkgs():
+    arg_name = '--cuda='
+    arg_value = None
+    for arg in sys.argv[1:]:
+        if arg.startswith(arg_name):
+            arg_value = arg[len(arg_name):]
+            sys.argv.remove(arg)
+            break
+
+    cuda_pkgs = []
+    if arg_value == '11':
+        cuda_pkgs = [
+            'nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11',
+            'nvidia-cublas-cu11'
+        ]
+    elif arg_value == '12':
+        cuda_pkgs = [
+            'nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12',
+            'nvidia-cublas-cu12'
+        ]
+    return cuda_pkgs
+
+
+cuda_pkgs = get_cuda_pkgs()
+
+
 def parse_requirements(fname='requirements.txt', with_version=True):
     """Parse the package dependencies listed in a file but strips specific
     versioning information.
@@ -41,21 +67,6 @@ def parse_requirements(fname='requirements.txt', with_version=True):
         python -c "import setup; print(setup.parse_requirements())"
     """
     require_fpath = fname
-
-    def get_nccl_pkg():
-        arg_name = '--cuda='
-        arg_value = None
-        for arg in sys.argv[1:]:
-            if arg.startswith(arg_name):
-                arg_value = arg[len(arg_name):]
-                sys.argv.remove(arg)
-                break
-
-        if arg_value == '11':
-            return 'nvidia-nccl-cu11'
-        elif arg_value == '12':
-            return 'nvidia-nccl-cu12'
-        return None
 
     def parse_line(line):
         """Parse information from a line in a requirements text file."""
@@ -113,9 +124,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 yield item
 
     packages = list(gen_packages_items())
-    nccl_pkg = get_nccl_pkg()
-    if nccl_pkg is not None:
-        packages += [nccl_pkg]
+    packages += cuda_pkgs
     return packages
 
 

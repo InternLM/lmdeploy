@@ -260,7 +260,7 @@ class APIClient:
                                          delimiter=b'\n'):
             if chunk:
                 if stream:
-                    decoded = chunk.decode('utf-8')[6:]
+                    decoded = chunk.decode('utf-8')
                     if decoded == 'data: [DONE]':
                         continue
                     if decoded[:6] == 'data: ':

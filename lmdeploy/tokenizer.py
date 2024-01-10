@@ -3,7 +3,7 @@ import json
 import os
 import os.path as osp
 from collections import deque
-from typing import Optional, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 import torch
 
@@ -198,7 +198,7 @@ class HuggingFaceTokenizer:
             }
         return self._prefix_space_tokens
 
-    def _maybe_add_prefix_space(self, tokens, decoded):
+    def _maybe_add_prefix_space(self, tokens: List[int], decoded: str):
         """maybe add prefix space for incremental decoding."""
         if len(tokens) and not decoded.startswith(' ') and\
                 tokens[0] in self.prefix_space_tokens:

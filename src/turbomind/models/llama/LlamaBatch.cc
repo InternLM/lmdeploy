@@ -365,6 +365,9 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
                     // scaling_factor = std::max(exp2f(ceilf(log2f((float)max_seq_len / max_pos_emb) + 1.f))
                     // - 1.f, 1.f);
                 }
+                else {
+                    scaling_factor = 1.f;
+                }
             }
             if (scaling_factor != 1.f) {
                 float rope_dim = model_->attn_params_.rotary_embedding_dim;
@@ -1065,9 +1068,10 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 }
 
 template<typename T>
-void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_output,
-                                        const std::vector<int>& indices,
-                                        const std::vector<int>& lengths)
+void LlamaBatch<T>::OutputContextLogits(T*                                  context_decoder_output,
+                                        const std::vector<int>&             indices,
+                                        const std::vector<int>&             lengths,
+                                        const std::vector<const Sequence*>& sequences)
 {
     std::vector<float*> output_logits;
     int                 num_token = 0;
@@ -1075,7 +1079,11 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
         bool is_return_logits = false;
         for (int k = 0; k < indices.size(); ++k) {
             auto& request = state_->requests[indices[k]];
-            output_logits.push_back(request->outputs[rank_].getPtr<float>("logits", nullptr));
+            auto  logits  = request->outputs[rank_].getPtr<float>("logits", nullptr);
+            if (logits && sequences[k]->cache_len + lengths[k] <= sequences[k]->tokens.size()) {
+                logits = nullptr;
+            }
+            output_logits.push_back(logits);
             num_token += lengths[k];
             if (output_logits.back()) {
                 is_return_logits = true;
@@ -1095,7 +1103,7 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
             FT_CHECK(model_->vocab_size_padded_ % tp == 0);
             const auto local_vocab_size = model_->vocab_size_padded_ / tp;
             local_context_logits_buf_ =
-                (float*)allocator_->malloc(sizeof(float) * local_vocab_size * max_context_token_num_);
+                (float*)allocator_->malloc(sizeof(float) * model_->vocab_size_padded_ * max_context_token_num_);
         }
     }
 
@@ -1105,7 +1113,27 @@ void LlamaBatch<T>::OutputContextLogits(T*                      context_decoder_
 
     for (int k = 0; k < indices.size(); ++k) {
         if (output_logits[k]) {
-            Copy(logits, model_->vocab_size_ * lengths[k], output_logits[k]);
+            auto src_ptr       = logits;
+            auto dst_ptr       = output_logits[k];
+            int  num_new_token = 0;
+            if (sequences[k]->cache_len < sequences[k]->tokens.size()) {
+                num_new_token = sequences[k]->cache_len + lengths[k] - sequences[k]->tokens.size();
+                src_ptr += (lengths[k] - num_new_token) * model_->vocab_size_padded_;
+            }
+            else {
+                num_new_token = lengths[k];
+                dst_ptr += (sequences[k]->cache_len - sequences[k]->tokens.size()) * model_->vocab_size_;
+            }
+            if (model_->vocab_size_padded_ == model_->vocab_size_) {
+                Copy(src_ptr, model_->vocab_size_ * num_new_token, dst_ptr);
+            }
+            else {
+                for (int tok = 0; tok < num_new_token; tok++) {
+                    Copy(src_ptr, model_->vocab_size_, dst_ptr);
+                    src_ptr += model_->vocab_size_padded_;
+                    dst_ptr += model_->vocab_size_;
+                }
+            }
         }
         logits += model_->vocab_size_padded_ * lengths[k];
     }
@@ -1562,7 +1590,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
         if (iter == 0) {
             // compute logits of inputs if requested
-            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
         }
     }
 

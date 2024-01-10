@@ -4,6 +4,7 @@ from typing import Optional, Sequence
 
 import gradio as gr
 
+from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
 
@@ -30,16 +31,17 @@ async def chat_stream_local(instruction: str, state_chatbot: Sequence,
     state_chatbot = state_chatbot + [(instruction, None)]
 
     yield (state_chatbot, state_chatbot, disable_btn, enable_btn)
+    gen_config = GenerationConfig(max_new_tokens=request_output_len,
+                                  top_p=top_p,
+                                  temperature=temperature)
 
     async for outputs in InterFace.async_engine.generate(
             instruction,
             session_id,
+            gen_config=gen_config,
             stream_response=True,
             sequence_start=(len(state_chatbot) == 1),
-            sequence_end=False,
-            request_output_len=request_output_len,
-            top_p=top_p,
-            temperature=temperature):
+            sequence_end=False):
         response = outputs.response
         if outputs.finish_reason == 'length':
             gr.Warning('WARNING: exceed session max length.'
@@ -92,9 +94,10 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
         messages.append(dict(role='user', content=qa[0]))
         if qa[1] is not None:
             messages.append(dict(role='assistant', content=qa[1]))
+    gen_config = GenerationConfig(max_new_tokens=0)
     async for out in InterFace.async_engine.generate(messages,
                                                      session_id,
-                                                     request_output_len=0,
+                                                     gen_config=gen_config,
                                                      stream_response=True,
                                                      sequence_start=True,
                                                      sequence_end=False):
@@ -122,11 +125,11 @@ def run_local(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
@@ -148,7 +151,7 @@ def run_local(model_path: str,
 
             chatbot = gr.Chatbot(
                 elem_id='chatbot',
-                label=InterFace.async_engine.tm_model.model_name)
+                label=InterFace.async_engine.engine.model_name)
             instruction_txtbox = gr.Textbox(
                 placeholder='Please input the instruction',
                 label='Instruction')

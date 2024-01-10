@@ -1,213 +1,184 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Chat through command line.
 
-This submodule allows user to chat with language model through command line,
-and optionally accelerate model using backends like deepspeed.
+import os
+import random
+from typing import List
 
-Example 1: Chat with default setting
+from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.model import MODELS, best_match_model
+from lmdeploy.pytorch import EngineConfig
+from lmdeploy.tokenizer import Tokenizer
 
-```python
-python -m lmdeploy.pytorch.chat $PATH_TO_HF_MODEL
-```
-
-Example 2: Disable sampling
-
-```python
-python -m lmdeploy.pytorch.chat \
-    $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
-    --temperature 0
-```
-
-Example 3: Accelerate with deepspeed inference
-
-```python
-python -m lmdeploy.pytorch.chat \
-    $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
-    --accel deepspeed
-```
-
-Note: to use deepspeed, you need to install deepspeed,
-    and if hope to accelerate InternLM, you need a customized version
-    https://github.com/wangruohui/DeepSpeed/tree/support_internlm_0.10.0
-
-Example 4: Tensor parallel the model on 2 GPUs
-
-```python
-deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat \
-    $PATH_TO_LLAMA_MODEL_IN_HF_FORMAT \
-    --accel deepspeed \
-```
-
-This module also allow the following control commands to change
-generation behaviors during chat.
-
-- `exit`: terminate and exit chat
-- `config set key=value`: change generation config `key` to `value`,
-    e.g. config temperature=0 disable sampling for following chats
-- `clear`: clear chat history
-"""
-
-import itertools
-import logging
-from typing import Optional
-
-import torch
-from transformers import GenerationConfig, PreTrainedModel
-
-from .adapters import init_adapter
-from .dist import get_local_rank, get_rank, get_world_size
-from .model import accel_model, init_model
-from .session import BasicSessionManagerWithHistory
-from .utils import BasicStreamer, TerminalIO, control
-
-logger = logging.getLogger(__name__)
+os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-def set_logging(log_file: str, debug: bool):
-    torch.set_printoptions(linewidth=120)
-    level = logging.DEBUG if debug else logging.INFO
-    log_file = log_file or 'chat.log'
-    if r := get_rank() != 0:
-        log_file = log_file + f'.{r}'
-    logging.basicConfig(level=level,
-                        format=('%(filename)s: '
-                                '%(levelname)s: '
-                                '%(funcName)s(): '
-                                '%(lineno)d:\t'
-                                '%(message)s'),
-                        filename=log_file,
-                        filemode='w')
-    print(f'Worker {get_rank()} logging to {log_file}')
+def input_prompt(model_name):
+    """Input a prompt in the consolo interface."""
+    if model_name == 'codellama':
+        print('\nenter !! to end the input >>>\n', end='')
+        sentinel = '!!'
+    else:
+        print('\ndouble enter to end input >>> ', end='')
+        sentinel = ''  # ends when this string is seen
+    return '\n'.join(iter(input, sentinel))
 
 
-def main(
-    model_path: str,
-    tokenizer_path: Optional[str] = None,
-    accel: Optional[str] = None,
-    max_new_tokens: int = 128,
-    temperature: float = 0.8,
-    top_p: float = 0.95,
-    seed: int = 0,
-    use_fast_tokenizer: bool = True,
-    max_alloc: int = 2048,
-    max_session_len: int = None,
-    log_file: Optional[str] = None,
-    debug: bool = False,
-    adapter: Optional[str] = None,
-):
-    """Chat with model through terminal.
+def valid_str(string, coding='utf-8'):
+    """decode text according to its encoding type."""
+    invalid_chars = [b'\xef\xbf\xbd']
+    bstr = bytes(string, coding)
+    for invalid_char in invalid_chars:
+        bstr = bstr.replace(invalid_char, b'')
+    ret = bstr.decode(encoding=coding, errors='ignore')
+    return ret
+
+
+def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
+    """Return a list of token ids corresponding to stop-words."""
+    if stop_words is None:
+        return None
+    assert isinstance(stop_words, List) and \
+        all(isinstance(elem, str) for elem in stop_words), \
+        f'stop_words must be a list but got {type(stop_words)}'
+    stop_words = [
+        tokenizer.encode(stop_word, False)[-1] for stop_word in stop_words
+    ]
+    assert isinstance(stop_words, List) and all(
+        isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
+    return stop_words
+
+
+def run_chat(model_path,
+             engine_config: EngineConfig,
+             gen_config: EngineGenerationConfig = None,
+             session_id: int = 1,
+             trust_remote_code: bool = True):
+    """An example to perform model inference through the command line
+    interface.
 
     Args:
-        model_path (str): Path to model.
-        tokenizer_path (str): Path to tokenizer.
-        accel (str): Model accelerator.
-        max_new_tokens (int): Maximum number of tokens to generate.
-        temperature (float): Temperature for sampling.
-        top_p (float): Top p for sampling.
-        seed (int): Random seed.
-        use_fast_tokenizer (bool): Whether to use fast tokenizer.
-            This argument is directly pass to transformer's ``AutoTokenizer.from_pretrained``.
-            Generally, user should choose to use fast tokenizers.
-            But if using fast raise some error, try to force using a slow one.
-        max_alloc (int): Maximum memory to allocate (for deepspeed).
-        max_session_len (int): Maximum number of tokens allowed for all chat sessions.
-            This include both history and current session.
-        log_file (str): Path to log file.
-        debug (bool): Whether to enable debug mode.
-        adapter (str): Force to use an adapter.
-            Generally user should not use this argument because adapter is selected based
-            on the type of model. Only when it is impossible, e.g. distinguishing llama 1/2
-            based on `LlamaforCausalLM` class, this argument is required.
-            Currently, only "llama1" is acceptable for llama1 models.
-    """  # noqa: E501
-    set_logging(log_file, debug)
+        model_path (str): the huggingface model path.
+        engine_config (EngineConfig): Config of engine.
+        gen_config (EngineGenerationConfig): Config of generation.
+        session_id (int): the identical id of a session.
+        trust_remote_code (bool): trust remote code.
+    """
+    from lmdeploy.pytorch.engine import Engine
+    tm_model = Engine.from_pretrained(model_path,
+                                      engine_config=engine_config,
+                                      trust_remote_code=trust_remote_code)
+    tokenizer = tm_model.tokenizer
+    generator = tm_model.create_instance()
 
-    # workers should sync in sampling
-    torch.manual_seed(seed)
+    adapter_name = None
+    if engine_config.adapters is not None:
+        adapter_name = next(iter(engine_config.adapters.keys()))
 
-    local_rank = get_local_rank()
-    world_size = get_world_size()
+    nth_round = 1
+    step = 0
+    seed = random.getrandbits(64)
+    model_name = engine_config.model_name
+    if model_name is None:
+        model_name = best_match_model(model_path)[0]
+        assert model_name is not None, 'Can not find match model template'
+        print(f'match template: <{model_name}>')
+    model = MODELS.get(model_name)()
+    stop_words = _stop_words(model.stop_words, tokenizer)
 
-    # Init model and tokenizer
-    if not tokenizer_path:
-        tokenizer_path = model_path
+    while True:
+        prompt = input_prompt(model_name)
+        if prompt == 'exit':
+            exit(0)
+        elif prompt == 'end':
+            generator.end(session_id)
+            nth_round = 1
+            step = 0
+            seed = random.getrandbits(64)
+        else:
+            prompt = model.get_prompt(prompt, nth_round == 1)
+            input_ids = tokenizer.encode(prompt, nth_round == 1)
+            session_len = model.session_len
+            if session_len is None:
+                session_len = tm_model.session_len
+            if step >= session_len:
+                print('WARNING: exceed session max length.'
+                      ' Please end the session.')
+                continue
 
-    model, tokenizer = init_model(
-        model_path,
-        tokenizer_path,
-        use_fast_tokenizer=use_fast_tokenizer,
-    )
+            print(f'{prompt} ', end='', flush=True)
+            response_size = 0
+            gen_config.random_seed = seed
+            gen_config.stop_words = stop_words
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=input_ids,
+                                                  gen_config=gen_config,
+                                                  adapter_name=adapter_name):
+                status, res, tokens = outputs
+                # decode res
+                response = tokenizer.decode(res, offset=response_size)
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence, continue to concate it with the next
+                # sequence and decode them together
+                if response.endswith('�'):
+                    continue
+                response = valid_str(response)
+                print(f'{response}', end='', flush=True)
+                response_size = tokens
 
-    # Init adapter based on model and tokenizer
-    adapter = init_adapter(model, tokenizer, adapter)
+            # update step
+            step += len(input_ids) + tokens
+            print()
 
-    # Accelerate model
-    model: PreTrainedModel = accel_model(model,
-                                         accel,
-                                         max_alloc=max_alloc,
-                                         tp_size=world_size)
-
-    # warmup
-    warmup_config = GenerationConfig(
-        max_new_tokens=1,
-        do_sample=temperature > 0,
-        temperature=temperature,
-        top_p=top_p,
-    )
-    model.generate(torch.tensor([[6]], device=get_local_rank()), warmup_config)
-
-    gen_config = GenerationConfig(
-        max_new_tokens=max_new_tokens,
-        do_sample=temperature > 0,
-        temperature=temperature,
-        top_p=top_p,
-    )
-
-    # Session manager handling history
-    max_session_len = max_alloc if max_session_len is None else max_session_len
-    sm = BasicSessionManagerWithHistory(max_session_len=max_session_len,
-                                        start_ids=adapter.start_ids,
-                                        sep_ids=adapter.sep_ids)
-    io = TerminalIO()
-    streamer = BasicStreamer(adapter.decode, io.output)
-
-    for r in itertools.count(1):
-        # User input from IO
-        logger.info(f'Round {r}')
-
-        prompt: str = io.input()
-        logger.info(f'User input: {prompt}')
-
-        # Allow user to change config during runtime or exit
-        if control(prompt, gen_config, sm):
-            continue
-
-        # Tokenize and apply model specific templates
-        input_ids = adapter.encode_and_decorate(prompt)
-        logger.info(f'Input ids:\n{input_ids}')
-
-        # Prepend chat history (tensor concatenation)
-        input_ids = sm.prepend_history(input_ids)
-        logger.info(f'Input ids with history:\n{input_ids}')
-
-        # Generate
-        input_ids = input_ids.cuda(local_rank)
-        # returned tensor including input and generated output
-        output = model.generate(input_ids,
-                                gen_config,
-                                streamer=streamer,
-                                stopping_criteria=adapter.stopping_criteria)
-        logger.info(f'Output:\n{output}')
-
-        # Save output into session manager and maybe trim some history
-        sm.add_to_history(output)
+            nth_round += 1
 
 
-def cli():
-    import fire
+def main(model_path,
+         model_name: str = None,
+         session_id: int = 1,
+         top_k=40,
+         top_p=0.8,
+         temperature=0.8,
+         repetition_penalty: float = 1.0,
+         tp: int = 1,
+         stream_output: bool = True,
+         adapter: str = None,
+         trust_remote_code: bool = True):
+    """An example to perform model inference through the command line
+    interface.
 
-    fire.Fire(main)
+    Args:
+        model_path (str): the huggingface model path
+        model_name (str): name of the model.
+        session_id (int): the identical id of a session
+        top_k (int): sampling top k.
+        top_p (int): sampling top p.
+        temperature (float): sampling temperature.
+        repetition_penalty (float): parameter to penalize repetition
+        tp (int): GPU number used in tensor parallelism
+        stream_output (bool): indicator for streaming output or not
+        adapter (str): path to lora adapter.
+        trust_remote_code (bool): Trust remote code.
+    """
+    adapters = None
+    if adapter is not None:
+        adapters = dict(default=adapter)
+    engine_config = EngineConfig(model_name=model_name,
+                                 tp=tp,
+                                 adapters=adapters)
+    gen_config = EngineGenerationConfig(max_new_tokens=512,
+                                        top_k=top_k,
+                                        top_p=top_p,
+                                        temperature=temperature,
+                                        repetition_penalty=repetition_penalty,
+                                        ignore_eos=False)
+    return run_chat(model_path,
+                    engine_config,
+                    gen_config,
+                    session_id=session_id,
+                    trust_remote_code=trust_remote_code)
 
 
 if __name__ == '__main__':
-    cli()
+    import fire
+
+    fire.Fire(main)

@@ -144,7 +144,17 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     INIReader reader;
-    FT_CHECK_WITH_INFO((config.empty() ^ model_dir.empty()), "invalid init options");
+    FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
+
+    if (!model_dir.empty()) {
+        model_dir_ = model_dir;
+        const std::string inifile{model_dir + "/config.ini"};
+        reader = INIReader(inifile);
+        if (reader.ParseError() < 0) {
+            TM_LOG_ERROR("[ERROR] Can't load %s", inifile.c_str());
+            ft::FT_CHECK(false);
+        }
+    }
 
     if (!config.empty()) {
         std::FILE* tmpf = std::tmpfile();
@@ -153,16 +163,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
         reader = INIReader(tmpf);
         if (reader.ParseError() < 0) {
             TM_LOG_ERROR("[ERROR] Can't init with config %s", config.c_str());
-            ft::FT_CHECK(false);
-        }
-    }
-
-    if (!model_dir.empty()) {
-        model_dir_ = model_dir;
-        const std::string inifile{model_dir + "/config.ini"};
-        reader = INIReader(inifile);
-        if (reader.ParseError() < 0) {
-            TM_LOG_ERROR("[ERROR] Can't load %s", inifile.c_str());
             ft::FT_CHECK(false);
         }
     }
