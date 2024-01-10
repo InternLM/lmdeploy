@@ -9,7 +9,9 @@ from lmdeploy.model import MODELS, SamplingParam, best_match_model
                           ('baichuan-inc/Baichuan-7B', 'baichuan-7b'),
                           ('codellama/CodeLlama-7b-hf', 'codellama'),
                           ('upstage/SOLAR-0-70b-16bit', 'solar'),
-                          ('workspace', None)])
+                          ('meta-llama/Llama-2-7b-chat-hf', 'llama-2-chat'),
+                          ('THUDM/chatglm2-6b', 'chatglm2-6b'),
+                          ('tiiuae/falcon-7b', 'falcon'), ('workspace', None)])
 def test_best_match_model(model_path_and_name):
     deduced_name = best_match_model(model_path_and_name[0])
     if deduced_name is not None:
