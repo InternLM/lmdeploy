@@ -810,7 +810,7 @@ class UltraChat(BaseModel):
         return ret
 
 
-@MODELS.register_module(name=['yi', 'yi-200k', 'yi-34b'])
+@MODELS.register_module(name=['yi', 'yi-chat', 'yi-200k', 'yi-34b'])
 class Yi(BaseModel):
     """Chat template of Yi model."""
 
@@ -883,7 +883,7 @@ class Yi(BaseModel):
         return ret
 
 
-def best_match_model(query: str, similarity_cutoff: float = 0.46):
+def best_match_model(query: str, similarity_cutoff: float = 0.5):
     """Get the model that matches the query.
 
     Args:

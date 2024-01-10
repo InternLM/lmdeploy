@@ -3,18 +3,20 @@ import pytest
 from lmdeploy.model import MODELS, SamplingParam, best_match_model
 
 
-@pytest.mark.parametrize('model_path_and_name',
-                         [('internlm/internlm-chat-7b', ['internlm-chat-7b']),
-                          ('Qwen/Qwen-7B-Chat', ['qwen-7b']),
-                          ('baichuan-inc/Baichuan-7B', ['baichuan-7b']),
-                          ('codellama/CodeLlama-7b-hf', ['codellama']),
-                          ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
-                          ('meta-llama/Llama-2-7b-chat-hf', ['llama-2-chat']),
-                          ('THUDM/chatglm2-6b', ['chatglm2-6b']),
-                          ('01-ai/Yi-6B-200k', ['yi-200k']),
-                          ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
-                          ('tiiuae/falcon-7b', ['falcon']),
-                          ('workspace', [None])])
+@pytest.mark.parametrize(
+    'model_path_and_name',
+    [('internlm/internlm-chat-7b', ['internlm-chat-7b']),
+     ('Qwen/Qwen-7B-Chat', ['qwen-7b']),
+     ('baichuan-inc/Baichuan-7B', ['baichuan-7b']),
+     ('codellama/CodeLlama-7b-hf', ['codellama']),
+     ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
+     ('meta-llama/Llama-2-7b-chat-hf', ['llama-2-chat']),
+     ('THUDM/chatglm2-6b', ['chatglm2-6b']),
+     ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
+     ('01-ai/Yi-34B-Chat', ['yi-chat', 'yi-34b', 'yi-200k']),
+     ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
+     ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
+     ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
     deduced_name = best_match_model(model_path_and_name[0] + suffix)
