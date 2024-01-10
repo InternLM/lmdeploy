@@ -4,15 +4,19 @@ lmdeploy.pytorch is designed to ease new model deployment and prototype verifica
 
 ## Support New Model
 
-Let's start with Llama.
+Let's begin with Llama.
 
-before we start, let's take a look at the inputs of the model. To support new features in our engine, the inputs are a little bit different from the inputs in transformers.
+Before delving into the details, it's essential to acquaint ourselves with the input specifications of the model. In order to accommodate new features within our engine, there are some deviations from the typical transformer inputs.
 
-1. Continuous batching is used to avoid batch padding, so the `input_ids` would be the concatenation of all input sequence in batch, than `unsqueeze(0)` to match the dimension of origin input_ids.
-2. Paged attention is used to reduce the memory usage of key/value cache, `past_key_value` become a big Tensor with shape `[num_blocks, block_size, num_heads, head_dim]`, where num_blocks is the number of page block, block_size is the the size of each block.
-3. Extra inputs are necessary to support the inputs above, such as block table, history length. These extra inputs are not listed in arguments of origin forward method. A context object is used to provide these info.
+1. To circumvent the need for batch padding, continuous batching is employed. Consequently, the `input_ids` now represents the concatenation of all input sequences in the batch, followed by a `unsqueeze(0)` operation to align with the original `input_ids` dimension.
 
-Because of the change of the inputs above, we need to rewrite forward of `LlamaModel` and `LlamaAttention` to fit the new inputs. First, let's rewrite the `LlamaModel`, we only keep the minimal codes to support deployment:
+2. In an effort to optimize memory usage for the key/value cache, we implement paged attention. This transforms the `past_key_value` into a substantial tensor with dimensions `[num_blocks, block_size, num_heads, head_dim]`. Here, `num_blocks` denotes the number of page blocks, and `block_size` indicates the size of each block.
+
+3. Accompanying these changes, additional inputs are imperative to support the modified inputs described above. These include the block table and history length. It's important to note that these supplementary inputs are not explicitly listed as arguments in the original forward method. Instead, a context object is utilized to furnish this essential information.
+
+Due to the alterations in the input structure mentioned earlier, the forward methods for both `LlamaModel` and `LlamaAttention` modules need to be adjusted. Below are the modified implementations:
+
+For `LlamaModel`:
 
 ```python
 # lmdeploy/pytorch/models/llama.py
@@ -56,13 +60,7 @@ class LlamaModel(nn.Module):
         )
 ```
 
-For LlamaAttention module, we need to perform following steps:
-
-1. kqv proj
-2. rotary embedding
-3. filling kv cache
-4. MHA
-5. o proj
+For LlamaAttention:
 
 ```python
 # lmdeploy/pytorch/models/llama.py
@@ -145,14 +143,14 @@ class LlamaAttention(nn.Module):
         return attn_output, None, past_key_value
 ```
 
-Notice that some arguments such as `history_lengths` and `block_offsets` comes from `self.context.context`. As we have mentioned above, continuous batching and paged attention require extra arguments to support them, `context` is the container to store these inputs. If you need more detail about context object, please read [context info](#context-info).
+Note: The additional arguments like `history_lengths` and `block_offsets` are accessed from the `context` object, which acts as a container for the necessary inputs required by continuous batching and paged attention. Refer to the [context info](#context-info) for more detail about `context` object.
 
-We replace some operation to our custom triton kernel for two reason.
+We have replaced certain operations with our custom Triton kernel for two reasons:
 
-1. Custom triton kernel can be used to support new features such as `paged_attention_fwd`.
-2. Fuse kernels have better performance than the pure PyTorch implementation.
+1. The custom Triton kernel allows us to incorporate new features, such as `paged_attention_fwd`.
+2. Fused kernels offer superior performance compared to the pure PyTorch implementation.
 
-Now we have new implementations of two modules, let's register them into `lmdeploy/pytorch/models/module_map.py`.
+Now that we have the updated implementations for the two modules, let's register them in `lmdeploy/pytorch/models/module_map.py`.
 
 ```python
 # lmdeploy/pytorch/models/module_map.py
@@ -164,18 +162,18 @@ MODEL_MAP.update({
 })
 ```
 
-The rewritten module has been mapped to the origin module. When we create an Engine, ModelAgent would patch the model automatically, then we can perform inference with these new implementation.
+In this mapping, the revised modules are associated with their original counterparts. When creating an `Engine`, the `ModelAgent` will automatically patch the model. Subsequently, we can conduct inference using these updated implementations.
 
 ## Support Tensor Parallelism
 
-If we want to support tensor parallelism(tp), we have partition the weights in the model. Let's try extend the rewrite above.
+If we aim to enable tensor parallelism (TP), it is necessary to partition the weights in the model. Let's build upon the previously mentioned modifications to accommodate TP in the Llama model:
 
-In Llama (and most LLM), most Linear layers are involved in the weight partition. Among them:
+In Llama (as well as in most Language Model models), the weight partition primarily affects the Linear layers. Specifically, for the following components:
 
-- `LlamaAttention`: `q_proj`, `k_proj`, `v_proj` need column wise partition; `o_proj` needs row wise partition.
-- `LlamaMLP`: `gate_proj`, `up_proj` need column wise partition; `down_proj` needs row wise partition.
+- In `LlamaAttention`: `q_proj`, `k_proj`, `v_proj` require column-wise partitioning, while `o_proj` necessitates row-wise partitioning.
+- In `LlamaMLP`: `gate_proj` and `up_proj` require column-wise partitioning, while `down_proj` requires row-wise partitioning.
 
-We can implement `_distribution_partition_fn` in each rewrite modules:
+We can implement the \_distribution_partition_fn in each of the rewritten modules:
 
 ```python
 # lmdeploy/pytorch/models/llama.py
@@ -212,9 +210,7 @@ class LlamaMLP(nn.Module):
 
 ```
 
-`_distribute_partition_fn` would be called when loading model weights, the weights of special module would be distributed to different devices.
-
-After partition, we need to perform `all_reduce` on the output of `o_proj` and `down_proj`. Of cause you can just put `all_reduce` in the forward method, another option is add an `_distribute_output_fn` call:
+In the process of loading model weights, the `_distribute_partition_fn` is called to distribute the weights of specific modules across different devices. Following the weight partitioning, it becomes necessary to perform `all_reduce` on the output tensors of `o_proj` and `down_proj`. While one option is to include `all_reduce` directly in the forward method, an alternative approach is to introduce the `_distribute_output_fn` call:
 
 ```python
 # lmdeploy/pytorch/models/llama.py
@@ -235,7 +231,7 @@ class LlamaMLP(nn.Module):
         return outputs
 ```
 
-Don't forget to add `LlamaMLP` in `module_map`.
+It is essential to remember to add `LlamaMLP` to the `module_map`:
 
 ```python
 # lmdeploy/pytorch/models/module_map.py
@@ -245,7 +241,7 @@ MODEL_MAP.update({
 })
 ```
 
-That's all. Now it is possible to utilize multiple GPUs to deploy LLM.
+With these adjustments, the model is now capable of utilizing multiple GPUs for deploying Large Language Models (LLM). This enables efficient distribution of computations across different devices in a parallelized manner.
 
 ## Appendix
 
@@ -277,13 +273,13 @@ class StepContext:
 
 ### FAQ
 
-- **How to call origin forward?**
+- **How to invoke the original forward method?**
 
-It is a common practice to add hooks to a method instead a full rewrite. You can use `self.origin_mod` to visit the unpatched module.
+A common approach is to add hooks to a method rather than performing a complete rewrite. To access the unpatched module, you can utilize self.origin_mod within the rewritten method.
 
 - **How to register modules in remote code?**
 
-Some modules are contained in remote code, it is hard to locate the module with `qualname`. `lmdeploy.pytorch` support register them with abbreviation:
+For modules located in remote code, pinpointing them via `qualname` might be challenging. `lmdeploy.pytorch` facilitates registration using abbreviations for such modules:n:
 
 ```python
 MODULE_MAP.update({
@@ -294,11 +290,11 @@ MODULE_MAP.update({
 
 > \[!NOTE\]
 >
-> Abbreviation tends to have a low priority. It is recommend to register modules with `qualname`.
+> Although abbreviations are supported, they tend to have lower priority. It is advisable to register modules using their complete `qualname` for more robust and accurate mapping.
 
-- **How to support different modules with same name?**
+- **How to support different modules with the same name?**
 
-You can support them in the same rewrite module, and give them different implement by their attribute, take `baichuan2` 7b/13b as example:
+You can accommodate multiple modules with the same name within a single rewrite module by providing distinct implementations based on their attributes. For instance, consider `baichuan2` 7b/13b:
 
 ```python
 class BaichuanModel(nn.Module):
@@ -309,12 +305,14 @@ class BaichuanModel(nn.Module):
             return forward_default(...)
 ```
 
-- **How to do post-initialization for rewrite module?**
+- **How to perform post-initialization for a rewrite module?**
 
-Add a `_update_model_fn` method, it will be called after weight loading.
+To execute tasks after model weight loading, introduce a `_update_model_fn` method in your rewrite module. This method will be automatically called post-initialization:
 
 ```python
 class LlamaAttention:
     def _update_model_fn(self):
         # ADD YOUR CODE HERE
 ```
+
+Here, you can include any additional post-initialization steps or configurations needed for your specific use case.

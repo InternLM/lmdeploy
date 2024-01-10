@@ -1,6 +1,6 @@
 # Architecture of lmdeploy.pytorch
 
-`lmdeploy.pytorch` is an inference engine in LMDeploy. It provides a developer friendly framework to users who want to deploy their own model and develop new features.
+`lmdeploy.pytorch` is an inference engine in LMDeploy that offers a developer-friendly framework to users interested in deploying their own models and developing new features.
 
 ## Design
 
@@ -10,48 +10,48 @@
 
 `lmdeploy.pytorch` shares service interfaces with `Turbomind`, and the inference service is implemented by `Engine` and `EngineInstance`.
 
-EngineInstance is the sender of  the inference requests, and it sends the encapsulated request to the Engine to achieve streaming inference. The inference interface of EngineInstance is thread-safe, and EngineInstances in different threads can initiate requests simultaneously. The Engine will automatically perform batch processing based on the current system resources.
+`EngineInstance` acts as the sender of inference requests, encapsulating and sending requests to the `Engine` to achieve streaming inference. The inference interface of `EngineInstance` is thread-safe, allowing instances in different threads to initiate requests simultaneously. The `Engine` will automatically perform batch processing based on the current system resources.
 
-Engine is the request receiver and executor. It contain modules that support the task as follow:
+Engine is the request receiver and executor. It contain modules:
 
-- `ModelAgent` is a wrapper of the model. It is responsible for loading model/adapters, cache management and tensor parallelism.
-- `Scheduler` is the sequence manager. It will decide which sequences and adapters would participated in current step, then allocate resources for them.
-- `RequestManager` is responsible for request sending and receiving. It is the bridge between Engine and EngineInstance.
+- `ModelAgent` serves as a wrapper for the model, handling tasks such as loading model/adapters, managing the cache, and implementing tensor parallelism.
+- The `Scheduler` functions as the sequence manager, determining the sequences and adapters to participate in the current step, and subsequently allocating resources for them.
+- `RequestManager` is tasked with sending and receiving requests. acting as the bridge between the `Engine` and `EngineInstance`.
 
 ## Engine
 
-Engine would response the requests in a sub-thread, looping as following:
+The Engine responses to requests in a sub-thread, following this looping sequence:
 
-1. Get new requests through RequestManager. These requests would be cached.
-2. Scheduler perform scheduling, decide which cached requests should be processed and allocate resources for them.
-3. ModelAgent would swap the caches according to the information provided by Scheduler, then performing inference with the patched model.
-4. Scheduler update the status of requests according to the inference result of ModelAgent.
-5. RequestManager response to the sender (EngineInstance), back to step 1.
+1. Get new requests through `RequestManager`. These requests are cached for now.
+2. The `Scheduler` performs scheduling, deciding which cached requests should be processed and allocating resources for them.
+3. `ModelAgent` swaps the caches according to the information provided by the Scheduler, then performs inference with the patched model.
+4. The `Scheduler` updates the status of requests based to the inference results from `ModelAgent`.
+5. `RequestManager` responds to the sender (`EngineInstance`), and the process return to step 1.
 
-Let's dive deeper into these modules.
+Now, Let's delve deeper into the modules that participate in these steps.
 
 ### Scheduler
 
-It is a common practice to cache history key and value states in LLM inference to prevent redundant computation. Since history lengths are different in batch of sequences, we have to padding the caches so we can perform the batching inference. The padding would waste a lot of memory and limit the performance of the transformer.
+In LLM inference, caching history key and value states is a common practice to prevent redundant computation. However, as history lengths vary in a batch of sequences, we need to pad the caches to enable batching inference. Unfortunately, this padding can lead to significant memory wastage, limiting the transformer's performance.
 
-[vLLM](https://docs.vllm.ai) provide a paging based strategy, allocating caches in page blocks to prevent extra memory usage. The Scheduler module in our Engine share the same design, allocating resources according to the sequence length in blocks and evicting unused blocks to support larger batching and longer session length.
+[vLLM](https://docs.vllm.ai) employs a paging-based strategy, allocating caches in page blocks to minimize extra memory usage. Our Scheduler module in the Engine shares a similar design, allocating resources based on sequence length in blocks and evicting unused blocks to support larger batching and longer session lengths.
 
-We also support [S-LoRA](https://github.com/S-LoRA/S-LoRA). S-LoRA can be used to support multiple LoRA adapters on limited memory.
+Additionally, we support [S-LoRA](https://github.com/S-LoRA/S-LoRA), which enables the use of multiple LoRA adapters on limited memory.
 
 ### ModelAgent
 
-lmdeploy.pytorch support Tensor Parallelism, which would leads to complex model initialization, cache allocation and weight partition. ModelAgent is designed to hide these details so Engine just need to focus on maintaining the pipeline.
+`lmdeploy.pytorch` supports Tensor Parallelism, which leads to complex model initialization, cache allocation, and weight partitioning. ModelAgent is designed to abstract these complexities, allowing the Engine to focus solely on maintaining the pipeline.
 
-ModelAgent is composed of two component:
+ModelAgent consists of two components:
 
-1. `patched_model` is the transformer model after patch. Compared to the origin model, patched model has more features, such as TP, quantization and high performance kernels.
-2. `cache_engine` is the maintainer of caches. It receive command from Scheduler, perform host-device page swap. Only gpu blocks can be used to cache key/value and adapters.
+1. \`**patched_model**: : This is the transformer model after patching. In comparison to the original model, the patched model incorporates additional features such as Tensor Parallelism, quantization, and high-performance kernels.
+2. **cache_engine**: This component manages the caches. It receives commands from the Scheduler and performs host-device page swaps. Only GPU blocks are utilized for caching key/value pairs and adapters.
 
 ## Patching
 
-In order to ease the deployment of new model, we have develop a tool to patch the modules.
+In order to facilitate the deployment of a new model, we have developed a tool to patch the modules.
 
-Let's say, if we want to reimplement the forward of `LlamaAttention.forward`:
+For example, if we want to reimplement the forward method of `LlamaAttention`:
 
 ```python
 class CustomLlamaAttention(nn.Module):
@@ -59,7 +59,7 @@ class CustomLlamaAttention(nn.Module):
         # custom forward
 ```
 
-Just register the implementation above into `lmdeploy.pytorch.models.module_map`.
+We register the implementation above into `lmdeploy.pytorch.models.module_map`:
 
 ```python
 MODULE_MAP.update({
@@ -67,16 +67,16 @@ MODULE_MAP.update({
 'qualname.to.CustomLlamaAttention'})
 ```
 
-ModelAgent would load and patch `LlamaAttention` with `CustomLlamaAttention` and leave anything other unchanged. Than you can perform inference with the new implementation. Read [support new model](../advance/pytorch_new_model.md) for more detail about model patching.
+`ModelAgent` would then load and patch `LlamaAttention` with `CustomLlamaAttention` while leaving everything else unchanged. You can perform inference with the new implementation. For more detail about model patching, please refer to [support new model](../advance/pytorch_new_model.md) .
 
 ## Features
 
-lmdeploy.pytorch support new features include:
+`lmdeploy.pytorch` supports new features including:
 
-- **Continuous Batching**: Since the sequence length in a batch might be different, padding is required to support batching inference. Large padding leads to extra memory usage and useless computation. We use continuous batching, concatenate all sequence into a single long sequence to avoid padding.
+- **Continuous Batching**: As the sequence length in a batch may vary, padding is often necessary for batching inference. However, large padding can lead to additional memory usage and unnecessary computation. To address this, we employ continuous batching, where all sequences are concatenated into a single long sequence to avoid padding.
 
-- **Tensor Parallelism**: The GPU memory usage of LLM might be larger than the memory of a single GPU. Tensor parallelism can be used to fit such model on multiple devices. Each device has parts of the model and can be computed simultaneous, the result would be gathered to ensure the correctness.
+- **Tensor Parallelism**: The GPU memory usage of LLM might exceed the capacity of a single GPU. Tensor parallelism is utilized to accommodate such models on multiple devices. Each device handles parts of the model simultaneously, and the results are gathered to ensure correctness.
 
-- **S-LoRA**: LoRA adapter can be used to support training LLM on device with limited memory. It is a common practice to merge adapter into weights of the model before deployment, load multiple adapter in such way would consume a lot of memory. We have support S-LoRA, adapters would be paged and swapped in when necessary, special kernels are developed to support inference with unmerged adapters. Which made it possible to load a lot of different adapters.
+- **S-LoRA**: LoRA adapters can be used to train LLM on devices with limited memory. While it's common practice to merge adapters into the model weights before deployment, loading multiple adapters in this way can consume a significant amount of memory. We support S-LoRA, where adapters are paged and swapped in when necessary. Special kernels are developed to support inference with unmerged adapters, enabling the loading of various adapters efficiently.
 
-- **Quantization**: Model quantization perform computation with low precision. lmdeploy.pytorch has support w8a8 quantization. Read [w8a8](../quantization/w8a8.md) for more details.
+- **Quantization**: Model quantization involves performing computations with low precision. `lmdeploy.pytorch` supports w8a8 quantization. For more details, refer to [w8a8](../quantization/w8a8.md).
