@@ -69,11 +69,11 @@ class SubCliServe(object):
                         "InternLM/internlm-chat-20b-4bit",
                         "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                        on huggingface.co, such as "InternLM/internlm-chat-7b",
+                        on huggingface.co, such as "internlm/internlm-chat-7b",
                         "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                         and so on.
             model_name (str): needed when model_path is a pytorch model on
-                huggingface.co, such as "InternLM/internlm-chat-7b"
+                huggingface.co, such as "internlm/internlm-chat-7b"
             server_name (str): host ip for serving
             server_port (int): server port
             instance_num (int): number of instances of turbomind model

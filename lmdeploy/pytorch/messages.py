@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 import torch
 from torch import Tensor
 
+from lmdeploy.messages import EngineGenerationConfig
+
 from .block import LogicalTokenBlocks
 
 
@@ -33,6 +35,19 @@ class SamplingParam:
         self.random_seed = random_seed
         self.stop_words = stop_words
         self.bad_words = bad_words
+
+    @classmethod
+    def from_gen_config(self, gen_config: EngineGenerationConfig):
+        """from gen config."""
+
+        return SamplingParam(top_p=gen_config.top_p,
+                             top_k=gen_config.top_k,
+                             temperature=gen_config.temperature,
+                             repetition_penalty=gen_config.repetition_penalty,
+                             ignore_eos=gen_config.ignore_eos,
+                             random_seed=gen_config.random_seed,
+                             stop_words=gen_config.stop_words,
+                             bad_words=gen_config.bad_words)
 
 
 class MessageStatus(enum.Enum):
@@ -69,7 +84,7 @@ class SchedulerSession:
                      token_ids: Tensor,
                      max_output_len: int = 512,
                      sampling_param: SamplingParam = None,
-                     adapter_id: int = -1) -> 'SchedulerSequence':
+                     adapter_name: str = None) -> 'SchedulerSequence':
         """Add a new message."""
         if not isinstance(token_ids, Tensor):
             token_ids = torch.tensor(token_ids)
@@ -85,7 +100,7 @@ class SchedulerSession:
                                 status=MessageStatus.WAITING,
                                 remain_output_len=max_output_len,
                                 sampling_param=sampling_param,
-                                adapter_id=adapter_id,
+                                adapter_name=adapter_name,
                                 arrive_time=time.time())
         self.sequences[seq.seq_id] = seq
         return seq
@@ -115,7 +130,7 @@ class SchedulerSession:
             sampling_param=sampling_param,
             status=seq.status,
             logical_blocks=seq.logical_blocks.clone(),
-            adapter_id=seq.adapter_id,
+            adapter_name=seq.adapter_name,
             arrive_time=time.time(),
             meta=deepcopy(seq.meta))
 
@@ -137,7 +152,7 @@ class SchedulerSequence:
     logical_blocks: LogicalTokenBlocks = None
     sender_id: int = -1
     req_id: int = -1
-    adapter_id: int = -1
+    adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
 

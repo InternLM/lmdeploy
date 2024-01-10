@@ -94,10 +94,7 @@ class Engine:
             for outputs in model_inst.stream_infer(session_id,
                                                    input_ids=input_ids,
                                                    gen_config=gen_config):
-                if len(outputs) > 1:
-                    res, n_token = outputs[-2:]
-                else:
-                    res, n_token = outputs[0]
+                res, n_token = outputs[-2:]
                 self.tokenizer.decode(res, offset)
                 offset = n_token
                 now = time.perf_counter()
@@ -146,7 +143,8 @@ class Engine:
         # start threads
         for i in range(concurrency):
             t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, stream_output))
+                       args=(req_queue, res_queue, i, stream_output),
+                       daemon=True)
             t.start()
             threads.append(t)
 
