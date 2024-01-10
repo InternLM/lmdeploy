@@ -11,6 +11,7 @@ from lmdeploy.model import MODELS, SamplingParam, best_match_model
                           ('upstage/SOLAR-0-70b-16bit', 'solar'),
                           ('meta-llama/Llama-2-7b-chat-hf', 'llama-2-chat'),
                           ('THUDM/chatglm2-6b', 'chatglm2-6b'),
+                          ('01-ai/Yi-6B-200k', 'yi-200k'),
                           ('WizardLM/WizardLM-70B-V1.0', 'wizardlm'),
                           ('tiiuae/falcon-7b', 'falcon'), ('workspace', None)])
 def test_best_match_model(model_path_and_name):
