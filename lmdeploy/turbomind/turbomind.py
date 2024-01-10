@@ -17,7 +17,8 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.messages import EngineGenerationConfig, ResponseType
-from lmdeploy.model import MODELS, BaseModel, best_match_model
+from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
+                            best_match_model)
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -138,6 +139,7 @@ class TurboMind:
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
+                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
 
         engine_config = _update_engine_config(engine_config,
@@ -162,7 +164,10 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
+        if chat_template_config is not None:
+            self.model = chat_template_config.chat_template
+        else:
+            self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
@@ -343,14 +348,16 @@ class TurboMind:
         return model_comm
 
     @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        engine_config: EngineConfig = None,
-                        model_name: Optional[str] = None,
-                        model_format: Optional[str] = None,
-                        group_size: Optional[int] = None,
-                        tp: Optional[int] = None,
-                        **kwargs):
+    def from_pretrained(
+            cls,
+            pretrained_model_name_or_path: str,
+            engine_config: EngineConfig = None,
+            model_name: Optional[str] = None,
+            model_format: Optional[str] = None,
+            group_size: Optional[int] = None,
+            tp: Optional[int] = None,
+            chat_template_config: Optional[ChatTemplateConfig] = None,
+            **kwargs):
         """LMDeploy's turbomind inference engine.
 
         Args:
@@ -412,6 +419,7 @@ class TurboMind:
                    model_format=model_format,
                    group_size=group_size,
                    tp=tp,
+                   chat_template_config=chat_template_config,
                    **kwargs)
 
     def create_instance(self, cuda_stream_id=0):
