@@ -254,8 +254,7 @@ class TurboMind:
             cfg.weight_type = 'int4'
             output_format = 'w4'
             data_type = 'int4'
-            assert cfg.group_size > 0, \
-                f'group_size: {cfg.group_size} should > 0'
+            cfg.group_size = 128
         else:
             output_format = update_output_format(engine_config.model_name,
                                                  inferred_model_format,
