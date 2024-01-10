@@ -65,34 +65,44 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 # 支持的模型
 
-`LMDeploy` 支持 2 种推理引擎： `TurboMind` 和 `PyTorch`，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
+|       Model        |   Size    |
+| :----------------: | :-------: |
+|       Llama        | 7B - 65B  |
+|       Llama2       | 7B - 70B  |
+|      InternLM      | 7B - 20B  |
+| InternLM-XComposer |    7B     |
+|        QWen        | 7B - 72B  |
+|      QWen-VL       |    7B     |
+|      Baichuan      | 7B - 13B  |
+|     Baichuan2      | 7B - 13B  |
+|     Code Llama     | 7B - 34B  |
+|      ChatGLM2      |    6B     |
+|       Falcon       | 7B - 180B |
 
-不同的推理引擎在支持的模型类别、计算精度方面有所差别。用户可根据实际需求选择合适的。
+LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
-## TurboMind 支持的模型
+它们在支持的模型类别、计算精度方面有所差别。用户可参考[这里](./docs/zh_cn/supported_models/supported_models.md), 查阅每个推理引擎的能力，并根据实际需求选择合适的。
 
-|        模型        | 模型规模 | FP16/BF16 | KV INT8 | W4A16 |
-| :----------------: | :------: | :-------: | :-----: | :---: |
-|       Llama        | 7B - 65B |    Yes    |   Yes   |  Yes  |
-|       Llama2       | 7B - 70B |    Yes    |   Yes   |  Yes  |
-|      InternLM      | 7B - 20B |    Yes    |   Yes   |  Yes  |
-| InternLM-XComposer |    7B    |    Yes    |   Yes   |  Yes  |
-|        QWen        | 7B - 72B |    Yes    |   Yes   |  Yes  |
-|      QWen-VL       |    7B    |    Yes    |   Yes   |  Yes  |
-|      Baichuan      |    7B    |    Yes    |   Yes   |  Yes  |
-|     Baichuan2      |    7B    |    Yes    |   Yes   |  Yes  |
-|     Code Llama     | 7B - 34B |    Yes    |   No    |  No   |
+# 快速开始
 
-### PyTorch 支持的模型
+## 安装
 
-|   模型    | 模型规模  | FP16/BF16 | KV INT8 | W8A8 |
-| :-------: | :-------: | :-------: | :-----: | :--: |
-|   Llama   | 7B - 65B  |    Yes    |   No    | Yes  |
-|  Llama2   | 7B - 70B  |    Yes    |   No    | Yes  |
-| InternLM  | 7B - 20B  |    Yes    |   No    | Yes  |
-| Baichuan2 | 7B - 13B  |    Yes    |   No    | Yes  |
-| ChatGLM2  |    6B     |    Yes    |   No    |  No  |
-|  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
+使用 pip ( python 3.8+) 安装 LMDeploy，或者[源码安装](./docs/zh_cn/build.md)
+
+```shell
+pip install lmdeploy
+```
+
+## 离线批处理
+
+```shell
+import lmdeploy
+pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
+response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+print(response)
+```
+
+关于 pipeline 的更多推理参数说明，请参考[这里](./docs/zh_cn/inference/pipeline.md)
 
 # 用户教程
 
