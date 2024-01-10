@@ -427,7 +427,7 @@ class Puyu(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='llama2')
+@MODELS.register_module(name=['llama2', 'llama2-chat', 'llama-2-chat'])
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
