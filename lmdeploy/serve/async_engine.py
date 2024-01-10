@@ -113,6 +113,7 @@ class AsyncEngine:
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.engine.model_name)
         self.chat_template = chat_template_config.chat_template
+        self.session_len = self.engine.session_len
 
     def _build_pytorch(
             self,
@@ -152,6 +153,8 @@ class AsyncEngine:
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.model_name)
         self.chat_template = chat_template_config.chat_template
+        if self.engine.session_len is None:
+            self.session_len = self.chat_template.session_len
 
     def __call__(self,
                  prompts: List[str],
@@ -341,8 +344,7 @@ class AsyncEngine:
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
         elif self.id2step[str(session_id)] + len(
-                input_ids
-        ) + gen_config.max_new_tokens >= self.engine.session_len:
+                input_ids) + gen_config.max_new_tokens >= self.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
