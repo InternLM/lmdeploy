@@ -1,8 +1,31 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Dict
+
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
 from ..messages import SamplingParam
+
+
+class SeedManager:
+    """random seed manager."""
+
+    def __init__(self):
+        self._generators: Dict[int, torch.Generator] = dict()
+
+    def new_generator(self, seed: int, device: str = 'cuda'):
+        """new generator."""
+        return torch.Generator(device=device).manual_seed(seed)
+
+    def get(self, seed: int, device: str = 'cuda'):
+        """get generator."""
+        if seed not in self._generators:
+            generator = self.new_generator(seed, device)
+            self._generators[seed] = generator
+        return self._generators[seed]
+
+
+SEED_MANAGER = SeedManager()
 
 
 class FusedLogitsProcessor(LogitsWarper):
@@ -30,6 +53,11 @@ class FusedLogitsProcessor(LogitsWarper):
         new_scores = scores
         filter_value = -float('inf')
 
+        # temperature
+        temperature = self.sampling_param.temperature
+        if temperature is not None and temperature > 0:
+            new_scores /= temperature
+
         # top_k
         top_k_indices = None
         top_k = self.sampling_param.top_k
@@ -50,14 +78,24 @@ class FusedLogitsProcessor(LogitsWarper):
             new_scores = new_scores.masked_fill(indices_to_remove,
                                                 filter_value)
 
-        # temperature
-        temperature = self.sampling_param.temperature
-        if temperature is not None:
-            new_scores /= temperature
-
         # recovery top_k
         if top_k_indices is not None:
             output = torch.full_like(scores, filter_value)
             new_scores = torch.scatter(output, 1, top_k_indices, new_scores)
 
         return new_scores
+
+    def sampling(self, logits: torch.Tensor):
+        """sampling."""
+
+        def __random_sampling(seed, logits: torch.Tensor):
+            """random sampling."""
+            generator = SEED_MANAGER.get(seed, logits.device)
+            logits = logits.softmax(-1)
+            return torch.multinomial(logits, 1, generator=generator)[:, 0]
+
+        seed = self.sampling_param.random_seed
+        if seed is None or self.sampling_param.top_k == 1:
+            return logits.argmax(-1)
+        else:
+            return __random_sampling(seed, logits)
