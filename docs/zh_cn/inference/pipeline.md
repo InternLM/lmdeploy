@@ -163,17 +163,10 @@ print(response)
 | --------------------- | ------------- | ---------------------------------------------------------------------- | ------- |
 | model_name            | str, optional | 已部署模型的名称。                                                     | None    |
 | model_format          | str, optional | 已部署模型的布局。可以是以下值之一：`hf`, `llama`, `awq`。             | None    |
-| group_size            | int           | 在将权重量化为4位时使用的组大小。                                      | 0       |
 | tp                    | int           | 在张量并行中使用的GPU卡数量。                                          | 1       |
 | session_len           | int, optional | 序列的最大会话长度。                                                   | None    |
 | max_batch_size        | int           | 推理过程中的最大批处理大小。                                           | 128     |
-| max_context_token_num | int           | 每次前向传播中需要处理的最大令牌数量。                                 | 1       |
 | cache_max_entry_count | float         | 由k/v缓存占用的GPU内存百分比。                                         | 0.5     |
-| cache_block_seq_len   | int           | k/v块中的序列长度。                                                    | 128     |
-| cache_chunk_size      | int           | TurboMind引擎试图从GPU内存重新分配的每次的块数。                       | -1      |
-| num_tokens_per_iter   | int           | 每次迭代处理的令牌数。                                                 | 0       |
-| max_prefill_iters     | int           | 单个请求的最大预填充迭代次数。                                         | 1       |
-| use_context_fmha      | int           | 是否在上下文解码中使用fmha。                                           | 1       |
 | quant_policy          | int           | 默认为0。当k/v量化为8位时，设置为4。                                   | 0       |
 | rope_scaling_factor   | float         | 用于动态ntk的缩放因子。TurboMind遵循transformer LlamaAttention的实现。 | 0.0     |
 | use_dynamic_ntk       | bool          | 是否使用动态ntk。                                                      | False   |

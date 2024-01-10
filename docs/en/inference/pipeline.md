@@ -143,17 +143,10 @@ This class provides the configuration parameters for TurboMind backend.
 | --------------------- | ------------- | -------------------------------------------------------------------------------------------------------- | ------- |
 | model_name            | str, Optional | The name of the deployed model.                                                                          | None    |
 | model_format          | str, Optional | The layout of the deployed model. Can be one of the following values: hf, llama, awq.                    | None    |
-| group_size            | int           | The group size used when quantizing weights to 4-bit.                                                    | 0       |
 | tp                    | int           | The number of GPU cards used in tensor parallelism.                                                      | 1       |
 | session_len           | int, Optional | The maximum session length of a sequence.                                                                | None    |
 | max_batch_size        | int           | The maximum batch size during inference.                                                                 | 128     |
-| max_context_token_num | int           | The maximum number of tokens to be processed in each forward pass.                                       | 1       |
 | cache_max_entry_count | float         | The percentage of GPU memory occupied by the k/v cache.                                                  | 0.5     |
-| cache_block_seq_len   | int           | The length of a sequence in a k/v block.                                                                 | 128     |
-| cache_chunk_size      | int           | The number of blocks each time the TurboMind engine tries to realloc from GPU memory.                    | -1      |
-| num_tokens_per_iter   | int           | Number of tokens to be processed per iteration.                                                          | 0       |
-| max_prefill_iters     | int           | Maximum prefill iterations for a single request.                                                         | 1       |
-| use_context_fmha      | int           | Whether or not to use fmha in context decoding.                                                          | 1       |
 | quant_policy          | int           | Set it to 4 when k/v is quantized into 8 bits.                                                           | 0       |
 | rope_scaling_factor   | float         | Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention. | 0.0     |
 | use_dynamic_ntk       | bool          | Whether or not to use dynamic ntk.                                                                       | False   |
