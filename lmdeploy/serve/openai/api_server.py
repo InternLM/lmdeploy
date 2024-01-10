@@ -4,7 +4,7 @@ import os
 import random
 import time
 from http import HTTPStatus
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List, Literal, Optional, Union
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
@@ -23,6 +25,7 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     GenerateRequest, GenerateRequestQos, GenerateResponse, ModelCard,
     ModelList, ModelPermission, UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
+from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 class VariableInterface:
@@ -882,6 +885,10 @@ async def chat_interactive_v1(request: GenerateRequest,
 
 def serve(model_path: str,
           model_name: Optional[str] = None,
+          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+          backend_config: Optional[Union[PytorchEngineConfig,
+                                         TurbomindEngineConfig]] = None,
+          chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           instance_num: int = 64,
@@ -911,7 +918,12 @@ def serve(model_path: str,
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "internlm/internlm-chat-7b"
+            huggingface.co, such as "InternLM/internlm-chat-7b"
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (EngineConfig): beckend config. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
         instance_num (int): number of instances of turbomind model
@@ -933,11 +945,15 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
-    VariableInterface.async_engine = AsyncEngine(model_path=model_path,
-                                                 model_name=model_name,
-                                                 instance_num=instance_num,
-                                                 tp=tp,
-                                                 **kwargs)
+    VariableInterface.async_engine = AsyncEngine(
+        model_path=model_path,
+        model_name=model_name,
+        backend=backend,
+        backend_config=backend_config,
+        chat_template_config=chat_template_config,
+        instance_num=instance_num,
+        tp=tp,
+        **kwargs)
 
     if qos_config_path:
         try:

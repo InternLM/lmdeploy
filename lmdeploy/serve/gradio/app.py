@@ -1,10 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Literal, Optional, Union
+
+from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
+from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 def run(model_path_or_server: str,
         server_name: str = '0.0.0.0',
         server_port: int = 6006,
         batch_size: int = 32,
+        backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+        backend_config: Optional[Union[PytorchEngineConfig,
+                                       TurbomindEngineConfig]] = None,
+        chat_template_config: Optional[ChatTemplateConfig] = None,
         tp: int = 1,
         model_name: str = None,
         **kwargs):
@@ -19,6 +28,11 @@ def run(model_path_or_server: str,
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         batch_size (int): batch size for running Turbomind directly
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (EngineConfig): beckend config. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         tp (int): tensor parallel for Turbomind
     """
     if ':' in model_path_or_server:
@@ -33,9 +47,12 @@ def run(model_path_or_server: str,
     else:
         from lmdeploy.serve.gradio.turbomind_coupled import run_local
         run_local(model_path_or_server,
-                  model_name=model_name,
                   server_name=server_name,
                   server_port=server_port,
+                  backend=backend,
+                  backend_config=backend_config,
+                  chat_template_config=chat_template_config,
+                  model_name=model_name,
                   batch_size=batch_size,
                   tp=tp,
                   **kwargs)

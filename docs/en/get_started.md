@@ -14,14 +14,12 @@ pip install lmdeploy
 
 ```shell
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b", tp=1)
+pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-Tensor parallelism is supported, and can be invoked by setting the `tp` parameter.
-
-<!-- For more information on inference pipeline parameters, please refer to [here(TODO)](<>). -->
+For more information on inference pipeline parameters, please refer to [here](./inference/pipeline.md).
 
 ## Serving
 
