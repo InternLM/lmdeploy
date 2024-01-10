@@ -155,6 +155,8 @@ class AsyncEngine:
         self.chat_template = chat_template_config.chat_template
         if self.engine.session_len is None:
             self.session_len = self.chat_template.session_len
+        else:
+            self.session_len = self.engine.session_len
 
     def __call__(self,
                  prompts: List[str],

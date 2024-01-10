@@ -77,28 +77,27 @@ pip install triton>=2.1.0
 ```
 
 ```python
-if __name__ == '__main__':
-    import lmdeploy
-    from lmdeploy.messages import GenerationConfig
-    from lmdeploy.pytorch import EngineConfig
+import lmdeploy
+from lmdeploy.messages import GenerationConfig
+from lmdeploy.pytorch import EngineConfig
 
-    backend_config = EngineConfig(tp=2)
-    gen_config = GenerationConfig(top_p=0.8,
-                                  top_k=40,
-                                  temperature=0.8,
-                                  max_new_tokens=1024)
-    pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                             backend='pytorch',
-                             backend_config=backend_config)
-    prompts = [[{
-        'role': 'user',
-        'content': 'Hi, pls intro yourself'
-    }], [{
-        'role': 'user',
-        'content': 'Shanghai is'
-    }]]
-    response = pipe(prompts, gen_config=gen_config)
-    print(response)
+backend_config = EngineConfig(session_len=2024)
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                         backend='pytorch',
+                         backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': 'Hi, pls intro yourself'
+}], [{
+    'role': 'user',
+    'content': 'Shanghai is'
+}]]
+response = pipe(prompts, gen_config=gen_config)
+print(response)
 ```
 
 ## `pipeline` API

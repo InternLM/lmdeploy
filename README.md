@@ -100,7 +100,7 @@ Please overview [getting_started](./docs/en/get_started.md) section for the basi
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - Inference pipeline
+  - [Inference pipeline](./docs/en/inference/pipeline.md)
   - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
   - Inference Engine - PyTorch
   - [Serving](docs/en/serving/restful_api.md)
