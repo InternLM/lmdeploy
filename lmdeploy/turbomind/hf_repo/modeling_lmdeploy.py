@@ -162,8 +162,8 @@ class LMDeployForCausalLM(PreTrainedModel):
                     input_ids=[input_ids],
                     **kwargs,
             ):
-                res, tokens = outputs[0]
-                yield res, tokens
+                status, res, tokens = outputs
+                yield status, res, tokens
 
     def chat(
         self,
@@ -210,10 +210,10 @@ class LMDeployForCausalLM(PreTrainedModel):
             _nth_round = session._nth_round
             response_size = 0
 
-            for res, tokens in self.generate(input_ids,
-                                             session=session,
-                                             **gen_kwargs):
-                response = self.tm_model.tokenizer.decode(res.tolist(),
+            for status, res, tokens in self.generate(input_ids,
+                                                     session=session,
+                                                     **gen_kwargs):
+                response = self.tm_model.tokenizer.decode(res,
                                                           offset=response_size)
                 if response.endswith('�'):
                     continue

@@ -1,10 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Optional
+from typing import Literal, Optional, Union
+
+from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
+from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 def pipeline(model_path: str,
              model_name: Optional[str] = None,
+             backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+             backend_config: Optional[Union[TurbomindEngineConfig,
+                                            PytorchEngineConfig]] = None,
+             chat_template_config: Optional[ChatTemplateConfig] = None,
              instance_num: int = 32,
              tp: int = 1,
              log_level='ERROR',
@@ -21,19 +29,22 @@ def pipeline(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (EngineConfig): beckend config. Default to none.
         instance_num (int): instance numbers to be created
         tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Examples:
         >>> import lmdeploy
-        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1', 'internlm-chat-7b')
+        >>> pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
     """ # noqa E501
@@ -41,6 +52,9 @@ def pipeline(model_path: str,
     os.environ['TM_LOG_LEVEL'] = log_level
     return AsyncEngine(model_path,
                        model_name=model_name,
+                       backend=backend,
+                       backend_config=backend_config,
+                       chat_template_config=chat_template_config,
                        instance_num=instance_num,
                        tp=tp,
                        **kwargs)
@@ -67,11 +81,11 @@ def serve(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         server_name (str): host ip for serving
         server_port (int): server port
@@ -84,7 +98,7 @@ def serve(model_path: str,
 
     Examples:
         >>> import lmdeploy
-        >>> client = lmdeploy.serve('InternLM/internlm-chat-7b-v1_1', 'internlm-chat-7b')
+        >>> client = lmdeploy.serve('internlm/internlm-chat-7b', 'internlm-chat-7b')
         >>> for output in client.chat('hi', 1):
         ...    print(output)
     """ # noqa E501

@@ -211,7 +211,7 @@ The template of the configuration file is located at: `lmdeploy/server/qos_engin
 Upon starting the api_server, pass the configuration file and its path using the `--qos_config_path` flag. An example is illustrated below:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server InternLM/internlm-chat-7b --server_port 8000 --qos_config_path lmdeploy/serve/qos_engine/qos_config.json.template
+CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server internlm/internlm-chat-7b --server_port 8000 --qos_config_path lmdeploy/serve/qos_engine/qos_config.json.template
 ```
 
 ### Contributor

@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional
+
 from pydantic.dataclasses import dataclass
 
 
@@ -25,12 +27,12 @@ class EngineConfig:
         use_logn_attn (bool): whether or not to use log attn: default to False​
     """  # noqa: E501
 
-    model_name: str = None
-    model_format: str = None
+    model_name: Optional[str] = None
+    model_format: Optional[str] = None
     tp: int = 1
-    session_len: int = None
+    session_len: Optional[int] = None
     max_batch_size: int = 128
-    group_size: int = 128
+    group_size: int = 0
     max_context_token_num: int = 1
     cache_max_entry_count: float = 0.5
     cache_block_seq_len: int = 128

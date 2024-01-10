@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
@@ -39,7 +40,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.tm_model.model_name]
+    return [VariableInterface.async_engine.engine.model_name]
 
 
 @app.get('/v1/models')
@@ -270,18 +271,21 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     request_id = str(request.session_id)
     created_time = int(time.time())
 
-    result_generator = VariableInterface.async_engine.generate(
-        request.messages,
-        request.session_id,
-        True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
-        request_output_len=request.max_tokens if request.max_tokens else 512,
-        stop=request.stop,
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens if request.max_tokens else 512,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
+        ignore_eos=request.ignore_eos)
+
+    result_generator = VariableInterface.async_engine.generate(
+        request.messages,
+        request.session_id,
+        gen_config=gen_config,
+        stream_response=True,  # always use stream to enable batching
+        sequence_start=True,
+        sequence_end=True,
+        stop=request.stop,
         do_preprocess=not isinstance(request.messages,
                                      str),  # text completion for string input
     )
@@ -568,22 +572,23 @@ async def completions_v1(request: CompletionRequest,
     created_time = int(time.time())
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        top_k=request.top_k,
+        top_p=request.top_p,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
             request.prompt[i],
             request.session_id + i,
-            True,  # always use stream to enable batching
+            gen_config=gen_config,
+            stream_response=True,  # always use stream to enable batching
             sequence_start=True,
             sequence_end=True,
-            request_output_len=request.max_tokens
-            if request.max_tokens else 512,
             stop=False,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            temperature=request.temperature,
-            repetition_penalty=request.repetition_penalty,
-            ignore_eos=request.ignore_eos,
             do_preprocess=False)
         generators.append(result_generator)
 
@@ -702,7 +707,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.model.get_prompt(
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(
                 prompt, sequence_start=add_bos)
         input_ids = VariableInterface.async_engine.tokenizer.encode(
             prompt, add_bos=add_bos)
@@ -829,19 +834,21 @@ async def chat_interactive_v1(request: GenerateRequest,
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
     sequence_end = not request.interactive_mode
 
-    generation = async_engine.generate(
-        request.prompt,
-        request.session_id,
-        stream_response=True,  # always use stream to enable batching
-        sequence_start=sequence_start,
-        sequence_end=sequence_end,
-        request_output_len=request.request_output_len,
+    gen_config = GenerationConfig(
+        max_new_tokens=request.request_output_len,
         top_p=request.top_p,
         top_k=request.top_k,
-        stop=request.stop,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos)
+    generation = async_engine.generate(
+        request.prompt,
+        request.session_id,
+        gen_config=gen_config,
+        stream_response=True,  # always use stream to enable batching
+        sequence_start=sequence_start,
+        sequence_end=sequence_end,
+        stop=request.stop)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
@@ -900,11 +907,11 @@ def serve(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b"
+            huggingface.co, such as "internlm/internlm-chat-7b"
         server_name (str): host ip for serving
         server_port (int): server port
         instance_num (int): number of instances of turbomind model
