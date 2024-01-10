@@ -77,27 +77,28 @@ pip install triton>=2.1.0
 ```
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.pytorch import EngineConfig
+if __name__ == '__main__':
+    import lmdeploy
+    from lmdeploy.messages import GenerationConfig
+    from lmdeploy.pytorch import EngineConfig
 
-backend_config = EngineConfig(session_len=2048)
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend='pytorch',
-                         backend_config=backend_config)
-prompts = [[{
-    'role': 'user',
-    'content': 'Hi, pls intro yourself'
-}], [{
-    'role': 'user',
-    'content': 'Shanghai is'
-}]]
-response = pipe(prompts, gen_config=gen_config)
-print(response)
+    backend_config = EngineConfig(tp=2)
+    gen_config = GenerationConfig(top_p=0.8,
+                                  top_k=40,
+                                  temperature=0.8,
+                                  max_new_tokens=1024)
+    pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                             backend='pytorch',
+                             backend_config=backend_config)
+    prompts = [[{
+        'role': 'user',
+        'content': 'Hi, pls intro yourself'
+    }], [{
+        'role': 'user',
+        'content': 'Shanghai is'
+    }]]
+    response = pipe(prompts, gen_config=gen_config)
+    print(response)
 ```
 
 ## `pipeline` API
@@ -199,3 +200,11 @@ print(response)
 | random_seed        | int         | 采样令牌时使用的种子。                                | None    |
 | stop_words         | List\[str\] | 停止进一步生成令牌的词。                              | None    |
 | bad_words          | List\[str\] | 引擎永远不会生成的词。                                | None    |
+
+## FAQs
+
+- *RuntimeError: context has already been set*. 如果你在使用 tp>1 和 pytorch 后端的时候，遇到了这个错误。请确保 python 脚本中有下面内容作为入口
+  ```python
+  if __name__ == '__main__':
+  ```
+  一般来说，在多线程或多进程上下文中，可能需要确保初始化代码只执行一次。这时候，`if __name__ == '__main__':` 可以帮助确保这些初始化代码只在主程序执行，而不会在每个新创建的进程或线程中重复执行。

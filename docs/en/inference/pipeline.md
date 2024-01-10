@@ -77,27 +77,28 @@ pip install triton>=2.1.0
 ```
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.pytorch import EngineConfig
+if __name__ == '__main__':
+    import lmdeploy
+    from lmdeploy.messages import GenerationConfig
+    from lmdeploy.pytorch import EngineConfig
 
-backend_config = EngineConfig(session_len=2048)
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend='pytorch',
-                         backend_config=backend_config)
-prompts = [[{
-    'role': 'user',
-    'content': 'Hi, pls intro yourself'
-}], [{
-    'role': 'user',
-    'content': 'Shanghai is'
-}]]
-response = pipe(prompts, gen_config=gen_config)
-print(response)
+    backend_config = EngineConfig(tp=2)
+    gen_config = GenerationConfig(top_p=0.8,
+                                  top_k=40,
+                                  temperature=0.8,
+                                  max_new_tokens=1024)
+    pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
+                             backend='pytorch',
+                             backend_config=backend_config)
+    prompts = [[{
+        'role': 'user',
+        'content': 'Hi, pls intro yourself'
+    }], [{
+        'role': 'user',
+        'content': 'Shanghai is'
+    }]]
+    response = pipe(prompts, gen_config=gen_config)
+    print(response)
 ```
 
 ## `pipeline` API
@@ -199,3 +200,11 @@ This class contains the generation parameters used by inference engines.
 | random_seed        | int         | Seed used when sampling a token.                                                                                      | None    |
 | stop_words         | List\[str\] | Words that stop generating further tokens.                                                                            | None    |
 | bad_words          | List\[str\] | Words that the engine will never generate.                                                                            | None    |
+
+## FAQs
+
+- *RuntimeError: context has already been set*. If you got this for tp>1 in pytorch backend. Please make sure the python script has following
+  ```python
+  if __name__ == '__main__':
+  ```
+  Generally, in the context of multi-threading or multi-processing, it might be necessary to ensure that initialization code is executed only once. In this case, `if __name__ == '__main__':` can help to ensure that these initialization codes are run only in the main program, and not repeated in each newly created process or thread.
