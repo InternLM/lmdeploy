@@ -4,23 +4,25 @@ from lmdeploy.model import MODELS, SamplingParam, best_match_model
 
 
 @pytest.mark.parametrize('model_path_and_name',
-                         [('internlm/internlm-chat-7b', 'internlm-chat-7b'),
-                          ('Qwen/Qwen-7B-Chat', 'qwen-7b'),
-                          ('baichuan-inc/Baichuan-7B', 'baichuan-7b'),
-                          ('codellama/CodeLlama-7b-hf', 'codellama'),
-                          ('upstage/SOLAR-0-70b-16bit', 'solar'),
-                          ('meta-llama/Llama-2-7b-chat-hf', 'llama-2-chat'),
-                          ('THUDM/chatglm2-6b', 'chatglm2-6b'),
-                          ('01-ai/Yi-6B-200k', 'yi-200k'),
-                          ('WizardLM/WizardLM-70B-V1.0', 'wizardlm'),
-                          ('tiiuae/falcon-7b', 'falcon'), ('workspace', None)])
-def test_best_match_model(model_path_and_name):
-    deduced_name = best_match_model(model_path_and_name[0])
+                         [('internlm/internlm-chat-7b', ['internlm-chat-7b']),
+                          ('Qwen/Qwen-7B-Chat', ['qwen-7b']),
+                          ('baichuan-inc/Baichuan-7B', ['baichuan-7b']),
+                          ('codellama/CodeLlama-7b-hf', ['codellama']),
+                          ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
+                          ('meta-llama/Llama-2-7b-chat-hf', ['llama-2-chat']),
+                          ('THUDM/chatglm2-6b', ['chatglm2-6b']),
+                          ('01-ai/Yi-6B-200k', ['yi-200k']),
+                          ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
+                          ('tiiuae/falcon-7b', ['falcon']),
+                          ('workspace', [None])])
+@pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
+def test_best_match_model(model_path_and_name, suffix):
+    deduced_name = best_match_model(model_path_and_name[0] + suffix)
     if deduced_name is not None:
-        assert deduced_name[0] == model_path_and_name[
+        assert deduced_name[0] in model_path_and_name[
             1], f'expect {model_path_and_name[1]}, but got {deduced_name[0]}'
     else:
-        assert deduced_name == model_path_and_name[
+        assert deduced_name in model_path_and_name[
             1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
 
 

@@ -675,7 +675,7 @@ class ChatGLM2(BaseModel):
         return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
 
 
-@MODELS.register_module(name='solar')
+@MODELS.register_module(name=['solar', 'solar-70b'])
 class SOLAR(BaseModel):
     """Chat template of SOLAR model.
 
@@ -883,7 +883,7 @@ class Yi(BaseModel):
         return ret
 
 
-def best_match_model(query: str, similarity_cutoff: float = 0.4):
+def best_match_model(query: str, similarity_cutoff: float = 0.46):
     """Get the model that matches the query.
 
     Args:
