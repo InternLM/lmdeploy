@@ -58,6 +58,13 @@ class FusedLogitsProcessor(LogitsWarper):
         if temperature is not None and temperature > 0:
             new_scores /= temperature
 
+        # bad words
+        bad_words = self.sampling_param.bad_words
+        if bad_words:
+            bad_words_bias = new_scores.new_zeros(new_scores.size(1))
+            bad_words_bias[bad_words] = filter_value
+            new_scores += bad_words_bias[None]
+
         # top_k
         top_k_indices = None
         top_k = self.sampling_param.top_k
