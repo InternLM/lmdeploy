@@ -274,6 +274,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     request_id = str(request.session_id)
     created_time = int(time.time())
 
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
+
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens if request.max_tokens else 512,
         top_p=request.top_p,
@@ -577,6 +580,8 @@ async def completions_v1(request: CompletionRequest,
     created_time = int(time.time())
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens if request.max_tokens else 512,
         top_k=request.top_k,
@@ -839,6 +844,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     async_engine = VariableInterface.async_engine
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
     sequence_end = not request.interactive_mode
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
 
     gen_config = GenerationConfig(
         max_new_tokens=request.request_output_len,
