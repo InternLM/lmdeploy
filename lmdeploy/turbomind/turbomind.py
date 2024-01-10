@@ -16,8 +16,9 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineGenerationConfig
-from lmdeploy.model import MODELS, BaseModel, best_match_model
+from lmdeploy.messages import EngineGenerationConfig, ResponseType
+from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
+                            best_match_model)
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -138,6 +139,7 @@ class TurboMind:
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
+                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
 
         engine_config = _update_engine_config(engine_config,
@@ -162,7 +164,10 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
+        if chat_template_config is not None:
+            self.model = chat_template_config.chat_template
+        else:
+            self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
@@ -254,8 +259,7 @@ class TurboMind:
             cfg.weight_type = 'int4'
             output_format = 'w4'
             data_type = 'int4'
-            assert cfg.group_size > 0, \
-                f'group_size: {cfg.group_size} should > 0'
+            cfg.group_size = 128
         else:
             output_format = update_output_format(engine_config.model_name,
                                                  inferred_model_format,
@@ -344,14 +348,16 @@ class TurboMind:
         return model_comm
 
     @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        engine_config: EngineConfig = None,
-                        model_name: Optional[str] = None,
-                        model_format: Optional[str] = None,
-                        group_size: Optional[int] = None,
-                        tp: Optional[int] = None,
-                        **kwargs):
+    def from_pretrained(
+            cls,
+            pretrained_model_name_or_path: str,
+            engine_config: EngineConfig = None,
+            model_name: Optional[str] = None,
+            model_format: Optional[str] = None,
+            group_size: Optional[int] = None,
+            tp: Optional[int] = None,
+            chat_template_config: Optional[ChatTemplateConfig] = None,
+            **kwargs):
         """LMDeploy's turbomind inference engine.
 
         Args:
@@ -365,7 +371,7 @@ class TurboMind:
                       "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "InternLM/internlm-chat-7b",
+                      on huggingface.co, such as "internlm/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
             model_name (str): needed when pretrained_model_name_or_path is c)
@@ -376,6 +382,13 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
+        if engine_config is not None and engine_config.model_name is not None:
+            if model_name is None:
+                model_name = engine_config.model_name
+            else:
+                assert model_name == engine_config.model_name, 'Got different'
+                f' model names. model_name: {model_name}, engine_config model '
+                f'name: {engine_config.model_name}'
         # try fuzzy matching to get a model_name
         if model_name is None and model_source == ModelSource.HF_MODEL:
             potential_names = best_match_model(pretrained_model_name_or_path)
@@ -406,6 +419,7 @@ class TurboMind:
                    model_format=model_format,
                    group_size=group_size,
                    tp=tp,
+                   chat_template_config=chat_template_config,
                    **kwargs)
 
     def create_instance(self, cuda_stream_id=0):
@@ -505,6 +519,29 @@ class TurboMindInstance:
                 f'kwargs {k} is deprecated for inference, '
                 'use GenerationConfig instead.')
         return config
+
+    def end(self, session_id: int):
+        """End the given session."""
+        input_ids = [self.tm_model.tokenizer.eos_token_id]
+        end_generator = self.tm_model.create_instance()
+        for outputs in end_generator.stream_infer(session_id,
+                                                  input_ids,
+                                                  request_output_len=0,
+                                                  sequence_start=False,
+                                                  sequence_end=True):
+            pass
+
+    def cancel(self, session_id: int):
+        """Stop current streaming inference."""
+        input_ids = [self.tm_model.tokenizer.eos_token_id]
+        stop_generator = self.tm_model.create_instance()
+        for outputs in stop_generator.stream_infer(session_id,
+                                                   input_ids,
+                                                   request_output_len=0,
+                                                   sequence_start=False,
+                                                   sequence_end=False,
+                                                   stop=True):
+            pass
 
     def prepare_inputs(self,
                        session_id,
@@ -694,17 +731,18 @@ class TurboMindInstance:
             sequence_length -= seq_start.to(sequence_length.device)
 
             outputs = []
+            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs.append((output[:-1], len_ - 1))
+                    outputs = (status, output[:-1].tolist(), len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs.append((output[:-1], len_))
+                    outputs = (status, output[:-1].tolist(), len_)
                 else:
-                    outputs.append((output, len_))
+                    outputs = (status, output.tolist(), len_)
             yield outputs
 
             if finish:
@@ -785,17 +823,18 @@ class TurboMindInstance:
             sequence_length -= seq_start.to(sequence_length.device)
 
             outputs = []
+            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs.append((output[:-1], len_ - 1))
+                    outputs = (status, output[:-1].tolist(), len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs.append((output[:-1], len_))
+                    outputs = (status, output[:-1].tolist(), len_)
                 else:
-                    outputs.append((output, len_))
+                    outputs = (status, output.tolist(), len_)
             yield outputs
 
             if finish:

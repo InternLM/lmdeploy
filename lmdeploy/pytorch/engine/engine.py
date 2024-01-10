@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -7,7 +8,7 @@ from typing import Any, Dict, List
 
 import torch
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, ResponseType
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -18,8 +19,7 @@ from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor
 from .model_agent import AutoModelAgent, ModelInputs
-from .request import (Request, RequestManager, RequestType, Response,
-                      ResponseType)
+from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
 
@@ -779,6 +779,31 @@ class EngineInstance:
                                           f'with error: {resp.type}')):
                 self.owned_sessions.append(session_id)
 
+    async def async_stream_infer(self,
+                                 session_id: int,
+                                 input_ids: List[int],
+                                 gen_config: EngineGenerationConfig = None,
+                                 **kwargs):
+        """Send stream inference request.
+
+        Args:
+            session_id (int): The session id.
+            input_ids (List[int]): The input token ids.
+            request_output_len (int): The max output length of this request.
+            gen_config (EngineGenerationConfig): The sampling parameters.
+
+        Yields:
+            int: Error flags. 0 if success.
+            List[int]: The streaming output tokens.
+            int: The number of the output tokens.
+        """
+        for item in self.stream_infer(session_id=session_id,
+                                      input_ids=input_ids,
+                                      gen_config=gen_config,
+                                      **kwargs):
+            await asyncio.sleep(0)
+            yield item
+
     def stream_infer(self,
                      session_id: int,
                      input_ids: List[int],
@@ -791,7 +816,6 @@ class EngineInstance:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
             request_output_len (int): The max output length of this request.
-            step (int): No use for now.
             gen_config (EngineGenerationConfig): The sampling parameters.
 
         Yields:
@@ -817,7 +841,7 @@ class EngineInstance:
         token_ids = []
         while True:
             if not self.engine.loop_threads.is_alive():
-                yield (1, [], 0)
+                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
                 break
 
             resp = self.req_sender.recv(req_id)
@@ -825,13 +849,13 @@ class EngineInstance:
                 continue
             if resp.type == ResponseType.SUCCESS:
                 token_ids += resp.data['token_ids']
-                yield (0, token_ids, len(token_ids))
+                yield (resp.type, token_ids, len(token_ids))
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
-                yield (0, token_ids, len(token_ids))
+                yield (resp.type, token_ids, len(token_ids))
                 break
             else:
-                yield (1, [], 0)
+                yield (resp.type, [], 0)
                 break
 
     def infer(self,

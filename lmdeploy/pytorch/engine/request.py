@@ -5,6 +5,7 @@ from queue import Empty, Queue
 from threading import Lock, Thread, ThreadError
 from typing import Any, Callable, ClassVar, Dict, List
 
+from lmdeploy.messages import ResponseType
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -19,17 +20,6 @@ class RequestType(enum.Enum):
     END_SESSION = enum.auto()
     STOP_ENGINE = enum.auto()
     RESUME_ENGINE = enum.auto()
-
-
-class ResponseType(enum.Enum):
-    """Response type."""
-
-    SUCCESS = enum.auto()
-    FINISH = enum.auto()
-    ENGINE_STOP_ERROR = enum.auto()
-    SESSION_REPEAT = enum.auto()
-    SESSION_NOT_EXIST = enum.auto()
-    HANDLER_NOT_EXIST = enum.auto()
 
 
 @dataclass

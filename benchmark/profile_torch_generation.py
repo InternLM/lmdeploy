@@ -52,10 +52,7 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         for outputs in chatbot.stream_infer(session_id,
                                             input_ids=input_ids,
                                             gen_config=gen_config):
-            if len(outputs) > 1:
-                _, n_token = outputs[-2:]
-            else:
-                _, n_token = outputs[0]
+            _, n_token = outputs[-2:]
             now = time.perf_counter()
             if n_prev_token != n_token:
                 token_latency_stats[n_prev_token] = np.round(now - prev, 3)
