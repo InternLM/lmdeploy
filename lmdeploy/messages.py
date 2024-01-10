@@ -54,12 +54,10 @@ class EngineGenerationConfig(GenerationConfig):
                 assert isinstance(words, List) and \
                     all(isinstance(elem, str) for elem in words), \
                     f'stop_words must be a list of str but got {type(words)}'
-                token_ids = tokenizer(words).input_ids
-                if sum(len(_) for _ in token_ids) != len(words):
-                    logger.warning(f'words token num over 1: '
-                                   f'token_ids({token_ids}), words({words})')
-                    return None
-                return [token_id[0] for token_id in token_ids]
+                indexes = []
+                for word in words:
+                    indexes += tokenizer.indexes_containing_token(word)
+                return indexes
             return None
 
         return EngineGenerationConfig(
