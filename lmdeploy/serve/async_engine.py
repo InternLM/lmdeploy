@@ -333,7 +333,7 @@ class AsyncEngine:
             self.id2step[str(session_id)] = step
         if gen_config is None:
             gen_config = GenerationConfig()
-        if isinstance(gen_config, GenerationConfig):
+        if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
         prompt = messages
