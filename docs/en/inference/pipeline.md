@@ -113,7 +113,6 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 | backend              | Literal\['turbomind', 'pytorch'\]                    | Specifies the backend to use, either turbomind or pytorch.                                                                           | 'turbomind' |
 | backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None        |
 | chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None        |
-| instance_num         | int                                                  | The number of instances to be created for handling concurrent requests.                                                              | 32          |
 | tp                   | int                                                  | Number of tensor parallelunits. Will be deprecated later, please use backend_config.                                                 | 1           |
 | log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'     |
 
