@@ -5,6 +5,10 @@ LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
 # llama
 MODULE_MAP = {
+    'transformers.models.llama.modeling_llama.LlamaFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
+    'transformers.models.llama.modeling_llama.LlamaSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaAttention',
     'transformers.models.llama.modeling_llama.LlamaModel':
@@ -79,4 +83,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'modeling_internlm.InternLMMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+})
+
+# peft
+MODULE_MAP.update({
+    'peft.tuners.lora.layer.Linear':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
 })

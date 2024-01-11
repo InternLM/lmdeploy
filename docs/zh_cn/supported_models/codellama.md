@@ -88,9 +88,8 @@ TBD
 启动 sever 的方式是：
 
 ```shell
-# --instance_num: turbomind推理实例的个数。可理解为支持的最大并发数
 # --tp: 在 tensor parallel时，使用的GPU数量
-lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --tp 1
 ```
 
 打开 `http://{server_ip}:{server_port}`，即可访问 swagger，查阅 RESTful API 的详细信息。

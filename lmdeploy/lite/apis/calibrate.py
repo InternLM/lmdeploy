@@ -119,6 +119,11 @@ def calibrate(model: str,
             Defaults to './work_dir'.
         device (str, optional): The device to be used for calculation.
             Defaults to 'cuda'.
+
+    Returns:
+        model (nn.Module): The loaded huggingface model.
+        tokenizer : The loaded hugginface tokenizer.
+        work_dir (str): The working directory for outputs.
     """
 
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \

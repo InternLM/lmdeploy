@@ -49,7 +49,6 @@ class SubCliServe(object):
                    model_name: Optional[str] = None,
                    server_name: str = '0.0.0.0',
                    server_port: int = 23333,
-                   instance_num: int = 64,
                    tp: int = 1,
                    allow_origins: List[str] = ['*'],
                    allow_credentials: bool = True,
@@ -69,14 +68,13 @@ class SubCliServe(object):
                         "InternLM/internlm-chat-20b-4bit",
                         "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                        on huggingface.co, such as "InternLM/internlm-chat-7b",
+                        on huggingface.co, such as "internlm/internlm-chat-7b",
                         "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                         and so on.
             model_name (str): needed when model_path is a pytorch model on
-                huggingface.co, such as "InternLM/internlm-chat-7b"
+                huggingface.co, such as "internlm/internlm-chat-7b"
             server_name (str): host ip for serving
             server_port (int): server port
-            instance_num (int): number of instances of turbomind model
             tp (int): tensor parallel
             allow_origins (List[str]): a list of allowed origins for CORS
             allow_credentials (bool): whether to allow credentials for CORS
@@ -90,7 +88,6 @@ class SubCliServe(object):
                        model_name=model_name,
                        server_name=server_name,
                        server_port=server_port,
-                       instance_num=instance_num,
                        tp=tp,
                        allow_origins=allow_origins,
                        allow_credentials=allow_credentials,

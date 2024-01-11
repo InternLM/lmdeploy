@@ -7,6 +7,9 @@ class SubCliLite(object):
     def auto_awq(self,
                  model: str,
                  work_dir: str,
+                 calib_dataset: str = 'c4',
+                 calib_samples: int = 128,
+                 calib_seqlen: int = 2048,
                  w_bits: int = 4,
                  w_sym: bool = False,
                  w_group_size: int = 128,
@@ -16,6 +19,12 @@ class SubCliLite(object):
         Args:
             model (str): The path of model in hf format.
             work_dir (str): The working directory to save results.
+            calib_dataset (str, optional): The calibration dataset name.
+                Defaults to 'c4'.
+            calib_samples (int, optional): The number of samples for
+                calibration. Defaults to 128.
+            calib_seqlen (int, optional): The sequence length for calibration.
+                Defaults to 2048.
             w_bits (int): Bit number for weight quantization.
             w_sym (bool): Whether to do symmetric quantization.
             w_group_size (int): Group size for weight quantization statistics.

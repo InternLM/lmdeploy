@@ -25,6 +25,13 @@
    benchmark/profile_api_server.md
    benchmark/profile_triton_server.md
 
+.. _支持的模型:
+.. toctree::
+   :maxdepth: 1
+   :caption: 模型列表
+
+   supported_models/supported_models.md
+
 .. _推理:
 .. toctree::
    :maxdepth: 1
@@ -58,6 +65,7 @@
    :caption: 进阶指南
 
    serving/qos.md
+   advance/pytorch_new_model.md
 
 
 索引与表格

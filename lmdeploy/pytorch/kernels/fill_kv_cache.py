@@ -179,11 +179,20 @@ def _create_fill_cache_info(is_decoding: bool, block_size: int,
     4. block_offset1d: which block we want to perform the filling.
     """
     if not is_decoding:
-        return _prefilling_cache_info(block_size, seq_length, block_offsets,
-                                      history_lengths, device)
+        cache_info = _prefilling_cache_info(block_size, seq_length,
+                                            block_offsets, history_lengths,
+                                            device)
     else:
-        return _decoding_cache_info(block_size, start_loc, seq_length,
-                                    block_offsets, history_lengths, device)
+        cache_info = _decoding_cache_info(block_size, start_loc, seq_length,
+                                          block_offsets, history_lengths,
+                                          device)
+
+    state_len = cache_info['state_len']
+    block_offsets1d = cache_info['block_offsets1d']
+    assert state_len.size(0) == block_offsets1d.size(0), (
+        f'len(state_len)=={state_len.size(0)} not equal to '
+        f'len(block_offsets1d)=={block_offsets1d.size(0)}')
+    return cache_info
 
 
 @torch.inference_mode()

@@ -217,7 +217,7 @@ curl -X POST http://localhost/v1/completions_qos \
 启动api_server时，通过`--qos_config_path`，将配置文件及路径传入，示例如下：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server InternLM/internlm-chat-7b --server_port 8000 --qos_config_path lmdeploy/serve/qos_engine/qos_config.json.template
+CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server internlm/internlm-chat-7b --server_port 8000 --qos_config_path lmdeploy/serve/qos_engine/qos_config.json.template
 ```
 
 ### 贡献者

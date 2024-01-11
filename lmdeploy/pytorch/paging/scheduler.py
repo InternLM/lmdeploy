@@ -2,10 +2,11 @@
 # modify from: https://github.com/vllm-project/vllm
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Set, Union
 
 from lmdeploy.utils import get_logger
 
+from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession
 from .block_manager import BlockManager
@@ -13,6 +14,7 @@ from .block_manager import BlockManager
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
+AdapterList = List[SchedulerAdapter]
 
 
 def _find_seq_with_session_id(group: SeqList, session_id: int):
@@ -27,6 +29,7 @@ class SchedulerOutput:
     swap_in_map: Dict[int, int]
     swap_out_map: Dict[int, int]
     copy_map: Dict[int, int]
+    adapters: AdapterList
 
 
 class Scheduler:
@@ -46,6 +49,7 @@ class Scheduler:
         self.running: SeqList = []
         self.hanging: SeqList = []
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
+        self.actived_adapters: Set[str] = set()
 
         self.block_manager = BlockManager(
             cache_config.num_gpu_blocks,
@@ -103,6 +107,20 @@ class Scheduler:
                 self.scheduler_config.max_request_output_len
         self.waiting.append(seq)
 
+    def add_adapter(self, adapter_path: str, adapter_name: str):
+        """Add adapter.
+
+        Args:
+            adapter_path (str): The path of adapter.
+            adapter_name (str): The name of the adapter.
+        """
+        adapter = ADAPTER_MANAGER.add_adapter_from_pretrained(
+            adapter_path, adapter_name=adapter_name)
+        self.block_manager.allocate_adapter(adapter)
+        block_table = self.block_manager.get_block_table(
+            adapter) - self.block_manager.num_gpu_blocks
+        return adapter.build_weight_map(block_table)
+
     def _schedule_prefill(self):
         """Schedule for prefilling."""
 
@@ -113,6 +131,9 @@ class Scheduler:
         swap_in_map: Dict[int, int] = dict()
         copy_map: Dict[int, int] = dict()
         running: SeqList = []
+        required_adapters = set(seq.adapter_name for seq in self.running)
+        max_adapters = self.scheduler_config.max_active_adapters - len(
+            required_adapters)
 
         def _to_running(seq: SchedulerSequence):
             """to running."""
@@ -133,12 +154,40 @@ class Scheduler:
             self.waiting = sorted(self.waiting,
                                   key=lambda seq: seq.arrive_time)
 
+        def _active_adapter(adapter_name):
+            """active adapter of a seq."""
+            if adapter_name is None:
+                required_adapters.add(adapter_name)
+                return
+            if adapter_name not in required_adapters:
+                adapter = ADAPTER_MANAGER.get_adapter(adapter_name)
+                if not adapter.is_actived():
+                    success, tmp_map = self.block_manager.try_swap_in(adapter)
+                    assert success
+                    swap_in_map.update(tmp_map)
+            required_adapters.add(adapter_name)
+
+        def _deactive_adapter(adapter_name):
+            """deactive_adapter."""
+            if adapter_name is None:
+                return
+            adapter = ADAPTER_MANAGER.get_adapter(adapter_name)
+            if adapter.is_actived():
+                success, tmp_map = self.block_manager.try_swap_out(adapter)
+                assert success
+                swap_out_map.update(tmp_map)
+
         if len(running) >= max_batches or len(self.waiting) == 0:
             return running, swap_in_map, swap_out_map, copy_map
 
         _reorder_waiting()
         while len(self.waiting) > 0 and len(running) < max_batches:
             seq = self.waiting[0]
+
+            # limit number of adapters
+            if len(required_adapters) >= max_adapters:
+                if seq.adapter_name not in required_adapters:
+                    break
 
             if not block_manager.can_allocate(seq):
                 if not _evict_until_can_append(seq):
@@ -149,8 +198,15 @@ class Scheduler:
                     break
             # allocate session memory
             block_manager.allocate(seq)
+            _active_adapter(seq.adapter_name)
             self.waiting.pop(0)
             _to_running(seq)
+
+        deactive_adapters = self.actived_adapters.difference(required_adapters)
+        for adapter_name in deactive_adapters:
+            _deactive_adapter(adapter_name)
+
+        self.actived_adapters = required_adapters
 
         self.running += running
         return running, swap_in_map, swap_out_map, copy_map
@@ -215,6 +271,13 @@ class Scheduler:
         self.running = running
         return running, swap_in_map, swap_out_map, copy_map
 
+    @classmethod
+    def _get_adapter_list(cls, adapter_names: List[str]):
+        adapters = [
+            ADAPTER_MANAGER.get_adapter(name) for name in adapter_names
+        ]
+        return adapters
+
     def schedule(self, is_prefill: bool):
         """Schedule inputs for next steps."""
         if is_prefill:
@@ -223,12 +286,13 @@ class Scheduler:
             output = self._schedule_decoding()
         running, swap_in_map, swap_out_map, copy_map = output
 
-        return SchedulerOutput(
-            running=running,
-            swap_in_map=swap_in_map,
-            swap_out_map=swap_out_map,
-            copy_map=copy_map,
-        )
+        adapters = self._get_adapter_list(self.actived_adapters)
+
+        return SchedulerOutput(running=running,
+                               swap_in_map=swap_in_map,
+                               swap_out_map=swap_out_map,
+                               copy_map=copy_map,
+                               adapters=adapters)
 
     def _set_session_status(self, session_id: int, status: MessageStatus):
         """Setup the status of session.
@@ -324,6 +388,6 @@ class Scheduler:
         for session_id in session_id_to_remove:
             self.sessions.pop(session_id)
 
-    def get_block_tables(self, seqs: SeqList):
+    def get_block_tables(self, seqs: Union[SeqList, AdapterList]):
         """get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
