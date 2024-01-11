@@ -5,18 +5,12 @@ from inspect import Parameter, Signature
 from typing import Dict, Sequence
 
 import psutil
-from pynvml import (nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo,
-                    nvmlInit)
 
 
 def get_gpu_memory(id: int = 0) -> int:
     """Returns the free and total physical memory of the GPU in bytes."""
-    nvmlInit()
-    handle = nvmlDeviceGetHandleByIndex(id)
-    mem_info = nvmlDeviceGetMemoryInfo(handle)
-    free = mem_info.free
-    total = mem_info.total
-    return free, total
+    import torch
+    return torch.cuda.mem_get_info(id)
 
 
 def get_cpu_memory() -> int:
