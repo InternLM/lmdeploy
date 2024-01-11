@@ -3,16 +3,11 @@ import random
 import torch
 
 
-def get_conda_allcate_prefix(config, model, case_type: str = ''):
+def get_conda_allcate_prefix(config, model):
     cuda_allocate = config.get('quantization_cuda_allocate')
     tp_config = config.get('tp_config')
     cuda_prefix = ''
     if cuda_allocate is None or tp_config is None:
-        return cuda_prefix
-    if case_type == 'quantization':
-        if cuda_allocate.get(model) is not None:
-            cuda_prefix = 'CUDA_VISIBLE_DEVICES=' + str(
-                cuda_allocate.get(model))
         return cuda_prefix
 
     if model in tp_config.keys():
@@ -29,19 +24,19 @@ def get_conda_allcate_prefix(config, model, case_type: str = ''):
     return cuda_prefix
 
 
-def get_tp_config(config, model, case_type: str = ''):
+def get_tp_config(config, model):
     tp_config = config.get('tp_config')
     tp_info = ''
-    if case_type == 'quantization':
+    if tp_config is None:
         return tp_info
     if model in tp_config.keys():
         tp_info = '--tp ' + str(tp_config.get(model))
     return tp_info
 
 
-def get_command_with_extra(cmd, config, model, case_type: str = ''):
-    cuda_prefix = get_conda_allcate_prefix(config, model, case_type)
-    tp_config = get_tp_config(config, model, case_type)
+def get_command_with_extra(cmd, config, model):
+    cuda_prefix = get_conda_allcate_prefix(config, model)
+    tp_config = get_tp_config(config, model)
 
     if cuda_prefix is not None and len(cuda_prefix) > 0:
         cmd = ' '.join([cuda_prefix, cmd])

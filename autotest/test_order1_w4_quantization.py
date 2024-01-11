@@ -51,12 +51,12 @@ def quantization(config, w4_model_name, origin_model_name):
     get_param_cmd = get_command_with_extra(
         'lmdeploy lite calibrate --model ' + model_path + '/' +
         origin_model_name + ' --work_dir ' + model_path + '/' + w4_model_name,
-        config, origin_model_name, 'quantization')
+        config, origin_model_name)
 
     quantization_cmd = get_command_with_extra(
         'lmdeploy lite auto_awq --model ' + model_path + '/' +
         origin_model_name + ' --work_dir ' + model_path + '/' + w4_model_name,
-        config, origin_model_name, 'quantization')
+        config, origin_model_name)
 
     quantization_param_log = os.path.join(
         log_path, 'quantization_param_' + w4_model_name + '.log')
