@@ -18,7 +18,7 @@ from lmdeploy.model import MODELS, SamplingParam, best_match_model
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
      ('CodeLlama-34b-Instruct-hf', ['codellama']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
-@pytest.mark.parametrize('suffix', [''])
+@pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
     deduced_name = best_match_model(model_path_and_name[0] + suffix)
     if deduced_name is not None:

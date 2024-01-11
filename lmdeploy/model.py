@@ -901,7 +901,7 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
     for model_name in model_names:
         if model_name in base_name:
             ratio = fuzz.ratio(model_name.lower(), base_name)
-            if ratio > max_ratio:
+            if ratio > max_ratio and model_name != 'base':  # skip base model
                 max_ratio = ratio
                 matched_name = model_name
     if matched_name:
@@ -915,4 +915,4 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
         match for match, score in matches if score / 100 >= similarity_cutoff
     ]
 
-    return matches if matches else None
+    return matches[0] if matches else None
