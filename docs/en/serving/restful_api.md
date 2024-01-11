@@ -163,6 +163,6 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 
 6. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
 
-### multiple services
+### request distribution service
 
 Please refer to our [request distributor server](./proxy_server.md)

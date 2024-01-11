@@ -1,8 +1,8 @@
-## 请求分发服务器
+# 请求分发服务器
 
 请求分发服务可以将多个 api_server 服务，进行并联。用户可以只需要访问代理 URL，就可以间接访问不同的 api_server 服务。代理服务内部会自动分发请求，做到负载均衡。
 
-### 启动
+## 启动
 
 启动代理服务：
 
@@ -12,7 +12,7 @@ python lmdeploy/serve/proxy/proxy.py --server_name {server_name} --server_port {
 
 启动成功后，代理服务的 URL 也会被脚本打印。浏览器访问这个 URL，可以打开 Swagger UI。
 
-### API
+## API
 
 通过 Swagger UI，我们可以看到多个 API。其中，和 api_server 节点管理相关的有：
 
@@ -30,7 +30,7 @@ python lmdeploy/serve/proxy/proxy.py --server_name {server_name} --server_port {
 
 这些 API 的使用方式和 api_server 一样。
 
-### 分发策略
+## 分发策略
 
 代理服务目前的分发策略如下：
 

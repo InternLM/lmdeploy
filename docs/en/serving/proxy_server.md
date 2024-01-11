@@ -1,8 +1,8 @@
-## Request Distributor Server
+# Request Distributor Server
 
 The request distributor service can parallelize multiple api_server services. Users only need to access the proxy URL, and they can indirectly access different api_server services. The proxy service will automatically distribute requests internally, achieving load balancing.
 
-### Startup
+## Startup
 
 Start the proxy service:
 
@@ -12,7 +12,7 @@ python lmdeploy/serve/proxy/proxy.py --server_name {server_name} --server_port {
 
 After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
 
-### API
+## API
 
 Through Swagger UI, we can see multiple APIs. Those related to api_server node management include:
 
@@ -30,7 +30,7 @@ APIs related to usage include:
 
 The usage of these APIs is the same as that of api_server.
 
-### Dispatch Strategy
+## Dispatch Strategy
 
 The current distribution strategies of the proxy service are as follows:
 
