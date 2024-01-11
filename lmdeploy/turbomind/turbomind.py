@@ -395,7 +395,7 @@ class TurboMind:
             if potential_names is None:
                 logger.warning(f'Please input a model_name for {model_source}')
             else:
-                model_name = potential_names[0]
+                model_name = potential_names
                 logger.warning(
                     f'Best matched chat template name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
