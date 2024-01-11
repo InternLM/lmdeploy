@@ -47,7 +47,7 @@ LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进
 
 ```shell
 lmdeploy lite calibrate internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy lite auto_awq internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
+lmdeploy lite auto_awq internlm/internlm-chat-7b ./internlm-chat-7b-4bit
 lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --group-size 128
 ```
 

@@ -68,7 +68,7 @@ To be noted, there could be other ways of hybrid strategies 1 & 2, and this doc 
 
 ### A Sample QoS Configuration
 
-The configuration will be specified by the `--qos_config_path` flag, and will be loaded by program upon startup.
+The configuration will be specified by the `--qos-config-path` flag, and will be loaded by program upon startup.
 
 ```json
 {
@@ -208,10 +208,10 @@ The template of the configuration file is located at: `lmdeploy/server/qos_engin
 
 ### Passing Configuration Parameters
 
-Upon starting the api_server, pass the configuration file and its path using the `--qos_config_path` flag. An example is illustrated below:
+Upon starting the api_server, pass the configuration file and its path using the `--qos-config-path` flag. An example is illustrated below:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server internlm/internlm-chat-7b --server_port 8000 --qos_config_path lmdeploy/serve/qos_engine/qos_config.json.template
+CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server internlm/internlm-chat-7b --server-port 8000 --qos-config-path lmdeploy/serve/qos_engine/qos_config.json.template
 ```
 
 ### Contributor

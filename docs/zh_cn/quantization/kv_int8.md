@@ -30,18 +30,17 @@ lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
 ```bash
 # 计算 minmax
 lmdeploy lite calibrate \
-  --model $HF_MODEL \
-  --calib_dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
-  --calib_samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
-  --calib_seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
-  --work_dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
+  $HF_MODEL \
+  --calib-dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
+  --calib-samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
+  --calib-seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
+  --work-dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
 
 # 通过 minmax 获取量化参数
 lmdeploy lite kv_qparams \
-  --work_dir $WORK_DIR  \                             # 上一步的结果
-  --turbomind_dir workspace/triton_models/weights/ \ # 保存量化参数的目录，推理要用
-  --kv_sym False \                                    # 对称量化或非对称量化，默认为 False
-  --num_tp 1  \                                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
+  $WORK_DIR  \                                        # 上一步的结果
+  workspace/triton_models/weights/ \                  # 保存量化参数的目录，推理要用
+  --num-tp 1  \                                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
 ```
 
 `kv_qparams` 会在 `weights` 目录生成 fp32 缩放系数，文件格式是 `numpy.tofile` 产生的二进制。
