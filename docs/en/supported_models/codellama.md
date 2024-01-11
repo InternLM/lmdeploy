@@ -88,9 +88,8 @@ TBD
 Launch inference server by:
 
 ```shell
-# --instance_num: number of instances to performance inference, which can be viewed as max requests concurrency
 # --tp: the number of GPUs used in tensor parallelism
-lmdeploy serve api_server ./workspace --server_name ${server_ip} --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server_name ${server_ip} --server_port ${server_port} --tp 1
 ```
 
 Then, you can communicate with it by command line,

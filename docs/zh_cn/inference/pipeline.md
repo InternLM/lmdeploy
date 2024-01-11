@@ -113,7 +113,6 @@ print(response)
 | backend              | Literal\['turbomind', 'pytorch'\]                    | 指定要使用的后端，可选 turbomind 或 pytorch。                                                            | 'turbomind' |
 | backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | 后端的配置对象。根据所选后端，可以是 TurbomindEngineConfig 或 PytorchEngineConfig。                      | None        |
 | chat_template_config | Optional\[ChatTemplateConfig\]                       | 聊天模板的配置。                                                                                         | None        |
-| instance_num         | int                                                  | 处理并发请求时要创建的实例数。                                                                           | 32          |
 | tp                   | int                                                  | 张量并行单位的数量。后期会弃用，请改用 backend_config 参数                                               | 1           |
 | log_level            | str                                                  | 日志级别。                                                                                               | 'ERROR'     |
 

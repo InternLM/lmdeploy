@@ -891,7 +891,6 @@ def serve(model_path: str,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          instance_num: int = 64,
           tp: int = 1,
           allow_origins: List[str] = ['*'],
           allow_credentials: bool = True,
@@ -926,7 +925,6 @@ def serve(model_path: str,
             Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
-        instance_num (int): number of instances of turbomind model
         tp (int): tensor parallel
         allow_origins (List[str]): a list of allowed origins for CORS
         allow_credentials (bool): whether to allow credentials for CORS
@@ -951,7 +949,6 @@ def serve(model_path: str,
         backend=backend,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
-        instance_num=instance_num,
         tp=tp,
         **kwargs)
 
