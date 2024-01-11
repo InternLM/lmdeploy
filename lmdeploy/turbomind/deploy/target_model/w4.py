@@ -14,7 +14,14 @@ from .base import (OUTPUT_MODELS, BaseOutputModel, TurbomindModelConfig,
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
-import _turbomind as _tm  # noqa: E402
+try:
+    import _turbomind as _tm  # noqa: E402
+except:  # noqa
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
+    logger.warning('Could not import turbomind. Please check the env or '
+                   'report issue to lmdeloy.')
+    pass
 
 
 def transpose_qk_s4(src: torch.Tensor, group_size):
