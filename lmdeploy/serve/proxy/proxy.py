@@ -215,8 +215,8 @@ class NodeManager:
         """
         logger.info(f'no model name: {model_name}')
         ret = {
-            'error_code': ErrorCodes.MODLE_NOT_FOUND,
-            'text': err_msg[ErrorCodes.MODLE_NOT_FOUND],
+            'error_code': ErrorCodes.MODEL_NOT_FOUND,
+            'text': err_msg[ErrorCodes.MODEL_NOT_FOUND],
         }
         return json.dumps(ret).encode() + b'\n'
 

@@ -25,13 +25,13 @@ class Strategy(enum.Enum):
 
 
 class ErrorCodes(enum.Enum):
-    MODLE_NOT_FOUND = 10400
+    MODEL_NOT_FOUND = 10400
     SERVICE_UNAVAILABLE = 10401
     API_TIMEOUT = 10402
 
 
 err_msg = {
-    ErrorCodes.MODLE_NOT_FOUND:
+    ErrorCodes.MODEL_NOT_FOUND:
     'The request model name does not exist in the model list.',
     ErrorCodes.SERVICE_UNAVAILABLE:
     'The service is unavailable now. May retry later.',
