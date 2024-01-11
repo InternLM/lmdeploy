@@ -1,5 +1,6 @@
 fastapi
 fire
+fuzzywuzzy
 mmengine-lite
 numpy
 peft
