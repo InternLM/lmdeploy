@@ -94,7 +94,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy - quantization
         run: |
-          # pytest autotest -m quantization -n 5 --alluredir=allure-results --clean-alluredir
+          pytest autotest -m quantization -n 5 --alluredir=allure-results --clean-alluredir
       - name: Test lmdeploy - convert
         run: |
           pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2

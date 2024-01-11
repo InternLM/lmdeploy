@@ -8,6 +8,7 @@ from utils.get_run_config import get_command_with_extra
 
 
 @pytest.mark.quantization
+@pytest.mark.timeout(1800)
 class TestQuantization:
 
     @pytest.mark.CodeLlama_7b_Instruct_hf

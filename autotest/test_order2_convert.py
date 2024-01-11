@@ -6,103 +6,91 @@ import allure
 import pytest
 from utils.get_run_config import get_command_with_extra
 
-
 @pytest.mark.convert
-@pytest.mark.llama2_chat_7b_w4
-@allure.story('llama2-chat-7b-w4')
-def test_model_convert_llama2_chat_7b_w4(config):
-    convert(config, 'llama2-chat-7b-w4')
+class TestConvert:
+
+    @pytest.mark.llama2_chat_7b_w4
+    @allure.story('llama2-chat-7b-w4')
+    def test_model_convert_llama2_chat_7b_w4(self, config):
+        convert(config, 'llama2-chat-7b-w4')
 
 
-@pytest.mark.convert
-@pytest.mark.internlm_chat_7b
-@allure.story('internlm-chat-7b')
-def test_model_convert_internlm_chat_7b(config):
-    convert(config, 'internlm-chat-7b')
+    @pytest.mark.internlm_chat_7b
+    @allure.story('internlm-chat-7b')
+    def test_model_convert_internlm_chat_7b(self, config):
+        convert(config, 'internlm-chat-7b')
 
 
-@pytest.mark.convert
-@pytest.mark.internlm_chat_20b
-@allure.story('internlm-chat-20b')
-def test_model_convert_internlm_chat_20b(config):
-    convert(config, 'internlm-chat-20b')
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b')
+    def test_model_convert_internlm_chat_20b(self, config):
+        convert(config, 'internlm-chat-20b')
 
 
-@pytest.mark.convert
-@pytest.mark.internlm_chat_20b
-@allure.story('internlm-chat-20b')
-def test_model_convert_internlm_chat_20b_inner_w4(config):
-    convert(config, 'internlm-chat-20b-inner-w4')
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b')
+    def test_model_convert_internlm_chat_20b_inner_w4(self, config):
+        convert(config, 'internlm-chat-20b-inner-w4')
 
 
-@pytest.mark.convert
-@pytest.mark.Qwen_7B_Chat
-@allure.story('Qwen-7B-Chat')
-def test_model_convert_Qwen_7B_Chat(config):
-    convert(config, 'Qwen-7B-Chat')
+    @pytest.mark.Qwen_7B_Chat
+    @allure.story('Qwen-7B-Chat')
+    def test_model_convert_Qwen_7B_Chat(self, config):
+        convert(config, 'Qwen-7B-Chat')
 
 
-@pytest.mark.convert
-@pytest.mark.Qwen_14B_Chat
-@allure.story('Qwen-14B-Chat')
-def test_model_convert_Qwen_14B_Chat(config):
-    convert(config, 'Qwen-14B-Chat')
+    @pytest.mark.Qwen_14B_Chat
+    @allure.story('Qwen-14B-Chat')
+    def test_model_convert_Qwen_14B_Chat(self, config):
+        convert(config, 'Qwen-14B-Chat')
 
 
-@pytest.mark.convert
-@pytest.mark.Qwen_7B_Chat
-@allure.story('Qwen-7B-Chat-inner-w4')
-def test_model_convert_Qwen_7B_Chat_inner_w4(config):
-    convert(config, 'Qwen-7B-Chat-inner-w4')
+    @pytest.mark.Qwen_7B_Chat
+    @allure.story('Qwen-7B-Chat-inner-w4')
+    def test_model_convert_Qwen_7B_Chat_inner_w4(self, config):
+        convert(config, 'Qwen-7B-Chat-inner-w4')
 
 
-@pytest.mark.convert
-@pytest.mark.Qwen_14B_Chat
-@allure.story('Qwen-14B-Chat-inner-w4')
-def test_model_convert_Qwen_14B_Chat_inner_w4(config):
-    convert(config, 'Qwen-14B-Chat-inner-w4')
+    @pytest.mark.Qwen_14B_Chat
+    @allure.story('Qwen-14B-Chat-inner-w4')
+    def test_model_convert_Qwen_14B_Chat_inner_w4(self, config):
+        convert(config, 'Qwen-14B-Chat-inner-w4')
 
 
-@pytest.mark.convert
-@pytest.mark.Baichuan2_7B_Chat
-@allure.story('Baichuan2-7B-Chat')
-def test_model_convert_Baichuan2_7B_Chat(config):
-    convert(config, 'Baichuan2-7B-Chat')
+    @pytest.mark.Baichuan2_7B_Chat
+    @allure.story('Baichuan2-7B-Chat')
+    def test_model_convert_Baichuan2_7B_Chat(self, config):
+        convert(config, 'Baichuan2-7B-Chat')
 
 
-@pytest.mark.convert
-@pytest.mark.Baichuan2_7B_Chat
-@allure.story('Baichuan2-7B-Chat-inner-w4')
-def test_model_convert_Baichuan2_7B_Chat_inner_w4(config):
-    convert(config, 'Baichuan2-7B-Chat-inner-w4')
+    @pytest.mark.Baichuan2_7B_Chat
+    @allure.story('Baichuan2-7B-Chat-inner-w4')
+    def test_model_convert_Baichuan2_7B_Chat_inner_w4(self, config):
+        convert(config, 'Baichuan2-7B-Chat-inner-w4')
 
 
-@pytest.mark.convert
-@pytest.mark.CodeLlama_7b_Instruct_hf
-@allure.story('CodeLlama-7b-Instruct-hf')
-def future_test_model_convert_CodeLlama_7b_Instruct_hf(config):
-    convert(config, 'CodeLlama-7b-Instruct-hf')
+    @pytest.mark.CodeLlama_7b_Instruct_hf
+    @allure.story('CodeLlama-7b-Instruct-hf')
+    def future_test_model_convert_CodeLlama_7b_Instruct_hf(self, config):
+        convert(config, 'CodeLlama-7b-Instruct-hf')
 
 
-@pytest.mark.convert
-@pytest.mark.CodeLlama_7b_Instruct_hf
-@allure.story('CodeLlama-7b-Instruct-hf-inner-w4')
-def future_test_model_convert_CodeLlama_7b_Instruct_hf_inner_w4(config):
-    convert(config, 'CodeLlama-7b-Instruct-hf-inner-w4')
+    @pytest.mark.CodeLlama_7b_Instruct_hf
+    @allure.story('CodeLlama-7b-Instruct-hf-inner-w4')
+    def future_test_model_convert_CodeLlama_7b_Instruct_hf_inner_w4(self, config):
+        convert(config, 'CodeLlama-7b-Instruct-hf-inner-w4')
 
 
-@pytest.mark.convert
-@pytest.mark.llama_2_7b_chat
-@allure.story('llama-2-7b-chat')
-def test_model_convert_llama_2_7b_chat(config):
-    convert(config, 'llama-2-7b-chat')
+    @pytest.mark.llama_2_7b_chat
+    @allure.story('llama-2-7b-chat')
+    def test_model_convert_llama_2_7b_chat(self, config):
+        convert(config, 'llama-2-7b-chat')
 
 
-@pytest.mark.convert
-@pytest.mark.llama_2_7b_chat
-@allure.story('llama-2-7b-chat-inner-w4')
-def test_model_convert_llama_2_7b_chat_inner_w4(config):
-    convert(config, 'llama-2-7b-chat-inner-w4')
+    @pytest.mark.llama_2_7b_chat
+    @allure.story('llama-2-7b-chat-inner-w4')
+    def test_model_convert_llama_2_7b_chat_inner_w4(self, config):
+        convert(config, 'llama-2-7b-chat-inner-w4')
 
 
 def convert(config, model_case):

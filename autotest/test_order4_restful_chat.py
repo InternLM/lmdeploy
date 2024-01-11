@@ -60,8 +60,8 @@ def prepare_environment(request, config):
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 
 
-conftest._init_restful_case_list()
-case_list = conftest.global_restful_case_List
+conftest._init_common_case_list()
+case_list = conftest.global_common_case_List
 
 
 def getCaseList():
@@ -80,12 +80,12 @@ class Test_restful:
     }],
                              indirect=True)
     @pytest.mark.parametrize('usercase', getCaseList())
-    def test_restful_internlm_chat_7b(self, config, restful_case_config,
+    def test_restful_internlm_chat_7b(self, config, common_case_config,
                                       usercase):
         model = 'internlm-chat-7b'
         port = 23333
 
-        run_all_step(config, usercase, restful_case_config.get(usercase),
+        run_all_step(config, usercase, common_case_config.get(usercase),
                      model, port)
 
 
