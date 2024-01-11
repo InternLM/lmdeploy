@@ -1,17 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Literal, Optional, Union
+from typing import Literal, Optional
 
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
-from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 def pipeline(model_path: str,
              model_name: Optional[str] = None,
              backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-             backend_config: Optional[Union[TurbomindEngineConfig,
-                                            PytorchEngineConfig]] = None,
+             backend_config: Optional[object] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
              tp: int = 1,
              log_level='ERROR',
@@ -65,8 +62,7 @@ def pipeline(model_path: str,
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union[TurbomindEngineConfig,
-                                         PytorchEngineConfig]] = None,
+          backend_config: Optional[object] = None,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
