@@ -29,10 +29,14 @@ class ArgumentHelper:
 
     @staticmethod
     def model_name(parser):
-        parser.add_argument('--model-name',
-                            type=str,
-                            default=None,
-                            help='The name of the deployed')
+        parser.add_argument(
+            '--model-name',
+            type=str,
+            default=None,
+            help='The name of the to-be-deployed model, such as'
+            ' llama-7b, llama-13b, vicuna-7b and etc. You '
+            'can run `lmdeploy list` to get the supported '
+            'model names')
 
     @staticmethod
     def model_format(parser):

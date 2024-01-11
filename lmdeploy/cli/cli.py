@@ -31,7 +31,8 @@ class CLI(object):
             'model_name',
             type=str,
             help='The name of the to-be-deployed model, such as llama-7b, '
-            'llama-13b, vicuna-7b and etc')
+            'llama-13b, vicuna-7b and etc. You can run `lmdeploy list` to '
+            'get the supported model names')
         parser.add_argument('model_path',
                             type=str,
                             help='The directory path of the model')
