@@ -2,7 +2,7 @@
 from mmengine.config import DictAction
 
 from .cli import CLI
-from .utils import DefaultsAndTypesHelpFormatter, convert_args
+from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
 
 class SubCliLite(object):
@@ -31,21 +31,10 @@ class SubCliLite(object):
         parser.add_argument('work_dir',
                             type=str,
                             help='The working directory to save results')
-        parser.add_argument(
-            '--calib-dataset',
-            type=str,
-            default='c4',
-            help='The calibration dataset name. defaults to "c4"')
-        parser.add_argument(
-            '--calib-samples',
-            type=int,
-            default=128,
-            help='The number of samples for calibration. defaults to 128')
-        parser.add_argument(
-            '--calib-seqlen',
-            type=int,
-            default=2048,
-            help='The sequence length for calibration. defaults to 2048')
+        ArgumentHelper.calib_dataset(parser)
+        ArgumentHelper.calib_samples(parser)
+        ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.device(parser)
         parser.add_argument('--w-bits',
                             type=int,
                             default=4,
@@ -58,11 +47,6 @@ class SubCliLite(object):
             type=int,
             default=128,
             help='Group size for weight quantization statistics')
-        parser.add_argument('--device',
-                            type=str,
-                            default='cuda',
-                            choices=['cuda', 'cpu'],
-                            help='Device type of running')
 
     @staticmethod
     def add_parser_calibrate():
@@ -76,31 +60,14 @@ class SubCliLite(object):
                             type=str,
                             help='The name or path of the model to be loaded')
         parser.add_argument(
-            '--calib-dataset',
-            type=str,
-            default='c4',
-            help='The calibration dataset name. defaults to "c4"')
-        parser.add_argument(
-            '--calib-samples',
-            type=int,
-            default=128,
-            help='The number of samples for calibration. defaults to 128')
-        parser.add_argument(
-            '--calib-seqlen',
-            type=int,
-            default=2048,
-            help='The sequence length for calibration. defaults to 2048')
-        parser.add_argument(
             '--work-dir',
             type=str,
             default='./work_dir',
             help='The working directory for outputs. defaults to "./work_dir"')
-        parser.add_argument(
-            '--device',
-            type=str,
-            default='cuda',
-            choices=['cuda', 'cpu'],
-            help='The device to be used for calculation. defaults to "cuda"')
+        ArgumentHelper.calib_dataset(parser)
+        ArgumentHelper.calib_samples(parser)
+        ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.device(parser)
 
     @staticmethod
     def add_parser_kv_qparams():
@@ -124,10 +91,11 @@ class SubCliLite(object):
         parser.add_argument('--kv-sym',
                             action='store_true',
                             help='Whether to use symmetric quantizaiton')
-        parser.add_argument('--num-tp',
-                            type=int,
-                            default=1,
-                            help='Number of tensor parallelism')
+        parser.add_argument(
+            '--num-tp',
+            type=int,
+            default=None,
+            help='GPU number used in tensor parallelism. Should be 2^n')
         parser.add_argument('--tm-params',
                             nargs='*',
                             default=None,

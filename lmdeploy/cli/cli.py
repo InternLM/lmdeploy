@@ -3,7 +3,7 @@ import argparse
 import os
 
 from ..version import __version__
-from .utils import DefaultsAndTypesHelpFormatter, convert_args
+from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
 
 class CLI(object):
@@ -35,16 +35,9 @@ class CLI(object):
         parser.add_argument('model_path',
                             type=str,
                             help='The directory path of the model')
-        parser.add_argument(
-            '--model-format',
-            type=str,
-            default=None,
-            help='The format of the model, should choose from ["llama", "hf",'
-            ' "awq", none]. "llama" stands for meta"s llama format, "hf"'
-            ' means huggingface llama format, and "awq" means llama(hf) '
-            'model quantized by lmdeploy/lite/quantization/awq.py. the '
-            'default value is none, which means the model_format will '
-            'be inferred based on model_name')
+        ArgumentHelper.model_format(parser)
+        ArgumentHelper.tp(parser)
+        # other args
         parser.add_argument('--tokenizer-path',
                             type=str,
                             default=None,
@@ -53,12 +46,6 @@ class CLI(object):
                             type=str,
                             default='workspace',
                             help='The destination path that saves outputs')
-        parser.add_argument(
-            '--tp',
-            type=int,
-            default=1,
-            help='The number of gpus used for tensor parallelism, '
-            'should be 2^n')
         parser.add_argument(
             '--quant-path',
             type=str,
@@ -82,11 +69,7 @@ class CLI(object):
             help=CLI.list.__doc__)
         parser.set_defaults(run=CLI.list)
         # define arguments
-        parser.add_argument('--engine',
-                            type=str,
-                            default='turbomind',
-                            choices=['turbomind', 'pytorch'],
-                            help='Select inference engine type')
+        ArgumentHelper.engine(parser)
 
     @staticmethod
     def add_parser_checkenv():
@@ -99,7 +82,9 @@ class CLI(object):
         parser.add_argument('--dump-file',
                             type=str,
                             default=None,
-                            help='The file path to save env info')
+                            help='The file path to save env info. Only '
+                            'support file format in `json`, `yml`,'
+                            ' `pkl`')
 
     @staticmethod
     def convert(args):
@@ -114,7 +99,10 @@ class CLI(object):
         engine = args.engine
         assert engine in ['turbomind', 'pytorch']
         if engine == 'pytorch':
-            model_names = ['llama', 'llama2', 'internlm-7b']
+            model_names = [
+                'llama', 'llama2', 'internlm', 'baichuan2', 'chatglm2',
+                'falcon'
+            ]
         elif engine == 'turbomind':
             from lmdeploy.model import MODELS
             model_names = list(MODELS.module_dict.keys())

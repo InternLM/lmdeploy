@@ -2,8 +2,7 @@
 from mmengine.config import DictAction
 
 from .cli import CLI
-from .utils import (DefaultsAndTypesHelpFormatter, convert_args,
-                    get_engine_parser)
+from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
 
 class SubCliChat(object):
@@ -17,7 +16,6 @@ class SubCliChat(object):
     def add_parser_torch():
         parser = SubCliChat.subparsers.add_parser(
             'torch',
-            parents=[get_engine_parser(add_pytorch=True)],
             formatter_class=DefaultsAndTypesHelpFormatter,
             help=SubCliChat.torch.__doc__,
             description=SubCliChat.torch.__doc__,
@@ -26,32 +24,23 @@ class SubCliChat(object):
         parser.add_argument('model_path',
                             type=str,
                             help='The huggingface model path')
-        parser.add_argument('--model-name',
-                            type=str,
-                            default=None,
-                            help='Name of the input model')
-        parser.add_argument('--session-id',
-                            type=int,
-                            default=1,
-                            help='The identical id of a session')
-        parser.add_argument('--top-k',
-                            type=float,
-                            default=40,
-                            help='Sampling top k')
-        parser.add_argument('--top-p',
-                            type=float,
-                            default=0.8,
-                            help='Sampling top p')
-        parser.add_argument('--temperature',
-                            type=float,
-                            default=0.8,
-                            help='Sampling temperature')
-        parser.add_argument('--repetition-penalty',
-                            type=float,
-                            default=1.0,
-                            help='Parameter to penalize repetition')
+        # enging args
+        engine_group = parser.add_argument_group('Engine arguments')
+        ArgumentHelper.model_name(engine_group)
+        ArgumentHelper.tp(engine_group)
+        ArgumentHelper.max_batch_size(engine_group)
+        ArgumentHelper.block_size(engine_group)
+
+        # generation args
+        gen_group = parser.add_argument_group('Generation arguments')
+        ArgumentHelper.top_k(gen_group)
+        ArgumentHelper.top_p(gen_group)
+        ArgumentHelper.temperature(gen_group)
+        ArgumentHelper.repetition_penalty(gen_group)
+
+        # other args
+        ArgumentHelper.session_id(parser)
         parser.add_argument('--adapter',
-                            nargs='*',
                             default=None,
                             action=DictAction,
                             help='Used key-values pairs in xxx=yyy format'
@@ -65,35 +54,28 @@ class SubCliChat(object):
     def add_parser_turbomind():
         parser = SubCliChat.subparsers.add_parser(
             'turbomind',
-            parents=[get_engine_parser(add_turbomind=True)],
             formatter_class=DefaultsAndTypesHelpFormatter,
             help=SubCliChat.turbomind.__doc__,
             description=SubCliChat.turbomind.__doc__,
         )
         parser.set_defaults(run=SubCliChat.turbomind)
-        group = parser.add_argument_group('engine arguments')
         parser.add_argument('model_path',
                             type=str,
                             help='The path of the deployed model')
-        group.add_argument('--model-name',
-                           type=str,
-                           default=None,
-                           help='The name of deployed model')
-        group.add_argument('--session-id',
-                           type=int,
-                           default=1,
-                           help='The identical id of a session')
-        group.add_argument(
-            '--cap',
-            type=str,
-            default='chat',
-            choices=['completion', 'infilling', 'chat', 'python'],
-            help='The capability of a model. For example, '
-            'codellama has the ability among ["completion", '
-            '"infilling", "chat", "python"]')
-        parser.add_argument('--stream-output',
-                            action='store_true',
-                            help='Indicator for streaming output or not')
+        # engine arguments
+        engine_group = parser.add_argument_group('Engine arguments')
+        ArgumentHelper.tp(engine_group)
+        ArgumentHelper.max_batch_size(engine_group)
+        ArgumentHelper.model_format(engine_group)
+        ArgumentHelper.quant_policy(engine_group)
+        ArgumentHelper.rope_scaling_factor(engine_group)
+        ArgumentHelper.use_logn_attn(engine_group)
+        ArgumentHelper.model_name(engine_group)
+
+        # other arguments
+        ArgumentHelper.session_id(parser)
+        ArgumentHelper.cap(parser)
+        ArgumentHelper.stream_output(parser)
         parser.add_argument('--request-output-len',
                             type=int,
                             default=512,

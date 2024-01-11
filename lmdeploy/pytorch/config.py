@@ -34,6 +34,7 @@ class EngineConfig:
             would be allocate according to current environment.
         num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
             would be allocate according to current environment.
+        adapters (dict): The path configs to lora adapters.
     """
     model_name: str = ''
     tp: int = 1

@@ -24,57 +24,193 @@ def convert_args(args):
     return kwargs
 
 
-def get_engine_parser(add_pytorch: bool = False,
-                      add_turbomind: bool = False) -> argparse.ArgumentParser:
-    """Create the parser for engine config.
+class ArgumentHelper:
+    """Helper class to add unified argument."""
 
-    Args:
-        add_pytorch (bool): Whether to include pytorch engine arguments.
-        add_turbomind (bool): Whether to include turbomind engine arguments.
+    @staticmethod
+    def model_name(parser):
+        parser.add_argument('--model-name',
+                            type=str,
+                            default=None,
+                            help='The name of the deployed')
 
-    Returns:
-        argparse.ArgumentParser
-    """
-    assert add_pytorch or add_turbomind, 'Should at least include one engine'
-    parser = argparse.ArgumentParser(
-        add_help=False, formatter_class=DefaultsAndTypesHelpFormatter)
-    parser.add_argument(
-        '--tp',
-        type=int,
-        default=1,
-        help='GPU number used in tensor parallelism. Should be 2^n')
-    parser.add_argument('--max-batch-size',
-                        type=int,
-                        default=128,
-                        help='Maximum batch size')
+    @staticmethod
+    def model_format(parser):
+        parser.add_argument(
+            '--model-format',
+            type=str,
+            default=None,
+            choices=['hf', 'llama', 'awq'],
+            help='The format of input model. `hf` meaning `hf_llama`, `llama` '
+            'meaning `meta_llama`, `awq` meaning the quantized model by awq')
 
-    if add_pytorch:
-        name = 'engine arguments' if not add_turbomind \
-            else 'pytorch engine arguments'
-        group = parser.add_argument_group(name)
-        group.add_argument('--block-size',
-                           type=int,
-                           default=64,
-                           help='The block size for paging cache')
-    if add_turbomind:
-        name = 'engine arguments' if not add_pytorch \
-            else 'turbomind engine arguments'
-        group = parser.add_argument_group(name)
-        group.add_argument('--model-format',
-                           type=str,
-                           default=None,
-                           choices=['hf', 'llama', 'awq'],
-                           help='The format of input model')
-        group.add_argument('--quant-policy',
-                           type=int,
-                           default=0,
-                           help='Whether to use kv int8')
-        group.add_argument('--rope-scaling-factor',
-                           type=float,
-                           default=0.0,
-                           help='Rope scaling factor')
-        group.add_argument('--use-logn-attn',
-                           action='store_true',
-                           default=False,
-                           help='Whether to use logn attention scaling')
-    return parser
+    @staticmethod
+    def tp(parser):
+        parser.add_argument(
+            '--tp',
+            type=int,
+            default=1,
+            help='GPU number used in tensor parallelism. Should be 2^n')
+
+    @staticmethod
+    def session_id(parser):
+        parser.add_argument('--session-id',
+                            type=int,
+                            default=1,
+                            help='The identical id of a session')
+
+    @staticmethod
+    def session_len(parser):
+        parser.add_argument('--session-len',
+                            type=int,
+                            default=None,
+                            help='The max session length of a sequence')
+
+    @staticmethod
+    def max_batch_size(parser):
+        parser.add_argument('--max-batch-size',
+                            type=int,
+                            default=128,
+                            help='Maximum batch size')
+
+    @staticmethod
+    def quant_policy(parser):
+        parser.add_argument('--quant-policy',
+                            type=int,
+                            default=0,
+                            help='Whether to use kv int8')
+
+    @staticmethod
+    def rope_scaling_factor(parser):
+        parser.add_argument('--rope-scaling-factor',
+                            type=float,
+                            default=0.0,
+                            help='Rope scaling factor')
+
+    @staticmethod
+    def use_logn_attn(parser):
+        parser.add_argument('--use-logn-attn',
+                            action='store_true',
+                            default=False,
+                            help='Whether to use logn attention scaling')
+
+    @staticmethod
+    def block_size(parser):
+        parser.add_argument('--block-size',
+                            type=int,
+                            default=64,
+                            help='The block size for paging cache')
+
+    @staticmethod
+    def top_p(parser):
+        parser.add_argument('--top-p',
+                            type=float,
+                            default=0.8,
+                            help='An alternative to sampling with temperature,'
+                            ' called nucleus sampling, where the model '
+                            'considers the results of the tokens with '
+                            'top_p probability mass')
+
+    @staticmethod
+    def top_k(parser):
+        parser.add_argument(
+            '--top-k',
+            type=int,
+            default=1,
+            help='An alternative to sampling with temperature, '
+            'where the model considers the top_k tokens '
+            'with the highest probability')
+
+    @staticmethod
+    def temperature(parser):
+        parser.add_argument('--temperature',
+                            type=float,
+                            default=0.8,
+                            help='Sampling temperature')
+
+    @staticmethod
+    def repetition_penalty(parser):
+        parser.add_argument('--repetition-penalty',
+                            type=float,
+                            default=1.0,
+                            help='Parameter to penalize repetition')
+
+    @staticmethod
+    def cap(parser):
+        parser.add_argument(
+            '--cap',
+            type=str,
+            default='chat',
+            choices=['completion', 'infill', 'instruct', 'python'],
+            help='The capability of a model. For example, codellama has the '
+            'ability among ["completion", "infill", "instruct", "python"]')
+
+    @staticmethod
+    def log_level(parser):
+        import logging
+        parser.add_argument('--log-level',
+                            type=str,
+                            default='ERROR',
+                            choices=list(logging._nameToLevel.keys()),
+                            help='Set the log level')
+
+    @staticmethod
+    def backend(parser):
+        parser.add_argument('--backend',
+                            type=str,
+                            default='turbomind',
+                            choices=['pytorch', 'turbomind'],
+                            help='Set the inference backend')
+
+    @staticmethod
+    def engine(parser):
+        parser.add_argument('--engine',
+                            type=str,
+                            default='turbomind',
+                            choices=['pytorch', 'turbomind'],
+                            help='Set the inference backend')
+
+    @staticmethod
+    def stream_output(parser):
+        parser.add_argument('--stream-output',
+                            action='store_true',
+                            help='Indicator for streaming output or not')
+
+    @staticmethod
+    def calib_dataset(parser):
+        parser.add_argument(
+            '--calib-dataset',
+            type=str,
+            default='c4',
+            help='The calibration dataset name. defaults to "c4"')
+
+    @staticmethod
+    def calib_samples(parser):
+        parser.add_argument(
+            '--calib-samples',
+            type=int,
+            default=128,
+            help='The number of samples for calibration. defaults to 128')
+
+    @staticmethod
+    def calib_seqlen(parser):
+        parser.add_argument(
+            '--calib-seqlen',
+            type=int,
+            default=2048,
+            help='The sequence length for calibration. defaults to 2048')
+
+    @staticmethod
+    def device(parser):
+        parser.add_argument('--device',
+                            type=str,
+                            default='cuda',
+                            choices=['cuda', 'cpu'],
+                            help='Device type of running')
+
+    @staticmethod
+    def meta_instruction(parser):
+        parser.add_argument('--meta-instruction',
+                            type=str,
+                            default=None,
+                            help='System prompt for ChatTemplateConfig')
