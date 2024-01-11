@@ -20,6 +20,7 @@ def get_conda_allcate_prefix(config, model):
 
     cuda_prefix = 'CUDA_VISIBLE_DEVICES=' + ','.join(
         random.sample(available_cuda, cuda_num))
+    del available_cuda
     return cuda_prefix
 
 
@@ -56,4 +57,5 @@ def _get_available_cude():
             continue
         available_cuda.append(str(i))
 
+    del devices
     return available_cuda

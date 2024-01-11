@@ -49,52 +49,27 @@ def quantization(config, w4_model_name, origin_model_name):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
 
-    get_param_cmd = get_command_with_extra(
-        'lmdeploy lite calibrate --model ' + model_path + '/' +
-        origin_model_name + ' --work_dir ' + model_path + '/' + w4_model_name,
-        config, origin_model_name)
-
     quantization_cmd = get_command_with_extra(
-        'lmdeploy lite auto_awq --model ' + model_path + '/' +
-        origin_model_name + ' --work_dir ' + model_path + '/' + w4_model_name,
+        'lmdeploy lite auto_awq ' + model_path + '/' + origin_model_name +
+        ' --calib-dataset ptb --work_dir ' + model_path + '/' + w4_model_name,
         config, origin_model_name)
 
-    quantization_param_log = os.path.join(
-        log_path, 'quantization_param_' + w4_model_name + '.log')
     quantization_log = os.path.join(log_path,
                                     'quantization_' + w4_model_name + '.log')
 
-    with allure.step('step1 - get quantization params'):
-        with open(quantization_param_log, 'w') as f:
-            f.writelines('commondLine get_param_cmd: ' + get_param_cmd + '\n')
-            # get params
-            getParamsRes = subprocess.run([get_param_cmd],
-                                          stdout=f,
-                                          stderr=PIPE,
-                                          shell=True,
-                                          text=True,
-                                          encoding='utf-8')
-            f.writelines(getParamsRes.stderr)
-            result = getParamsRes.returncode == 0
+    with open(quantization_log, 'w') as f:
+        f.writelines('commondLine quantization_cmd: ' + quantization_cmd +
+                     '\n')
+        # quantization
+        quantizationRes = subprocess.run([quantization_cmd],
+                                         stdout=f,
+                                         stderr=PIPE,
+                                         shell=True,
+                                         text=True,
+                                         encoding='utf-8')
+        f.writelines(quantizationRes.stderr)
+        result = quantizationRes.returncode == 0
 
-        allure.attach.file(quantization_param_log,
-                           attachment_type=allure.attachment_type.TEXT)
-        assert result, getParamsRes.stderr
-
-    with allure.step('step2 - quantization'):
-        with open(quantization_log, 'w') as f:
-            f.writelines('commondLine quantization_cmd: ' + quantization_cmd +
-                         '\n')
-            # quantization
-            quantizationRes = subprocess.run([quantization_cmd],
-                                             stdout=f,
-                                             stderr=PIPE,
-                                             shell=True,
-                                             text=True,
-                                             encoding='utf-8')
-            f.writelines(quantizationRes.stderr)
-            result = quantizationRes.returncode == 0
-
-        allure.attach.file(quantization_log,
-                           attachment_type=allure.attachment_type.TEXT)
-    assert result, getParamsRes.stderr
+    allure.attach.file(quantization_log,
+                       attachment_type=allure.attachment_type.TEXT)
+    assert result, quantizationRes.stderr
