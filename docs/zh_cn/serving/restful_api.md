@@ -159,4 +159,4 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 
 ### 多个服务并行
 
-请参考我们的 [代理服务](./proxy_server.md)
+请参考我们的 [请求分发服务器](./proxy_server.md)

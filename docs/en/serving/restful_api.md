@@ -165,4 +165,4 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 
 ### multiple services
 
-Please refer to our [proxy service](./proxy_server.md)
+Please refer to our [request distributor server](./proxy_server.md)
