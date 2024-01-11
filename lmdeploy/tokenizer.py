@@ -228,11 +228,6 @@ class HuggingFaceTokenizer:
         for _token, _indexes in self._indexes_tokens_deque:
             if token == _token:
                 return _indexes
-        if len(self.encode(token, add_bos=False)) > 1:
-            logger.warning(
-                f'The token indexes of {token} is over than 1. Currently, it'
-                ' can not be used as stop words')
-            return []
 
         if self.token2id == {}:
             # decode is slower than convert_ids_to_tokens
@@ -376,4 +371,10 @@ class Tokenizer:
     def indexes_containing_token(self, token):
         """Return all the possible indexes, whose decoding output may contain
         the input token."""
+        encoded = self.encode(token, add_bos=False)
+        if len(encoded) > 1:
+            logger.warning(
+                f'The token {token}, its length of indexes {encoded} is over '
+                'than 1. Currently, it can not be used as stop words')
+            return []
         return self.model.indexes_containing_token(token)
