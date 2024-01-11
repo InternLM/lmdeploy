@@ -17,12 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.constants import (API_TIMEOUT_LEN, LATENCY_DEEQUE_LEN,
-                                ErrorCodes, Strategy, err_msg)
 from lmdeploy.serve.openai.api_server import create_error_response
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
     ModelPermission)
+from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN,
+                                            LATENCY_DEEQUE_LEN, ErrorCodes,
+                                            Strategy, err_msg)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -369,7 +370,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     The request should be a JSON object with the following fields:
     - model: model name. Available from /v1/models.
-    - messages: string prompt or chat history in OpenAI format.
+    - messages: string prompt or chat history in OpenAI format. A example
+        for chat history is `[{"role": "user", "content":"knock knock"}]`.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
@@ -380,6 +382,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - max_tokens (int): output token nums
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
@@ -435,6 +439,8 @@ async def completions_v1(request: CompletionRequest,
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - user (str): A unique identifier representing your end-user.
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
