@@ -100,10 +100,10 @@ jobs:
           pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - chat
         run: |
-          pytest autotest -m command_chat -n 6 --alluredir=allure-results --dist loadscope --reruns 3
+          pytest autotest -m command_chat -n 4 --alluredir=allure-results --reruns 3
       - name: Test lmdeploy - hf chat
         run: |
-          pytest autotest -m hf_command_chat -n 4 --alluredir=allure-results --dist loadscope --reruns 3
+          pytest autotest -m hf_command_chat -n 4 --alluredir=allure-results --reruns 3
       - name: Test lmdeploy - restful
         run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Generate reports
