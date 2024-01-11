@@ -427,7 +427,7 @@ class Puyu(BaseModel):
         return ret
 
 
-@MODELS.register_module(name=['llama2', 'llama-2-chat'])
+@MODELS.register_module(name=['llama2', 'llama-2', 'llama-2-chat'])
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
@@ -897,8 +897,17 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
     if query.endswith('/'):
         query = query[:-1]
     base_name = os.path.basename(query).lower()
+    max_ratio, matched_name = float('-inf'), None
+    for model_name in model_names:
+        if model_name in base_name:
+            ratio = fuzz.ratio(model_name.lower(), base_name)
+            if ratio > max_ratio:
+                max_ratio = ratio
+                matched_name = model_name
+    if matched_name:
+        return matched_name
 
-    # Using fuzzy matching instead of difflib
+    # Using fuzzy matching
     matches = process.extract(base_name, model_names, scorer=fuzz.ratio)
 
     # Ignore matches with score below similarity_cutoff
