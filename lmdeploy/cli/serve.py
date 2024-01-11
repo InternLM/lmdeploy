@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from mmengine.config import DictAction
-
 from .cli import CLI
 from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
@@ -111,10 +109,6 @@ class SubCliServe:
                             type=int,
                             default=23333,
                             help='Server port')
-        parser.add_argument('--instance-num',
-                            type=int,
-                            default=64,
-                            help='Number of instances of turbomind model')
         parser.add_argument('--allow-origins',
                             nargs='+',
                             type=str,
@@ -166,12 +160,6 @@ class SubCliServe:
         ArgumentHelper.session_id(parser)
         ArgumentHelper.cap(parser)
         ArgumentHelper.stream_output(parser)
-        parser.add_argument(
-            '--kwargs',
-            nargs='*',
-            default=None,
-            action=DictAction,
-            help='Other key-values arguments in xxx=yyy format')
 
     @staticmethod
     def gradio(args):
@@ -236,7 +224,6 @@ class SubCliServe:
                        chat_template_config=chat_template_config,
                        server_name=args.server_name,
                        server_port=args.server_port,
-                       instance_num=args.instance_num,
                        tp=args.tp,
                        allow_origins=args.allow_origins,
                        allow_credentials=args.allow_credentials,
@@ -257,9 +244,6 @@ class SubCliServe:
         """Interact with Triton Server using gRPC protocol."""
         from lmdeploy.serve.client import main as run_triton_client
         kwargs = convert_args(args)
-        other_kwargs = kwargs.pop('kwargs', None)
-        if other_kwargs is not None:
-            kwargs.update(other_kwargs)
         run_triton_client(**kwargs)
 
     @staticmethod
