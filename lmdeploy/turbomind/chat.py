@@ -1,11 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import dataclasses
 import os
 import random
+from configparser import ConfigParser
 
-from lmdeploy.turbomind.utils import get_gen_param
+from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.model import ChatTemplateConfig, best_match_model
 
+from .deploy.target_model.base import TurbomindModelConfig
 from .engine_config import EngineConfig
+from .utils import ModelSource, get_model_source
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -31,6 +34,34 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
+def update_engine_config(input_engine_config_is_none: bool,
+                         engine_config: EngineConfig, model_path: str):
+
+    model_source = get_model_source(model_path)
+    if model_source == ModelSource.HF_MODEL:
+        if engine_config.model_name is None:
+            engine_config.model_name = best_match_model(model_path)
+    else:
+        ini_path = os.path.join(model_path, 'triton_models', 'weights',
+                                'config.ini')
+        # load cfg
+        with open(ini_path, 'r') as f:
+            parser = ConfigParser()
+            parser.read_file(f)
+        section_name = 'llama'
+        _cfg = parser._sections[section_name]
+        cfg = TurbomindModelConfig.from_dict(_cfg)
+        if engine_config.model_name is None:
+            engine_config.model_name = cfg.model_name
+
+        # if read from workspace and doesn't pass engine_config
+        if input_engine_config_is_none:
+            for k, v in cfg.__dict__.items():
+                if hasattr(engine_config, k):
+                    setattr(engine_config, k, v)
+    return engine_config
+
+
 def main(model_path,
          model_name: str = None,
          session_id: int = 1,
@@ -53,12 +84,34 @@ def main(model_path,
         **kwarg (dict): other arguments for initializing model's chat template
     """
     from lmdeploy import turbomind as tm
-    tm_model = tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=engine_config,
-                                            model_name=model_name,
-                                            tp=tp,
-                                            capability=cap,
-                                            **kwargs)
+
+    def _create_cfg(cls, *args, **kwargs):
+        used_args = {}
+        for k, v in kwargs.items():
+            if v and hasattr(cls, k):
+                used_args[k] = v
+        return cls(*args, **used_args)
+
+    # engine config
+    input_engine_config_is_none = engine_config is None
+    if engine_config is None:
+        engine_config = _create_cfg(EngineConfig,
+                                    **kwargs,
+                                    model_name=model_name,
+                                    tp=tp)
+    engine_config = update_engine_config(input_engine_config_is_none,
+                                         engine_config, model_path)
+
+    # chat template
+    chat_template_config = _create_cfg(ChatTemplateConfig,
+                                       engine_config.model_name,
+                                       **kwargs,
+                                       capability=cap)
+
+    tm_model = tm.TurboMind.from_pretrained(
+        model_path,
+        engine_config=engine_config,
+        chat_template_config=chat_template_config)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
 
@@ -68,6 +121,10 @@ def main(model_path,
     model_name = tm_model.model_name
     model = tm_model.model
 
+    # gen_config
+    gen_config = _create_cfg(EngineGenerationConfig,
+                             **model.sampling_param.__dict__)
+
     print(f'session {session_id}')
     while True:
         prompt = input_prompt(model_name)
@@ -76,13 +133,13 @@ def main(model_path,
         elif prompt == 'end':
             prompt = model.get_prompt('', nth_round == 1)
             input_ids = tokenizer.encode(prompt)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    request_output_len=request_output_len,
-                    sequence_start=False,
-                    sequence_end=True,
-                    stream_output=stream_output):
+            gen_config.max_new_tokens = 0
+            for outputs in generator.stream_infer(session_id=session_id,
+                                                  input_ids=[input_ids],
+                                                  gen_config=gen_config,
+                                                  sequence_start=False,
+                                                  sequence_end=True,
+                                                  stream_output=stream_output):
                 pass
             nth_round = 1
             step = 0
@@ -96,18 +153,17 @@ def main(model_path,
                       ' Please end the session.')
                 continue
 
-            gen_param = get_gen_param(cap, model.sampling_param, nth_round,
-                                      step, request_output_len, **kwargs)
-
             print(f'{prompt} ', end='', flush=True)
             response_size = 0
+            gen_config.max_new_tokens = request_output_len
+            gen_config.random_seed = seed
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
                     stream_output=stream_output,
-                    **dataclasses.asdict(gen_param),
-                    ignore_eos=False,
-                    random_seed=seed if nth_round == 1 else None):
+                    step=step,
+                    sequence_start=(nth_round == 1),
+                    gen_config=gen_config):
                 _, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res, offset=response_size)
