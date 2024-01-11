@@ -147,7 +147,7 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。
 
-2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `backend_config` 的 `max_batch_size` 大小
+2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `backend_config` 的 `cache_max_entry_count` 大小
 
 3. 当同一个 `session_id` 的请求给 `/v1/chat/interactive` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
 

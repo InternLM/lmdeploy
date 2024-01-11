@@ -153,7 +153,7 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be
    modified by passing `--session_len` to api_server.
 
-2. When OOM appeared at the server side, please reduce the `max_batch_size` of `backend_config` when lanching the service.
+2. When OOM appeared at the server side, please reduce the `cache_max_entry_count` of `backend_config` when lanching the service.
 
 3. When the request with the same `session_id` to `/v1/chat/interactive` got a empty return value and a negative `tokens`, please consider setting `interactive_mode=false` to restart the session.
 
