@@ -108,6 +108,7 @@ class SubCliChat(object):
 
         engine_config = EngineConfig(model_name=args.model_name,
                                      tp=args.tp,
+                                     max_batch_size=args.max_batch_size,
                                      adapters=args.adapter)
         gen_config = EngineGenerationConfig(
             top_k=args.top_k,

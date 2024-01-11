@@ -65,10 +65,6 @@ def get_engine_parser(add_pytorch: bool = False,
                            default=None,
                            choices=['hf', 'llama', 'awq'],
                            help='The format of input model')
-        group.add_argument('--group-size',
-                           type=int,
-                           default=0,
-                           help='The quantization parameter for awq')
         group.add_argument('--quant-policy',
                            type=int,
                            default=0,
@@ -77,10 +73,6 @@ def get_engine_parser(add_pytorch: bool = False,
                            type=float,
                            default=0.0,
                            help='Rope scaling factor')
-        group.add_argument('--use-dynamic-ntk',
-                           action='store_true',
-                           default=False,
-                           help='Whether to use dynamic ntk')
         group.add_argument('--use-logn-attn',
                            action='store_true',
                            default=False,
