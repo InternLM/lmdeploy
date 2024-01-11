@@ -228,6 +228,11 @@ class HuggingFaceTokenizer:
         for _token, _indexes in self._indexes_tokens_deque:
             if token == _token:
                 return _indexes
+        if len(self.encode(token, add_bos=False)) > 1:
+            logger.warning(
+                f'The token indexes of {token} is over than 1. Currently, it'
+                ' can not be used as stop words')
+            return []
 
         if self.token2id == {}:
             # decode is slower than convert_ids_to_tokens
