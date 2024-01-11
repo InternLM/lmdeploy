@@ -96,6 +96,10 @@ class CLI(object):
             description=CLI.check_env.__doc__,
             help=CLI.check_env.__doc__)
         parser.set_defaults(run=CLI.check_env)
+        parser.add_argument('--dump-file',
+                            type=str,
+                            default=None,
+                            help='The file path to save env info')
 
     @staticmethod
     def convert(args):

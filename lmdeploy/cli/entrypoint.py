@@ -13,6 +13,7 @@ def run():
     SubCliLite.add_parsers()
     parser = CLI.parser
     args = parser.parse_args()
+
     if 'run' in dir(args):
         args.run(args)
     else:
