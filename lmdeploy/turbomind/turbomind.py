@@ -164,7 +164,7 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        if chat_template_config is not None:
+        if chat_template_config and chat_template_config.model_name:
             self.model = chat_template_config.chat_template
         else:
             self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)

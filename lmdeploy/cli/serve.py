@@ -190,9 +190,7 @@ class SubCliServe:
             batch_size=args.batch_size,
             backend=args.backend,
             backend_config=backend_config,
-            chat_template_config=chat_template_config,
-            tp=args.tp,
-            model_name=args.model_name)
+            chat_template_config=chat_template_config)
 
     @staticmethod
     def api_server(args):
@@ -224,7 +222,6 @@ class SubCliServe:
                        chat_template_config=chat_template_config,
                        server_name=args.server_name,
                        server_port=args.server_port,
-                       tp=args.tp,
                        allow_origins=args.allow_origins,
                        allow_credentials=args.allow_credentials,
                        allow_methods=args.allow_methods,

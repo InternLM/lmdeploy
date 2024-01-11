@@ -108,7 +108,8 @@ class AsyncEngine:
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
-        if chat_template_config is None:
+        if chat_template_config is None or \
+                chat_template_config.model_name is None:
             chat_template_config = ChatTemplateConfig(self.engine.model_name)
         self.chat_template = chat_template_config.chat_template
         self.session_len = self.engine.session_len
