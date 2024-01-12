@@ -119,7 +119,6 @@ def run_local(model_path: str,
               chat_template_config: Optional[ChatTemplateConfig] = None,
               server_name: str = 'localhost',
               server_port: int = 6006,
-              batch_size: int = 4,
               tp: int = 1,
               **kwargs):
     """chat with AI assistant through web ui.
@@ -148,7 +147,6 @@ def run_local(model_path: str,
             Default to None.
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
-        batch_size (int): batch size for running Turbomind directly
         tp (int): tensor parallel for Turbomind
     """
     InterFace.async_engine = AsyncEngine(
@@ -157,7 +155,6 @@ def run_local(model_path: str,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
         model_name=model_name,
-        instance_num=batch_size,
         tp=tp,
         **kwargs)
 
@@ -219,7 +216,8 @@ def run_local(model_path: str,
         demo.load(init, inputs=None, outputs=[state_session_id])
 
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=batch_size, max_size=100,
+    demo.queue(concurrency_count=InterFace.async_engine.instance_num,
+               max_size=100,
                api_open=True).launch(
                    max_threads=10,
                    share=True,

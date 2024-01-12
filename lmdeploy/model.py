@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
-import difflib
 import os
 from abc import abstractmethod
 from typing import List, Literal, Optional
 
+from fuzzywuzzy import fuzz, process
 from mmengine import Registry
 
 MODELS = Registry('model', locations=['lmdeploy.model'])
@@ -156,7 +156,7 @@ class BaseModel:
                              repetition_penalty=self.repetition_penalty)
 
 
-@MODELS.register_module(name='wizardlM')
+@MODELS.register_module(name='wizardlm')
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):
     """Chat template of vicuna model."""
@@ -441,7 +441,7 @@ class Puyu(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='llama2')
+@MODELS.register_module(name=['llama2', 'llama-2', 'llama-2-chat'])
 class Llama2(BaseModel):
     """Chat template of LLaMA2 model."""
 
@@ -689,7 +689,7 @@ class ChatGLM2(BaseModel):
         return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
 
 
-@MODELS.register_module(name='solar')
+@MODELS.register_module(name=['solar', 'solar-70b'])
 class SOLAR(BaseModel):
     """Chat template of SOLAR model.
 
@@ -824,7 +824,7 @@ class UltraChat(BaseModel):
         return ret
 
 
-@MODELS.register_module(name='yi')
+@MODELS.register_module(name=['yi', 'yi-chat', 'yi-200k', 'yi-34b'])
 class Yi(BaseModel):
     """Chat template of Yi model."""
 
@@ -897,12 +897,12 @@ class Yi(BaseModel):
         return ret
 
 
-def best_match_model(query: str, similarity_cutoff: float = 0.4):
-    """Get the model that match the query.
+def best_match_model(query: str, similarity_cutoff: float = 0.5):
+    """Get the model that matches the query.
 
     Args:
         query (str): the input query. Could be a model path.
-        similarity_cutoff (float): similarities below to the limit are ignored.
+        similarity_cutoff (float): similarities below the limit are ignored.
 
     Return:
         List[str] | None: the possible model names or none.
@@ -911,7 +911,22 @@ def best_match_model(query: str, similarity_cutoff: float = 0.4):
     if query.endswith('/'):
         query = query[:-1]
     base_name = os.path.basename(query).lower()
-    matches = difflib.get_close_matches(base_name,
-                                        model_names,
-                                        cutoff=similarity_cutoff)
-    return matches if matches else None
+    max_ratio, matched_name = float('-inf'), None
+    for model_name in model_names:
+        if model_name in base_name:
+            ratio = fuzz.ratio(model_name.lower(), base_name)
+            if ratio > max_ratio and model_name != 'base':  # skip base model
+                max_ratio = ratio
+                matched_name = model_name
+    if matched_name:
+        return matched_name
+
+    # Using fuzzy matching
+    matches = process.extract(base_name, model_names, scorer=fuzz.ratio)
+
+    # Ignore matches with score below similarity_cutoff
+    matches = [
+        match for match, score in matches if score / 100 >= similarity_cutoff
+    ]
+
+    return matches[0] if matches else None

@@ -29,7 +29,7 @@ lmdeploy chat turbomind $repo_id --model-name $model_name
 lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
-lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --tp 1
+lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
 ```
 
 ### 2) Other LM models
@@ -49,7 +49,7 @@ lmdeploy chat turbomind $repo_id --model-name $model_name
 lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
-lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --tp 1
+lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
 ```
 
 ### 3) A model converted by `lmdeploy convert`
@@ -67,5 +67,5 @@ lmdeploy chat turbomind ./workspace
 lmdeploy serve gradio ./workspace
 
 # Serving with Restful API
-lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --tp 1
 ```

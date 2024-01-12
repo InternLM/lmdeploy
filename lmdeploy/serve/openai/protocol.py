@@ -83,7 +83,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
     max_tokens: Optional[int] = 512
-    stop: Optional[bool] = False
+    stop: Optional[Union[str, List[str]]] = None
     stream: Optional[bool] = False
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
@@ -255,7 +255,7 @@ class GenerateRequest(BaseModel):
     session_id: int = -1
     interactive_mode: bool = False
     stream: bool = False
-    stop: bool = False
+    stop: Optional[Union[str, List[str]]] = None
     request_output_len: int = 512
     top_p: float = 0.8
     top_k: int = 40

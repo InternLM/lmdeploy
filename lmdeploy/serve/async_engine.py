@@ -49,7 +49,6 @@ class AsyncEngine:
         backend_config (EngineConfig): beckend config. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        instance_num (int): instance numbers to be created
         tp (int): tensor parallel
     """
 
@@ -60,7 +59,6 @@ class AsyncEngine:
                  backend_config: Optional[Union[TurbomindEngineConfig,
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
-                 instance_num: int = 32,
                  tp: int = 1,
                  **kwargs) -> None:
         if backend == 'turbomind':
@@ -79,13 +77,13 @@ class AsyncEngine:
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend = backend
+        self.instance_num = self.backend_config.max_batch_size
         self.tokenizer = self.engine.tokenizer
-        self.instance_num = instance_num
         self.id2step = {}
         self.id2generator = {}
         self.loop = asyncio.get_event_loop()
         self.gens_set = set()
-        for i in range(instance_num):
+        for i in range(self.instance_num):
             self.gens_set.add(self.engine.create_instance())
 
     def _build_turbomind(
@@ -114,6 +112,7 @@ class AsyncEngine:
             chat_template_config = ChatTemplateConfig(self.engine.model_name)
         self.chat_template = chat_template_config.chat_template
         self.session_len = self.engine.session_len
+        self.backend_config = backend_config
 
     def _build_pytorch(
             self,
@@ -157,6 +156,7 @@ class AsyncEngine:
             self.session_len = self.chat_template.session_len
         else:
             self.session_len = self.engine.session_len
+        self.backend_config = backend_config
 
     def __call__(self,
                  prompts: List[str],
@@ -309,7 +309,6 @@ class AsyncEngine:
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default
             step: int = 0,
-            stop: bool = False,
             do_preprocess: bool = True,
             **kwargs):
         """Generate responses.
@@ -323,7 +322,6 @@ class AsyncEngine:
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
-            stop (bool): whether stop inference
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
@@ -341,11 +339,7 @@ class AsyncEngine:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
-        if stop is True:
-            self.stop_session(session_id)
-            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
-                         finish_reason)
-        elif self.id2step[str(session_id)] + len(
+        if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens >= self.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
@@ -353,7 +347,7 @@ class AsyncEngine:
             if sequence_end is True and sequence_start is False:
                 self.end_session(session_id)
         else:
-            generator = await self.get_generator(stop, session_id)
+            generator = await self.get_generator(False, session_id)
             with self.safe_run(session_id):
                 response_size = 0
                 async for outputs in generator.async_stream_infer(
@@ -363,8 +357,7 @@ class AsyncEngine:
                         stream_output=stream_response,
                         sequence_start=(sequence_start),
                         sequence_end=sequence_end,
-                        step=self.id2step[str(session_id)],
-                        stop=stop):
+                        step=self.id2step[str(session_id)]):
                     status, res, tokens = outputs
                     # decode res
                     response = self.tokenizer.decode(res, offset=response_size)
@@ -389,7 +382,7 @@ class AsyncEngine:
                              len(input_ids), tokens, finish_reason)
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
-                if sequence_end or stop:
+                if sequence_end:
                     self.id2step[str(session_id)] = 0
                 # manually end pytorch session
                 # TODO modify pytorch or turbomind api

@@ -13,7 +13,6 @@ def pipeline(model_path: str,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
-             instance_num: int = 32,
              tp: int = 1,
              log_level='ERROR',
              **kwargs):
@@ -38,7 +37,8 @@ def pipeline(model_path: str,
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
         backend_config (EngineConfig): beckend config. Default to none.
-        instance_num (int): instance numbers to be created
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
@@ -50,21 +50,26 @@ def pipeline(model_path: str,
     """ # noqa E501
     from lmdeploy.serve.async_engine import AsyncEngine
     os.environ['TM_LOG_LEVEL'] = log_level
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
+    logger.setLevel(log_level)
     return AsyncEngine(model_path,
                        model_name=model_name,
                        backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,
-                       instance_num=instance_num,
                        tp=tp,
                        **kwargs)
 
 
 def serve(model_path: str,
           model_name: Optional[str] = None,
+          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+          backend_config: Optional[Union[TurbomindEngineConfig,
+                                         PytorchEngineConfig]] = None,
+          chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          instance_num: int = 64,
           tp: int = 1,
           log_level: str = 'ERROR',
           **kwargs):
@@ -87,9 +92,13 @@ def serve(model_path: str,
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (EngineConfig): beckend config. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
-        instance_num (int): number of instances of turbomind model
         tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
@@ -110,9 +119,11 @@ def serve(model_path: str,
     task = Process(target=serve,
                    args=(model_path, ),
                    kwargs=dict(model_name=model_name,
+                               backend=backend,
+                               backend_config=backend_config,
+                               chat_template_config=chat_template_config,
                                server_name=server_name,
                                server_port=server_port,
-                               instance_num=instance_num,
                                tp=tp,
                                log_level=log_level,
                                **kwargs))

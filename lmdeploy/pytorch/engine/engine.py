@@ -462,8 +462,7 @@ class Engine:
                 msg.sampling_param for msg in running
             ]
             grouped_params = dict()
-            for i, p in enumerate(sampling_params):
-                key = (p.top_k, p.top_p, p.temperature, p.repetition_penalty)
+            for i, key in enumerate(sampling_params):
                 grouped_params.setdefault(key, list())
                 grouped_params[key].append(i)
             return grouped_params
@@ -471,17 +470,11 @@ class Engine:
         def _sampling(grouped_params, split_logits, inputs):
             next_token_ids = torch.empty((len(running), ), dtype=torch.long)
             for param, idx in grouped_params.items():
-                top_k, top_p, temperature, _ = param
-                logits_processor = FusedLogitsProcessor(
-                    SamplingParam(
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                    ))
+                logits_processor = FusedLogitsProcessor(param)
                 input_ids = inputs.input_ids.reshape(-1, 1)
                 new_logits = split_logits[idx]
                 new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = new_logits.argmax(-1).cpu()
+                argmax_ids = logits_processor.sampling(new_logits).cpu()
                 next_token_ids[idx] = argmax_ids
             return next_token_ids
 
