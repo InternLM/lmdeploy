@@ -16,7 +16,8 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineGenerationConfig, ResponseType
+from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
+                               TurbomindEngineConfig)
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
                             best_match_model)
 from lmdeploy.tokenizer import Tokenizer
@@ -26,7 +27,6 @@ from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .engine_config import EngineConfig
 from .utils import ModelSource, create_hf_download_args, get_model_source
 
 # TODO: find another way import _turbomind
@@ -85,19 +85,19 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
-def _update_engine_config(config: EngineConfig, **kwargs):
+def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
     if config is None:
-        config = EngineConfig()
+        config = TurbomindEngineConfig()
     for k, v in kwargs.items():
         if v and hasattr(config, k):
             setattr(config, k, v)
             get_logger('turbomind').warning(
                 f'kwargs {k} is deprecated to initialize model, '
-                'use EngineConfig instead.')
+                'use TurbomindEngineConfig instead.')
     return config
 
 
-def _update_tm_config(dst: TurbomindModelConfig, src: EngineConfig):
+def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
     dst_dict = copy.deepcopy(dst.__dict__)
     src_dict = copy.deepcopy(src.__dict__)
     src_dict['tensor_para_size'] = src_dict['tp']
@@ -132,7 +132,7 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
-                 engine_config: EngineConfig = None,
+                 engine_config: TurbomindEngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
                  model_name: Optional[str] = None,
                  model_format: Optional[str] = None,
@@ -274,7 +274,7 @@ class TurboMind:
                 tm_params[k].append(v)
 
     def _from_hf(self, model_source: ModelSource, model_path: str,
-                 engine_config: EngineConfig):
+                 engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
@@ -343,7 +343,8 @@ class TurboMind:
 
         return model_comm
 
-    def _from_workspace(self, model_path: str, engine_config: EngineConfig):
+    def _from_workspace(self, model_path: str,
+                        engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
         ini_path = osp.join(model_path, 'triton_models', 'weights',
                             'config.ini')
@@ -391,7 +392,7 @@ class TurboMind:
     def from_pretrained(
             cls,
             pretrained_model_name_or_path: str,
-            engine_config: EngineConfig = None,
+            engine_config: TurbomindEngineConfig = None,
             model_name: Optional[str] = None,
             model_format: Optional[str] = None,
             group_size: Optional[int] = None,

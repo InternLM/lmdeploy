@@ -120,9 +120,11 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
 
-    from lmdeploy.pytorch.engine import Engine, EngineConfig
+    from lmdeploy.messages import PytorchEngineConfig
+    from lmdeploy.pytorch.engine import Engine
 
-    tm_model = Engine(model_path, EngineConfig(model_name='llama', tp=tp))
+    tm_model = Engine(model_path, PytorchEngineConfig(model_name='llama',
+                                                      tp=tp))
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
