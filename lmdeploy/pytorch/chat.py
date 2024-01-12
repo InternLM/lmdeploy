@@ -2,7 +2,7 @@
 
 import os
 import random
-from typing import Dict, List
+from typing import List
 
 from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import MODELS, best_match_model
@@ -143,7 +143,7 @@ def main(model_path: str,
          repetition_penalty: float = 1.0,
          tp: int = 1,
          stream_output: bool = True,
-         adapter: Dict[str, str] = None,
+         adapter: str = None,
          trust_remote_code: bool = True):
     """An example to perform model inference through the command line
     interface.
@@ -161,9 +161,12 @@ def main(model_path: str,
         adapter (str): path to lora adapter.
         trust_remote_code (bool): Trust remote code.
     """
+    adapters = None
+    if adapter is not None:
+        adapters = dict(default=adapter)
     engine_config = EngineConfig(model_name=model_name,
                                  tp=tp,
-                                 adapters=adapter)
+                                 adapters=adapters)
     gen_config = EngineGenerationConfig(max_new_tokens=512,
                                         top_k=top_k,
                                         top_p=top_p,
