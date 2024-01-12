@@ -13,28 +13,23 @@ from lmdeploy.messages import EngineGenerationConfig
 from .block import LogicalTokenBlocks
 
 
+@dataclass
 class SamplingParam:
     """Sampling parameter."""
+    top_p: float = 1.0
+    top_k: int = 1
+    temperature: float = 0.8
+    repetition_penalty: float = 1.0
+    ignore_eos: bool = False
+    random_seed: int = None
+    stop_words: List[int] = None
+    bad_words: List[int] = None
 
-    def __init__(
-        self,
-        top_p: float = 1.0,
-        top_k: int = 1,
-        temperature: float = 0.8,
-        repetition_penalty: float = 1.0,
-        ignore_eos: bool = False,
-        random_seed: int = None,
-        stop_words: List[int] = None,
-        bad_words: List[int] = None,
-    ):
-        self.top_p = top_p
-        self.top_k = top_k
-        self.temperature = temperature
-        self.repetition_penalty = repetition_penalty
-        self.ignore_eos = ignore_eos
-        self.random_seed = random_seed
-        self.stop_words = stop_words
-        self.bad_words = bad_words
+    def __hash__(self):
+        """hash."""
+        return hash(
+            (self.top_k, self.top_p, self.temperature, self.repetition_penalty,
+             self.ignore_eos, self.random_seed))
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):

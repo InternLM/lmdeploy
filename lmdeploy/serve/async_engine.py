@@ -134,7 +134,7 @@ class AsyncEngine:
             if potential_names is None:
                 raise ArgumentError('Please set model_name or backend_config.')
             else:
-                self.model_name = potential_names[0]
+                self.model_name = potential_names
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
@@ -310,7 +310,6 @@ class AsyncEngine:
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default
             step: int = 0,
-            stop: bool = False,
             do_preprocess: bool = True,
             **kwargs):
         """Generate responses.
@@ -324,7 +323,6 @@ class AsyncEngine:
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             step (int): the offset of the k/v cache
-            stop (bool): whether stop inference
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
@@ -342,11 +340,7 @@ class AsyncEngine:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
-        if stop is True:
-            self.stop_session(session_id)
-            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
-                         finish_reason)
-        elif self.id2step[str(session_id)] + len(
+        if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens >= self.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
@@ -354,7 +348,7 @@ class AsyncEngine:
             if sequence_end is True and sequence_start is False:
                 self.end_session(session_id)
         else:
-            generator = await self.get_generator(stop, session_id)
+            generator = await self.get_generator(False, session_id)
             with self.safe_run(session_id):
                 response_size = 0
                 async for outputs in generator.async_stream_infer(
@@ -364,8 +358,7 @@ class AsyncEngine:
                         stream_output=stream_response,
                         sequence_start=(sequence_start),
                         sequence_end=sequence_end,
-                        step=self.id2step[str(session_id)],
-                        stop=stop):
+                        step=self.id2step[str(session_id)]):
                     status, res, tokens = outputs
                     # decode res
                     response = self.tokenizer.decode(res, offset=response_size)
@@ -390,7 +383,7 @@ class AsyncEngine:
                              len(input_ids), tokens, finish_reason)
                 # update step
                 self.id2step[str(session_id)] += len(input_ids) + tokens
-                if sequence_end or stop:
+                if sequence_end:
                     self.id2step[str(session_id)] = 0
                 # manually end pytorch session
                 # TODO modify pytorch or turbomind api

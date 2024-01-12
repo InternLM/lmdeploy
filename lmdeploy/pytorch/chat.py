@@ -79,7 +79,7 @@ def run_chat(model_path: str,
     seed = random.getrandbits(64)
     model_name = engine_config.model_name
     if model_name is None:
-        model_name = best_match_model(model_path)[0]
+        model_name = best_match_model(model_path)
         assert model_name is not None, 'Can not find match model template'
         print(f'match template: <{model_name}>')
     model = MODELS.get(model_name)()
