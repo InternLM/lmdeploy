@@ -41,18 +41,25 @@ class SubCliServe:
         # common args
         ArgumentHelper.backend(parser)
 
-        # common engine args
-        ArgumentHelper.tp(parser)
-        ArgumentHelper.model_name(parser)
-        ArgumentHelper.session_len(parser)
-        ArgumentHelper.max_batch_size(parser)
-
         # chat template args
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
 
+        # pytorch engine args
+        pt_group = parser.add_argument_group('PyTorch engine arguments')
+        # common engine args
+        tp_act = ArgumentHelper.tp(pt_group)
+        model_name_act = ArgumentHelper.model_name(pt_group)
+        session_len_act = ArgumentHelper.session_len(pt_group)
+        max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
+
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
+        # common engine args
+        tb_group._group_actions.append(tp_act)
+        tb_group._group_actions.append(model_name_act)
+        tb_group._group_actions.append(session_len_act)
+        tb_group._group_actions.append(max_batch_size_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
@@ -79,23 +86,6 @@ class SubCliServe:
             ' of a model hosted inside a model repo on huggingface.co,'
             ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
             ', "baichuan-inc/baichuan2-7b-chat" and so on')
-        # common args
-        ArgumentHelper.backend(parser)
-        ArgumentHelper.tp(parser)
-        ArgumentHelper.log_level(parser)
-        ArgumentHelper.meta_instruction(parser)
-        ArgumentHelper.cap(parser)
-        ArgumentHelper.model_name(parser)
-        ArgumentHelper.session_len(parser)
-        ArgumentHelper.max_batch_size(parser)
-
-        # turbomind args
-        tb_group = parser.add_argument_group('TurboMind engine arguments')
-        ArgumentHelper.model_format(tb_group)
-        ArgumentHelper.quant_policy(tb_group)
-        ArgumentHelper.rope_scaling_factor(tb_group)
-        ArgumentHelper.cache_max_entry_count(tb_group)
-
         parser.add_argument('--server-name',
                             type=str,
                             default='0.0.0.0',
@@ -126,6 +116,32 @@ class SubCliServe:
                             type=str,
                             default='',
                             help='Qos policy config path')
+        # common args
+        ArgumentHelper.backend(parser)
+
+        # chat template args
+        ArgumentHelper.meta_instruction(parser)
+        ArgumentHelper.cap(parser)
+
+        # pytorch engine args
+        pt_group = parser.add_argument_group('PyTorch engine arguments')
+        # common engine args
+        tp_act = ArgumentHelper.tp(pt_group)
+        model_name_act = ArgumentHelper.model_name(pt_group)
+        session_len_act = ArgumentHelper.session_len(pt_group)
+        max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
+
+        # turbomind args
+        tb_group = parser.add_argument_group('TurboMind engine arguments')
+        # common engine args
+        tb_group._group_actions.append(tp_act)
+        tb_group._group_actions.append(model_name_act)
+        tb_group._group_actions.append(session_len_act)
+        tb_group._group_actions.append(max_batch_size_act)
+        ArgumentHelper.model_format(tb_group)
+        ArgumentHelper.quant_policy(tb_group)
+        ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.cache_max_entry_count(tb_group)
 
     @staticmethod
     def add_parser_api_client():

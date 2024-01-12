@@ -148,7 +148,7 @@ class SubCliLite(object):
 
     @staticmethod
     def smooth_quant(args):
-        """Perform smooth quantization with."""
+        """Perform w8a8 quantization using SmoothQuant."""
         from lmdeploy.lite.apis.smooth_quant import smooth_quant
         kwargs = convert_args(args)
         smooth_quant(**kwargs)
