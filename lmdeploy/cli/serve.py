@@ -118,6 +118,7 @@ class SubCliServe:
                             help='Qos policy config path')
         # common args
         ArgumentHelper.backend(parser)
+        ArgumentHelper.log_level(parser)
 
         # chat template args
         ArgumentHelper.meta_instruction(parser)
