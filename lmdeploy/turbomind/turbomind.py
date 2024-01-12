@@ -426,6 +426,11 @@ class TurboMind:
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
+            if model_name is None and (engine_config is None
+                                       or engine_config.model_name is None):
+                # huggingface repo id will be changed to local path in .cache
+                # have to match name in ahead.
+                model_name = best_match_model(pretrained_model_name_or_path)
             if not osp.exists(pretrained_model_name_or_path):
                 download_kwargs = create_hf_download_args(**kwargs)
                 local_path = snapshot_download(pretrained_model_name_or_path,
