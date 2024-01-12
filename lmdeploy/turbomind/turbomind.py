@@ -27,8 +27,7 @@ from .deploy.converter import (get_model_format, supported_formats,
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 from .engine_config import EngineConfig
-from .utils import (ModelSource, check_tm_model_input, create_hf_download_args,
-                    get_model_source)
+from .utils import ModelSource, create_hf_download_args, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -142,13 +141,53 @@ class TurboMind:
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
 
-        engine_config = _update_engine_config(engine_config,
-                                              model_name=model_name,
-                                              model_format=model_format,
-                                              group_size=group_size,
-                                              tp=tp,
-                                              **kwargs)
-        tp = engine_config.tp
+        # check model_name equal in engine_config and passed in
+        if engine_config is not None and engine_config.model_name is not None:
+            if model_name is not None:
+                assert model_name == engine_config.model_name, 'Got different'
+                f' model names. model_name: {model_name}, engine_config model '
+                f'name: {engine_config.model_name}'
+
+        # if loading from workspace and engine_config is None, use config.ini
+        # and ignore passed args like model_format, tp, etc.
+        if model_source == ModelSource.WORKSPACE and engine_config is None:
+
+            def _catch_args(**kwargs):
+                args = []
+                for k, v in kwargs.items():
+                    if v and hasattr(EngineConfig, k):
+                        args.append(k)
+                return args
+
+            args = _catch_args(**kwargs,
+                               model_name=model_name,
+                               model_format=model_format,
+                               tp=tp)
+            if len(args) > 0:
+                get_logger('turbomind').warning(
+                    f'loading from workspace, ignore args {args} '
+                    'please use EngineConfig or modify config.ini')
+
+        else:
+            engine_config = _update_engine_config(engine_config,
+                                                  model_name=model_name,
+                                                  model_format=model_format,
+                                                  group_size=group_size,
+                                                  tp=tp,
+                                                  **kwargs)
+
+        # match model name
+        if model_source == ModelSource.HF_MODEL and \
+                engine_config.model_name is None:
+            potential_names = best_match_model(model_path)
+            if potential_names is None:
+                logger.warning(f'Please input a model_name for {model_source}')
+            else:
+                engine_config.model_name = potential_names
+                logger.warning('Best matched chat template name: '
+                               f'{engine_config.model_name}')
+
+        tp = engine_config.tp if engine_config is not None else 1
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
 
@@ -318,16 +357,17 @@ class TurboMind:
 
         # check whether input tp is valid
         if cfg.tensor_para_size != 1 and \
-                engine_config.tp != cfg.tensor_para_size:
+                self.gpu_count != cfg.tensor_para_size:
             get_logger('turbomind').info(
                 f'found tp={cfg.tensor_para_size} in config.ini.')
             self.gpu_count = cfg.tensor_para_size
-            engine_config.tp = cfg.tensor_para_size
 
         # update cfg
-        cfg = _update_tm_config(cfg, engine_config)
-        if engine_config.session_len is not None:
-            cfg.session_len = engine_config.session_len
+        if engine_config is not None:
+            engine_config.tp = cfg.tensor_para_size
+            cfg = _update_tm_config(cfg, engine_config)
+            if engine_config.session_len is not None:
+                cfg.session_len = engine_config.session_len
 
         # update cls
         self.config = cfg
@@ -382,28 +422,9 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
-        if engine_config is not None and engine_config.model_name is not None:
-            if model_name is None:
-                model_name = engine_config.model_name
-            else:
-                assert model_name == engine_config.model_name, 'Got different'
-                f' model names. model_name: {model_name}, engine_config model '
-                f'name: {engine_config.model_name}'
-        # try fuzzy matching to get a model_name
-        if model_name is None and model_source == ModelSource.HF_MODEL:
-            potential_names = best_match_model(pretrained_model_name_or_path)
-            if potential_names is None:
-                logger.warning(f'Please input a model_name for {model_source}')
-            else:
-                model_name = potential_names[0]
-                logger.warning(
-                    f'Best matched chat template name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
-            check_tm_model_input(pretrained_model_name_or_path,
-                                 model_name=model_name,
-                                 **kwargs)
             if not osp.exists(pretrained_model_name_or_path):
                 download_kwargs = create_hf_download_args(**kwargs)
                 local_path = snapshot_download(pretrained_model_name_or_path,
