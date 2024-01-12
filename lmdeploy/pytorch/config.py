@@ -34,6 +34,7 @@ class EngineConfig:
             would be allocate according to current environment.
         num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
             would be allocate according to current environment.
+        num_tokens_per_iter (int): Max numbers of the input token.
     """
     model_name: str = ''
     tp: int = 1
@@ -45,6 +46,7 @@ class EngineConfig:
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
+    num_tokens_per_iter: int = 16384
 
 
 @dataclass
@@ -57,7 +59,7 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    max_prefill_seq_len: int = 10240
+    num_tokens_per_iter: int = 16384
 
 
 @dataclass

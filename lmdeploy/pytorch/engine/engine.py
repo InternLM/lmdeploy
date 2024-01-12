@@ -114,7 +114,8 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type='recompute')
+            eviction_type='recompute',
+            num_tokens_per_iter=engine_config.num_tokens_per_iter)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -508,7 +509,7 @@ class Engine:
     def _model_forward(self, inputs: ModelInputs, swap_in_map: Dict,
                        swap_out_map: Dict):
         """model forward."""
-        max_prefill_seq_len = self.scheduler_config.max_prefill_seq_len
+        num_tokens_per_iter = self.scheduler_config.num_tokens_per_iter
         swap_done = False
 
         class _LogitsGather:
@@ -530,12 +531,14 @@ class Engine:
                                                   self._max_seq_len,
                                                   logits.size(-1),
                                                   device='cpu')
-                out_logits[:, start:start + seq_len] = logits.detach().cpu()
+                out_logits[:, start:start + seq_len].copy_(logits,
+                                                           non_blocking=True)
                 self._start = start + seq_len
                 self._out_logits = out_logits
 
             def get_logits(self):
                 """get logits."""
+                torch.cuda.synchronize()
                 return self._out_logits
 
         def __forward(inputs):
@@ -555,7 +558,7 @@ class Engine:
             """one large sequence."""
             new_input = inputs.slice(index, index + 1)
             max_seq_len = new_input.seq_length[0]
-            new_inputs = new_input.split(max_prefill_seq_len,
+            new_inputs = new_input.split(num_tokens_per_iter,
                                          self.cache_config.block_size)
 
             logits_gather = _LogitsGather(max_seq_len)
@@ -582,11 +585,11 @@ class Engine:
             logits_gather = _LogitsGather(max_seq_len)
             while idx < batch_size:
                 slen = seq_len[idx]
-                if token_count == 0 and slen > max_prefill_seq_len:
+                if token_count == 0 and slen > num_tokens_per_iter:
                     tmp_out = __long_context_single_forward(inputs, idx)
                     logits_gather.gather(tmp_out)
                     idx += 1
-                elif token_count + slen > max_prefill_seq_len:
+                elif token_count + slen > num_tokens_per_iter:
                     tmp_out = __long_context_batched_forward(
                         inputs, indices[0], idx)
                     logits_gather.gather(tmp_out)
@@ -604,7 +607,7 @@ class Engine:
             tmp_out['logits'] = logits_gather.get_logits()
             return tmp_out
 
-        if inputs.input_ids.numel() < max_prefill_seq_len:
+        if inputs.input_ids.numel() < num_tokens_per_iter:
             return __forward(inputs)
         else:
             return __long_context_forward(inputs)
