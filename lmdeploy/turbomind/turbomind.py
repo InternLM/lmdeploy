@@ -155,7 +155,7 @@ class TurboMind:
             def _catch_args(**kwargs):
                 args = []
                 for k, v in kwargs.items():
-                    if v and hasattr(EngineConfig, k):
+                    if v and hasattr(TurbomindEngineConfig, k):
                         args.append(k)
                 return args
 
@@ -166,7 +166,7 @@ class TurboMind:
             if len(args) > 0:
                 get_logger('turbomind').warning(
                     f'loading from workspace, ignore args {args} '
-                    'please use EngineConfig or modify config.ini')
+                    'please use TurbomindEngineConfig or modify config.ini')
 
         else:
             engine_config = _update_engine_config(engine_config,
