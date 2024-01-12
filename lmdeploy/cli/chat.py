@@ -39,7 +39,7 @@ class SubCliChat(object):
         ArgumentHelper.repetition_penalty(gen_group)
 
         # other args
-        ArgumentHelper.session_id(parser)
+        ArgumentHelper.session_len(parser)
         parser.add_argument('--adapter',
                             default=None,
                             action=DictAction,
@@ -73,7 +73,7 @@ class SubCliChat(object):
         ArgumentHelper.model_name(engine_group)
 
         # other arguments
-        ArgumentHelper.session_id(parser)
+        ArgumentHelper.session_len(parser)
         ArgumentHelper.cap(parser)
         ArgumentHelper.stream_output(parser)
         parser.add_argument('--request-output-len',
@@ -101,7 +101,6 @@ class SubCliChat(object):
         run_chat(args.model_path,
                  engine_config,
                  gen_config=gen_config,
-                 session_id=args.session_id,
                  trust_remote_code=args.trust_remote_code)
 
     @staticmethod
