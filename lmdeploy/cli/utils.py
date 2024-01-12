@@ -2,6 +2,8 @@
 
 import argparse
 
+from mmengine.config import DictAction
+
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
 
@@ -218,3 +220,19 @@ class ArgumentHelper:
                             type=str,
                             default=None,
                             help='System prompt for ChatTemplateConfig')
+
+    @staticmethod
+    def cache_max_entry_count(parser):
+        parser.add_argument(
+            '--cache-max-entry-count',
+            type=float,
+            default=0.5,
+            help='The percentage of gpu memory occupied by the k/v cache')
+
+    @staticmethod
+    def adapters(parser):
+        parser.add_argument('--adapters',
+                            default=None,
+                            action=DictAction,
+                            help='Used key-values pairs in xxx=yyy format'
+                            ' to set the path lora adapter')

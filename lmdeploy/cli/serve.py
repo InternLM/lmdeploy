@@ -37,14 +37,17 @@ class SubCliServe:
                             type=int,
                             default=6006,
                             help='The port of gradio server')
-        parser.add_argument('--batch-size',
-                            type=int,
-                            default=32,
-                            help='Batch size for running turbomind directly')
+
         # common args
         ArgumentHelper.backend(parser)
+
+        # common engine args
         ArgumentHelper.tp(parser)
+        ArgumentHelper.model_name(parser)
+        ArgumentHelper.session_len(parser)
         ArgumentHelper.max_batch_size(parser)
+
+        # chat template args
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
 
@@ -53,12 +56,7 @@ class SubCliServe:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
-        ArgumentHelper.use_logn_attn(tb_group)
-
-        # pytorch args
-        pt_group = parser.add_argument_group('PyTorch engine arguments')
-        ArgumentHelper.block_size(pt_group)
-        ArgumentHelper.model_name(pt_group)
+        ArgumentHelper.cache_max_entry_count(tb_group)
 
     @staticmethod
     def add_parser_api_server():
@@ -84,22 +82,19 @@ class SubCliServe:
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.tp(parser)
-        ArgumentHelper.max_batch_size(parser)
         ArgumentHelper.log_level(parser)
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
+        ArgumentHelper.model_name(parser)
+        ArgumentHelper.session_len(parser)
+        ArgumentHelper.max_batch_size(parser)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
-        ArgumentHelper.use_logn_attn(tb_group)
-
-        # pytorch args
-        pt_group = parser.add_argument_group('PyTorch engine arguments')
-        ArgumentHelper.block_size(pt_group)
-        ArgumentHelper.model_name(pt_group)
+        ArgumentHelper.cache_max_entry_count(tb_group)
 
         parser.add_argument('--server-name',
                             type=str,
@@ -169,17 +164,20 @@ class SubCliServe:
         if args.backend == 'pytorch':
             from lmdeploy.pytorch.config import EngineConfig
             backend_config = EngineConfig(tp=args.tp,
+                                          model_name=args.model_name,
                                           max_batch_size=args.max_batch_size,
-                                          block_size=args.block_size)
+                                          session_len=args.session_len)
         else:
             from lmdeploy.turbomind.engine_config import EngineConfig
             backend_config = EngineConfig(
+                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
+                session_len=args.session_len,
                 model_format=args.model_format,
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
-                use_logn_attn=args.use_logn_attn)
+                cache_max_entry_count=args.cache_max_entry_count)
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
@@ -187,7 +185,6 @@ class SubCliServe:
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
-            batch_size=args.batch_size,
             backend=args.backend,
             backend_config=backend_config,
             chat_template_config=chat_template_config)
@@ -200,23 +197,25 @@ class SubCliServe:
         if args.backend == 'pytorch':
             from lmdeploy.pytorch.config import EngineConfig
             backend_config = EngineConfig(tp=args.tp,
+                                          model_name=args.model_name,
                                           max_batch_size=args.max_batch_size,
-                                          block_size=args.block_size)
+                                          session_len=args.session_len)
         else:
             from lmdeploy.turbomind.engine_config import EngineConfig
             backend_config = EngineConfig(
+                model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
+                session_len=args.session_len,
                 model_format=args.model_format,
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
-                use_logn_attn=args.use_logn_attn)
+                cache_max_entry_count=args.cache_max_entry_count)
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
             capability=args.cap)
         run_api_server(args.model_path,
-                       model_name=args.model_name,
                        backend=args.backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,

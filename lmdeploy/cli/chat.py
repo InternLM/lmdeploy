@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from mmengine.config import DictAction
-
 from .cli import CLI
 from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
@@ -24,27 +22,14 @@ class SubCliChat(object):
         parser.add_argument('model_path',
                             type=str,
                             help='The huggingface model path')
-        # enging args
+        # engine args
         engine_group = parser.add_argument_group('Engine arguments')
         ArgumentHelper.model_name(engine_group)
         ArgumentHelper.tp(engine_group)
-        ArgumentHelper.max_batch_size(engine_group)
-        ArgumentHelper.block_size(engine_group)
-
-        # generation args
-        gen_group = parser.add_argument_group('Generation arguments')
-        ArgumentHelper.top_k(gen_group)
-        ArgumentHelper.top_p(gen_group)
-        ArgumentHelper.temperature(gen_group)
-        ArgumentHelper.repetition_penalty(gen_group)
+        ArgumentHelper.session_len(engine_group)
+        ArgumentHelper.adapters(engine_group)
 
         # other args
-        ArgumentHelper.session_len(parser)
-        parser.add_argument('--adapter',
-                            default=None,
-                            action=DictAction,
-                            help='Used key-values pairs in xxx=yyy format'
-                            ' to set the path lora adapter')
         parser.add_argument('--trust-remote-code',
                             action='store_false',
                             default=True,
@@ -65,42 +50,27 @@ class SubCliChat(object):
         # engine arguments
         engine_group = parser.add_argument_group('Engine arguments')
         ArgumentHelper.tp(engine_group)
-        ArgumentHelper.max_batch_size(engine_group)
         ArgumentHelper.model_format(engine_group)
         ArgumentHelper.quant_policy(engine_group)
-        ArgumentHelper.rope_scaling_factor(engine_group)
-        ArgumentHelper.use_logn_attn(engine_group)
         ArgumentHelper.model_name(engine_group)
-
+        ArgumentHelper.cache_max_entry_count(engine_group)
+        ArgumentHelper.rope_scaling_factor(engine_group)
+        ArgumentHelper.session_len(engine_group)
         # other arguments
-        ArgumentHelper.session_len(parser)
         ArgumentHelper.cap(parser)
-        ArgumentHelper.stream_output(parser)
-        parser.add_argument('--request-output-len',
-                            type=int,
-                            default=512,
-                            help='Output token nums')
 
     @staticmethod
     def torch(args):
         """Chat with PyTorch inference engine through terminal."""
-        from lmdeploy.messages import EngineGenerationConfig
         from lmdeploy.pytorch.chat import run_chat
         from lmdeploy.pytorch.config import EngineConfig
 
         engine_config = EngineConfig(model_name=args.model_name,
                                      tp=args.tp,
-                                     max_batch_size=args.max_batch_size,
-                                     adapters=args.adapter)
-        gen_config = EngineGenerationConfig(
-            top_k=args.top_k,
-            top_p=args.top_p,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-        )
+                                     session_len=args.session_len,
+                                     adapters=args.adapters)
         run_chat(args.model_path,
                  engine_config,
-                 gen_config=gen_config,
                  trust_remote_code=args.trust_remote_code)
 
     @staticmethod

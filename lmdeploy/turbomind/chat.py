@@ -37,7 +37,7 @@ def main(model_path: str,
          cap: str = 'chat',
          tp: int = 1,
          stream_output: bool = True,
-         request_output_len: int = 512,
+         request_output_len: int = 1024,
          engine_config: EngineConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
