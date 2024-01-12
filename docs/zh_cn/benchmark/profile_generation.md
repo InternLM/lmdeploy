@@ -43,7 +43,7 @@ cd lmdeploy/benchmark
 lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 
 # 执行测速脚本
-python3 profile_generation ./internlm-7b
+python3 profile_generation.py ./internlm-7b
 ```
 
 ## 测试方法
