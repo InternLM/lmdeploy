@@ -5,8 +5,6 @@ import random
 
 from lmdeploy.turbomind.utils import get_gen_param
 
-from .engine_config import EngineConfig
-
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
@@ -38,7 +36,6 @@ def main(model_path: str,
          tp: int = 1,
          stream_output: bool = True,
          request_output_len: int = 1024,
-         engine_config: EngineConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -52,12 +49,10 @@ def main(model_path: str,
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
-        engine_config (EngineConfig): The config for turbomind engine
         **kwarg (dict): other arguments for initializing model's chat template
     """
     from lmdeploy import turbomind as tm
     tm_model = tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=engine_config,
                                             model_name=model_name,
                                             tp=tp,
                                             capability=cap,

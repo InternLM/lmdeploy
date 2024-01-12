@@ -44,9 +44,13 @@ class SubCliChat(object):
             description=SubCliChat.turbomind.__doc__,
         )
         parser.set_defaults(run=SubCliChat.turbomind)
-        parser.add_argument('model_path',
-                            type=str,
-                            help='The path of the deployed model')
+        parser.add_argument(
+            'model_path',
+            type=str,
+            help='The path of the deployed model. '
+            'It can be in format of huggingface or turbomind. '
+            'When it is turbomind model, all arguments for engine'
+            'config would be ignored, so you need to change the `config.ini`')
         # engine arguments
         engine_group = parser.add_argument_group('Engine arguments')
         ArgumentHelper.tp(engine_group)

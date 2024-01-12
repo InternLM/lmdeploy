@@ -69,10 +69,12 @@ def run_chat(model_path: str,
                                       trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
-
     adapter_name = None
     if engine_config.adapters is not None:
         adapter_name = next(iter(engine_config.adapters.keys()))
+
+    if gen_config is None:
+        gen_config = EngineGenerationConfig()
 
     nth_round = 1
     step = 0
