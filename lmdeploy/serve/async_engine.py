@@ -133,7 +133,7 @@ class AsyncEngine:
             if potential_names is None:
                 raise ArgumentError('Please set model_name or backend_config.')
             else:
-                self.model_name = potential_names[0]
+                self.model_name = potential_names
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
