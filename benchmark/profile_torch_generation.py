@@ -122,7 +122,9 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
 
     from lmdeploy.pytorch.engine import Engine, EngineConfig
 
-    tm_model = Engine(model_path, EngineConfig(model_name='llama', tp=tp))
+    tm_model = Engine(
+        model_path,
+        EngineConfig(model_name='llama', tp=tp, max_batch_size=concurrency))
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
