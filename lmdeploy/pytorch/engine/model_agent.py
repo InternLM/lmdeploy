@@ -787,11 +787,11 @@ class TPModelAgent(AutoModelAgent):
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
-        mp.set_start_method('spawn')
+        self.mp_ctx = mp.get_context('spawn')
         super().__init__(model_config=model_config, cache_config=cache_config)
         self.world_size = world_size
-        self.tp_model_in_que = mp.Queue(10)
-        self.tp_model_out_que = mp.Queue(10)
+        self.tp_model_in_que = self.mp_ctx.Queue(10)
+        self.tp_model_out_que = self.mp_ctx.Queue(10)
 
         self.patch_model_tp(model_path,
                             model_config=model_config,
