@@ -7,7 +7,7 @@
 启动代理服务：
 
 ```shell
-python3 -m lmdeploy.serve.proxy --server_name {server_name} --server_port {server_port} --strategy "min_expected_latency"
+python3 -m lmdeploy.serve.proxy.proxy --server_name {server_name} --server_port {server_port} --strategy "min_expected_latency"
 ```
 
 启动成功后，代理服务的 URL 也会被脚本打印。浏览器访问这个 URL，可以打开 Swagger UI。

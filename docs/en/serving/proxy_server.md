@@ -7,7 +7,7 @@ The request distributor service can parallelize multiple api_server services. Us
 Start the proxy service:
 
 ```shell
-python3 -m lmdeploy.serve.proxy --server_name {server_name} --server_port {server_port} --strategy "min_expected_latency"
+python3 -m lmdeploy.serve.proxy.proxy --server_name {server_name} --server_port {server_port} --strategy "min_expected_latency"
 ```
 
 After startup is successful, the URL of the proxy service will also be printed by the script. Access this URL in your browser to open the Swagger UI.
