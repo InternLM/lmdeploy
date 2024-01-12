@@ -92,9 +92,6 @@ def _update_engine_config(config: EngineConfig, **kwargs):
     for k, v in kwargs.items():
         if v and hasattr(config, k):
             setattr(config, k, v)
-            if k == 'model_name':
-                # model_name may be matched by best_match_model
-                continue
             get_logger('turbomind').warning(
                 f'kwargs {k} is deprecated to initialize model, '
                 'use EngineConfig instead.')
