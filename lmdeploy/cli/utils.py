@@ -149,9 +149,9 @@ class ArgumentHelper:
             '--cap',
             type=str,
             default='chat',
-            choices=['completion', 'infill', 'instruct', 'python'],
+            choices=['completion', 'infilling', 'chat', 'python'],
             help='The capability of a model. For example, codellama has the '
-            'ability among ["completion", "infill", "instruct", "python"]')
+            'ability among ["completion", "infilling", "chat", "python"]')
 
     @staticmethod
     def log_level(parser):
