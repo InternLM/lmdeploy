@@ -70,6 +70,27 @@ class SubCliLite(object):
         ArgumentHelper.device(parser)
 
     @staticmethod
+    def add_parser_smooth_quant():
+        parser = SubCliLite.subparsers.add_parser(
+            'smooth_quant',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=SubCliLite.smooth_quant.__doc__,
+            help=SubCliLite.smooth_quant.__doc__)
+        parser.set_defaults(run=SubCliLite.smooth_quant)
+        parser.add_argument('model',
+                            type=str,
+                            help='The name or path of the model to be loaded')
+        parser.add_argument(
+            '--work-dir',
+            type=str,
+            default='./work_dir',
+            help='The working directory for outputs. defaults to "./work_dir"')
+        ArgumentHelper.calib_dataset(parser)
+        ArgumentHelper.calib_samples(parser)
+        ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.device(parser)
+
+    @staticmethod
     def add_parser_kv_qparams():
         parser = SubCliLite.subparsers.add_parser(
             'kv_qparams',
@@ -126,8 +147,16 @@ class SubCliLite(object):
         run_kv_qparams(**kwargs)
 
     @staticmethod
+    def smooth_quant(args):
+        """Perform smooth quantization with."""
+        from lmdeploy.lite.apis.smooth_quant import smooth_quant
+        kwargs = convert_args(args)
+        smooth_quant(**kwargs)
+
+    @staticmethod
     def add_parsers():
         """Add all parsers."""
         SubCliLite.add_parser_auto_awq()
         SubCliLite.add_parser_calibrate()
         SubCliLite.add_parser_kv_qparams()
+        SubCliLite.add_parser_smooth_quant()
