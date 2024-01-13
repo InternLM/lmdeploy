@@ -179,14 +179,15 @@ class SubCliServe:
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
         if args.backend == 'pytorch':
-            from lmdeploy.pytorch.config import EngineConfig
-            backend_config = EngineConfig(tp=args.tp,
-                                          model_name=args.model_name,
-                                          max_batch_size=args.max_batch_size,
-                                          session_len=args.session_len)
+            from lmdeploy.messages import PytorchEngineConfig
+            backend_config = PytorchEngineConfig(
+                tp=args.tp,
+                model_name=args.model_name,
+                max_batch_size=args.max_batch_size,
+                session_len=args.session_len)
         else:
-            from lmdeploy.turbomind.engine_config import EngineConfig
-            backend_config = EngineConfig(
+            from lmdeploy.messages import TurbomindEngineConfig
+            backend_config = TurbomindEngineConfig(
                 model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,
@@ -212,14 +213,15 @@ class SubCliServe:
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
         if args.backend == 'pytorch':
-            from lmdeploy.pytorch.config import EngineConfig
-            backend_config = EngineConfig(tp=args.tp,
-                                          model_name=args.model_name,
-                                          max_batch_size=args.max_batch_size,
-                                          session_len=args.session_len)
+            from lmdeploy.messages import PytorchEngineConfig
+            backend_config = PytorchEngineConfig(
+                tp=args.tp,
+                model_name=args.model_name,
+                max_batch_size=args.max_batch_size,
+                session_len=args.session_len)
         else:
-            from lmdeploy.turbomind.engine_config import EngineConfig
-            backend_config = EngineConfig(
+            from lmdeploy.messages import TurbomindEngineConfig
+            backend_config = TurbomindEngineConfig(
                 model_name=args.model_name,
                 tp=args.tp,
                 max_batch_size=args.max_batch_size,

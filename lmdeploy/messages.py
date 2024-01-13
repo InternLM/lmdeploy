@@ -100,7 +100,7 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_name (str): the name of the deployed
+        model_name (str): the name of the deployed model
         model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq], `hf` meaning `hf_llama`, `llama` meaning `meta_llama`, `awq` meaning the quantized model by AWQ.
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
