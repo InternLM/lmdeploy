@@ -365,7 +365,7 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            interactive_mode: bool = False,
                            ignore_eos: bool = False,
-                           stop: bool = False,
+                           cancel: bool = False,
                            top_p: float = 0.8,
                            temperature: float = 0.7) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
@@ -376,7 +376,7 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'interactive_mode': interactive_mode,
         'ignore_eos': ignore_eos,
-        'stop': stop,
+        'cancel': cancel,
         'top_p': top_p,
         'temperature': temperature
     }

@@ -841,6 +841,9 @@ async def chat_interactive_v1(request: GenerateRequest,
         1.0 means no penalty
     - ignore_eos (bool): indicator for ignoring eos
     """
+    if request.cancel and request.session_id != -1:
+        VariableInterface.async_engine.stop_session(request.session_id)
+        return {'text': '', 'tokens': 0, 'finish_reason': None}
     if request.session_id == -1:
         request.session_id = random.randint(10087, 23333)
 
