@@ -56,7 +56,7 @@ lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 bash ./internlm-7b/service_docker_up.sh
 
 # 另起终端，在`lmdeploy/benchmark`目录下，执行测速脚本
-python3 ./profile_serving 0.0.0.0:33337 ./internlm-7b/triton_models/tokenizer ./ShareGPT_V3_unfiltered_cleaned_split.json
+python3 ./profile_serving.py 0.0.0.0:33337 ./internlm-7b/triton_models/tokenizer ./ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
 ## 测试方法

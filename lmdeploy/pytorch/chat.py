@@ -4,9 +4,8 @@ import os
 import random
 from typing import List
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.model import MODELS, best_match_model
-from lmdeploy.pytorch import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -49,7 +48,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
 
 
 def run_chat(model_path: str,
-             engine_config: EngineConfig,
+             engine_config: PytorchEngineConfig,
              gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
              trust_remote_code: bool = True):
@@ -58,7 +57,7 @@ def run_chat(model_path: str,
 
     Args:
         model_path (str): the huggingface model path.
-        engine_config (EngineConfig): Config of engine.
+        engine_config (PytorchEngineConfig): Config of engine.
         gen_config (EngineGenerationConfig): Config of generation.
         session_id (int): the identical id of a session.
         trust_remote_code (bool): trust remote code.
@@ -164,9 +163,9 @@ def main(model_path: str,
     adapters = None
     if adapter is not None:
         adapters = dict(default=adapter)
-    engine_config = EngineConfig(model_name=model_name,
-                                 tp=tp,
-                                 adapters=adapters)
+    engine_config = PytorchEngineConfig(model_name=model_name,
+                                        tp=tp,
+                                        adapters=adapters)
     gen_config = EngineGenerationConfig(max_new_tokens=512,
                                         top_k=top_k,
                                         top_p=top_p,

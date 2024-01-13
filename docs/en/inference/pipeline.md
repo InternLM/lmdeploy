@@ -16,9 +16,9 @@ An example showing how to set tensor parallel num:
 
 ```python
 import lmdeploy
-from lmdeploy.turbomind import EngineConfig
+from lmdeploy.messages import TurbomindEngineConfig
 
-backend_config = EngineConfig(tp=2)
+backend_config = TurbomindEngineConfig(tp=2)
 pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
                          backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
@@ -29,10 +29,9 @@ An example for setting sampling parameters:
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.turbomind import EngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
-backend_config = EngineConfig(tp=2)
+backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
@@ -48,10 +47,9 @@ An example for OpenAI format prompt input:
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.turbomind import EngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
-backend_config = EngineConfig(tp=2)
+backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
@@ -78,16 +76,14 @@ pip install triton>=2.1.0
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.pytorch import EngineConfig
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
 
-backend_config = EngineConfig(session_len=2024)
+backend_config = PytorchEngineConfig(session_len=2024)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
 pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend='pytorch',
                          backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -106,15 +102,14 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 
 ### Init parameters:
 
-| Parameter            | Type                                                 | Description                                                                                                                          | Default     |
-| -------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| model_path           | str                                                  | Path to the model. Can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on huggingface.co.  | N/A         |
-| model_name           | Optional\[str\]                                      | Name of the model when the model_path points to a Pytorch model on huggingface.co.                                                   | None        |
-| backend              | Literal\['turbomind', 'pytorch'\]                    | Specifies the backend to use, either turbomind or pytorch.                                                                           | 'turbomind' |
-| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None        |
-| chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None        |
-| tp                   | int                                                  | Number of tensor parallelunits. Will be deprecated later, please use backend_config.                                                 | 1           |
-| log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'     |
+| Parameter            | Type                                                 | Description                                                                                                                          | Default                                    |
+| -------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| model_path           | str                                                  | Path to the model. Can be a path to a local directory storing a Turbomind model, or a model_id for models hosted on huggingface.co.  | N/A                                        |
+| model_name           | Optional\[str\]                                      | Name of the model when the model_path points to a Pytorch model on huggingface.co.                                                   | None                                       |
+| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None, running turbomind backend by default |
+| chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None                                       |
+| tp                   | int                                                  | Number of tensor parallelunits. Will be deprecated later, please use backend_config.                                                 | 1                                          |
+| log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'                                    |
 
 ### Invocation
 
@@ -130,7 +125,7 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 | repetition_penalty | float                    | 1.0           | The parameter for repetition penalty. 1.0 means no penalty. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                      |
 | ignore_eos         | bool                     | False         | Indicator for ignoring end-of-string (eos). This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                      |
 
-## EngineConfig (turbomind)
+## TurbomindEngineConfig
 
 ### Description
 
@@ -151,7 +146,7 @@ This class provides the configuration parameters for TurboMind backend.
 | use_dynamic_ntk       | bool          | Whether or not to use dynamic ntk.                                                                       | False   |
 | use_logn_attn         | bool          | Whether or not to use logarithmic attention.                                                             | False   |
 
-## EngineConfig (pytorch)
+## PytorchEngineConfig
 
 ### Description
 
