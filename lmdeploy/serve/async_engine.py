@@ -130,7 +130,8 @@ class AsyncEngine:
 
         # try fuzzy matching to get a model_name
         if self.model_name is None and (backend_config is None
-                                        or backend_config.model_name == ''):
+                                        or backend_config.model_name == ''
+                                        or backend_config.model_name is None):
             potential_names = best_match_model(model_path)
             if potential_names is None:
                 raise ArgumentError('Please set model_name or backend_config.')
@@ -217,7 +218,7 @@ class AsyncEngine:
         """Clear a session by a session_id."""
         if str(session_id) in self.id2generator:
             self.id2generator[str(session_id)].end(session_id)
-            self.id2step.pop(str(session_id))
+            self.id2step[str(session_id)] = 0
             self.gens_set.add(self.id2generator[str(session_id)])
 
     @contextmanager
