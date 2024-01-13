@@ -11,9 +11,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from lmdeploy.messages import GenerationConfig
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
+                               TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
@@ -25,7 +25,6 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     GenerateRequest, GenerateRequestQos, GenerateResponse, ModelCard,
     ModelList, ModelPermission, UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
-from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 class VariableInterface:
@@ -933,7 +932,8 @@ def serve(model_path: str,
             huggingface.co, such as "InternLM/internlm-chat-7b"
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
-        backend_config (EngineConfig): beckend config. Default to none.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         server_name (str): host ip for serving

@@ -5,10 +5,9 @@ from argparse import ArgumentError
 from contextlib import contextmanager
 from typing import Dict, List, Literal, Optional, Union
 
-from lmdeploy.messages import EngineGenerationConfig, GenerationConfig
+from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
+                               PytorchEngineConfig, TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
-from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
-from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -46,7 +45,8 @@ class AsyncEngine:
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
-        backend_config (EngineConfig): beckend config. Default to none.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         tp (int): tensor parallel
@@ -100,7 +100,7 @@ class AsyncEngine:
             backend_config = TurbomindEngineConfig(model_name=model_name,
                                                    tp=tp)
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
-            ' use EngineConfig imported from lmdeploy.turbomind for ' \
+            ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
@@ -145,8 +145,8 @@ class AsyncEngine:
             backend_config = PytorchEngineConfig(self.model_name,
                                                  session_len=2048)
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
-            'use EngineConfig imported from lmdeploy.pytorch for pytorch' \
-            ' backend'
+            'use PytorchEngineConfig imported from lmdeploy.messages for ' \
+            'pytorch backend'
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
         if chat_template_config is None:

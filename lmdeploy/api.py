@@ -2,14 +2,12 @@
 import os
 from typing import Literal, Optional, Union
 
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
-from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 def pipeline(model_path: str,
              model_name: Optional[str] = None,
-             backend: Literal['turbomind', 'pytorch'] = 'turbomind',
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
@@ -34,9 +32,8 @@ def pipeline(model_path: str,
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
-        backend (str): either `turbomind` or `pytorch` backend. Default to
-            `turbomind` backend.
-        backend_config (EngineConfig): beckend config. Default to none.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         tp (int): tensor parallel
@@ -53,6 +50,8 @@ def pipeline(model_path: str,
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
+    backend = 'pytorch' if type(
+        backend_config) is PytorchEngineConfig else 'turbomind'
     return AsyncEngine(model_path,
                        model_name=model_name,
                        backend=backend,
@@ -94,7 +93,8 @@ def serve(model_path: str,
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
-        backend_config (EngineConfig): beckend config. Default to none.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         server_name (str): host ip for serving

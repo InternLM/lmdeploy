@@ -4,12 +4,11 @@ from typing import Literal, Optional, Sequence, Union
 
 import gradio as gr
 
-from lmdeploy.messages import GenerationConfig
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
+                               TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
-from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 class InterFace:
@@ -142,7 +141,8 @@ def run_local(model_path: str,
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
-        backend_config (EngineConfig): beckend config. Default to none.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         server_name (str): the ip address of gradio server

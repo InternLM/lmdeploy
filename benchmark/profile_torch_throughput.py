@@ -12,9 +12,8 @@ import fire
 import numpy as np
 from tqdm import tqdm
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.pytorch.engine import Engine as LMEngine
-from lmdeploy.pytorch.engine import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 
@@ -64,8 +63,8 @@ class Engine:
     def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
         # avoid turbomind checking chat template name by setting
         # `model_name='llama'`
-        tm_model = LMEngine(model_path, EngineConfig(tp=tp,
-                                                     model_name='llama'))
+        tm_model = LMEngine(model_path,
+                            PytorchEngineConfig(tp=tp, model_name='llama'))
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
         self.csv = csv
