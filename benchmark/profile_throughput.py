@@ -12,6 +12,7 @@ import fire
 import numpy as np
 from tqdm import tqdm
 
+from lmdeploy import EngineGenerationConfig, TurbomindEngineConfig
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.turbomind import TurboMind
 
@@ -59,14 +60,13 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
-        # avoid turbomind checking chat template name by setting
-        # `model_name='llama'`
+    def __init__(self, model_path: str, engine_config: TurbomindEngineConfig,
+                 gen_config: EngineGenerationConfig, csv: str):
+
         tm_model = TurboMind(model_path=model_path,
-                             model_name='llama',
-                             tp=tp,
-                             **kwargs)
+                             engine_config=engine_config)
         self.tm_model = tm_model
+        self.gen_config = gen_config
         self.tokenizer = tm_model.tokenizer
         self.csv = csv
         self.pbar = None
@@ -89,8 +89,9 @@ class Engine:
                     session_id,
                     input_ids=input_ids,
                     request_output_len=output_seqlen,
-                    temperature=1.0,
-                    top_p=1.0,
+                    temperature=self.gen_config.temperature,
+                    top_p=self.gen_config.top_p,
+                    top_k=self.gen_config.top_k,
                     sequence_start=True,
                     sequence_end=True,
                     ignore_eos=True,
@@ -236,7 +237,9 @@ def main(dataset: str,
          stream_output: bool = True,
          csv: str = './profile_throughput.csv',
          log_level: str = 'ERROR',
-         seed: int = 0):
+         seed: int = 0,
+         cache_count: float = 0.5,
+         model_format: str = 'hf'):
     """Benchmark the request throughput of lmdeploy in localhost.
 
     Args:
@@ -257,16 +260,25 @@ def main(dataset: str,
         csv (str, optional): The path to save the result.
         log_level(str, optional): The log level. Defaults to INFO
         seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
+        cache_count (float, optional): The ratio of k/v cache memory. Defaults to 0.5.
+        model_format (str, optional): The layout of the deployed model.
+            Its value should be among ['hf', 'llama', 'awq', None]. Defaults to hf
     """    # noqa
     random.seed(seed)
     os.environ['TM_LOG_LEVEL'] = log_level
 
-    engine = Engine(model_path,
-                    tp=tp,
-                    top_k=top_k,
-                    top_p=top_p,
-                    temperature=temperature,
-                    csv=csv)
+    group_size = 128 if model_format == 'awq' else 0
+    engine_config = TurbomindEngineConfig(model_name='llama',
+                                          session_len=4096,
+                                          model_format=model_format,
+                                          group_size=group_size,
+                                          max_batch_size=concurrency,
+                                          cache_max_entry_count=cache_count,
+                                          tp=tp)
+    gen_config = EngineGenerationConfig(top_k=top_k,
+                                        top_p=top_p,
+                                        temperature=temperature)
+    engine = Engine(model_path, engine_config, gen_config, csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
 

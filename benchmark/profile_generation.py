@@ -16,6 +16,8 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
+from lmdeploy import TurbomindEngineConfig
+
 
 def infer(model, session_id: int, input_ids: List, output_seqlen: int,
           top_k: int, top_p: float, temperature: float, test_round: int,
@@ -104,19 +106,23 @@ def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
 def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
                        output_seqlen: int, tp: int, top_k: int, top_p: float,
                        temperature: float, test_round: int, warmup_round: int,
-                       **kwargs):
+                       cache_count: float, model_format: str, **kwargs):
 
     from lmdeploy.turbomind import TurboMind
     print(f'profiling ... concurrency: {concurrency}, '
           f'n_prompt_token: {input_seqlen}, '
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
-
+    group_size = 128 if model_format == 'awq' else 0
     # avoid turbomind checking chat template name by setting `model_name='llama'` # noqa
-    tm_model = TurboMind(model_path=model_path,
-                         tp=tp,
-                         model_name='llama',
-                         **kwargs)
+    engine_config = TurbomindEngineConfig(model_name='llama',
+                                          tp=tp,
+                                          group_size=group_size,
+                                          model_format=model_format,
+                                          session_len=4096,
+                                          max_batch_size=concurrency,
+                                          cache_max_entry_count=cache_count)
+    tm_model = TurboMind(model_path=model_path, engine_config=engine_config)
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
@@ -324,11 +330,21 @@ def parse_args():
     parser.add_argument('--test-round',
                         type=int,
                         help='number of test rounds',
-                        default=6)
+                        default=3)
     parser.add_argument('--warmup-round',
                         type=int,
                         help='number of warmuop rounds',
                         default=1)
+    parser.add_argument('--model-format',
+                        type=str,
+                        help='the layout of the deployed model. '
+                        'It can be one of the following values '
+                        '[hf, llama, awq, none]',
+                        default='hf')
+    parser.add_argument('--cache-count',
+                        type=float,
+                        help='the ratio of k/v cache mem',
+                        default=0.5)
     args = parser.parse_args()
     return args
 
@@ -356,7 +372,8 @@ def main():
                                      top_p=args.top_p,
                                      temperature=args.temperature,
                                      test_round=args.test_round,
-                                     warmup_round=args.warmup_round)
+                                     warmup_round=args.warmup_round,
+                                     cache_count=args.cache_count)
             output = Pool(1).map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
                 throughput_per_proc, tp = output[0]
