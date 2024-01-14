@@ -47,7 +47,7 @@ Using the following commands, you can quantize a LLM model into 4bit, and commun
 
 ```shell
 lmdeploy lite auto_awq internlm/internlm-chat-7b ./internlm-chat-7b-4bit
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --group-size 128
+lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq
 ```
 
 LMDeploy 4bit inference supports the following NVIDIA GPU:

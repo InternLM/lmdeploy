@@ -4,7 +4,7 @@ from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
 
 
 class SubCliChat(object):
-    _help = 'Chat through terminal with pytorch or turbomind model.'
+    _help = 'Chat with pytorch or turbomind engine.'
     _desc = _help
     parser = CLI.subparsers.add_parser('chat', help=_help, description=_desc)
     subparsers = parser.add_subparsers(
