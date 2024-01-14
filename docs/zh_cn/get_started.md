@@ -26,16 +26,16 @@ print(response)
 LMDeploy `api_server` 支持把模型一键封装为服务，对外提供的 RESTful API 兼容 openai 的接口。以下为服务启动的示例：
 
 ```shell
-lmdeploy serve api_server internlm/internlm-chat-7b --server-port 8080
+lmdeploy serve api_server internlm/internlm-chat-7b
 ```
 
-服务启动后，你可以在终端通过`api_client`与server进行对话：
+服务默认端口是23333。在 server 启动后，你可以在终端通过`api_client`与server进行对话：
 
 ```shell
-lmdeploy serve api_client http://0.0.0.0:8080
+lmdeploy serve api_client http://0.0.0.0:23333
 ```
 
-除了`api_client`，你还可以通过 Swagger UI `http://0.0.0.0:8080` 在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](serving/restful_api.md)，了解各接口的定义和使用方法。
+除了`api_client`，你还可以通过 Swagger UI `http://0.0.0.0:23333` 在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](serving/restful_api.md)，了解各接口的定义和使用方法。
 
 ## 模型量化
 

@@ -55,8 +55,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 For detailed inference benchmarks in more devices and more settings, please refer to the following link:
 
-- [A100-FP16](./docs/en/benchmark/a100_fp16.md)
-- [A100-W4A16](./docs/en/benchmark/a100_w4a16.md)
+- [A100](./docs/en/benchmark/a100_fp16.md)
 - V100
 - 4090
 - 3090
@@ -78,7 +77,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |      ChatGLM2      |    6B     |
 |       Falcon       | 7B - 180B |
 
-`LMDeploy` has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
+LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
 They differ in the types of supported models and the inference data type. Please refer to [this table](./docs/en/supported_models/supported_models.md) for each engine's capability and choose the proper one that best fits your actual needs.
 
