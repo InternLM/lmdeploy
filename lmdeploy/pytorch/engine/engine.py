@@ -832,6 +832,8 @@ class EngineInstance:
         req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
         token_ids = []
+        gen_interval = 8
+        gen_count = 0
         while True:
             if not self.engine.loop_threads.is_alive():
                 yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
@@ -844,7 +846,11 @@ class EngineInstance:
                 continue
             if resp.type == ResponseType.SUCCESS:
                 token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
+                if gen_count == gen_interval:
+                    gen_count = 0
+                    yield (resp.type, token_ids, len(token_ids))
+                else:
+                    gen_count += 1
             elif resp.type == ResponseType.FINISH:
                 token_ids += resp.data['token_ids']
                 yield (resp.type, token_ids, len(token_ids))
