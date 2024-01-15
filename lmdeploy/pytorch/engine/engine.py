@@ -839,6 +839,8 @@ class EngineInstance:
                 break
 
             resp = self.req_sender.recv(req_id)
+            # avoid token decoding and scheduling simultaneously
+            time.sleep(0.02)
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:
