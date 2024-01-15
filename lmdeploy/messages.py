@@ -5,11 +5,7 @@ from typing import Dict, List, Optional
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-from lmdeploy.utils import get_logger
-
 from .tokenizer import Tokenizer
-
-logger = get_logger('lmdeploy')
 
 
 @dataclass

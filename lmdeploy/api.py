@@ -2,8 +2,8 @@
 import os
 from typing import Literal, Optional, Union
 
-from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
-from lmdeploy.model import ChatTemplateConfig
+from .messages import PytorchEngineConfig, TurbomindEngineConfig
+from .model import ChatTemplateConfig
 
 
 def pipeline(model_path: str,
@@ -51,7 +51,7 @@ def pipeline(model_path: str,
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
     if 'tp' in kwargs:
-        logger.warn(
+        logger.warning(
             'The argument "tp" is deprecated and will be removed soon. '
             'Please set "tp" in "backend_config"')
         tp = kwargs['tp']
