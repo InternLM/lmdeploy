@@ -46,9 +46,8 @@ LMDeploy 使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法对模型权重进
 只用2行命令，就可以把一个 LLM 模型权重量化为 4bit。以下例子展示的是把 internlm-chat-7b 量化为 4bit，并在控制台与量化模型进行交互式对话。
 
 ```shell
-lmdeploy lite calibrate internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
 lmdeploy lite auto_awq internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --group-size 128
+lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq
 ```
 
 LMDeploy 4bit 量化和推理支持的显卡包括：

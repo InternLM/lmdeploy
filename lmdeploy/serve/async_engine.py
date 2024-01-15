@@ -110,6 +110,8 @@ class AsyncEngine:
             **kwargs)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.engine.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.engine.model_name
         self.chat_template = chat_template_config.chat_template
         self.session_len = self.engine.session_len
         self.backend_config = backend_config
@@ -128,7 +130,8 @@ class AsyncEngine:
 
         # try fuzzy matching to get a model_name
         if self.model_name is None and (backend_config is None
-                                        or backend_config.model_name == ''):
+                                        or backend_config.model_name == ''
+                                        or backend_config.model_name is None):
             potential_names = best_match_model(model_path)
             if potential_names is None:
                 raise ArgumentError('Please set model_name or backend_config.')
@@ -144,6 +147,9 @@ class AsyncEngine:
         if self.model_name is not None and backend_config is None:
             backend_config = PytorchEngineConfig(self.model_name,
                                                  session_len=2048)
+        if backend_config.model_name is None \
+                or backend_config.model_name == '':  # cli may pass None
+            backend_config.model_name = self.model_name
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
@@ -151,6 +157,8 @@ class AsyncEngine:
                              engine_config=backend_config)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.model_name
         self.chat_template = chat_template_config.chat_template
         if self.engine.session_len is None:
             self.session_len = self.chat_template.session_len
@@ -213,7 +221,7 @@ class AsyncEngine:
         """Clear a session by a session_id."""
         if str(session_id) in self.id2generator:
             self.id2generator[str(session_id)].end(session_id)
-            self.id2step.pop(str(session_id))
+            self.id2step[str(session_id)] = 0
             self.gens_set.add(self.id2generator[str(session_id)])
 
     @contextmanager

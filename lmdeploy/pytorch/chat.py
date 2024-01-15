@@ -47,7 +47,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     return stop_words
 
 
-def run_chat(model_path,
+def run_chat(model_path: str,
              engine_config: PytorchEngineConfig,
              gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
@@ -68,10 +68,12 @@ def run_chat(model_path,
                                       trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
-
     adapter_name = None
     if engine_config.adapters is not None:
         adapter_name = next(iter(engine_config.adapters.keys()))
+
+    if gen_config is None:
+        gen_config = EngineGenerationConfig()
 
     nth_round = 1
     step = 0
@@ -131,12 +133,12 @@ def run_chat(model_path,
             nth_round += 1
 
 
-def main(model_path,
+def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
-         top_k=40,
-         top_p=0.8,
-         temperature=0.8,
+         top_k: float = 40,
+         top_p: float = 0.8,
+         temperature: float = 0.8,
          repetition_penalty: float = 1.0,
          tp: int = 1,
          stream_output: bool = True,

@@ -203,7 +203,11 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        if chat_template_config is not None:
+        if chat_template_config:
+            if chat_template_config.model_name is None:
+                chat_template_config.model_name = self.model_name
+                logger.warning(f'Input chat template with model_name is None. '
+                               f'Forcing to use {self.model_name}')
             self.model = chat_template_config.chat_template
         else:
             self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)

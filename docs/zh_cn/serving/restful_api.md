@@ -9,7 +9,7 @@
 重要的事情说三遍。
 
 ```shell
-lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --tp 1
+lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
 我们提供的 restful api，其中三个仿照 OpenAI 的形式。
@@ -139,8 +139,8 @@ lmdeploy serve api_client api_server_url
 ```shell
 # api_server_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_name 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
+# 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
+lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 ### FAQ

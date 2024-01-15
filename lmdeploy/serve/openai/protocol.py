@@ -262,6 +262,7 @@ class GenerateRequest(BaseModel):
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
+    cancel: Optional[bool] = False  # cancel a responding request
 
 
 class GenerateRequestQos(BaseModel):
