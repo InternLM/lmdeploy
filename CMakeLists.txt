@@ -292,6 +292,7 @@ endif()
 
 if (BUILD_MULTI_GPU)
   list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
+  list(APPEND COMMON_LIB_DIRS /usr/local/mpi/lib)
 endif()
 
 if(USE_TRITONSERVER_DATATYPE)
@@ -373,7 +374,7 @@ add_library(transformer-shared SHARED
 
 if (BUILD_MULTI_GPU)
 target_link_libraries(transformer-shared PUBLIC
-  ${MPI_CXX_LIBRARIES}
+  -lmpi
   ${NCCL_LIBRARIES}
 )
 endif()
