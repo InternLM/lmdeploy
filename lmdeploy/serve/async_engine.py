@@ -6,7 +6,8 @@ from contextlib import contextmanager
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
-                               PytorchEngineConfig, TurbomindEngineConfig)
+                               PytorchEngineConfig, Response,
+                               TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.utils import get_logger
 
@@ -19,14 +20,6 @@ class GenOut:
     response: str
     history_token_len: int
     input_token_len: int
-    generate_token_len: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
-
-
-@dataclasses.dataclass
-class Response:
-    """Pack all response information together."""
-    text: str
     generate_token_len: int
     finish_reason: Optional[Literal['stop', 'length']] = None
 

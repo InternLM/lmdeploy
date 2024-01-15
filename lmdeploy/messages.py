@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
@@ -163,3 +163,11 @@ class ResponseType(enum.Enum):
     SESSION_REPEAT = enum.auto()
     SESSION_NOT_EXIST = enum.auto()
     HANDLER_NOT_EXIST = enum.auto()
+
+
+@dataclass
+class Response:
+    """Pack all response information together."""
+    text: str
+    generate_token_len: int
+    finish_reason: Optional[Literal['stop', 'length']] = None
