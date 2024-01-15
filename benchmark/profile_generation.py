@@ -120,9 +120,10 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
                                           group_size=group_size,
                                           model_format=model_format,
                                           session_len=4096,
-                                          max_batch_size=concurrency,
+                                          max_batch_size=256,
                                           cache_max_entry_count=cache_count)
-    tm_model = TurboMind(model_path=model_path, engine_config=engine_config)
+    tm_model = TurboMind.from_pretrained(model_path,
+                                         engine_config=engine_config)
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
@@ -373,7 +374,8 @@ def main():
                                      temperature=args.temperature,
                                      test_round=args.test_round,
                                      warmup_round=args.warmup_round,
-                                     cache_count=args.cache_count)
+                                     cache_count=args.cache_count,
+                                     model_format=args.model_format)
             output = Pool(1).map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
                 throughput_per_proc, tp = output[0]

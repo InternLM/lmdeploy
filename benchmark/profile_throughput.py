@@ -247,7 +247,7 @@ def main(dataset: str,
         model_path (str): Path to a model in localhost or a model_repo_id in huggingface.co
         concurrency (int, optional): Number of working threads to process the sampled prompts.
             Defaults to 256.
-        num_prompts (int, optional): Number of prompts to process. Defaults to 2000.
+        num_prompts (int, optional): Number of prompts to process. Defaults to 5000.
         tp (int, optional): Number of GPUs for tensor parallel. Defaults to 1.
         top_k (int, optional): The number of highest probability vocabulary tokens
             to keep for top-k-filtering. Defaults to 1.
