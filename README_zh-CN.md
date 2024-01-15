@@ -20,9 +20,35 @@ ______________________________________________________________________
 
 ## 最新进展 🎉
 
-- \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](./docs/zh_cn/serving/proxy_server.md)
-- \[2023/12\] Turbomind 支持多模态输入。[Gradio Demo](./examples/vl/README.md)
+<details open>
+<summary><b>2024</b></summary>
 
+- \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](./docs/zh_cn/serving/proxy_server.md)
+- \[2024/01\] 增加 [PyTorch 推理引擎](./docs/zh_cn/inference/pytorch.md)，作为 TurboMind 引擎的补充。帮助降低开发门槛，和快速实验新特性、新技术
+
+</details>
+
+<details close>
+<summary><b>2023</b></summary>
+
+- \[2023/12\] Turbomind 支持多模态输入。[Gradio Demo](./examples/vl/README.md)
+- \[2023/11\] Turbomind 支持直接读取 Huggingface 模型。点击[这里](docs/zh_cn/inference/load_hf.md)查看使用方法
+- \[2023/11\] TurboMind 重磅升级。包括：Paged Attention、更快的且不受序列最大长度限制的 attention kernel、2+倍快的 KV8 kernels、Split-K decoding (Flash Decoding) 和 支持 sm_75 架构的 W4A16
+- \[2023/09\] TurboMind 支持 Qwen-14B
+- \[2023/09\] TurboMind 支持 InternLM-20B 模型
+- \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
+- \[2023/09\] TurboMind 支持 Baichuan2-7B
+- \[2023/08\] TurboMind 支持 flash-attention2
+- \[2023/08\] TurboMind 支持 Qwen-7B，动态NTK-RoPE缩放，动态logN缩放
+- \[2023/08\] TurboMind 支持 Windows (tp=1)
+- \[2023/08\] TurboMind 支持 4-bit 推理，速度是 FP16 的 2.4 倍，是目前最快的开源实现�。部署方式请看[这里](docs/zh_cn/quantization/w4a16.md)
+- \[2023/08\] LMDeploy 开通了 [HuggingFace Hub](https://huggingface.co/lmdeploy) ，提供开箱即用的 4-bit 模型
+- \[2023/08\] LMDeploy 支持使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法进行 4-bit 量化
+- \[2023/07\] TurboMind 支持使用 GQA 的 Llama-2 70B 模型
+- \[2023/07\] TurboMind 支持 Llama-2 7B/13B 模型
+- \[2023/07\] TurboMind 支持 InternLM 的 Tensor Parallel 推理
+
+</details>
 ______________________________________________________________________
 
 # 简介

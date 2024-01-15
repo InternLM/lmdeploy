@@ -20,8 +20,35 @@ ______________________________________________________________________
 
 ## Latest News 🎉
 
-- \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to[here](./docs/zh_cn/serving/proxy_server.md)
+<details open>
+<summary><b>2024</b></summary>
+
+- \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](./docs/en/serving/proxy_server.md)
+- \[2024/01\] Support [PyTorch inference engine](./docs/en/inference/pytorch.md), developed entirely in Python, helping to lower the barriers for developers and enable  rapid experimentation with new features and technologies.
+
+</details>
+
+<details close>
+<summary><b>2023</b></summary>
+
 - \[2023/12\] Turbomind supports multimodal input. [Gradio Demo](./examples/vl/README.md)
+- \[2023/11\] Turbomind supports loading hf model directly. Click [here](docs/en/inference/load_hf.md) for details.
+- \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
+- \[2023/09\] TurboMind supports Qwen-14B
+- \[2023/09\] TurboMind supports InternLM-20B
+- \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide
+- \[2023/09\] TurboMind supports Baichuan2-7B
+- \[2023/08\] TurboMind supports flash-attention2.
+- \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
+- \[2023/08\] TurboMind supports Windows (tp=1)
+- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation�. Check [this](docs/en/quantization/w4a16.md) guide for detailed info
+- \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
+- \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
+- \[2023/07\] TurboMind supports Llama-2 70B with GQA.
+- \[2023/07\] TurboMind supports Llama-2 7B/13B.
+- \[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
+
+</details>
 
 ______________________________________________________________________
 
