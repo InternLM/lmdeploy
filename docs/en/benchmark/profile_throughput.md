@@ -7,16 +7,11 @@ Therefore, it is necessary to use real dialogue data to evaluate the dynamic inf
 The evaluation script is `profile_throughput.py`. Before running it, please install the lmdeploy precompiled package, download the evaluation script and the test dataset:
 
 ```shell
-pip install 'lmdeploy>=0.1.0a1'
+pip install lmdeploy
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
-
-During performance test, a specific model needs to be inputted. We recommend converting the model into turbomind format via `lmdeploy convert`, then proceed with testing.
-The reason is to conveniently adjust the parameters of the inference engine in order to achieve better performance, such as batch size (max_batch_size), K/V cache size (max_cache_entry_count), etc. For detailed explanations of these parameters, please refer to [here](../inference/turbomind_config.md).
-
-In the following sections, we assume the model is in turbomind format.
 
 ## Metrics
 
@@ -43,15 +38,12 @@ Total time includes prefill time.
 We take `internlm-7b` as an example. The entire benchmark procedure is:
 
 ```shell
-pip install 'lmdeploy>=0.1.0a1'
+pip install lmdeploy
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
-# get internlm-7b from huggingface and convert it to turbomind format
-lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
-
-python3 profile_throughput.py ./ShareGPT_V3_unfiltered_cleaned_split.json ./internlm-7b
+python3 profile_throughput.py ./ShareGPT_V3_unfiltered_cleaned_split.json internlm/internlm-7b --cache-count 0.7
 ```
 
 ## Command details
@@ -74,11 +66,11 @@ Optional arguments are listed as below:
 
 - `--concurrency`
 
-  It represents the number of request threads with default value 64. Requests of concurrent threads will be batched by the inference engine. Its value should not exceed `max_batch_size` in `config.ini`. Otherwise, the excess requests will wait in the inference queue.
+  It represents the number of request threads. Defaults to 256.
 
 - `--num-prompts`
 
-  The number of sampled prompts from dataset to process. The default is 2000.
+  The number of sampled prompts from dataset to process. The default is 5000.
 
 - `--tp`
 
@@ -103,3 +95,11 @@ Optional arguments are listed as below:
 - `--seed`
 
   It is the seed used in sampling prompts from dataset with default value 0.
+
+- `--cache-count`
+
+  The ratio of k/v cache memory. Default to 0.5.
+
+- `--model-format`
+
+  The layout of the model. Its value should be among \['hf', 'llama', 'awq', None\]. Defaults to `hf`. `llama` means `meta_llama` and `awq` indicates the quantized model by AWQ algorithm

@@ -63,8 +63,8 @@ class Engine:
     def __init__(self, model_path: str, engine_config: TurbomindEngineConfig,
                  gen_config: EngineGenerationConfig, csv: str):
 
-        tm_model = TurboMind(model_path=model_path,
-                             engine_config=engine_config)
+        tm_model = TurboMind.from_pretrained(model_path,
+                                             engine_config=engine_config)
         self.tm_model = tm_model
         self.gen_config = gen_config
         self.tokenizer = tm_model.tokenizer
@@ -228,8 +228,8 @@ class Engine:
 
 def main(dataset: str,
          model_path: str,
-         concurrency: int = 64,
-         num_prompts: int = 2000,
+         concurrency: int = 256,
+         num_prompts: int = 5000,
          tp: int = 1,
          top_k: int = 1,
          top_p: float = 1.0,
@@ -246,7 +246,7 @@ def main(dataset: str,
         dataset (str): Path to the dataset
         model_path (str): Path to a model in localhost or a model_repo_id in huggingface.co
         concurrency (int, optional): Number of working threads to process the sampled prompts.
-            Defaults to 64.
+            Defaults to 256.
         num_prompts (int, optional): Number of prompts to process. Defaults to 2000.
         tp (int, optional): Number of GPUs for tensor parallel. Defaults to 1.
         top_k (int, optional): The number of highest probability vocabulary tokens
