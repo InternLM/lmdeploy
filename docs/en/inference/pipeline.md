@@ -1,13 +1,17 @@
-# Pipeline
+# Inference Pipeline
 
-## Example
+In this tutorial, We will first present a list of examples to introduce the usage of `lmdeploy.pipeline`.
+
+Then, we will describe the pipeline API in detail.
+
+## Usage
 
 An example using default parameters:
 
 ```python
-import lmdeploy
+from lmdeploy import pipeline
 
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
+pipe = pipeline('internlm/internlm-chat-7b')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -15,12 +19,11 @@ print(response)
 An example showing how to set tensor parallel num:
 
 ```python
-import lmdeploy
-from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -28,16 +31,15 @@ print(response)
 An example for setting sampling parameters:
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
 print(response)
@@ -46,16 +48,15 @@ print(response)
 An example for OpenAI format prompt input:
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 prompts = [[{
     'role': 'user',
     'content': 'Hi, pls intro yourself'
@@ -75,16 +76,15 @@ pip install triton>=2.1.0
 ```
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
+from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
 
 backend_config = PytorchEngineConfig(session_len=2024)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 prompts = [[{
     'role': 'user',
     'content': 'Hi, pls intro yourself'
@@ -108,7 +108,6 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 | model_name           | Optional\[str\]                                      | Name of the model when the model_path points to a Pytorch model on huggingface.co.                                                   | None                                       |
 | backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | Configuration object for the backend. It can be either TurbomindEngineConfig or PytorchEngineConfig depending on the backend chosen. | None, running turbomind backend by default |
 | chat_template_config | Optional\[ChatTemplateConfig\]                       | Configuration for chat template.                                                                                                     | None                                       |
-| tp                   | int                                                  | Number of tensor parallelunits. Will be deprecated later, please use backend_config.                                                 | 1                                          |
 | log_level            | str                                                  | The level of logging.                                                                                                                | 'ERROR'                                    |
 
 ### Invocation
@@ -135,7 +134,7 @@ This class provides the configuration parameters for TurboMind backend.
 
 | Parameter             | Type          | Description                                                                                              | Default |
 | --------------------- | ------------- | -------------------------------------------------------------------------------------------------------- | ------- |
-| model_name            | str, Optional | The name of the deployed model.                                                                          | None    |
+| model_name            | str, Optional | The chat template name of the deployed model                                                             | None    |
 | model_format          | str, Optional | The layout of the deployed model. Can be one of the following values: hf, llama, awq.                    | None    |
 | tp                    | int           | The number of GPU cards used in tensor parallelism.                                                      | 1       |
 | session_len           | int, Optional | The maximum session length of a sequence.                                                                | None    |
@@ -143,7 +142,6 @@ This class provides the configuration parameters for TurboMind backend.
 | cache_max_entry_count | float         | The percentage of GPU memory occupied by the k/v cache.                                                  | 0.5     |
 | quant_policy          | int           | Set it to 4 when k/v is quantized into 8 bits.                                                           | 0       |
 | rope_scaling_factor   | float         | Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention. | 0.0     |
-| use_dynamic_ntk       | bool          | Whether or not to use dynamic ntk.                                                                       | False   |
 | use_logn_attn         | bool          | Whether or not to use logarithmic attention.                                                             | False   |
 
 ## PytorchEngineConfig
@@ -156,7 +154,7 @@ This class provides the configuration parameters for Pytorch backend.
 
 | Parameter        | Type | Description                                                                                              | Default     |
 | ---------------- | ---- | -------------------------------------------------------------------------------------------------------- | ----------- |
-| model_name       | str  | Name of the given model.                                                                                 | ''          |
+| model_name       | str  | The chat template name of the deployed model                                                             | ''          |
 | tp               | int  | Tensor Parallelism.                                                                                      | 1           |
 | session_len      | int  | Maximum session length.                                                                                  | None        |
 | max_batch_size   | int  | Maximum batch size.                                                                                      | 128         |
@@ -165,6 +163,7 @@ This class provides the configuration parameters for Pytorch backend.
 | block_size       | int  | Paging cache block size.                                                                                 | 64          |
 | num_cpu_blocks   | int  | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
 | num_gpu_blocks   | int  | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
+| adapters         | dict | The path configs to lora adapters.                                                                       | None        |
 
 ## GenerationConfig
 
@@ -176,7 +175,7 @@ This class contains the generation parameters used by inference engines.
 
 | Parameter          | Type        | Description                                                                                                           | Default |
 | ------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
-| n                  | int         | Number of chat completion choices to generate for each input message.                                                 | 1       |
+| n                  | int         | Number of chat completion choices to generate for each input message. Currently, only 1 is supported                  | 1       |
 | max_new_tokens     | int         | Maximum number of tokens that can be generated in chat completion.                                                    | 512     |
 | top_p              | float       | Nucleus sampling, where the model considers the tokens with top_p probability mass.                                   | 1.0     |
 | top_k              | int         | The model considers the top_k tokens with the highest probability.                                                    | 1       |

@@ -20,22 +20,8 @@ ______________________________________________________________________
 
 ## Latest News 🎉
 
+- \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to[here](./docs/zh_cn/serving/proxy_server.md)
 - \[2023/12\] Turbomind supports multimodal input. [Gradio Demo](./examples/vl/README.md)
-- \[2023/11\] Turbomind supports loading hf model directly. Click [here](docs/en/inference/load_hf.md) for details.
-- \[2023/11\] TurboMind major upgrades, including: Paged Attention, faster attention kernels without sequence length limitation, 2x faster KV8 kernels, Split-K decoding (Flash Decoding), and W4A16 inference for sm_75
-- \[2023/09\] TurboMind supports Qwen-14B
-- \[2023/09\] TurboMind supports InternLM-20B
-- \[2023/09\] TurboMind supports all features of Code Llama: code completion, infilling, chat / instruct, and python specialist. Click [here](./docs/en/supported_models/codellama.md) for deployment guide
-- \[2023/09\] TurboMind supports Baichuan2-7B
-- \[2023/08\] TurboMind supports flash-attention2.
-- \[2023/08\] TurboMind supports Qwen-7B, dynamic NTK-RoPE scaling and dynamic logN scaling
-- \[2023/08\] TurboMind supports Windows (tp=1)
-- \[2023/08\] TurboMind supports 4-bit inference, 2.4x faster than FP16, the fastest open-source implementation🚀. Check [this](docs/en/quantization/w4a16.md) guide for detailed info
-- \[2023/08\] LMDeploy has launched on the [HuggingFace Hub](https://huggingface.co/lmdeploy), providing ready-to-use 4-bit models.
-- \[2023/08\] LMDeploy supports 4-bit quantization using the [AWQ](https://arxiv.org/abs/2306.00978) algorithm.
-- \[2023/07\] TurboMind supports Llama-2 70B with GQA.
-- \[2023/07\] TurboMind supports Llama-2 7B/13B.
-- \[2023/07\] TurboMind supports tensor-parallel inference of InternLM.
 
 ______________________________________________________________________
 
@@ -43,9 +29,11 @@ ______________________________________________________________________
 
 LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by the [MMRazor](https://github.com/open-mmlab/mmrazor) and [MMDeploy](https://github.com/open-mmlab/mmdeploy) teams. It has the following core features:
 
-- **Efficiency**: LMDeploy delivers up to 1.8x higher request throughput than vLLM, by introducing key features like persistent batch(a.k.a. continuous batching), blocked KV cache, dynamic split&fuse, tensor parallelism, high-performance CUDA kernels and so on.
+- **Efficient Inference**: LMDeploy delivers up to 1.8x higher request throughput than vLLM, by introducing key features like persistent batch(a.k.a. continuous batching), blocked KV cache, dynamic split&fuse, tensor parallelism, high-performance CUDA kernels and so on.
 
-- **Quantization**: LMDeploy supports weight-only and k/v quantization, and the 4-bit inference performance is 2.4x higher than FP16. The quantization quality has been confirmed via OpenCompass evaluation.
+- **Effective Quantization**: LMDeploy supports weight-only and k/v quantization, and the 4-bit inference performance is 2.4x higher than FP16. The quantization quality has been confirmed via OpenCompass evaluation.
+
+- **Effortless Distribution Server**: Leveraging the request distribution service, LMDeploy facilitates an easy and efficient deployment of multi-model services across multiple machines and cards.
 
 - **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
 
@@ -100,7 +88,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-For more information on inference pipeline parameters, please refer to [here](./docs/en/inference/pipeline.md).
+For more information about inference pipeline, please refer to [here](./docs/en/inference/pipeline.md).
 
 # Tutorials
 
@@ -119,6 +107,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - Add a new model
   - gemm tuning
   - Long context inference
+  - [Multi-model inference service](docs/en/serving/proxy_server.md)
 
 ## Contributing
 

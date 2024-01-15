@@ -20,22 +20,8 @@ ______________________________________________________________________
 
 ## 最新进展 🎉
 
+- \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](./docs/zh_cn/serving/proxy_server.md)
 - \[2023/12\] Turbomind 支持多模态输入。[Gradio Demo](./examples/vl/README.md)
-- \[2023/11\] Turbomind 支持直接读取 Huggingface 模型。点击[这里](docs/zh_cn/inference/load_hf.md)查看使用方法
-- \[2023/11\] TurboMind 重磅升级。包括：Paged Attention、更快的且不受序列最大长度限制的 attention kernel、2+倍快的 KV8 kernels、Split-K decoding (Flash Decoding) 和 支持 sm_75 架构的 W4A16
-- \[2023/09\] TurboMind 支持 Qwen-14B
-- \[2023/09\] TurboMind 支持 InternLM-20B 模型
-- \[2023/09\] TurboMind 支持 Code Llama 所有功能：代码续写、填空、对话、Python专项。点击[这里](./docs/zh_cn/supported_models/codellama.md)阅读部署方法
-- \[2023/09\] TurboMind 支持 Baichuan2-7B
-- \[2023/08\] TurboMind 支持 flash-attention2
-- \[2023/08\] TurboMind 支持 Qwen-7B，动态NTK-RoPE缩放，动态logN缩放
-- \[2023/08\] TurboMind 支持 Windows (tp=1)
-- \[2023/08\] TurboMind 支持 4-bit 推理，速度是 FP16 的 2.4 倍，是目前最快的开源实现🚀。部署方式请看[这里](docs/zh_cn/quantization/w4a16.md)
-- \[2023/08\] LMDeploy 开通了 [HuggingFace Hub](https://huggingface.co/lmdeploy) ，提供开箱即用的 4-bit 模型
-- \[2023/08\] LMDeploy 支持使用 [AWQ](https://arxiv.org/abs/2306.00978) 算法进行 4-bit 量化
-- \[2023/07\] TurboMind 支持使用 GQA 的 Llama-2 70B 模型
-- \[2023/07\] TurboMind 支持 Llama-2 7B/13B 模型
-- \[2023/07\] TurboMind 支持 InternLM 的 Tensor Parallel 推理
 
 ______________________________________________________________________
 
@@ -44,9 +30,11 @@ ______________________________________________________________________
 LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](https://github.com/open-mmlab/mmrazor) 团队联合开发，是涵盖了 LLM 任务的全套轻量化、部署和服务解决方案。
 这个强大的工具箱提供以下核心功能：
 
-- **高效**：LMDeploy 开发了 Persistent Batch(即 Continuous Batch)，Blocked K/V Cache，动态拆分和融合，张量并行，高效的计算 kernel等重要特性。推理性能是 vLLM 的 1.8 倍
+- **高效的推理**：LMDeploy 开发了 Persistent Batch(即 Continuous Batch)，Blocked K/V Cache，动态拆分和融合，张量并行，高效的计算 kernel等重要特性。推理性能是 vLLM 的 1.8 倍
 
-- **量化**：LMDeploy 支持权重量化和 k/v 量化。4bit 模型推理效率是 FP16 下的 2.4 倍。量化模型的可靠性已通过 OpenCompass 评测得到充分验证。
+- **可靠的量化**：LMDeploy 支持权重量化和 k/v 量化。4bit 模型推理效率是 FP16 下的 2.4 倍。量化模型的可靠性已通过 OpenCompass 评测得到充分验证。
+
+- **便捷的服务**：通过请求分发服务，LMDeploy 支持多模型在多机、多卡上的推理服务。
 
 - **有状态推理**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
 
@@ -121,6 +109,7 @@ print(response)
   - 支持新模型
   - gemm tuning
   - 长文本推理
+  - [多模型推理服务](./docs/zh_cn/serving/proxy_server.md)
 
 ## 贡献指南
 

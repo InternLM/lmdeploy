@@ -35,7 +35,7 @@ The default port of `api_server` is `23333`. After the server is launched, you c
 lmdeploy serve api_client http://0.0.0.0:23333
 ```
 
-Besides the `api_client`, you can overview and try out `api_server` APIs online by swagger UI `http://0.0.0.0:23333`. And you can also read the API specification from [here](serving/restful_api.md).
+You can overview and try out `api_server` APIs online by swagger UI at `http://0.0.0.0:23333`, or you can read the API specification from [here](serving/restful_api.md).
 
 ## Quantization
 
