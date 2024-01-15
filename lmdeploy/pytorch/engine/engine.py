@@ -8,12 +8,13 @@ from typing import Any, Dict, List
 
 import torch
 
-from lmdeploy.messages import EngineGenerationConfig, ResponseType
+from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+                               ResponseType)
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
-from ..config import CacheConfig, EngineConfig, SchedulerConfig
+from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
 from ..paging import Scheduler
@@ -97,12 +98,12 @@ class Engine:
 
     Args:
         model_path (str): The hugging face model path.
-        engine_config (EngineConfig): The config of the Engine.
+        engine_config (PytorchEngineConfig): The config of the Engine.
     """
 
     def __init__(self,
                  model_path: str,
-                 engine_config: EngineConfig,
+                 engine_config: PytorchEngineConfig,
                  trust_remote_code: bool = True) -> None:
         self.engine_config = engine_config
         model_name = engine_config.model_name
@@ -158,7 +159,7 @@ class Engine:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        engine_config: EngineConfig,
+                        engine_config: PytorchEngineConfig,
                         trust_remote_code: bool = True,
                         **kwargs):
         """lmdeploy python inference engine.
@@ -945,6 +946,8 @@ class EngineInstance:
                 break
 
             resp = self.req_sender.recv(req_id)
+            # avoid token decoding and scheduling simultaneously
+            time.sleep(0.02)
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:

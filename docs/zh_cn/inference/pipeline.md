@@ -16,9 +16,9 @@ print(response)
 
 ```python
 import lmdeploy
-from lmdeploy.turbomind import EngineConfig
+from lmdeploy.messages import TurbomindEngineConfig
 
-backend_config = EngineConfig(tp=2)
+backend_config = TurbomindEngineConfig(tp=2)
 pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
                          backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
@@ -29,10 +29,9 @@ print(response)
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.turbomind import EngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
-backend_config = EngineConfig(tp=2)
+backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
@@ -48,10 +47,9 @@ print(response)
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.turbomind import EngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
-backend_config = EngineConfig(tp=2)
+backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
@@ -78,16 +76,14 @@ pip install triton>=2.1.0
 
 ```python
 import lmdeploy
-from lmdeploy.messages import GenerationConfig
-from lmdeploy.pytorch import EngineConfig
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
 
-backend_config = EngineConfig(session_len=2024)
+backend_config = PytorchEngineConfig(session_len=2024)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
 pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend='pytorch',
                          backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -106,15 +102,14 @@ print(response)
 
 ### 初始化参数:
 
-| Parameter            | Type                                                 | Description                                                                                              | Default     |
-| -------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------- |
-| model_path           | str                                                  | 模型路径。这可以是存储 Turbomind 模型的本地目录的路径，或者是托管在 huggingface.co 上的模型的 model_id。 |             |
-| model_name           | Optional\[str\]                                      | 当 model_path 指向 huggingface.co 上的 Pytorch 模型时需要的模型名称。                                    | None        |
-| backend              | Literal\['turbomind', 'pytorch'\]                    | 指定要使用的后端，可选 turbomind 或 pytorch。                                                            | 'turbomind' |
-| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | 后端的配置对象。根据所选后端，可以是 TurbomindEngineConfig 或 PytorchEngineConfig。                      | None        |
-| chat_template_config | Optional\[ChatTemplateConfig\]                       | 聊天模板的配置。                                                                                         | None        |
-| tp                   | int                                                  | 张量并行单位的数量。后期会弃用，请改用 backend_config 参数                                               | 1           |
-| log_level            | str                                                  | 日志级别。                                                                                               | 'ERROR'     |
+| Parameter            | Type                                                 | Description                                                                                              | Default                     |
+| -------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------- |
+| model_path           | str                                                  | 模型路径。这可以是存储 Turbomind 模型的本地目录的路径，或者是托管在 huggingface.co 上的模型的 model_id。 |                             |
+| model_name           | Optional\[str\]                                      | 当 model_path 指向 huggingface.co 上的 Pytorch 模型时需要的模型名称。                                    | None                        |
+| backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | 后端的配置对象。根据所选后端，可以是 TurbomindEngineConfig 或 PytorchEngineConfig。                      | None, 默认跑 turbomind 后端 |
+| chat_template_config | Optional\[ChatTemplateConfig\]                       | 聊天模板的配置。                                                                                         | None                        |
+| tp                   | int                                                  | 张量并行单位的数量。后期会弃用，请改用 backend_config 参数                                               | 1                           |
+| log_level            | str                                                  | 日志级别。                                                                                               | 'ERROR'                     |
 
 ### 调用
 
@@ -130,7 +125,7 @@ print(response)
 | repetition_penalty | float                      | 1.0    | 重复惩罚的参数。1.0表示没有惩罚。后期会弃用，请改用 gen_config 参数                                                                       |
 | ignore_eos         | bool                       | False  | 是否忽略结束符的指示器。后期会弃用，请改用 gen_config 参数                                                                                |
 
-## EngineConfig(pytorch)
+## PytorchEngineConfig
 
 ### 描述
 
@@ -150,7 +145,7 @@ print(response)
 | num_cpu_blocks   | int  | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 | num_gpu_blocks   | int  | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 
-## EngineConfig (turbomind)
+## TurbomindEngineConfig
 
 ### 描述
 

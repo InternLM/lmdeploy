@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Optional
+
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from lmdeploy.utils import get_logger
 
@@ -71,6 +73,67 @@ class EngineGenerationConfig(GenerationConfig):
             random_seed=gen_config.random_seed,
             stop_words=special_word_token_ids(gen_config.stop_words),
             bad_words=special_word_token_ids(gen_config.bad_words))
+
+
+@pydantic_dataclass
+class TurbomindEngineConfig:
+    """TurboMind Engine config.
+
+    Args:​
+        model_name (str): the name of the deployed model​
+        model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq], `hf` meaning `hf_llama`, `llama` meaning `meta_llama`, `awq` meaning the quantized model by AWQ.​
+        tp (int): the number of GPU cards used in tensor parallelism, default to 1​
+        session_len (int): the max session length of a sequence, default to None​
+        max_batch_size (int): the max batch size during inference, default to 128​
+        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache, default to 0.5​
+        quant_policy: (int): , default to 0. When k/v is quantized into 8 bit, set it to 4​
+        rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention​
+        use_logn_attn (bool): whether or not to use log attn: default to False​
+    """  # noqa: E501
+
+    model_name: Optional[str] = None
+    model_format: Optional[str] = None
+    tp: int = 1
+    session_len: Optional[int] = None
+    max_batch_size: int = 128
+    cache_max_entry_count: float = 0.5
+    quant_policy: int = 0
+    rope_scaling_factor: float = 0.0
+    use_logn_attn: bool = False
+
+
+@dataclass
+class PytorchEngineConfig:
+    """PyTorch Engine Config.
+
+    Args:
+        model_name (str): name of the given model.
+        tp (int): Tensor Parallelism. default 1.
+        session_len (int): Max session length. Default None.
+        max_batch_size: (int): Max batch size. Default 128.
+        eviction_type (str): What action to perform when kv cache
+            is full, ['recompute', 'copy'], Default 'recompute'.
+        prefill_interval (int): Interval to perform prefill,
+            Default 16.
+        block_size (int): paging cache block size, default 64.
+        num_cpu_blocks (int): Num cpu blocks. If num is 0, cache
+            would be allocate according to current environment.
+        num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
+            would be allocate according to current environment.
+        adapters (Dict[str, str]): Adapter name path pair.
+        num_tokens_per_iter (int): tokens per iteration.
+    """
+    model_name: str = ''
+    tp: int = 1
+    session_len: int = None
+    max_batch_size: int = 128
+    eviction_type: str = 'recompute'
+    prefill_interval: int = 16
+    block_size: int = 64
+    num_cpu_blocks: int = 0
+    num_gpu_blocks: int = 0
+    adapters: Dict[str, str] = None
+    num_tokens_per_iter: int = 16384
 
 
 class ResponseType(enum.Enum):

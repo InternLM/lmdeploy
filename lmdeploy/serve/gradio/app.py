@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal, Optional, Union
 
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch import EngineConfig as PytorchEngineConfig
-from lmdeploy.turbomind import EngineConfig as TurbomindEngineConfig
 
 
 def run(model_path_or_server: str,
@@ -30,7 +29,8 @@ def run(model_path_or_server: str,
         batch_size (int): batch size for running Turbomind directly
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
-        backend_config (EngineConfig): beckend config. Default to none.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         tp (int): tensor parallel for Turbomind

@@ -47,6 +47,7 @@
    :maxdepth: 1
    :caption: 服务
 
+   serving/proxy_server.md
    serving/restful_api.md
 
 
