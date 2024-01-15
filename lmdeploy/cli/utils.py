@@ -187,11 +187,10 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_dataset(parser):
-        return parser.add_argument(
-            '--calib-dataset',
-            type=str,
-            default='c4',
-            help='The calibration dataset name. defaults to "c4"')
+        return parser.add_argument('--calib-dataset',
+                                   type=str,
+                                   default='ptb',
+                                   help='The calibration dataset name')
 
     @staticmethod
     def calib_samples(parser):
@@ -199,15 +198,14 @@ class ArgumentHelper:
             '--calib-samples',
             type=int,
             default=128,
-            help='The number of samples for calibration. defaults to 128')
+            help='The number of samples for calibration')
 
     @staticmethod
     def calib_seqlen(parser):
-        return parser.add_argument(
-            '--calib-seqlen',
-            type=int,
-            default=2048,
-            help='The sequence length for calibration. defaults to 2048')
+        return parser.add_argument('--calib-seqlen',
+                                   type=int,
+                                   default=2048,
+                                   help='The sequence length for calibration')
 
     @staticmethod
     def device(parser):
@@ -240,3 +238,11 @@ class ArgumentHelper:
             action=DictAction,
             help='Used key-values pairs in xxx=yyy format'
             ' to set the path lora adapter')
+
+    @staticmethod
+    def work_dir(parser):
+        return parser.add_argument(
+            '--work-dir',
+            type=str,
+            default='./work_dir',
+            help='The working directory to save results')

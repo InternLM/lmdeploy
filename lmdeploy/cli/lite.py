@@ -28,9 +28,7 @@ class SubCliLite(object):
         parser.add_argument('model',
                             type=str,
                             help='The path of model in hf format')
-        parser.add_argument('work_dir',
-                            type=str,
-                            help='The working directory to save results')
+        ArgumentHelper.work_dir(parser)
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
@@ -59,11 +57,7 @@ class SubCliLite(object):
         parser.add_argument('model',
                             type=str,
                             help='The name or path of the model to be loaded')
-        parser.add_argument(
-            '--work-dir',
-            type=str,
-            default='./work_dir',
-            help='The working directory for outputs. defaults to "./work_dir"')
+        ArgumentHelper.work_dir(parser)
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)

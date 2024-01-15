@@ -28,8 +28,8 @@ NORM_TYPE_MAP = {
 
 
 def auto_awq(model: str,
-             work_dir: str,
-             calib_dataset: str = 'c4',
+             work_dir: str = './work_dir',
+             calib_dataset: str = 'ptb',
              calib_samples: int = 128,
              calib_seqlen: int = 2048,
              w_bits: int = 4,

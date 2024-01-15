@@ -31,7 +31,7 @@ Get the quantization parameters by these two steps:
 # get minmax
 lmdeploy lite calibrate \
   $HF_MODEL \
-  --calib-dataset 'c4' \             # Support c4, ptb, wikitext2, pileval
+  --calib-dataset 'ptb' \            # Support c4, ptb, wikitext2, pileval
   --calib-samples 128 \              # Number of samples in the calibration set, if the memory is not enough, it can be adjusted appropriately
   --calib-seqlen 2048 \              # Length of a single text, if the memory is not enough, you can adjust it appropriately
   --work-dir $WORK_DIR \             # Directory for saving quantized statistical parameters and quantized weights in Pytorch format
@@ -39,8 +39,8 @@ lmdeploy lite calibrate \
 # get quant parameters
 lmdeploy lite kv_qparams \
   $WORK_DIR  \                             # Directory of the last output
-  workspace/triton_models/weights/ \ # Directory to save the quantization parameters
-  --num-tp 1  \                                       # Number of GPUs used for Tensor parallelization, keep it consistent with deploy.py
+  workspace/triton_models/weights/ \       # Directory to save the quantization parameters
+  --num-tp 1  \                            # Number of GPUs used for Tensor parallelization, keep it consistent with deploy.py
 ```
 
 `kv_qparams` will generate fp32 scaling factors in the `weights` directory. The file format is a binary produced by `numpy.tofile`.

@@ -31,7 +31,7 @@ lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
 # 计算 minmax
 lmdeploy lite calibrate \
   $HF_MODEL \
-  --calib-dataset 'c4' \             # 校准数据集，支持 c4, ptb, wikitext2, pileval
+  --calib-dataset 'ptb' \            # 校准数据集，支持 c4, ptb, wikitext2, pileval
   --calib-samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
   --calib-seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
   --work-dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
