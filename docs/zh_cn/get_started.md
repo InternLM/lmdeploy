@@ -4,7 +4,7 @@ LMDeploy提供了快速安装、模型量化、离线批处理、在线推理服
 
 ## 安装
 
-使用 pip ( python 3.8+) 安装 LMDeploy，或者[源码安装](./build.md)
+使用 pip (python 3.8+) 安装 LMDeploy，或者[源码安装](./build.md)
 
 ```shell
 pip install lmdeploy

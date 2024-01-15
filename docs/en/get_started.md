@@ -4,7 +4,7 @@ LMDeploy offers functionalities such as model quantization, offline batch infere
 
 ## Installation
 
-Install lmdeploy with pip ( python 3.8+) or [from source](./build.md)
+Install lmdeploy with pip (python 3.8+) or [from source](./build.md)
 
 ```shell
 pip install lmdeploy
@@ -12,7 +12,7 @@ pip install lmdeploy
 
 ## Offline batch inference
 
-```shell
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
