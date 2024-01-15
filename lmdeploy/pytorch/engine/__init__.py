@@ -1,4 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .engine import Engine, EngineConfig
+from .engine import Engine
 
-__all__ = ['Engine', 'EngineConfig']
+__all__ = ['Engine']

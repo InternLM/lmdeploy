@@ -13,8 +13,8 @@ import tqdm
 from mmengine import Registry
 from pydantic.dataclasses import dataclass
 
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind import EngineConfig
 
 from ..source_model.base import BaseInputModel, BaseReader
 
@@ -83,7 +83,7 @@ class TurbomindModelConfig:
             return cls(**default)
 
     @classmethod
-    def from_engine_config(cls, config: EngineConfig):
+    def from_engine_config(cls, config: TurbomindEngineConfig):
         env = copy.deepcopy(config.__dict__)
         env['tensor_para_size'] = env['tp']
         ret = TurbomindModelConfig.from_dict(env, allow_none=True)
