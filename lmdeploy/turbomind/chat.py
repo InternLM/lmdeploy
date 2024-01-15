@@ -3,6 +3,7 @@ import dataclasses
 import os
 import random
 
+from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.turbomind.utils import get_gen_param
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -36,6 +37,7 @@ def main(model_path: str,
          tp: int = 1,
          stream_output: bool = True,
          request_output_len: int = 1024,
+         chat_template_cfg: ChatTemplateConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -49,14 +51,27 @@ def main(model_path: str,
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
+        chat_template_cfg (ChatTemplateConfig): Chat template config
         **kwarg (dict): other arguments for initializing model's chat template
     """
     from lmdeploy import turbomind as tm
-    tm_model = tm.TurboMind.from_pretrained(model_path,
-                                            model_name=model_name,
-                                            tp=tp,
-                                            capability=cap,
-                                            **kwargs)
+    if chat_template_cfg is None:
+        chat_template_cfg = ChatTemplateConfig(model_name=model_name,
+                                               capability=cap)
+        new_kwargs = {}
+        for k, v in kwargs.items():
+            if hasattr(chat_template_cfg, k):
+                setattr(chat_template_cfg, k, v)
+            else:
+                new_kwargs[k] = v
+        kwargs = new_kwargs
+    tm_model = tm.TurboMind.from_pretrained(
+        model_path,
+        model_name=model_name,
+        tp=tp,
+        capability=cap,
+        chat_template_config=chat_template_cfg,
+        **kwargs)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
 
