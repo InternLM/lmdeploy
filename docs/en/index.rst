@@ -46,8 +46,8 @@ Welcome to LMDeploy's tutorials!
    :maxdepth: 1
    :caption: serving
 
-   serving/proxy_server.md
    serving/restful_api.md
+   serving/proxy_server.md
 
 .. _quantization:
 .. toctree::
