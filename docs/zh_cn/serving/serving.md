@@ -42,8 +42,9 @@ bash workspace/service_docker_up.sh
 <summary><b>7B</b></summary>
 
 ```shell
-lmdeploy convert llama /path/to/llama-7b llama \
-    --tokenizer_path /path/to/tokenizer/model
+lmdeploy convert llama /path/to/llama-7b \
+    --model-format \
+    --tokenizer-path /path/to/tokenizer/model
 bash workspace/service_docker_up.sh
 ```
 
@@ -53,8 +54,9 @@ bash workspace/service_docker_up.sh
 <summary><b>13B</b></summary>
 
 ```shell
-lmdeploy convert llama /path/to/llama-13b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 2
+lmdeploy convert llama /path/to/llama-13b \
+    --model-format \
+    --tokenizer-path /path/to/tokenizer/model --tp 2
 bash workspace/service_docker_up.sh
 ```
 
@@ -64,8 +66,9 @@ bash workspace/service_docker_up.sh
 <summary><b>30B</b></summary>
 
 ```shell
-lmdeploy convert llama /path/to/llama-30b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 4
+lmdeploy convert llama /path/to/llama-30b \
+    --model-format \
+    --tokenizer-path /path/to/tokenizer/model --tp 4
 bash workspace/service_docker_up.sh
 ```
 
@@ -75,8 +78,9 @@ bash workspace/service_docker_up.sh
 <summary><b>65B</b></summary>
 
 ```shell
-lmdeploy convert llama /path/to/llama-65b llama \
-    --tokenizer_path /path/to/tokenizer/model --tp 8
+lmdeploy convert llama /path/to/llama-65b \
+    --model-format \
+    --tokenizer-path /path/to/tokenizer/model --tp 8
 bash workspace/service_docker_up.sh
 ```
 

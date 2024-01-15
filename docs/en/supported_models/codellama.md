@@ -64,10 +64,10 @@ And the generated code piece by `turbomind.chat` is the one to be filled in `<FI
 ### Chat
 
 ```
-lmdeploy chat turbomind ./workspace --cap chat --sys-instruct "Provide answers in Python"
+lmdeploy chat turbomind ./workspace --cap chat --meta-instruct "Provide answers in Python"
 ```
 
-`--sys-instruct` instruction can be changed to other coding languages as long as codellama supports it
+`--meta-instruct` instruction can be changed to other coding languages as long as codellama supports it
 
 ### Python specialist
 
@@ -88,9 +88,8 @@ TBD
 Launch inference server by:
 
 ```shell
-# --instance_num: number of instances to performance inference, which can be viewed as max requests concurrency
 # --tp: the number of GPUs used in tensor parallelism
-lmdeploy serve api_server ./workspace --server_name ${server_ip} --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server-name ${server_ip} --server-port ${server_port} --tp 1
 ```
 
 Then, you can communicate with it by command line,
@@ -105,8 +104,8 @@ or through webui after launching gradio,
 ```shell
 # api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
+# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
+lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 Regarding the detailed information of RESTful API, you can refer to [restful_api.md](../serving/restful_api.md).

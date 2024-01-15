@@ -52,10 +52,7 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         for outputs in chatbot.stream_infer(session_id,
                                             input_ids=input_ids,
                                             gen_config=gen_config):
-            if len(outputs) > 1:
-                _, n_token = outputs[-2:]
-            else:
-                _, n_token = outputs[0]
+            _, n_token = outputs[-2:]
             now = time.perf_counter()
             if n_prev_token != n_token:
                 token_latency_stats[n_prev_token] = np.round(now - prev, 3)
@@ -102,7 +99,7 @@ def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
     _start = time.perf_counter()
     procs = []
     for i in range(concurrency):
-        proc = Thread(target=_infer, args=(model, i + 1))
+        proc = Thread(target=_infer, args=(model, i + 1), daemon=True)
         procs.append(proc)
         proc.start()
 
@@ -123,9 +120,11 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
 
-    from lmdeploy.pytorch.engine import Engine, EngineConfig
+    from lmdeploy.messages import PytorchEngineConfig
+    from lmdeploy.pytorch.engine import Engine
 
-    tm_model = Engine(model_path, EngineConfig(model_name='llama', tp=tp))
+    tm_model = Engine(model_path, PytorchEngineConfig(model_name='llama',
+                                                      tp=tp))
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
@@ -139,7 +138,8 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
     for i in range(concurrency):
         proc = Thread(target=infer,
                       args=(tm_model, i + 1, input_ids, output_seqlen, top_k,
-                            top_p, temperature, test_round, que))
+                            top_p, temperature, test_round, que),
+                      daemon=True)
         procs.append(proc)
         proc.start()
 
@@ -256,7 +256,7 @@ class MemoryMonitor:
     def start(cls):
         cls._running = True
         from multiprocessing import Process
-        cls.proc = Process(target=cls.mem_monitor)
+        cls.proc = Process(target=cls.mem_monitor, daemon=True)
         cls.proc.start()
 
     @classmethod

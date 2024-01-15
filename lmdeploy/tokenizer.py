@@ -2,9 +2,14 @@
 import json
 import os
 import os.path as osp
-from typing import Optional, Sequence, Union
+from collections import deque
+from typing import List, Optional, Sequence, Union
 
 import torch
+
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 class SentencePieceTokenizer:
@@ -18,6 +23,11 @@ class SentencePieceTokenizer:
         from sentencepiece import SentencePieceProcessor
         self.model = SentencePieceProcessor(model_file=model_file)
         self._prefix_space_tokens = None
+        # for stop words
+        self._maybe_decode_bytes: bool = None
+        # TODO maybe lack a constant.py
+        self._indexes_tokens_deque = deque(maxlen=10)
+        self.max_indexes_num = 5
 
     @property
     def vocab_size(self):
@@ -52,6 +62,27 @@ class SentencePieceTokenizer:
             return ' ' + decoded
         else:
             return decoded
+
+    def indexes_containing_token(self, token: str):
+        """Return all the possible indexes, whose decoding output may contain
+        the input token."""
+        # traversing vocab is time consuming, can not be accelerated with
+        # multi threads (computation) or multi process (can't pickle tokenizer)
+        # so, we maintain latest 10 stop words and return directly if matched
+        for _token, _indexes in self._indexes_tokens_deque:
+            if token == _token:
+                return _indexes
+        if token == ' ':  # ' ' is special
+            token = '▁'
+        vocab = self.model.IdToPiece(list(range(self.vocab_size)))
+        indexes = [i for i, voc in enumerate(vocab) if token in voc]
+        if len(indexes) > self.max_indexes_num:
+            indexes = self.encode(token, add_bos=False)[-1:]
+            logger.warning(
+                f'There are too many(>{self.max_indexes_num}) possible '
+                f'indexes may decoding {token}, we will use {indexes} only')
+        self._indexes_tokens_deque.append((token, indexes))
+        return indexes
 
     def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
@@ -110,8 +141,9 @@ class HuggingFaceTokenizer:
         backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
         model_file_exists = osp.exists(model_file)
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
-            print('WARNING: Can not find tokenizer.json. '
-                  'It may take long time to initialize the tokenizer.')
+            logger.warning(
+                'Can not find tokenizer.json. '
+                'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
         self._prefix_space_tokens = None
@@ -130,6 +162,13 @@ class HuggingFaceTokenizer:
                     self.model.eos_token_id = cfg['eos_token_id']
             elif hasattr(self.model, 'eod_id'):  # Qwen remote
                 self.model.eos_token_id = self.model.eod_id
+
+        # for stop words
+        self._maybe_decode_bytes: bool = None
+        # TODO maybe lack a constant.py
+        self._indexes_tokens_deque = deque(maxlen=10)
+        self.max_indexes_num = 5
+        self.token2id = {}
 
     @property
     def vocab_size(self):
@@ -159,13 +198,59 @@ class HuggingFaceTokenizer:
             }
         return self._prefix_space_tokens
 
-    def _maybe_add_prefix_space(self, tokens, decoded):
+    def _maybe_add_prefix_space(self, tokens: List[int], decoded: str):
         """maybe add prefix space for incremental decoding."""
         if len(tokens) and not decoded.startswith(' ') and\
                 tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
+
+    @property
+    def maybe_decode_bytes(self):
+        """Check if self.model.convert_ids_to_tokens return not a str value."""
+        if self._maybe_decode_bytes is None:
+            self._maybe_decode_bytes = False
+            vocab = self.model.convert_ids_to_tokens(
+                list(range(self.vocab_size)))
+            for tok in vocab:
+                if not isinstance(tok, str):
+                    self._maybe_decode_bytes = True
+                    break
+        return self._maybe_decode_bytes
+
+    def indexes_containing_token(self, token: str):
+        """Return all the possible indexes, whose decoding output may contain
+        the input token."""
+        # traversing vocab is time consuming, can not be accelerated with
+        # multi threads (computation) or multi process (can't pickle tokenizer)
+        # so, we maintain latest 10 stop words and return directly if matched
+        for _token, _indexes in self._indexes_tokens_deque:
+            if token == _token:
+                return _indexes
+
+        if self.token2id == {}:
+            # decode is slower than convert_ids_to_tokens
+            if self.maybe_decode_bytes:
+                self.token2id = {
+                    self.model.decode(i): i
+                    for i in range(self.vocab_size)
+                }
+            else:
+                self.token2id = {
+                    self.model.convert_ids_to_tokens(i): i
+                    for i in range(self.vocab_size)
+                }
+        if token == ' ':  # ' ' is special
+            token = '▁'
+        indexes = [i for _token, i in self.token2id.items() if token in _token]
+        if len(indexes) > self.max_indexes_num:
+            indexes = self.encode(token, add_bos=False)[-1:]
+            logger.warning(
+                f'There are too many(>{self.max_indexes_num}) possible '
+                f'indexes may decoding {token}, we will use {indexes} only')
+        self._indexes_tokens_deque.append((token, indexes))
+        return indexes
 
     def encode(self, s: str, add_bos: bool = True, **kwargs):
         """Tokenize a prompt.
@@ -282,3 +367,14 @@ class Tokenizer:
             list[int]: token ids
         """
         return self.model(s)
+
+    def indexes_containing_token(self, token):
+        """Return all the possible indexes, whose decoding output may contain
+        the input token."""
+        encoded = self.encode(token, add_bos=False)
+        if len(encoded) > 1:
+            logger.warning(
+                f'The token {token}, its length of indexes {encoded} is over '
+                'than 1. Currently, it can not be used as stop words')
+            return []
+        return self.model.indexes_containing_token(token)

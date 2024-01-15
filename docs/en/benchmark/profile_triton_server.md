@@ -53,7 +53,7 @@ lmdeploy convert internlm internlm/internlm-7b --dst-path ./internlm-7b
 bash ./internlm-7b/service_docker_up.sh
 
 # open another terminal and run the following command in the directory `lmdeploy/benchmark`
-python3 ./profile_serving 0.0.0.0:33337 ./internlm-7b/triton_models/tokenizer ./ShareGPT_V3_unfiltered_cleaned_split.json
+python3 ./profile_serving.py 0.0.0.0:33337 ./internlm-7b/triton_models/tokenizer ./ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
 ## Command details

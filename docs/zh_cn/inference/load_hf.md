@@ -30,7 +30,7 @@ lmdeploy chat turbomind $repo_id --model-name $model_name
 lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
-lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --tp 1
+lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
 ```
 
 ### 2) 其他的 LM 模型
@@ -50,7 +50,7 @@ lmdeploy chat turbomind $repo_id --model-name $model_name
 lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
-lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --tp 1
+lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
 ```
 
 ### 3) 通过 `lmdeploy convert` 命令转换好的模型
@@ -59,7 +59,7 @@ lmdeploy serve api_server $repo_id --model-name $model_name --instance_num 32 --
 
 ```
 # Convert a model
-lmdeploy convert /path/to/model ./workspace --model-name MODEL_NAME
+lmdeploy convert $MODEL_NAME /path/to/model --dst-path ./workspace
 
 # Inference by TurboMind
 lmdeploy chat turbomind ./workspace
@@ -68,5 +68,5 @@ lmdeploy chat turbomind ./workspace
 lmdeploy serve gradio ./workspace
 
 # Serving with Restful API
-lmdeploy serve api_server ./workspace --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --tp 1
 ```

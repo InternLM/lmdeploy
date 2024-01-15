@@ -4,6 +4,10 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 
 import requests
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
 
 def get_model_list(api_url: str):
     response = requests.get(api_url)
@@ -12,6 +16,16 @@ def get_model_list(api_url: str):
         model_list = model_list.pop('data', [])
         return [item['id'] for item in model_list]
     return None
+
+
+def json_loads(content):
+    """Loads content to json format."""
+    try:
+        content = json.loads(content)
+        return content
+    except:  # noqa
+        logger.warning(f'weird json content {content}')
+        return ''
 
 
 class APIClient:
@@ -38,7 +52,7 @@ class APIClient:
             return self._available_models
         response = requests.get(self.models_v1_url)
         if hasattr(response, 'text'):
-            model_list = json.loads(response.text)
+            model_list = json_loads(response.text)
             model_list = model_list.pop('data', [])
             self._available_models = [item['id'] for item in model_list]
             return self._available_models
@@ -65,7 +79,7 @@ class APIClient:
                                            add_bos=add_bos),
                                  stream=False)
         if hasattr(response, 'text'):
-            output = json.loads(response.text)
+            output = json_loads(response.text)
             return output['input_ids'], output['length']
         return None, None
 
@@ -76,7 +90,7 @@ class APIClient:
                             top_p: Optional[float] = 1.0,
                             n: Optional[int] = 1,
                             max_tokens: Optional[int] = 512,
-                            stop: Optional[bool] = False,
+                            stop: Optional[Union[str, List[str]]] = None,
                             stream: Optional[bool] = False,
                             presence_penalty: Optional[float] = 0.0,
                             frequency_penalty: Optional[float] = 0.0,
@@ -89,7 +103,8 @@ class APIClient:
 
         Args:
             model: model name. Available from self.available_models.
-            messages: string prompt or chat history in OpenAI format.
+            messages: string prompt or chat history in OpenAI format. Chat
+                history example: `[{"role": "user", "content": "hi"}]`.
             temperature (float): to modulate the next token probability
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
@@ -98,6 +113,8 @@ class APIClient:
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
             max_tokens (int): output token nums
+            stop (str | List[str] | None): To stop generating further
+              tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
@@ -126,11 +143,11 @@ class APIClient:
                         continue
                     if decoded[:6] == 'data: ':
                         decoded = decoded[6:]
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
                 else:
                     decoded = chunk.decode('utf-8')
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
 
     def chat_interactive_v1(self,
@@ -138,7 +155,7 @@ class APIClient:
                             session_id: int = -1,
                             interactive_mode: bool = False,
                             stream: bool = False,
-                            stop: bool = False,
+                            stop: Optional[Union[str, List[str]]] = None,
                             request_output_len: int = 512,
                             top_p: float = 0.8,
                             top_k: int = 40,
@@ -162,7 +179,8 @@ class APIClient:
                 interactive mode, session history is kept on the server (and
                 vice versa).
             stream: whether to stream the results or not.
-            stop: whether to stop the session response or not.
+            stop (str | List[str] | None): To stop generating further tokens.
+                Only accept stop words that's encoded to one token idex.
             request_output_len (int): output token nums
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
@@ -192,7 +210,7 @@ class APIClient:
                                          delimiter=b'\n'):
             if chunk:
                 decoded = chunk.decode('utf-8')
-                output = json.loads(decoded)
+                output = json_loads(decoded)
                 yield output
 
     def completions_v1(
@@ -204,6 +222,7 @@ class APIClient:
             n: Optional[int] = 1,
             max_tokens: Optional[int] = 16,
             stream: Optional[bool] = False,
+            stop: Optional[Union[str, List[str]]] = None,
             top_p: Optional[float] = 1.0,
             top_k: Optional[int] = 40,
             user: Optional[str] = None,
@@ -229,6 +248,8 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
+            stop (str | List[str] | None): To stop generating further
+              tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
             user (str): A unique identifier representing your end-user.
@@ -258,11 +279,11 @@ class APIClient:
                         continue
                     if decoded[:6] == 'data: ':
                         decoded = decoded[6:]
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
                 else:
                     decoded = chunk.decode('utf-8')
-                    output = json.loads(decoded)
+                    output = json_loads(decoded)
                     yield output
 
     def chat(self,
@@ -344,7 +365,7 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            interactive_mode: bool = False,
                            ignore_eos: bool = False,
-                           stop: bool = False,
+                           cancel: bool = False,
                            top_p: float = 0.8,
                            temperature: float = 0.7) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
@@ -355,7 +376,7 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'interactive_mode': interactive_mode,
         'ignore_eos': ignore_eos,
-        'stop': stop,
+        'cancel': cancel,
         'top_p': top_p,
         'temperature': temperature
     }
@@ -367,7 +388,7 @@ def get_streaming_response(prompt: str,
                                      decode_unicode=False,
                                      delimiter=b'\n'):
         if chunk:
-            data = json.loads(chunk.decode('utf-8'))
+            data = json_loads(chunk.decode('utf-8'))
             output = data.pop('text', '')
             tokens = data.pop('tokens', 0)
             finish_reason = data.pop('finish_reason', None)

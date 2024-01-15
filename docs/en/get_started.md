@@ -14,14 +14,12 @@ pip install lmdeploy
 
 ```shell
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm-chat-7b", tp=1)
+pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-Tensor parallelism is supported, and can be invoked by setting the `tp` parameter.
-
-<!-- For more information on inference pipeline parameters, please refer to [here(TODO)](<>). -->
+For more information on inference pipeline parameters, please refer to [here](./inference/pipeline.md).
 
 ## Serving
 
@@ -48,9 +46,8 @@ LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight
 Using the following commands, you can quantize a LLM model into 4bit, and communicate with it with command line:
 
 ```shell
-lmdeploy lite calibrate internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
 lmdeploy lite auto_awq internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --group-size 128
+lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq
 ```
 
 LMDeploy 4bit inference supports the following NVIDIA GPU:

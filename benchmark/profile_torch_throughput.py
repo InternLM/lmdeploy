@@ -12,9 +12,8 @@ import fire
 import numpy as np
 from tqdm import tqdm
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.pytorch.engine import Engine as LMEngine
-from lmdeploy.pytorch.engine import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 
@@ -61,11 +60,15 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
+    def __init__(self, model_path: str, tp: int, max_batch_size: int, csv: str,
+                 **kwargs):
         # avoid turbomind checking chat template name by setting
         # `model_name='llama'`
-        tm_model = LMEngine(model_path, EngineConfig(tp=tp,
-                                                     model_name='llama'))
+        tm_model = LMEngine(
+            model_path,
+            PytorchEngineConfig(tp=tp,
+                                model_name='llama',
+                                max_batch_size=max_batch_size))
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
         self.csv = csv
@@ -94,10 +97,7 @@ class Engine:
             for outputs in model_inst.stream_infer(session_id,
                                                    input_ids=input_ids,
                                                    gen_config=gen_config):
-                if len(outputs) > 1:
-                    res, n_token = outputs[-2:]
-                else:
-                    res, n_token = outputs[0]
+                res, n_token = outputs[-2:]
                 self.tokenizer.decode(res, offset)
                 offset = n_token
                 now = time.perf_counter()
@@ -146,7 +146,8 @@ class Engine:
         # start threads
         for i in range(concurrency):
             t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, stream_output))
+                       args=(req_queue, res_queue, i, stream_output),
+                       daemon=True)
             t.start()
             threads.append(t)
 
@@ -269,6 +270,7 @@ def main(dataset: str,
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
+                    max_batch_size=concurrency,
                     csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)

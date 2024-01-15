@@ -4,9 +4,8 @@ import os
 import random
 from typing import List
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.model import MODELS, best_match_model
-from lmdeploy.pytorch import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -48,34 +47,40 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     return stop_words
 
 
-def run_chat(model_path,
-             engine_config: EngineConfig,
+def run_chat(model_path: str,
+             engine_config: PytorchEngineConfig,
              gen_config: EngineGenerationConfig = None,
              session_id: int = 1,
-             trust_remote_code=True):
+             trust_remote_code: bool = True):
     """An example to perform model inference through the command line
     interface.
 
     Args:
         model_path (str): the huggingface model path.
-        engine_config (EngineConfig): Config of engine.
+        engine_config (PytorchEngineConfig): Config of engine.
         gen_config (EngineGenerationConfig): Config of generation.
         session_id (int): the identical id of a session.
         trust_remote_code (bool): trust remote code.
     """
     from lmdeploy.pytorch.engine import Engine
-    tm_model = Engine(model_path,
-                      engine_config=engine_config,
-                      trust_remote_code=trust_remote_code)
+    tm_model = Engine.from_pretrained(model_path,
+                                      engine_config=engine_config,
+                                      trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
+    adapter_name = None
+    if engine_config.adapters is not None:
+        adapter_name = next(iter(engine_config.adapters.keys()))
+
+    if gen_config is None:
+        gen_config = EngineGenerationConfig()
 
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
     model_name = engine_config.model_name
     if model_name is None:
-        model_name = best_match_model(model_path)[0]
+        model_name = best_match_model(model_path)
         assert model_name is not None, 'Can not find match model template'
         print(f'match template: <{model_name}>')
     model = MODELS.get(model_name)()
@@ -107,7 +112,8 @@ def run_chat(model_path,
             gen_config.stop_words = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=input_ids,
-                                                  gen_config=gen_config):
+                                                  gen_config=gen_config,
+                                                  adapter_name=adapter_name):
                 status, res, tokens = outputs
                 # decode res
                 response = tokenizer.decode(res, offset=response_size)
@@ -127,16 +133,17 @@ def run_chat(model_path,
             nth_round += 1
 
 
-def main(model_path,
+def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
-         top_k=40,
-         top_p=0.8,
-         temperature=0.8,
+         top_k: float = 40,
+         top_p: float = 0.8,
+         temperature: float = 0.8,
          repetition_penalty: float = 1.0,
          tp: int = 1,
          stream_output: bool = True,
-         trust_remote_code=True):
+         adapter: str = None,
+         trust_remote_code: bool = True):
     """An example to perform model inference through the command line
     interface.
 
@@ -150,9 +157,15 @@ def main(model_path,
         repetition_penalty (float): parameter to penalize repetition
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
+        adapter (str): path to lora adapter.
         trust_remote_code (bool): Trust remote code.
     """
-    engine_config = EngineConfig(model_name=model_name, tp=tp)
+    adapters = None
+    if adapter is not None:
+        adapters = dict(default=adapter)
+    engine_config = PytorchEngineConfig(model_name=model_name,
+                                        tp=tp,
+                                        adapters=adapters)
     gen_config = EngineGenerationConfig(max_new_tokens=512,
                                         top_k=top_k,
                                         top_p=top_p,

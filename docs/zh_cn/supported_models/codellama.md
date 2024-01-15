@@ -64,10 +64,10 @@ def remove_non_ascii(s: str) -> str:
 ### 对话
 
 ```
-lmdeploy chat turbomind ./workspace --cap chat --sys-instruct "Provide answers in Python"
+lmdeploy chat turbomind ./workspace --cap chat --meta-instruct "Provide answers in Python"
 ```
 
-可以把 `--sys-instruct` 的指令换成 codellama 支持的其他变成语言。
+可以把 `--meta-instruct` 的指令换成 codellama 支持的其他变成语言。
 
 ### Python 专项
 
@@ -88,9 +88,8 @@ TBD
 启动 sever 的方式是：
 
 ```shell
-# --instance_num: turbomind推理实例的个数。可理解为支持的最大并发数
 # --tp: 在 tensor parallel时，使用的GPU数量
-lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 32 --tp 1
+lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
 打开 `http://{server_ip}:{server_port}`，即可访问 swagger，查阅 RESTful API 的详细信息。
@@ -107,8 +106,8 @@ lmdeploy serve api_client api_server_url
 ```shell
 # api_server_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_ip 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
+# 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
+lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 关于 RESTful API的详细介绍，请参考[这份](../serving/restful_api.md)文档。

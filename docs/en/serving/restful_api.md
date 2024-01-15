@@ -9,7 +9,7 @@ The user can open the http url print by the following command in a browser.
 - **Please check the http url for the detailed api usage!!!**
 
 ```shell
-lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
+lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
 We provide some RESTful APIs. Three of them are in OpenAI format.
@@ -144,8 +144,8 @@ You can also test restful-api through webui.
 ```shell
 # api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
+# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
+lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 ### FAQ
@@ -153,10 +153,16 @@ lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be
    modified by passing `--session_len` to api_server.
 
-2. When OOM appeared at the server side, please reduce the number of `instance_num` when lanching the service.
+2. When OOM appeared at the server side, please reduce the `cache_max_entry_count` of `backend_config` when lanching the service.
 
 3. When the request with the same `session_id` to `/v1/chat/interactive` got a empty return value and a negative `tokens`, please consider setting `interactive_mode=false` to restart the session.
 
 4. The `/v1/chat/interactive` api disables engaging in multiple rounds of conversation by default. The input argument `prompt` consists of either single strings or entire chat histories.
 
 5. If you need to adjust other default parameters of the session, such as the content of fields like system. You can directly pass in the initialization parameters of the [dialogue template](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py). For example, for the internlm-chat-7b model, you can set the `--meta_instruction` parameter when starting the `api_server`.
+
+6. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
+
+### request distribution service
+
+Please refer to our [request distributor server](./proxy_server.md)

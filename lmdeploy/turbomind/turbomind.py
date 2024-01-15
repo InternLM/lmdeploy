@@ -16,8 +16,10 @@ from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineGenerationConfig
-from lmdeploy.model import MODELS, BaseModel, best_match_model
+from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
+                               TurbomindEngineConfig)
+from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
+                            best_match_model)
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -25,9 +27,7 @@ from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .engine_config import EngineConfig
-from .utils import (ModelSource, check_tm_model_input, create_hf_download_args,
-                    get_model_source)
+from .utils import ModelSource, create_hf_download_args, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -44,16 +44,16 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     assert isinstance(stop_words, List) and \
         all(isinstance(elem, str) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
-    stop_words = [
-        tokenizer.encode(stop_word, False)[-1] for stop_word in stop_words
-    ]
-    assert isinstance(stop_words, List) and all(
-        isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
-    # each id in stop_words represents a stop word
+    stop_indexes = []
+    for stop_word in stop_words:
+        stop_indexes += tokenizer.indexes_containing_token(stop_word)
+    assert isinstance(stop_indexes, List) and all(
+        isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
+    # each id in stop_indexes represents a stop word
     # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
-    # detailed explanation about fastertransformer's stop_words
-    stop_word_offsets = range(1, len(stop_words) + 1)
-    stop_words = np.array([[stop_words, stop_word_offsets]]).astype(np.int32)
+    # detailed explanation about fastertransformer's stop_indexes
+    stop_word_offsets = range(1, len(stop_indexes) + 1)
+    stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
     return stop_words
 
 
@@ -85,19 +85,19 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
-def _update_engine_config(config: EngineConfig, **kwargs):
+def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
     if config is None:
-        config = EngineConfig()
+        config = TurbomindEngineConfig()
     for k, v in kwargs.items():
         if v and hasattr(config, k):
             setattr(config, k, v)
             get_logger('turbomind').warning(
                 f'kwargs {k} is deprecated to initialize model, '
-                'use EngineConfig instead.')
+                'use TurbomindEngineConfig instead.')
     return config
 
 
-def _update_tm_config(dst: TurbomindModelConfig, src: EngineConfig):
+def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
     dst_dict = copy.deepcopy(dst.__dict__)
     src_dict = copy.deepcopy(src.__dict__)
     src_dict['tensor_para_size'] = src_dict['tp']
@@ -132,22 +132,62 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
-                 engine_config: EngineConfig = None,
+                 engine_config: TurbomindEngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
                  model_name: Optional[str] = None,
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
+                 chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
 
-        is_engine_config_none = engine_config is None
-        engine_config = _update_engine_config(engine_config,
-                                              model_name=model_name,
-                                              model_format=model_format,
-                                              group_size=group_size,
-                                              tp=tp,
-                                              **kwargs)
-        tp = engine_config.tp
+        # check model_name equal in engine_config and passed in
+        if engine_config is not None and engine_config.model_name is not None:
+            if model_name is not None:
+                assert model_name == engine_config.model_name, 'Got different'
+                f' model names. model_name: {model_name}, engine_config model '
+                f'name: {engine_config.model_name}'
+
+        # if loading from workspace and engine_config is None, use config.ini
+        # and ignore passed args like model_format, tp, etc.
+        if model_source == ModelSource.WORKSPACE and engine_config is None:
+
+            def _catch_args(**kwargs):
+                args = []
+                for k, v in kwargs.items():
+                    if v and hasattr(TurbomindEngineConfig, k):
+                        args.append(k)
+                return args
+
+            args = _catch_args(**kwargs,
+                               model_name=model_name,
+                               model_format=model_format,
+                               tp=tp)
+            if len(args) > 0:
+                get_logger('turbomind').warning(
+                    f'loading from workspace, ignore args {args} '
+                    'please use TurbomindEngineConfig or modify config.ini')
+
+        else:
+            engine_config = _update_engine_config(engine_config,
+                                                  model_name=model_name,
+                                                  model_format=model_format,
+                                                  group_size=group_size,
+                                                  tp=tp,
+                                                  **kwargs)
+
+        # match model name
+        if model_source == ModelSource.HF_MODEL and \
+                engine_config.model_name is None:
+            potential_names = best_match_model(model_path)
+            if potential_names is None:
+                logger.warning(f'Please input a model_name for {model_source}')
+            else:
+                engine_config.model_name = potential_names
+                logger.warning('Best matched chat template name: '
+                               f'{engine_config.model_name}')
+
+        tp = engine_config.tp if engine_config is not None else 1
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
         self.gpu_count = tp
 
@@ -155,16 +195,22 @@ class TurboMind:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
                                             'tokenizer')
             self.tokenizer = Tokenizer(tokenizer_model_path)
-            _engine_config = None if is_engine_config_none else engine_config
             self.model_comm = self._from_workspace(model_path=model_path,
-                                                   engine_config=_engine_config)
+                                                   engine_config=engine_config)
         else:
             self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
                                             engine_config=engine_config)
 
-        self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
+        if chat_template_config:
+            if chat_template_config.model_name is None:
+                chat_template_config.model_name = self.model_name
+                logger.warning(f'Input chat template with model_name is None. '
+                               f'Forcing to use {self.model_name}')
+            self.model = chat_template_config.chat_template
+        else:
+            self.model: BaseModel = MODELS.get(self.model_name)(**kwargs)
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
         self.stop_words = _stop_words(self.model.stop_words, self.tokenizer)
@@ -232,7 +278,7 @@ class TurboMind:
                 tm_params[k].append(v)
 
     def _from_hf(self, model_source: ModelSource, model_path: str,
-                 engine_config: EngineConfig):
+                 engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
@@ -256,8 +302,7 @@ class TurboMind:
             cfg.weight_type = 'int4'
             output_format = 'w4'
             data_type = 'int4'
-            assert cfg.group_size > 0, \
-                f'group_size: {cfg.group_size} should > 0'
+            cfg.group_size = 128
         else:
             output_format = update_output_format(engine_config.model_name,
                                                  inferred_model_format,
@@ -297,15 +342,13 @@ class TurboMind:
         output_model.export()
 
         # load kv qparams
-        self._load_kv_qparams(model_path,
-                              tm_params,
-                              kv_sym=False,
-                              kv_bits=engine_config.kv_bits)
+        self._load_kv_qparams(model_path, tm_params, kv_sym=False, kv_bits=8)
         assert len(tm_params) == 0, f'missing {tm_params.keys()}'
 
         return model_comm
 
-    def _from_workspace(self, model_path: str, engine_config: EngineConfig):
+    def _from_workspace(self, model_path: str,
+                        engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
         ini_path = osp.join(model_path, 'triton_models', 'weights',
                             'config.ini')
@@ -350,14 +393,16 @@ class TurboMind:
         return model_comm
 
     @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        engine_config: EngineConfig = None,
-                        model_name: Optional[str] = None,
-                        model_format: Optional[str] = None,
-                        group_size: Optional[int] = None,
-                        tp: Optional[int] = None,
-                        **kwargs):
+    def from_pretrained(
+            cls,
+            pretrained_model_name_or_path: str,
+            engine_config: TurbomindEngineConfig = None,
+            model_name: Optional[str] = None,
+            model_format: Optional[str] = None,
+            group_size: Optional[int] = None,
+            tp: Optional[int] = None,
+            chat_template_config: Optional[ChatTemplateConfig] = None,
+            **kwargs):
         """LMDeploy's turbomind inference engine.
 
         Args:
@@ -371,7 +416,7 @@ class TurboMind:
                       "InternLM/internlm-chat-20b-4bit",
                       "lmdeploy/llama2-chat-70b-4bit", etc.
                     - iii) The model_id of a model hosted inside a model repo
-                      on huggingface.co, such as "InternLM/internlm-chat-7b",
+                      on huggingface.co, such as "internlm/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
             model_name (str): needed when pretrained_model_name_or_path is c)
@@ -382,21 +427,14 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
-        # try fuzzy matching to get a model_name
-        if model_name is None and model_source == ModelSource.HF_MODEL:
-            potential_names = best_match_model(pretrained_model_name_or_path)
-            if potential_names is None:
-                logger.warning(f'Please input a model_name for {model_source}')
-            else:
-                model_name = potential_names[0]
-                logger.warning(
-                    f'Best matched chat template name: {model_name}')
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
-            check_tm_model_input(pretrained_model_name_or_path,
-                                 model_name=model_name,
-                                 **kwargs)
+            if model_name is None and (engine_config is None
+                                       or engine_config.model_name is None):
+                # huggingface repo id will be changed to local path in .cache
+                # have to match name in ahead.
+                model_name = best_match_model(pretrained_model_name_or_path)
             if not osp.exists(pretrained_model_name_or_path):
                 download_kwargs = create_hf_download_args(**kwargs)
                 local_path = snapshot_download(pretrained_model_name_or_path,
@@ -412,6 +450,7 @@ class TurboMind:
                    model_format=model_format,
                    group_size=group_size,
                    tp=tp,
+                   chat_template_config=chat_template_config,
                    **kwargs)
 
     def create_instance(self, cuda_stream_id=0):
@@ -511,6 +550,29 @@ class TurboMindInstance:
                 f'kwargs {k} is deprecated for inference, '
                 'use GenerationConfig instead.')
         return config
+
+    def end(self, session_id: int):
+        """End the given session."""
+        input_ids = [self.tm_model.tokenizer.eos_token_id]
+        end_generator = self.tm_model.create_instance()
+        for outputs in end_generator.stream_infer(session_id,
+                                                  input_ids,
+                                                  request_output_len=0,
+                                                  sequence_start=False,
+                                                  sequence_end=True):
+            pass
+
+    def cancel(self, session_id: int):
+        """Stop current streaming inference."""
+        input_ids = [self.tm_model.tokenizer.eos_token_id]
+        stop_generator = self.tm_model.create_instance()
+        for outputs in stop_generator.stream_infer(session_id,
+                                                   input_ids,
+                                                   request_output_len=0,
+                                                   sequence_start=False,
+                                                   sequence_end=False,
+                                                   stop=True):
+            pass
 
     def prepare_inputs(self,
                        session_id,
@@ -700,17 +762,18 @@ class TurboMindInstance:
             sequence_length -= seq_start.to(sequence_length.device)
 
             outputs = []
+            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs.append((output[:-1], len_ - 1))
+                    outputs = (status, output[:-1].tolist(), len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs.append((output[:-1], len_))
+                    outputs = (status, output[:-1].tolist(), len_)
                 else:
-                    outputs.append((output, len_))
+                    outputs = (status, output.tolist(), len_)
             yield outputs
 
             if finish:
@@ -791,17 +854,18 @@ class TurboMindInstance:
             sequence_length -= seq_start.to(sequence_length.device)
 
             outputs = []
+            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
             for output, len_ in zip(output_ids, sequence_length):
                 output, len_ = output, len_.item()
                 if len(output) > 0 and output[-1].item() == self.eos_id \
                         and not gen_config.ignore_eos:
-                    outputs.append((output[:-1], len_ - 1))
+                    outputs = (status, output[:-1].tolist(), len_ - 1)
                 elif len(output) > 0 and \
                     gen_config.stop_words is not None and \
                         output[-1].item() in gen_config.stop_words:
-                    outputs.append((output[:-1], len_))
+                    outputs = (status, output[:-1].tolist(), len_)
                 else:
-                    outputs.append((output, len_))
+                    outputs = (status, output.tolist(), len_)
             yield outputs
 
             if finish:

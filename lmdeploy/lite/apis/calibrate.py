@@ -111,7 +111,7 @@ def _prepare_for_calibrate(model: nn.Module,
 
 
 def calibrate(model: str,
-              calib_dataset: str = 'c4',
+              calib_dataset: str = 'ptb',
               calib_samples: int = 128,
               calib_seqlen: int = 2048,
               work_dir: str = './work_dir',
@@ -122,7 +122,7 @@ def calibrate(model: str,
     Args:
         model (str): The name or path of the model to be loaded.
         calib_dataset (str, optional): The calibration dataset name.
-            Defaults to 'c4'.
+            Defaults to 'ptb'.
         calib_samples (int, optional): The number of samples for calibration.
             Defaults to 128.
         calib_seqlen (int, optional): The sequence length for calibration.
@@ -131,6 +131,11 @@ def calibrate(model: str,
             Defaults to './work_dir'.
         device (str, optional): The device to be used for calculation.
             Defaults to 'cuda'.
+
+    Returns:
+        model (nn.Module): The loaded huggingface model.
+        tokenizer : The loaded hugginface tokenizer.
+        work_dir (str): The working directory for outputs.
     """
 
     assert calib_dataset in ['c4', 'ptb', 'wikitext2', 'pileval'], \

@@ -1,7 +1,9 @@
 fastapi
 fire
+fuzzywuzzy
 mmengine-lite
 numpy
+peft
 pydantic>2.0.0
 pynvml
 safetensors

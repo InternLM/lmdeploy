@@ -4,13 +4,16 @@ import os
 import random
 import time
 from http import HTTPStatus
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List, Literal, Optional, Union
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
+                               TurbomindEngineConfig)
+from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionRequestQos, ChatCompletionResponse,
@@ -39,7 +42,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.tm_model.model_name]
+    return [VariableInterface.async_engine.engine.model_name]
 
 
 @app.get('/v1/models')
@@ -238,7 +241,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     The request should be a JSON object with the following fields:
     - model: model name. Available from /v1/models.
-    - messages: string prompt or chat history in OpenAI format.
+    - messages: string prompt or chat history in OpenAI format. Chat history
+        example: `[{"role": "user", "content": "hi"}]`.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
@@ -249,6 +253,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - max_tokens (int): output token nums
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
@@ -270,18 +276,24 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     request_id = str(request.session_id)
     created_time = int(time.time())
 
-    result_generator = VariableInterface.async_engine.generate(
-        request.messages,
-        request.session_id,
-        True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
-        request_output_len=request.max_tokens if request.max_tokens else 512,
-        stop=request.stop,
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
+
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens if request.max_tokens else 512,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
+        stop_words=request.stop)
+
+    result_generator = VariableInterface.async_engine.generate(
+        request.messages,
+        request.session_id,
+        gen_config=gen_config,
+        stream_response=True,  # always use stream to enable batching
+        sequence_start=True,
+        sequence_end=True,
         do_preprocess=not isinstance(request.messages,
                                      str),  # text completion for string input
     )
@@ -545,6 +557,8 @@ async def completions_v1(request: CompletionRequest,
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - user (str): A unique identifier representing your end-user.
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
@@ -568,22 +582,25 @@ async def completions_v1(request: CompletionRequest,
     created_time = int(time.time())
     if isinstance(request.prompt, str):
         request.prompt = [request.prompt]
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        top_k=request.top_k,
+        top_p=request.top_p,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos,
+        stop_words=request.stop)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
             request.prompt[i],
             request.session_id + i,
-            True,  # always use stream to enable batching
+            gen_config=gen_config,
+            stream_response=True,  # always use stream to enable batching
             sequence_start=True,
             sequence_end=True,
-            request_output_len=request.max_tokens
-            if request.max_tokens else 512,
-            stop=False,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            temperature=request.temperature,
-            repetition_penalty=request.repetition_penalty,
-            ignore_eos=request.ignore_eos,
             do_preprocess=False)
         generators.append(result_generator)
 
@@ -702,7 +719,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.model.get_prompt(
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(
                 prompt, sequence_start=add_bos)
         input_ids = VariableInterface.async_engine.tokenizer.encode(
             prompt, add_bos=add_bos)
@@ -810,7 +827,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - interactive_mode (bool): turn on interactive mode or not. On interactive
         mode, session history is kept on the server (and vice versa).
     - stream: whether to stream the results or not.
-    - stop: whether to stop the session response or not.
+    - stop (str | List[str] | None): To stop generating further
+        tokens. Only accept stop words that's encoded to one token idex.
     - request_output_len (int): output token nums
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
@@ -822,26 +840,33 @@ async def chat_interactive_v1(request: GenerateRequest,
         1.0 means no penalty
     - ignore_eos (bool): indicator for ignoring eos
     """
+    if request.cancel and request.session_id != -1:
+        VariableInterface.async_engine.stop_session(request.session_id)
+        return {'text': '', 'tokens': 0, 'finish_reason': None}
     if request.session_id == -1:
         request.session_id = random.randint(10087, 23333)
 
     async_engine = VariableInterface.async_engine
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
     sequence_end = not request.interactive_mode
+    if isinstance(request.stop, str):
+        request.stop = [request.stop]
 
+    gen_config = GenerationConfig(
+        max_new_tokens=request.request_output_len,
+        top_p=request.top_p,
+        top_k=request.top_k,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos,
+        stop_words=request.stop)
     generation = async_engine.generate(
         request.prompt,
         request.session_id,
+        gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=sequence_start,
-        sequence_end=sequence_end,
-        request_output_len=request.request_output_len,
-        top_p=request.top_p,
-        top_k=request.top_k,
-        stop=request.stop,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos)
+        sequence_end=sequence_end)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
@@ -875,9 +900,12 @@ async def chat_interactive_v1(request: GenerateRequest,
 
 def serve(model_path: str,
           model_name: Optional[str] = None,
+          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+          backend_config: Optional[Union[PytorchEngineConfig,
+                                         TurbomindEngineConfig]] = None,
+          chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          instance_num: int = 64,
           tp: int = 1,
           allow_origins: List[str] = ['*'],
           allow_credentials: bool = True,
@@ -900,14 +928,19 @@ def serve(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "InternLM/internlm-chat-7b"
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
-        instance_num (int): number of instances of turbomind model
         tp (int): tensor parallel
         allow_origins (List[str]): a list of allowed origins for CORS
         allow_credentials (bool): whether to allow credentials for CORS
@@ -926,11 +959,14 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
-    VariableInterface.async_engine = AsyncEngine(model_path=model_path,
-                                                 model_name=model_name,
-                                                 instance_num=instance_num,
-                                                 tp=tp,
-                                                 **kwargs)
+    VariableInterface.async_engine = AsyncEngine(
+        model_path=model_path,
+        model_name=model_name,
+        backend=backend,
+        backend_config=backend_config,
+        chat_template_config=chat_template_config,
+        tp=tp,
+        **kwargs)
 
     if qos_config_path:
         try:

@@ -9,7 +9,7 @@
 重要的事情说三遍。
 
 ```shell
-lmdeploy serve api_server ./workspace 0.0.0.0 --server_port ${server_port} --instance_num 64 --tp 1
+lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
 我们提供的 restful api，其中三个仿照 OpenAI 的形式。
@@ -139,18 +139,24 @@ lmdeploy serve api_client api_server_url
 ```shell
 # api_server_url 就是 api_server 产生的，比如 http://localhost:23333
 # server_name 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
+# 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
+lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 ### FAQ
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。
 
-2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `instance_num` 个数
+2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `backend_config` 的 `cache_max_entry_count` 大小
 
 3. 当同一个 `session_id` 的请求给 `/v1/chat/interactive` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
 
 4. `/v1/chat/interactive` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
 
 5. 如需调整会话默认的其他参数，比如 system 等字段的内容，可以直接将[对话模板](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py)初始化参数传入。比如 internlm-chat-7b 模型，可以通过启动`api_server`时，设置`--meta_instruction`参数。
+
+6. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
+
+### 多机并行服务
+
+请参考我们的 [请求分发服务器](./proxy_server.md)

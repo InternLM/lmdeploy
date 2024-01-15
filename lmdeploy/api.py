@@ -1,12 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Optional
+from typing import Literal, Optional, Union
+
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.model import ChatTemplateConfig
 
 
 def pipeline(model_path: str,
              model_name: Optional[str] = None,
-             instance_num: int = 32,
-             tp: int = 1,
+             backend_config: Optional[Union[TurbomindEngineConfig,
+                                            PytorchEngineConfig]] = None,
+             chat_template_config: Optional[ChatTemplateConfig] = None,
              log_level='ERROR',
              **kwargs):
     """
@@ -21,37 +25,56 @@ def pipeline(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
-        instance_num (int): instance numbers to be created
-        tp (int): tensor parallel
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to None.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Examples:
         >>> import lmdeploy
-        >>> pipe = lmdeploy.pipeline('InternLM/internlm-chat-7b-v1_1', 'internlm-chat-7b')
+        >>> pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
     """ # noqa E501
     from lmdeploy.serve.async_engine import AsyncEngine
     os.environ['TM_LOG_LEVEL'] = log_level
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
+    logger.setLevel(log_level)
+    backend = 'pytorch' if type(
+        backend_config) is PytorchEngineConfig else 'turbomind'
+    if 'tp' in kwargs:
+        logger.warn(
+            'The argument "tp" is deprecated and will be removed soon. '
+            'Please set "tp" in "backend_config"')
+        tp = kwargs['tp']
+        kwargs.pop('tp')
+    else:
+        tp = 1 if backend_config is None else backend_config.tp
     return AsyncEngine(model_path,
                        model_name=model_name,
-                       instance_num=instance_num,
+                       backend=backend,
+                       backend_config=backend_config,
+                       chat_template_config=chat_template_config,
                        tp=tp,
                        **kwargs)
 
 
 def serve(model_path: str,
           model_name: Optional[str] = None,
+          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+          backend_config: Optional[Union[TurbomindEngineConfig,
+                                         PytorchEngineConfig]] = None,
+          chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          instance_num: int = 64,
-          tp: int = 1,
           log_level: str = 'ERROR',
           **kwargs):
     """This will run the api_server in a subprocess.
@@ -67,16 +90,20 @@ def serve(model_path: str,
                     "InternLM/internlm-chat-20b-4bit",
                     "lmdeploy/llama2-chat-70b-4bit", etc.
                 - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "InternLM/internlm-chat-7b",
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
                     "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                     and so on.
         model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "InternLM/internlm-chat-7b",
+            huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        backend (str): either `turbomind` or `pytorch` backend. Default to
+            `turbomind` backend.
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+            config instance. Default to none.
+        chat_template_config (ChatTemplateConfig): chat template configuration.
+            Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
-        instance_num (int): number of instances of turbomind model
-        tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Return:
@@ -84,7 +111,7 @@ def serve(model_path: str,
 
     Examples:
         >>> import lmdeploy
-        >>> client = lmdeploy.serve('InternLM/internlm-chat-7b-v1_1', 'internlm-chat-7b')
+        >>> client = lmdeploy.serve('internlm/internlm-chat-7b', 'internlm-chat-7b')
         >>> for output in client.chat('hi', 1):
         ...    print(output)
     """ # noqa E501
@@ -93,12 +120,19 @@ def serve(model_path: str,
 
     from lmdeploy.serve.openai.api_client import APIClient
     from lmdeploy.serve.openai.api_server import serve
+    if 'tp' in kwargs:
+        tp = kwargs['tp']
+        kwargs.pop('tp')
+    else:
+        tp = 1 if backend_config is None else backend_config.tp
     task = Process(target=serve,
                    args=(model_path, ),
                    kwargs=dict(model_name=model_name,
+                               backend=backend,
+                               backend_config=backend_config,
+                               chat_template_config=chat_template_config,
                                server_name=server_name,
                                server_port=server_port,
-                               instance_num=instance_num,
                                tp=tp,
                                log_level=log_level,
                                **kwargs))
