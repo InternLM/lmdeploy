@@ -60,11 +60,15 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
+    def __init__(self, model_path: str, tp: int, max_batch_size: int, csv: str,
+                 **kwargs):
         # avoid turbomind checking chat template name by setting
         # `model_name='llama'`
-        tm_model = LMEngine(model_path,
-                            PytorchEngineConfig(tp=tp, model_name='llama'))
+        tm_model = LMEngine(
+            model_path,
+            PytorchEngineConfig(tp=tp,
+                                model_name='llama',
+                                max_batch_size=max_batch_size))
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
         self.csv = csv
@@ -266,6 +270,7 @@ def main(dataset: str,
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
+                    max_batch_size=concurrency,
                     csv=csv)
 
     requests = sample_requests(dataset, num_prompts, engine.tokenizer)
