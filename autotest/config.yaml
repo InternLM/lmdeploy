@@ -8,6 +8,8 @@ model_map:
     internlm-chat-7b: internlm-chat-7b
     internlm-chat-20b: internlm-chat-20b
     internlm-chat-20b-inner-w4: internlm-chat-20b
+    internlm2-chat-20b: internlm2-chat-20b
+    internlm2-chat-20b-inner-w4: internlm2-chat-20b
     Qwen-7B-Chat: qwen-7b
     Qwen-7B-Chat-inner-w4: qwen-7b
     Qwen-14B-Chat: qwen-14b
@@ -24,3 +26,5 @@ model_map:
 tp_config:
     internlm-chat-20b: 2
     internlm-chat-20b-inner-w4: 2
+    internlm2-chat-20b: 2
+    internlm2-chat-20b-inner-w4: 2

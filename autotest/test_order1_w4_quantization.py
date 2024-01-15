@@ -8,7 +8,7 @@ from utils.get_run_config import get_command_with_extra
 
 
 @pytest.mark.quantization
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(600)
 class TestQuantization:
 
     @pytest.mark.CodeLlama_7b_Instruct_hf
@@ -27,6 +27,13 @@ class TestQuantization:
     @allure.story('internlm-chat-20b')
     def test_quantization_internlm_chat_20b(self, config):
         quantization(config, 'internlm-chat-20b-inner-w4', 'internlm-chat-20b')
+
+    @pytest.mark.timeout(900)
+    @pytest.mark.internlm2_chat_20b
+    @allure.story('internlm2-chat-20b')
+    def test_quantization_internlm2_chat_20b(self, config):
+        quantization(config, 'internlm2-chat-20b-inner-w4',
+                     'internlm2-chat-20b')
 
     @pytest.mark.Qwen_14B_Chat
     @allure.story('Qwen-14B-Chat')
@@ -51,8 +58,8 @@ def quantization(config, w4_model_name, origin_model_name):
 
     quantization_cmd = get_command_with_extra(
         'lmdeploy lite auto_awq ' + model_path + '/' + origin_model_name +
-        ' --calib-dataset ptb --work_dir ' + model_path + '/' + w4_model_name,
-        config, origin_model_name)
+        ' --work-dir ' + model_path + '/' + w4_model_name +
+        ' --calib-dataset ptb', config, origin_model_name, False)
 
     quantization_log = os.path.join(log_path,
                                     'quantization_' + w4_model_name + '.log')

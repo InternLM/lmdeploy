@@ -85,8 +85,24 @@ class Test_restful:
         model = 'internlm-chat-7b'
         port = 23333
 
-        run_all_step(config, usercase, common_case_config.get(usercase),
-                     model, port)
+        run_all_step(config, usercase, common_case_config.get(usercase), model,
+                     port)
+
+    @pytest.mark.internlm2_chat_20b
+    @allure.story('internlm2-chat-20b')
+    @pytest.mark.parametrize('prepare_environment', [{
+        'model': 'internlm2-chat-20b',
+        'port': 23333
+    }],
+                             indirect=True)
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_restful_internlm2_chat_20b(self, config, common_case_config,
+                                        usercase):
+        model = 'internlm2-chat-20b'
+        port = 23333
+
+        run_all_step(config, usercase, common_case_config.get(usercase), model,
+                     port)
 
 
 def run_all_step(config, case, case_info, model, port):

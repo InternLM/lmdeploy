@@ -201,7 +201,7 @@ jobs:
         run: |
           docker exec $CONTAINER_ID \
             lmdeploy convert \
-            --model-name internlm-chat-20b \
+            internlm-chat-20b \
             --model-path /root/workspace/hf_model \
             --tp 2 \
             --dst-path /root/workspace/workdir/${TB_MODEL}

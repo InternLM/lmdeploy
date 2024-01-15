@@ -9,20 +9,18 @@ def command_line_test(config, case, case_info, model, type, extra):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
-        cmd = get_command_with_extra(
-            'lmdeploy serve api_client ' + extra + ' --temperature 0', config,
-            model)
+        cmd = get_command_with_extra('lmdeploy serve api_client ' + extra,
+                                     config, model)
     elif type == 'triton_client':
-        cmd = get_command_with_extra(
-            'lmdeploy serve triton_client ' + extra + ' --temperature 0',
-            config, model)
+        cmd = get_command_with_extra('lmdeploy serve triton_client ' + extra,
+                                     config, model)
     else:
         cmd = get_command_with_extra(
-            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model +
-            ' --temperature 0', config, model)
+            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model,
+            config, model)
 
     if case == 'session_len_error':
-        cmd = cmd + ' --session_len 20'
+        cmd = cmd + ' --session-len 20'
     return command_test(config, [cmd], model, case_info, type == 'turbomind')
 
 
@@ -31,23 +29,23 @@ def hf_command_line_test(config, case, case_info, model_case, model_name):
 
     cmd = get_command_with_extra(
         'lmdeploy chat turbomind ' + model_path + '/' + model_case +
-        ' --model-name ' + model_name + ' --temperature 0', config, model_name)
+        ' --model-name ' + model_name, config, model_name)
 
     if case == 'session_len_error':
-        cmd = cmd + ' --session_len 20'
+        cmd = cmd + ' --session-len 20'
     return command_test(config, [cmd], model_case, case_info, True)
 
 
 def pytorch_command_line_test(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
+    # todo: restruct according to newest command
     cmd = get_command_with_extra(
         'lmdeploy chat torch ' + model_path + '/' + model_case +
-        ' --max_new_tokens 2048 --temperature 0 --top_p 0.95 --seed 0', config,
-        model_case)
+        ' --max_new_tokens 2048 --top_p 0.95 --seed 0', config, model_case)
 
     if case == 'session_len_error':
-        cmd = cmd + ' --session_len 20'
+        cmd = cmd + ' --session-len 20'
     return command_test(config, [cmd], model_case, case_info, False)
 
 
@@ -56,12 +54,11 @@ def deepspeed_command_line_test(config, case, case_info, model_case):
 
     cmd = get_command_with_extra(
         'deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat ' + model_path +
-        '/' + model_case +
-        ' --max_new_tokens 64 --temperature 0 --top_p 0.95 --seed 0', config,
-        model_case)
+        '/' + model_case + ' --max_new_tokens 64 --top_p 0.95 --seed 0',
+        config, model_case)
 
     if case == 'session_len_error':
-        cmd = cmd + ' --session_len 20'
+        cmd = cmd + ' --session-len 20'
     return command_test(config, [cmd], model_case, case_info, False)
 
 
