@@ -12,9 +12,8 @@ import fire
 import numpy as np
 from tqdm import tqdm
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.pytorch.engine import Engine as LMEngine
-from lmdeploy.pytorch.engine import EngineConfig
 from lmdeploy.tokenizer import Tokenizer
 
 
@@ -67,7 +66,7 @@ class Engine:
         # `model_name='llama'`
         tm_model = LMEngine(
             model_path,
-            EngineConfig(
+            PytorchEngineConfig(
                 tp=tp,
                 model_name='llama',
                 max_batch_size=concurrency,
