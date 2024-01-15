@@ -147,6 +147,9 @@ class AsyncEngine:
         if self.model_name is not None and backend_config is None:
             backend_config = PytorchEngineConfig(self.model_name,
                                                  session_len=2048)
+        if backend_config.model_name is None \
+                or backend_config.model_name == '':  # cli may pass None
+            backend_config.model_name = self.model_name
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
