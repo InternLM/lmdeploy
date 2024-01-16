@@ -13,7 +13,7 @@ from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import (AdapterWeightMap, get_indexed_lora_linears,
-                               update_lora_linears)
+                               get_max_lora_weight_size, update_lora_linears)
 from ..config import CacheConfig, ModelConfig
 from ..models import patch
 from ..utils import get_gpu_memory
@@ -24,11 +24,29 @@ logger = get_logger('lmdeploy')
 _PATCH_ARG_NAMES = ['context', 'use_origin']
 
 
+def _infer_block_size(model: torch.nn.Module,
+                      model_config: ModelConfig,
+                      cache_config: CacheConfig,
+                      world_size: int = 1):
+    """infer block size."""
+    max_weight_dim = get_max_lora_weight_size(model)
+    if max_weight_dim == 0:
+        return cache_config.block_size
+
+    per_token_size = model_config.get_head_size(
+    ) * model_config.num_heads // world_size
+    block_size = 1
+    while block_size * per_token_size < max_weight_dim:
+        block_size *= 2
+    return block_size * world_size
+
+
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
                          gpu_id: int = 0,
                          gpu_mem_percent: float = 0.7,
-                         host_mem_size: int = 4 * (1 << 30)):
+                         host_mem_size: int = 4 * (1 << 30),
+                         world_size: int = 1):
     """Update the gpu mem and cpu mem according to model info.
 
     Args:
@@ -41,7 +59,7 @@ def _update_cache_config(model_config: ModelConfig,
     gpu_mem = gpu_mem_physical_free * gpu_mem_percent
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config)
+        cache_config.block_size, model_config) // world_size
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
@@ -440,6 +458,11 @@ class BaseModelAgent(AutoModelAgent):
             adapters=adapters,
             trust_remote_code=trust_remote_code)
 
+        block_size = _infer_block_size(self.patched_model, model_config,
+                                       cache_config)
+        if block_size != cache_config.block_size:
+            cache_config.block_size = block_size
+            logger.warning(f'infered block size: {block_size}')
         _update_cache_config(model_config, cache_config)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
@@ -618,7 +641,13 @@ def _tp_build_model(
             world_size=world_size,
         )
 
-        _update_cache_config(model_config, cache_config)
+        block_size = _infer_block_size(patched_model, model_config,
+                                       cache_config, world_size)
+        if block_size != cache_config.block_size:
+            cache_config.block_size = block_size
+            if rank == 0:
+                logger.warning(f'infered block size: {block_size}')
+        _update_cache_config(model_config, cache_config, world_size=world_size)
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,

@@ -108,7 +108,7 @@ pip install lmdeploy
 
 ## Offline Batch Inference
 
-```shell
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])

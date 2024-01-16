@@ -21,7 +21,7 @@ from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
                             best_match_model)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import _stop_words, get_logger
 
 from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
@@ -35,26 +35,6 @@ sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-
-def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
-    """return list of stop-words to numpy.ndarray."""
-    if stop_words is None:
-        return None
-    assert isinstance(stop_words, List) and \
-        all(isinstance(elem, str) for elem in stop_words), \
-        f'stop_words must be a list but got {type(stop_words)}'
-    stop_indexes = []
-    for stop_word in stop_words:
-        stop_indexes += tokenizer.indexes_containing_token(stop_word)
-    assert isinstance(stop_indexes, List) and all(
-        isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
-    # each id in stop_indexes represents a stop word
-    # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
-    # detailed explanation about fastertransformer's stop_indexes
-    stop_word_offsets = range(1, len(stop_indexes) + 1)
-    stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
-    return stop_words
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):
