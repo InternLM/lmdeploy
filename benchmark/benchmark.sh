@@ -32,7 +32,7 @@ benchmark_generation () {
     model_format=$2
     max_batch_size=$3
     cache_count=$4
-    output_path=$2
+    output_path=$5
 
     python3 profile_generation.py \
         ${model_path} \
