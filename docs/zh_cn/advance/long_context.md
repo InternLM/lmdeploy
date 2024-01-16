@@ -4,7 +4,31 @@
 
 ## 如何使用
 
-如果要直接加载 HuggingFace 格式的模型，可以通过修改 TurbomindEngineConfig 参数的方式赋予模型外推能力。将 `session_len` 修改为外推的长度，并将 `rope_scaling_factor` 修改为大于 1.0 的值。下面以 pipeline 接口为例，展示一个 Passkey Retrieval 的例子
+如果要直接加载 HuggingFace 格式的模型，可以通过修改 TurbomindEngineConfig 参数的方式赋予模型外推能力。将 `session_len` 修改为外推的长度，并将 `rope_scaling_factor` 修改为不小于 1.0 的值。
+
+以 InternLM2 为例，可以使用如下方式，激活长文本推理能力：
+
+```python
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
+pipe = pipeline('internlm/internlm2-chat-7b', backend_config=backend_config)
+prompt = 'Use a long prompt to replace this sentence'
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+response = pipe(prompt, gen_config=gen_config)
+print(response)
+```
+
+## 评测
+
+我们使用多种方式评测 LMDeploy 长文本推理能力，分别是 [passkey retrieval 实验](#passkey-retrieval)、[大海捞针实验](#大海捞针) 和[计算困惑度](#困惑度)
+
+### Passkey Retrieval
+
+执行如下代码，可以测试在长文本中找到特殊 key 成功和失败的次数
 
 ```python
 import numpy as np
@@ -48,15 +72,13 @@ def passkey_retrival(session_len, n_round=5):
 passkey_retrival(session_len, 5)
 ```
 
-## 评测
-
 ### 大海捞针
 
 可使用 OpenCompass 进行测评，具体使用方法，请参考[文档](https://github.com/open-compass/opencompass/blob/main/docs/zh_cn/advanced_guides/needleinahaystack_eval.md)
 
 ### 困惑度
 
-下面展示使用 TurboMind 计算困惑度的用法
+下面展示使用 LMDeploy 计算困惑度的用法
 
 ```python
 from datasets import load_dataset
@@ -65,7 +87,7 @@ from lmdeploy.turbomind import TurboMind
 import numpy as np
 
 # load model and tokenizer
-engine_config = TurbomindEngineConfig(rope_scaling_factor=1.0, session_len=200000)
+engine_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
 engine = TurboMind.from_pretrained('internlm/internlm2-chat-7b', engine_config)
 tokenizer = engine.tokenizer
 generator = engine.create_instance()

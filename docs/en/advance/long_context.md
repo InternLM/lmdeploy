@@ -4,7 +4,31 @@ Long text extrapolation refers to the ability of LLM to handle data longer than 
 
 ## Usage
 
-You can enable the context length extrapolation abality by modifying the TurbomindEngineConfig. Edit the `session_len` to the expected length and change `rope_scaling_factor` to a number larger than 1.0. Next, we will demonstrate its usage with an example.
+You can enable the context length extrapolation abality by modifying the TurbomindEngineConfig. Edit the `session_len` to the expected length and change `rope_scaling_factor` to a number no less than 1.0.
+
+Here is an example:
+
+```python
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
+pipe = pipeline('internlm/internlm2-chat-7b', backend_config=backend_config)
+prompt = 'Use a long prompt to replace this sentence'
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+response = pipe(prompt, gen_config=gen_config)
+print(response)
+```
+
+## Evaluation
+
+We use several methods to evaluate the long-context-length inference ability of LMDeploy, including [passkey retrieval](#passkey-retrieval), [needle in a haystack](#needle-in-a-haystack) and computing [perplexity](#perplexity)
+
+### Passkey Retrieval
+
+You can try the following code to test how many times LMDeploy can retrieval the special key.
 
 ```python
 import numpy as np
@@ -48,15 +72,13 @@ def passkey_retrival(session_len, n_round=5):
 passkey_retrival(session_len, 5)
 ```
 
-## Evaluation
-
 ### Needle In A Haystack
 
-You can use [OpenCompass](https://github.com/open-compass/opencompass) for evaluation. For specific usage instructions, please refer to the [documentation](https://github.com/open-compass/opencompass/blob/main/docs/en/advanced_guides/needleinahaystack_eval.md).
+[OpenCompass](https://github.com/open-compass/opencompass) offers very useful tools to perform needle-in-a-haystack evaluation. For specific instructions, please refer to the [guide](https://github.com/open-compass/opencompass/blob/main/docs/en/advanced_guides/needleinahaystack_eval.md).
 
 ### Perplexity
 
-Next, we will demonstrate how to use TurboMind to calculate perplexity.
+The following codes demonstrate how to use LMDeploy to calculate perplexity.
 
 ```python
 from datasets import load_dataset
@@ -65,13 +87,13 @@ from lmdeploy.turbomind import TurboMind
 import numpy as np
 
 # load model and tokenizer
-engine_config = TurbomindEngineConfig(rope_scaling_factor=1.0, session_len=200000)
+engine_config = TurbomindEngineConfig(rope_scaling_factor=2.0, session_len=160000)
 engine = TurboMind.from_pretrained('internlm/internlm2-chat-7b', engine_config)
 tokenizer = engine.tokenizer
 generator = engine.create_instance()
 
 # get perplexity
-text = 'The grass is green. The sky is blue. The sun is yellow'
+text = 'Use a long prompt to replace this sentence'
 input_ids = tokenizer.encode(text)
 loss = generator.get_ppl(input_ids)[0]
 ppl = np.exp(loss)
