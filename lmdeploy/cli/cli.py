@@ -17,7 +17,9 @@ class CLI(object):
                         action='version',
                         version=__version__)
     subparsers = parser.add_subparsers(
-        title='Commands', description='lmdeploy has following commands:')
+        title='Commands',
+        description='lmdeploy has following commands:',
+        dest='command')
 
     @staticmethod
     def add_parser_convert():
