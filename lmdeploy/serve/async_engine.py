@@ -6,7 +6,8 @@ from contextlib import contextmanager
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
-                               PytorchEngineConfig, TurbomindEngineConfig)
+                               PytorchEngineConfig, Response,
+                               TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.utils import get_logger
 
@@ -278,7 +279,7 @@ class AsyncEngine:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
         prompt_num = len(prompts)
-        outputs = [''] * prompt_num
+        outputs = [Response('', 0) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -295,7 +296,9 @@ class AsyncEngine:
 
             async def _inner_call(i, generator):
                 async for out in generator:
-                    outputs[i + j] += out.response
+                    outputs[i + j].text += out.response
+                    outputs[i + j].generate_token_len = out.generate_token_len
+                    outputs[i + j].finish_reason = out.finish_reason
 
             async def gather():
                 await asyncio.gather(*[
