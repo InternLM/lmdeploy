@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import random
 from threading import Lock
 from typing import Literal, Optional, Sequence, Union
 
@@ -35,11 +36,11 @@ async def chat_stream_local(instruction: str, state_chatbot: Sequence,
     yield (state_chatbot, state_chatbot, disable_btn, enable_btn)
     gen_config = GenerationConfig(max_new_tokens=request_output_len,
                                   top_p=top_p,
-                                  temperature=temperature)
+                                  top_k=40,
+                                  temperature=temperature,
+                                  random_seed=random.getrandbits(64)
+                                  if len(state_chatbot) == 1 else None)
 
-    gen_config = GenerationConfig(max_new_tokens=request_output_len,
-                                  top_p=top_p,
-                                  temperature=temperature)
     async for outputs in InterFace.async_engine.generate(
             instruction,
             session_id,

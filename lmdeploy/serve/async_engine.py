@@ -1,12 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
+import random
 from argparse import ArgumentError
 from contextlib import contextmanager
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
-                               PytorchEngineConfig, TurbomindEngineConfig)
+                               PytorchEngineConfig, Response,
+                               TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.utils import get_logger
 
@@ -277,8 +279,11 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        # set random if it is not set
+        if gen_config.random_seed is None:
+            gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [''] * prompt_num
+        outputs = [Response('', 0) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -295,7 +300,9 @@ class AsyncEngine:
 
             async def _inner_call(i, generator):
                 async for out in generator:
-                    outputs[i + j] += out.response
+                    outputs[i + j].text += out.response
+                    outputs[i + j].generate_token_len = out.generate_token_len
+                    outputs[i + j].finish_reason = out.finish_reason
 
             async def gather():
                 await asyncio.gather(*[
@@ -342,6 +349,9 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        # set random if it is not set and sequence_start is True
+        if gen_config.random_seed is None and sequence_start:
+            gen_config.random_seed = random.getrandbits(64)
         prompt = messages
         if do_preprocess:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)

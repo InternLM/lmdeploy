@@ -1,13 +1,15 @@
-# Pipeline
+# 推理 pipeline
 
-## 示例
+本文首先通过一些例子展示 pipeline 的基本用法。然后详细介绍 pipeline API 的参数以及参数的具体设置。
+
+## 使用方法
 
 使用默认参数的例子:
 
 ```python
-import lmdeploy
+from lmdeploy import pipeline
 
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
+pipe = pipeline('internlm/internlm-chat-7b')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -15,12 +17,11 @@ print(response)
 展示如何设置 tp 数的例子:
 
 ```python
-import lmdeploy
-from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -28,16 +29,15 @@ print(response)
 展示如何设置 sampling 参数:
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
 print(response)
@@ -46,16 +46,15 @@ print(response)
 展示如何设置 OpenAI 格式输入的例子:
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 prompts = [[{
     'role': 'user',
     'content': 'Hi, pls intro yourself'
@@ -75,16 +74,15 @@ pip install triton>=2.1.0
 ```
 
 ```python
-import lmdeploy
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
+from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
 
 backend_config = PytorchEngineConfig(session_len=2024)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = lmdeploy.pipeline('internlm/internlm-chat-7b',
-                         backend_config=backend_config)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
 prompts = [[{
     'role': 'user',
     'content': 'Hi, pls intro yourself'
@@ -108,7 +106,6 @@ print(response)
 | model_name           | Optional\[str\]                                      | 当 model_path 指向 huggingface.co 上的 Pytorch 模型时需要的模型名称。                                    | None                        |
 | backend_config       | TurbomindEngineConfig \| PytorchEngineConfig \| None | 后端的配置对象。根据所选后端，可以是 TurbomindEngineConfig 或 PytorchEngineConfig。                      | None, 默认跑 turbomind 后端 |
 | chat_template_config | Optional\[ChatTemplateConfig\]                       | 聊天模板的配置。                                                                                         | None                        |
-| tp                   | int                                                  | 张量并行单位的数量。后期会弃用，请改用 backend_config 参数                                               | 1                           |
 | log_level            | str                                                  | 日志级别。                                                                                               | 'ERROR'                     |
 
 ### 调用
@@ -125,26 +122,6 @@ print(response)
 | repetition_penalty | float                      | 1.0    | 重复惩罚的参数。1.0表示没有惩罚。后期会弃用，请改用 gen_config 参数                                                                       |
 | ignore_eos         | bool                       | False  | 是否忽略结束符的指示器。后期会弃用，请改用 gen_config 参数                                                                                |
 
-## PytorchEngineConfig
-
-### 描述
-
-此类是PyTorch引擎的配置对象。
-
-### 参数
-
-| Parameter        | Type | Description                                                  | Default     |
-| ---------------- | ---- | ------------------------------------------------------------ | ----------- |
-| model_name       | str  | 指定模型的名称。                                             | ''          |
-| tp               | int  | 张量并行度。                                                 | 1           |
-| session_len      | int  | 最大会话长度。                                               | None        |
-| max_batch_size   | int  | 最大批处理大小。                                             | 128         |
-| eviction_type    | str  | 当kv缓存满时需要执行的操作，可选值为\['recompute', 'copy'\]. | 'recompute' |
-| prefill_interval | int  | 执行预填充的间隔。                                           | 16          |
-| block_size       | int  | 分页缓存块大小。                                             | 64          |
-| num_cpu_blocks   | int  | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
-| num_gpu_blocks   | int  | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
-
 ## TurbomindEngineConfig
 
 ### 描述
@@ -155,7 +132,7 @@ print(response)
 
 | Parameter             | Type          | Description                                                            | Default |
 | --------------------- | ------------- | ---------------------------------------------------------------------- | ------- |
-| model_name            | str, optional | 已部署模型的名称。                                                     | None    |
+| model_name            | str, optional | 已部署模型的对话模板名称。                                             | None    |
 | model_format          | str, optional | 已部署模型的布局。可以是以下值之一：`hf`, `llama`, `awq`。             | None    |
 | tp                    | int           | 在张量并行中使用的GPU卡数量。                                          | 1       |
 | session_len           | int, optional | 序列的最大会话长度。                                                   | None    |
@@ -163,8 +140,28 @@ print(response)
 | cache_max_entry_count | float         | 由k/v缓存占用的GPU内存百分比。                                         | 0.5     |
 | quant_policy          | int           | 默认为0。当k/v量化为8位时，设置为4。                                   | 0       |
 | rope_scaling_factor   | float         | 用于动态ntk的缩放因子。TurboMind遵循transformer LlamaAttention的实现。 | 0.0     |
-| use_dynamic_ntk       | bool          | 是否使用动态ntk。                                                      | False   |
 | use_logn_attn         | bool          | 是否使用对数注意力。                                                   | False   |
+
+## PytorchEngineConfig
+
+### 描述
+
+此类是PyTorch引擎的配置对象。
+
+### 参数
+
+| Parameter        | Type | Description                                                  | Default     |
+| ---------------- | ---- | ------------------------------------------------------------ | ----------- |
+| model_name       | str  | 已部署模型的对话模板名称。                                   | ''          |
+| tp               | int  | 张量并行度。                                                 | 1           |
+| session_len      | int  | 最大会话长度。                                               | None        |
+| max_batch_size   | int  | 最大批处理大小。                                             | 128         |
+| eviction_type    | str  | 当kv缓存满时需要执行的操作，可选值为\['recompute', 'copy'\]. | 'recompute' |
+| prefill_interval | int  | 执行预填充的间隔。                                           | 16          |
+| block_size       | int  | 分页缓存块大小。                                             | 64          |
+| num_cpu_blocks   | int  | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
+| num_gpu_blocks   | int  | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
+| adapters         | dict | lora adapters的配置路径                                      | None        |
 
 ## GenerationConfig
 
@@ -176,7 +173,7 @@ print(response)
 
 | Parameter          | Type        | Description                                           | Default |
 | ------------------ | ----------- | ----------------------------------------------------- | ------- |
-| n                  | int         | 对每个输入消息生成聊天补全选择的数量。                | 1       |
+| n                  | int         | 对每个输入消息生成聊天补全选择的数量。目前仅支持 1    | 1       |
 | max_new_tokens     | int         | 聊天补全中可以生成的最大令牌数。                      | 512     |
 | top_p              | float       | 核心采样，其中模型考虑具有top_p概率质量的令牌。       | 1.0     |
 | top_k              | int         | 模型考虑具有最高概率的前K个令牌。                     | 1       |
