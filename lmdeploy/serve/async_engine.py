@@ -10,7 +10,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import _stop_words, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -167,6 +167,10 @@ class AsyncEngine:
         else:
             self.session_len = self.engine.session_len
         self.backend_config = backend_config
+        self.stop_words = _stop_words(self.chat_template.stop_words,
+                                      self.engine.tokenizer)
+        if self.stop_words is not None:
+            self.stop_words = self.stop_words[0][0].tolist()
 
     def __call__(self,
                  prompts: List[str],
@@ -349,6 +353,8 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        if self.backend == 'pytorch' and gen_config.stop_words is None:
+            gen_config.stop_words = self.stop_words
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
