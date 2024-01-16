@@ -3,6 +3,8 @@ from functools import partial
 from typing import Union
 
 import torch
+import transformers
+from mmengine import digit_version
 from torch import nn
 from transformers import PreTrainedTokenizer
 
@@ -163,12 +165,28 @@ class CalibrationContext():
 
                 if k_obs and v_obs:
                     batch_kwargs[i]['use_cache'] = True
-                    out = self._ori_forwards[mod](*batch_args[i],
-                                                  **batch_kwargs[i])
-                    out = list(out)
-                    key, value = out.pop(-1)
-                    k_obs.observe(key)
-                    v_obs.observe(value)
+                    version = digit_version(transformers.__version__)
+                    use_new_cache = type(mod).__name__ == 'LlamaDecoderLayer'
+                    if version > digit_version('4.36.0') and use_new_cache:
+                        from transformers.cache_utils import DynamicCache
+                        batch_kwargs[i]['past_key_value'] = DynamicCache()
+                        out = self._ori_forwards[mod](*batch_args[i],
+                                                      **batch_kwargs[i])
+                        out = list(out)
+                        cache = out.pop(-1)
+                        key, value = cache.pop(-1)
+
+                        k_obs.observe(key)
+                        v_obs.observe(value)
+
+                    else:
+                        out = self._ori_forwards[mod](*batch_args[i],
+                                                      **batch_kwargs[i])
+                        out = list(out)
+                        key, value = out.pop(-1)
+
+                        k_obs.observe(key)
+                        v_obs.observe(value)
 
                     del key, value
                     torch.cuda.empty_cache()
