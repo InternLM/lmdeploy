@@ -94,21 +94,25 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
     """
     yield (state_chatbot, disable_btn, disable_btn)
     InterFace.async_engine.stop_session(session_id)
-    InterFace.async_engine.end_session(session_id)
-    messages = []
-    for qa in state_chatbot:
-        messages.append(dict(role='user', content=qa[0]))
-        if qa[1] is not None:
-            messages.append(dict(role='assistant', content=qa[1]))
-    gen_config = GenerationConfig(max_new_tokens=0)
-    async for out in InterFace.async_engine.generate(messages,
-                                                     session_id,
-                                                     gen_config=gen_config,
-                                                     stream_response=True,
-                                                     sequence_start=True,
-                                                     sequence_end=False):
-        pass
-    yield (state_chatbot, disable_btn, enable_btn)
+    # pytorch backend does not support resume chat history now
+    if InterFace.async_engine.backend == 'pytorch':
+        yield (state_chatbot, disable_btn, enable_btn)
+    else:
+        InterFace.async_engine.end_session(session_id)
+        messages = []
+        for qa in state_chatbot:
+            messages.append(dict(role='user', content=qa[0]))
+            if qa[1] is not None:
+                messages.append(dict(role='assistant', content=qa[1]))
+        gen_config = GenerationConfig(max_new_tokens=0)
+        async for out in InterFace.async_engine.generate(messages,
+                                                         session_id,
+                                                         gen_config=gen_config,
+                                                         stream_response=True,
+                                                         sequence_start=True,
+                                                         sequence_end=False):
+            pass
+        yield (state_chatbot, disable_btn, enable_btn)
 
 
 def run_local(model_path: str,
