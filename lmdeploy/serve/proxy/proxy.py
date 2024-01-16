@@ -6,7 +6,7 @@ import random
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Literal, Optional
 
 import numpy as np
 import requests
@@ -30,6 +30,7 @@ logger = get_logger('lmdeploy')
 
 
 class Status(BaseModel):
+    """Status protocol consists of models' information."""
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
     latency: Deque = Field(default=deque(maxlen=LATENCY_DEEQUE_LEN),
@@ -38,6 +39,7 @@ class Status(BaseModel):
 
 
 class Node(BaseModel):
+    """Node protocol consists of url and status."""
     url: str
     status: Optional[Status] = None
 
@@ -476,8 +478,18 @@ async def completions_v1(request: CompletionRequest,
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 10086,
-          strategy: str = 'min_expected_latency',
+          strategy: Literal['random', 'min_expected_latency',
+                            'min_observed_latency'] = 'min_expected_latency',
           **kwargs):
+    """To launch the proxy server.
+
+    Args:
+        server_name (str): the server name of the proxy. Default to '0.0.0.0'.
+        server_port (str): the server port. Default to 10086.
+        strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
+            the strategy to dispatch requests to nodes. Default to
+            'min_expected_latency'
+    """
     node_manager.strategy = Strategy.from_str(strategy)
     uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
 

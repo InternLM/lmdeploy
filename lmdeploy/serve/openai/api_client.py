@@ -10,6 +10,7 @@ logger = get_logger('lmdeploy')
 
 
 def get_model_list(api_url: str):
+    """Get model list from api server."""
     response = requests.get(api_url)
     if hasattr(response, 'text'):
         model_list = json.loads(response.text)
@@ -396,6 +397,7 @@ def get_streaming_response(prompt: str,
 
 
 def main(api_server_url: str, session_id: int = 0):
+    """Main function to chat in terminal."""
     api_client = APIClient(api_server_url)
     while True:
         prompt = input_prompt()
