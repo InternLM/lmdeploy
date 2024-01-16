@@ -315,7 +315,7 @@ class Tokenizer:
         model_file_exists = osp.exists(model_file)
         config_exists = osp.exists(tokenizer_config_file)
         use_hf_model = config_exists or not model_file_exists
-
+        self.logger = get_logger('lmdeploy')
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
