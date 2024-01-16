@@ -141,6 +141,7 @@ class PytorchEngineConfig:
         num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
+        num_tokens_per_iter (int): tokens per iteration.
     """
     model_name: str = ''
     tp: int = 1
@@ -152,6 +153,7 @@ class PytorchEngineConfig:
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
+    num_tokens_per_iter: int = 16384
 
 
 class ResponseType(enum.Enum):
