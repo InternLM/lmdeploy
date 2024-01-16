@@ -26,7 +26,7 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    num_tokens_per_iter: int = 16384
+    max_prefill_token_num: int = 16384
 
 
 @dataclass

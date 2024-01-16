@@ -116,7 +116,7 @@ class Engine:
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
             eviction_type='recompute',
-            num_tokens_per_iter=engine_config.num_tokens_per_iter)
+            max_prefill_token_num=engine_config.max_prefill_token_num)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -510,7 +510,7 @@ class Engine:
     def _model_forward(self, inputs: ModelInputs, swap_in_map: Dict,
                        swap_out_map: Dict):
         """model forward."""
-        num_tokens_per_iter = self.scheduler_config.num_tokens_per_iter
+        max_prefill_token_num = self.scheduler_config.max_prefill_token_num
         swap_done = False
 
         class _LogitsGather:
@@ -559,7 +559,7 @@ class Engine:
             """one large sequence."""
             new_input = inputs.slice(index, index + 1)
             max_seq_len = new_input.seq_length[0]
-            new_inputs = new_input.split(num_tokens_per_iter,
+            new_inputs = new_input.split(max_prefill_token_num,
                                          self.cache_config.block_size)
 
             logits_gather = _LogitsGather(max_seq_len)
@@ -586,11 +586,11 @@ class Engine:
             logits_gather = _LogitsGather(max_seq_len)
             while idx < batch_size:
                 slen = seq_len[idx]
-                if token_count == 0 and slen > num_tokens_per_iter:
+                if token_count == 0 and slen > max_prefill_token_num:
                     tmp_out = __long_context_single_forward(inputs, idx)
                     logits_gather.gather(tmp_out)
                     idx += 1
-                elif token_count + slen > num_tokens_per_iter:
+                elif token_count + slen > max_prefill_token_num:
                     tmp_out = __long_context_batched_forward(
                         inputs, indices[0], idx)
                     logits_gather.gather(tmp_out)
@@ -608,7 +608,7 @@ class Engine:
             tmp_out['logits'] = logits_gather.get_logits()
             return tmp_out
 
-        if inputs.input_ids.numel() < num_tokens_per_iter:
+        if inputs.input_ids.numel() < max_prefill_token_num:
             return __forward(inputs)
         else:
             return __long_context_forward(inputs)
