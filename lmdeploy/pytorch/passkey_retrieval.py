@@ -27,7 +27,7 @@ class LLM(object):
                                       tp=tp,
                                       session_len=max_session_len,
                                       max_batch_size=64,
-                                      num_tokens_per_iter=8192,
+                                      max_prefill_token_num=8192,
                                   ),
                                   trust_remote_code=True)
         self.generator = self.tm_model.create_instance()
