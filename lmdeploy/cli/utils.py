@@ -22,7 +22,11 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
 
 def convert_args(args):
     """Convert args to dict format."""
-    kwargs = {k[0]: k[1] for k in args._get_kwargs() if k[0] not in ['run']}
+    special_names = ['run', 'command']
+    kwargs = {
+        k[0]: k[1]
+        for k in args._get_kwargs() if k[0] not in special_names
+    }
     return kwargs
 
 
