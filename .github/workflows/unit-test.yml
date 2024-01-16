@@ -100,14 +100,6 @@ jobs:
           coverage run --branch --source lmdeploy -m pytest -rsE tests
           coverage xml
           coverage report -m
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v2
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          env_vars: OS,PYTHON,CPLUS
-          name: codecov-umbrella
-          fail_ci_if_error: false
       - name: Clear workfile
         if: always()
         run: |
