@@ -85,6 +85,84 @@ class ModelInputs:
     max_rank: int
     meta: Any
 
+    def slice(self, start: int, end: int):
+        """select by indices."""
+        sli = slice(start, end)
+
+        start_loc = self.q_start_loc[sli]
+        seq_length = self.seq_length[sli]
+        end_loc = start_loc[-1] + seq_length[-1]
+        input_ids = self.input_ids[:, start_loc[0]:end_loc]
+        start_loc = start_loc - start_loc[0]
+
+        history_lengths = self.history_lengths[sli]
+
+        local_adapter_ids = self.local_adapter_ids
+        if local_adapter_ids is not None:
+            local_adapter_ids = local_adapter_ids[sli]
+
+        return ModelInputs(input_ids=input_ids,
+                           seq_length=seq_length,
+                           attention_mask=self.attention_mask[sli],
+                           block_offsets=self.block_offsets[sli],
+                           position_ids=self.position_ids[sli],
+                           q_start_loc=start_loc,
+                           history_lengths=history_lengths,
+                           is_decoding=self.is_decoding,
+                           local_adapter_ids=local_adapter_ids,
+                           global_adapter_ids=self.global_adapter_ids,
+                           adapter_offsets=self.adapter_offsets,
+                           max_rank=self.max_rank,
+                           meta=self.meta)
+
+    def split(self, split_size: int, block_size: int):
+        """split inputs."""
+        assert len(
+            self.seq_length) == 1, ('Can not perform split on batched input.')
+        assert split_size % block_size == 0, (
+            'split_size should be multi of block_size.')
+
+        input_ids = self.input_ids
+        if input_ids.numel() < split_size:
+            return self
+
+        num_blocks = split_size // block_size
+        overlap = (self.history_lengths[0] % block_size != 0)
+        max_seq_len = self.seq_length[0].item()
+        ret = []
+        block_start = 0
+        history_len = self.history_lengths[0]
+        for i in range(0, max_seq_len, split_size):
+            start = i
+            end = min(max_seq_len, i + split_size)
+            block_end = block_start + num_blocks
+            if overlap:
+                block_end += 1
+
+            local_adapter_ids = self.local_adapter_ids
+            if local_adapter_ids is not None:
+                local_adapter_ids = local_adapter_ids[:, start:end]
+
+            inp = ModelInputs(
+                input_ids=self.input_ids[:, start:end],
+                seq_length=input_ids.new_tensor([end - start]),
+                attention_mask=self.attention_mask[:, start:end],
+                block_offsets=self.block_offsets[:, :block_end],
+                position_ids=self.position_ids[:, start:end],
+                q_start_loc=input_ids.new_zeros(1),
+                history_lengths=[history_len + start],
+                is_decoding=self.is_decoding,
+                local_adapter_ids=local_adapter_ids,
+                global_adapter_ids=self.global_adapter_ids,
+                adapter_offsets=self.adapter_offsets,
+                max_rank=self.max_rank,
+                meta=self.meta,
+            )
+            ret.append(inp)
+            block_start += num_blocks
+
+        return ret
+
     def to_device(self, device: str):
         """to device."""
         input_dict = asdict(self)

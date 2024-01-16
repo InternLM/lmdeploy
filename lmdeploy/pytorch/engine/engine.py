@@ -103,7 +103,8 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type='recompute')
+            eviction_type='recompute',
+            max_prefill_token_num=engine_config.max_prefill_token_num)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -464,7 +465,6 @@ class Engine:
                 next_token_ids[idx] = argmax_ids
             return next_token_ids
 
-        logits = logits.cuda()
         grouped_params = _group_params(running)
 
         is_decoding = inputs.is_decoding
@@ -476,6 +476,7 @@ class Engine:
         else:
             # most step share the same sampling parameters
             split_logits = logits
+        split_logits = split_logits.cuda()
 
         next_token_ids = _sampling(grouped_params, split_logits, inputs)
 
@@ -490,6 +491,112 @@ class Engine:
             msg.remain_output_len -= 1
             if self._stoping_criteria(msg, token):
                 msg.status = MessageStatus.STOPPED
+
+    def _model_forward(self, inputs: ModelInputs, swap_in_map: Dict,
+                       swap_out_map: Dict):
+        """model forward."""
+        max_prefill_token_num = self.scheduler_config.max_prefill_token_num
+        swap_done = False
+
+        class _LogitsGather:
+            """logits gather."""
+
+            def __init__(self, max_seq_len):
+                self._max_seq_len = max_seq_len
+                self._start = 0
+                self._out_logits = None
+
+            def gather(self, output):
+                """gather."""
+                logits = output['logits']
+                out_logits = self._out_logits
+                start = self._start
+                seq_len = logits.size(-2)
+                if out_logits is None:
+                    out_logits = logits.new_empty(1,
+                                                  self._max_seq_len,
+                                                  logits.size(-1),
+                                                  device='cpu')
+                out_logits[:, start:start + seq_len].copy_(logits,
+                                                           non_blocking=True)
+                self._start = start + seq_len
+                self._out_logits = out_logits
+
+            def get_logits(self):
+                """get logits."""
+                torch.cuda.synchronize()
+                return self._out_logits
+
+        def __forward(inputs):
+            """forward."""
+            nonlocal swap_done, swap_in_map, swap_out_map
+            if swap_done:
+                return self.model_agent.forward(inputs,
+                                                swap_in_map=dict(),
+                                                swap_out_map=dict())
+            else:
+                swap_done = True
+                return self.model_agent.forward(inputs,
+                                                swap_in_map=swap_in_map,
+                                                swap_out_map=swap_out_map)
+
+        def __long_context_single_forward(inputs, index):
+            """one large sequence."""
+            new_input = inputs.slice(index, index + 1)
+            max_seq_len = new_input.seq_length[0]
+            new_inputs = new_input.split(max_prefill_token_num,
+                                         self.cache_config.block_size)
+
+            logits_gather = _LogitsGather(max_seq_len)
+            for inp in new_inputs:
+                tmp_out = __forward(inp)
+                logits_gather.gather(tmp_out)
+            tmp_out['logits'] = logits_gather.get_logits()
+            return tmp_out
+
+        def __long_context_batched_forward(inputs, start, end):
+            """batched."""
+            new_inputs = inputs.slice(start, end)
+            return __forward(new_inputs)
+
+        def __long_context_forward(inputs):
+            """forward for long context."""
+            seq_len = inputs.seq_length
+            max_seq_len = inputs.input_ids.size(1)
+            batch_size = seq_len.size(0)
+
+            indices = []
+            token_count = 0
+            idx = 0
+            logits_gather = _LogitsGather(max_seq_len)
+            while idx < batch_size:
+                slen = seq_len[idx]
+                if token_count == 0 and slen > max_prefill_token_num:
+                    tmp_out = __long_context_single_forward(inputs, idx)
+                    logits_gather.gather(tmp_out)
+                    idx += 1
+                elif token_count + slen > max_prefill_token_num:
+                    tmp_out = __long_context_batched_forward(
+                        inputs, indices[0], idx)
+                    logits_gather.gather(tmp_out)
+                    indices = []
+                    token_count = 0
+                else:
+                    indices.append(idx)
+                    token_count += slen
+                    idx += 1
+
+            if token_count > 0:
+                tmp_out = __long_context_batched_forward(
+                    inputs, indices[0], idx)
+                logits_gather.gather(tmp_out)
+            tmp_out['logits'] = logits_gather.get_logits()
+            return tmp_out
+
+        if inputs.input_ids.numel() < max_prefill_token_num:
+            return __forward(inputs)
+        else:
+            return __long_context_forward(inputs)
 
     def step(self, is_prefill: bool, return_logits: bool = False):
         """one step inference. Used to perform streaming chat.
@@ -514,9 +621,9 @@ class Engine:
         inputs = self.create_model_inputs(running, adapters)
 
         # inference
-        output = self.model_agent.forward(inputs,
-                                          swap_in_map=swap_in_map,
-                                          swap_out_map=swap_out_map)
+        output = self._model_forward(inputs,
+                                     swap_in_map=swap_in_map,
+                                     swap_out_map=swap_out_map)
         custom_outputs = output['custom_outputs']
         logits = output['logits']
         logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
@@ -864,7 +971,7 @@ class EngineInstance:
                                          gen_config=gen_config,
                                          **kwargs):
             status, tmp_ids, _ = outputs
-            if status != 0:
+            if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return (status, token_ids, len(token_ids))
             token_ids += tmp_ids
 

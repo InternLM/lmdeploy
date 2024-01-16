@@ -5,12 +5,14 @@ from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
+    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'BaiChuanForCausalLM': 'DecoderLayer',
     'LlamaForCausalLM': 'LlamaDecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
+    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',
     'LlamaForCausalLM': 'LlamaRMSNorm',
