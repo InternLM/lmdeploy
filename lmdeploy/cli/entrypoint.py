@@ -17,4 +17,15 @@ def run():
     if 'run' in dir(args):
         args.run(args)
     else:
-        args.print_help()
+        try:
+            args.print_help()
+        except AttributeError:
+            command = args.command
+            if command == 'serve':
+                SubCliServe.parser.print_help()
+            elif command == 'lite':
+                SubCliLite.parser.print_help()
+            elif command == 'chat':
+                SubCliChat.parser.print_help()
+            else:
+                parser.print_help()
