@@ -1,4 +1,4 @@
-name: unit_test
+name: unit-test
 
 on:
   pull_request:
@@ -17,7 +17,16 @@ on:
     branches:
       - main
     paths:
-      - "lmdeploy/version.py"
+      - ".github/workflows/unit_test.yml"
+      - "cmake/**"
+      - "src/**"
+      - "tests/**"
+      - "3rdparty/**"
+      - "lmdeploy/**"
+      - "requirements/**"
+      - "requirements.txt"
+      - "CMakeLists.txt"
+      - "setup.py"
     tags:
       - "v*.*.*"
 
@@ -32,7 +41,7 @@ jobs:
     timeout-minutes: 4320 # 72hours
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=6,7"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
@@ -82,12 +91,23 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Test lmdeploy
+      - name: Test lmdeploy csrc
         run: |
-          export CUDA_VISIBLE_DEVICES=6,7
+          #./build/bin/build/bin/unittest
+          echo "TODO"
+      - name: Test lmdeploy python UT
+        run: |
           coverage run --branch --source lmdeploy -m pytest -rsE tests
           coverage xml
           coverage report -m
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v2
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          env_vars: OS,PYTHON,CPLUS
+          name: codecov-umbrella
+          fail_ci_if_error: false
       - name: Clear workfile
         if: always()
         run: |
