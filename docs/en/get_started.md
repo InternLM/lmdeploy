@@ -4,7 +4,7 @@ LMDeploy offers functionalities such as model quantization, offline batch infere
 
 ## Installation
 
-Install lmdeploy with pip ( python 3.8+) or [from source](./build.md)
+Install lmdeploy with pip (python 3.8+) or [from source](./build.md)
 
 ```shell
 pip install lmdeploy
@@ -12,7 +12,7 @@ pip install lmdeploy
 
 ## Offline batch inference
 
-```shell
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
@@ -26,43 +26,44 @@ For more information on inference pipeline parameters, please refer to [here](./
 LMDeploy's `api_server` enables models to be easily packed into services with a single command. The provided RESTful APIs are compatible with OpenAI's interfaces. Below are an example of service startup:
 
 ```shell
-lmdeploy serve api_server internlm/internlm-chat-7b --server-port 8080 --tp 1
+lmdeploy serve api_server internlm/internlm-chat-7b
 ```
 
-After launching the server, you can communicate with server on terminal through `api_client`:
+The default port of `api_server` is `23333`. After the server is launched, you can communicate with server on terminal through `api_client`:
 
 ```shell
-lmdeploy serve api_client http://0.0.0.0:8080
+lmdeploy serve api_client http://0.0.0.0:23333
 ```
 
-Besides the `api_client`, you can overview and try out `api_server` APIs online by swagger UI `http://0.0.0.0:8080`. And you can also read the API specification from [here](serving/restful_api.md).
+You can overview and try out `api_server` APIs online by swagger UI at `http://0.0.0.0:23333`, or you can read the API specification from [here](serving/restful_api.md).
 
 ## Quantization
 
-### Weight INT4 Quantization
+LMDeploy provides the following quantization methods. Please visit the following links for the detailed guide
 
-LMDeploy uses [AWQ](https://arxiv.org/abs/2306.00978) algorithm for model weight quantization
+- [4bit weight-only quantization](quantization/w4a16.md)
+- [k/v quantization](quantization/kv_int8.md)
+- [w8a8 quantization](quantization/w8a8.md)
 
-Using the following commands, you can quantize a LLM model into 4bit, and communicate with it with command line:
+## Useful Tools
+
+LMDeploy CLI offers the following utilities, helping users experience LLM features conveniently
+
+### Inference with Command line Interface
 
 ```shell
-lmdeploy lite calibrate internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy lite auto_awq internlm/internlm-chat-7b --work-dir ./internlm-chat-7b-4bit
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --group-size 128
+lmdeploy chat turbomind internlm/internlm-chat-7b
 ```
 
-LMDeploy 4bit inference supports the following NVIDIA GPU:
+### Serving with Web UI
 
-- Turing(sm75): 20 series, T4
-- Ampere(sm80,sm86): 30 series, A10, A16, A30, A100
-- Ada Lovelace(sm90): 40 series
+LMDeploy adopts gradio to develop the online demo.
 
-Click [here](quantization/w4a16.md) to view more infermation about the inference of quantized models.
+```shell
+# install dependencies
+pip install lmdeploy[serve]
+# launch gradio server
+lmdeploy serve gradio internlm/internlm-chat-7b
+```
 
-### KV Cache INT8 Quantization
-
-Click [here](quantization/kv_int8.md) to view the usage method, implementation formula, and test results for kv int8.
-
-### W8A8 Quantization
-
-TODO
+![](https://github.com/InternLM/lmdeploy/assets/67539920/08d1e6f2-3767-44d5-8654-c85767cec2ab)

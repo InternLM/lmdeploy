@@ -2,8 +2,8 @@
 import os
 from typing import Literal, Optional, Union
 
-from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
-from lmdeploy.model import ChatTemplateConfig
+from .messages import PytorchEngineConfig, TurbomindEngineConfig
+from .model import ChatTemplateConfig
 
 
 def pipeline(model_path: str,
@@ -11,7 +11,6 @@ def pipeline(model_path: str,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
-             tp: int = 1,
              log_level='ERROR',
              **kwargs):
     """
@@ -33,10 +32,9 @@ def pipeline(model_path: str,
             huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
-            config instance. Default to none.
+            config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Examples:
@@ -52,6 +50,14 @@ def pipeline(model_path: str,
     logger.setLevel(log_level)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
+    if 'tp' in kwargs:
+        logger.warning(
+            'The argument "tp" is deprecated and will be removed soon. '
+            'Please set "tp" in "backend_config"')
+        tp = kwargs['tp']
+        kwargs.pop('tp')
+    else:
+        tp = 1 if backend_config is None else backend_config.tp
     return AsyncEngine(model_path,
                        model_name=model_name,
                        backend=backend,
@@ -69,7 +75,6 @@ def serve(model_path: str,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          tp: int = 1,
           log_level: str = 'ERROR',
           **kwargs):
     """This will run the api_server in a subprocess.
@@ -99,7 +104,6 @@ def serve(model_path: str,
             Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
-        tp (int): tensor parallel
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Return:
@@ -116,6 +120,11 @@ def serve(model_path: str,
 
     from lmdeploy.serve.openai.api_client import APIClient
     from lmdeploy.serve.openai.api_server import serve
+    if 'tp' in kwargs:
+        tp = kwargs['tp']
+        kwargs.pop('tp')
+    else:
+        tp = 1 if backend_config is None else backend_config.tp
     task = Process(target=serve,
                    args=(model_path, ),
                    kwargs=dict(model_name=model_name,

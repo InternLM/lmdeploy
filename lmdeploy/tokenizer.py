@@ -7,9 +7,7 @@ from typing import List, Optional, Sequence, Union
 
 import torch
 
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
+from .utils import get_logger
 
 
 class SentencePieceTokenizer:
@@ -28,6 +26,7 @@ class SentencePieceTokenizer:
         # TODO maybe lack a constant.py
         self._indexes_tokens_deque = deque(maxlen=10)
         self.max_indexes_num = 5
+        self.logger = get_logger('lmdeploy')
 
     @property
     def vocab_size(self):
@@ -78,7 +77,7 @@ class SentencePieceTokenizer:
         indexes = [i for i, voc in enumerate(vocab) if token in voc]
         if len(indexes) > self.max_indexes_num:
             indexes = self.encode(token, add_bos=False)[-1:]
-            logger.warning(
+            self.logger.warning(
                 f'There are too many(>{self.max_indexes_num}) possible '
                 f'indexes may decoding {token}, we will use {indexes} only')
         self._indexes_tokens_deque.append((token, indexes))
@@ -140,8 +139,9 @@ class HuggingFaceTokenizer:
         model_file = osp.join(model_dir, 'tokenizer.model')
         backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
         model_file_exists = osp.exists(model_file)
+        self.logger = get_logger('lmdeploy')
         if not osp.exists(backend_tokenizer_file) and model_file_exists:
-            logger.warning(
+            self.logger.warning(
                 'Can not find tokenizer.json. '
                 'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(model_dir,
@@ -246,7 +246,7 @@ class HuggingFaceTokenizer:
         indexes = [i for _token, i in self.token2id.items() if token in _token]
         if len(indexes) > self.max_indexes_num:
             indexes = self.encode(token, add_bos=False)[-1:]
-            logger.warning(
+            self.logger.warning(
                 f'There are too many(>{self.max_indexes_num}) possible '
                 f'indexes may decoding {token}, we will use {indexes} only')
         self._indexes_tokens_deque.append((token, indexes))
@@ -315,7 +315,7 @@ class Tokenizer:
         model_file_exists = osp.exists(model_file)
         config_exists = osp.exists(tokenizer_config_file)
         use_hf_model = config_exists or not model_file_exists
-
+        self.logger = get_logger('lmdeploy')
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
@@ -373,7 +373,7 @@ class Tokenizer:
         the input token."""
         encoded = self.encode(token, add_bos=False)
         if len(encoded) > 1:
-            logger.warning(
+            self.logger.warning(
                 f'The token {token}, its length of indexes {encoded} is over '
                 'than 1. Currently, it can not be used as stop words')
             return []

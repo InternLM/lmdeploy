@@ -9,7 +9,7 @@ The user can open the http url print by the following command in a browser.
 - **Please check the http url for the detailed api usage!!!**
 
 ```shell
-lmdeploy serve api_server ./workspace --server_name 0.0.0.0 --server_port ${server_port} --tp 1
+lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
 We provide some RESTful APIs. Three of them are in OpenAI format.
@@ -144,8 +144,8 @@ You can also test restful-api through webui.
 ```shell
 # api_server_url is what printed in api_server.py, e.g. http://localhost:23333
 # server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server_name localhost --server_port 6006
-lmdeploy serve gradio api_server_url --server_name ${gradio_ui_ip} --server_port ${gradio_ui_port}
+# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
+lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 ### FAQ

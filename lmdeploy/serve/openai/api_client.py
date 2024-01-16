@@ -10,6 +10,7 @@ logger = get_logger('lmdeploy')
 
 
 def get_model_list(api_url: str):
+    """Get model list from api server."""
     response = requests.get(api_url)
     if hasattr(response, 'text'):
         model_list = json.loads(response.text)
@@ -365,7 +366,7 @@ def get_streaming_response(prompt: str,
                            stream: bool = True,
                            interactive_mode: bool = False,
                            ignore_eos: bool = False,
-                           stop: bool = False,
+                           cancel: bool = False,
                            top_p: float = 0.8,
                            temperature: float = 0.7) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
@@ -376,7 +377,7 @@ def get_streaming_response(prompt: str,
         'request_output_len': request_output_len,
         'interactive_mode': interactive_mode,
         'ignore_eos': ignore_eos,
-        'stop': stop,
+        'cancel': cancel,
         'top_p': top_p,
         'temperature': temperature
     }
@@ -396,6 +397,7 @@ def get_streaming_response(prompt: str,
 
 
 def main(api_server_url: str, session_id: int = 0):
+    """Main function to chat in terminal."""
     api_client = APIClient(api_server_url)
     while True:
         prompt = input_prompt()

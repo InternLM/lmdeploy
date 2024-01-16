@@ -51,7 +51,7 @@ AUTO_MAP = {
 
 def smooth_quant(model: str,
                  work_dir: str = './work_dir',
-                 calib_dataset: str = 'c4',
+                 calib_dataset: str = 'ptb',
                  calib_samples: int = 128,
                  calib_seqlen: int = 2048,
                  device: str = 'cuda'):

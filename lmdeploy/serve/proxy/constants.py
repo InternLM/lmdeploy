@@ -7,12 +7,14 @@ API_TIMEOUT_LEN = 100
 
 
 class Strategy(enum.Enum):
+    """Strategy to dispatch requests to nodes."""
     RANDOM = enum.auto()
     MIN_EXPECTED_LATENCY = enum.auto()
     MIN_OBSERVED_LATENCY = enum.auto()
 
     @classmethod
     def from_str(cls, name):
+        """get strategy from string."""
         if name == 'random':
             return cls.RANDOM
         elif name == 'min_expected_latency':
@@ -25,6 +27,7 @@ class Strategy(enum.Enum):
 
 
 class ErrorCodes(enum.Enum):
+    """Error codes."""
     MODEL_NOT_FOUND = 10400
     SERVICE_UNAVAILABLE = 10401
     API_TIMEOUT = 10402

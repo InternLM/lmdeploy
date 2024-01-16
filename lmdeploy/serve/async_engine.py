@@ -1,14 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
+import random
 from argparse import ArgumentError
 from contextlib import contextmanager
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
-                               PytorchEngineConfig, TurbomindEngineConfig)
+                               PytorchEngineConfig, Response,
+                               TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import _stop_words, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -110,6 +112,8 @@ class AsyncEngine:
             **kwargs)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.engine.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.engine.model_name
         self.chat_template = chat_template_config.chat_template
         self.session_len = self.engine.session_len
         self.backend_config = backend_config
@@ -128,7 +132,8 @@ class AsyncEngine:
 
         # try fuzzy matching to get a model_name
         if self.model_name is None and (backend_config is None
-                                        or backend_config.model_name == ''):
+                                        or backend_config.model_name == ''
+                                        or backend_config.model_name is None):
             potential_names = best_match_model(model_path)
             if potential_names is None:
                 raise ArgumentError('Please set model_name or backend_config.')
@@ -144,6 +149,9 @@ class AsyncEngine:
         if self.model_name is not None and backend_config is None:
             backend_config = PytorchEngineConfig(self.model_name,
                                                  session_len=2048)
+        if backend_config.model_name is None \
+                or backend_config.model_name == '':  # cli may pass None
+            backend_config.model_name = self.model_name
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
@@ -151,12 +159,18 @@ class AsyncEngine:
                              engine_config=backend_config)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.model_name
         self.chat_template = chat_template_config.chat_template
         if self.engine.session_len is None:
             self.session_len = self.chat_template.session_len
         else:
             self.session_len = self.engine.session_len
         self.backend_config = backend_config
+        self.stop_words = _stop_words(self.chat_template.stop_words,
+                                      self.engine.tokenizer)
+        if self.stop_words is not None:
+            self.stop_words = self.stop_words[0][0].tolist()
 
     def __call__(self,
                  prompts: List[str],
@@ -213,7 +227,7 @@ class AsyncEngine:
         """Clear a session by a session_id."""
         if str(session_id) in self.id2generator:
             self.id2generator[str(session_id)].end(session_id)
-            self.id2step.pop(str(session_id))
+            self.id2step[str(session_id)] = 0
             self.gens_set.add(self.id2generator[str(session_id)])
 
     @contextmanager
@@ -269,8 +283,11 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        # set random if it is not set
+        if gen_config.random_seed is None:
+            gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [''] * prompt_num
+        outputs = [Response('', 0) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -287,7 +304,9 @@ class AsyncEngine:
 
             async def _inner_call(i, generator):
                 async for out in generator:
-                    outputs[i + j] += out.response
+                    outputs[i + j].text += out.response
+                    outputs[i + j].generate_token_len = out.generate_token_len
+                    outputs[i + j].finish_reason = out.finish_reason
 
             async def gather():
                 await asyncio.gather(*[
@@ -334,6 +353,11 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        if self.backend == 'pytorch' and gen_config.stop_words is None:
+            gen_config.stop_words = self.stop_words
+        # set random if it is not set and sequence_start is True
+        if gen_config.random_seed is None and sequence_start:
+            gen_config.random_seed = random.getrandbits(64)
         prompt = messages
         if do_preprocess:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)

@@ -28,15 +28,27 @@ NORM_TYPE_MAP = {
 
 
 def auto_awq(model: str,
-             work_dir: str,
-             calib_dataset: str = 'c4',
+             work_dir: str = './work_dir',
+             calib_dataset: str = 'ptb',
              calib_samples: int = 128,
              calib_seqlen: int = 2048,
              w_bits: int = 4,
              w_sym: bool = False,
              w_group_size: int = 128,
              device: str = 'cuda'):
+    """Perform weight quantization using AWQ algorithm.
 
+    Args:
+        model (str): The path of model in hf format.
+        work_dir (str): The working directory to save results.
+        calib_dataset (str): The calibration dataset name.
+        calib_samples (int): The number of samples for calibration.
+        calib_seqlen (int): The sequence length for calibration.
+        w_bits (int): Bit number for weight quantization.
+        w_sym (bool): Whether to do symmetric quantization.
+        w_group_size (int): Group size for weight quantization statistics.
+        device (str): Device type of running.
+    """
     model, tokenizer, work_dir = calibrate(model, calib_dataset, calib_samples,
                                            calib_seqlen, work_dir, device)
 
