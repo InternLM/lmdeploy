@@ -109,7 +109,7 @@ pip install lmdeploy
 
 ## 离线批处理
 
-```shell
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
