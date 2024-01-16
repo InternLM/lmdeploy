@@ -30,6 +30,8 @@ class GenerationConfig:
         random_seed (int): Seed used when sampling a token
         stop_words (List[str]): Words that stop generating further tokens
         bad_words (List[str]): Words that the engine will never generate
+        min_length (int): enforcing a min-length by setting EOS probability to 0,
+            only consider output tokens
     """
 
     n: int = 1
@@ -42,6 +44,7 @@ class GenerationConfig:
     random_seed: int = None
     stop_words: List[str] = None
     bad_words: List[str] = None
+    min_length: int = 0
 
 
 @dataclass
@@ -65,7 +68,7 @@ class EngineGenerationConfig(GenerationConfig):
             >>> tokenizer = Tokenizer('internlm/internlm-chat-7b')
             >>> gen_config = GenerationConfig(stop_words=['<eoa>'])
             >>> gen_config = EngineGenerationConfig.From(gen_config, tokenizer)
-        """ # noqa E501
+        """  # noqa E501
 
         def special_word_token_ids(words):
             if words is not None:

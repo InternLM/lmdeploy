@@ -248,6 +248,7 @@ private:
     uintptr_t* h_k_block_ptrs_{};
     uintptr_t* h_v_block_ptrs_{};
 
+    int*   h_min_length_{};
     int*   h_runtime_top_k_{};
     float* h_runtime_top_p_{};
     float* h_temperature_{};
