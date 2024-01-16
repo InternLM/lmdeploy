@@ -30,8 +30,8 @@ class GenerationConfig:
         random_seed (int): Seed used when sampling a token
         stop_words (List[str]): Words that stop generating further tokens
         bad_words (List[str]): Words that the engine will never generate
-        min_length (int): enforcing a min-length by setting EOS probability to 0,
-            only consider output tokens
+        min_length (int): enforcing a min-length by setting EOS probability
+            to 0, only consider output tokens
     """
 
     n: int = 1
