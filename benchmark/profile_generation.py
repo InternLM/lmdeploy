@@ -17,6 +17,7 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
 from tqdm import tqdm
 
 from lmdeploy import TurbomindEngineConfig
+from lmdeploy.turbomind import TurboMind
 
 
 def infer(model, session_id: int, input_ids: List, output_seqlen: int,
@@ -108,7 +109,6 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
                        temperature: float, test_round: int, warmup_round: int,
                        cache_count: float, model_format: str, **kwargs):
 
-    from lmdeploy.turbomind import TurboMind
     print(f'profiling ... concurrency: {concurrency}, '
           f'n_prompt_token: {input_seqlen}, '
           f'n_completion_token: {output_seqlen}, '
