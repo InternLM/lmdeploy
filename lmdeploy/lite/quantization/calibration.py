@@ -170,11 +170,19 @@ class CalibrationContext():
                     if version > digit_version('4.36.0') and use_new_cache:
                         from transformers.cache_utils import DynamicCache
                         batch_kwargs[i]['past_key_value'] = DynamicCache()
+
+                        ori_idx = mod.self_attn.layer_idx
+                        mod.self_attn.layer_idx = 0
+
                         out = self._ori_forwards[mod](*batch_args[i],
                                                       **batch_kwargs[i])
+                        mod.self_attn.layer_idx = ori_idx
+
                         out = list(out)
                         cache = out.pop(-1)
-                        key, value = cache.pop(-1)
+
+                        key = cache.key_cache.pop(-1)
+                        value = cache.value_cache.pop(-1)
 
                         k_obs.observe(key)
                         v_obs.observe(value)
