@@ -4,6 +4,7 @@ import dataclasses
 import random
 from argparse import ArgumentError
 from contextlib import contextmanager
+from queue import Queue
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
@@ -283,7 +284,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [Response('', 0) for i in range(prompt_num)]
+        outputs = [Response('', 0, i) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -313,6 +314,79 @@ class AsyncEngine:
             self.loop.run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
+
+    def stream_infer(
+            self,
+            prompts: Union[List[str], str],
+            gen_config: Optional[Union[GenerationConfig,
+                                       EngineGenerationConfig]] = None,
+            do_preprocess: bool = True,
+            **kwargs):
+        """Inference a batch of prompts with stream mode.
+
+        Args:
+            prompts (List[str] | str): a batch of prompts
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            chat_template_config (ChatTemplateConfig | None):a instance of
+                ChatTemplateConfig. Default to None.
+            do_preprocess (bool): whether pre-process the messages. Default to
+                True, which means chat_template will be applied.
+        """
+        need_list_wrap = isinstance(prompts, str) or isinstance(
+            prompts[0], Dict)
+        prompts = [prompts] if need_list_wrap else prompts
+        assert isinstance(prompts, List), 'prompts should be a list'
+        if gen_config is None:
+            gen_config = GenerationConfig()
+        if type(gen_config) is GenerationConfig:
+            gen_config = EngineGenerationConfig.From(gen_config,
+                                                     self.tokenizer)
+        # set random if it is not set
+        if gen_config.random_seed is None:
+            gen_config.random_seed = random.getrandbits(64)
+        prompt_num = len(prompts)
+        outputs = Queue()
+        generators = []
+        for j in range(0, prompt_num, self.instance_num):
+            batch_prompts = prompts[j:j + self.instance_num]
+            generators = []
+            for i, prompt in enumerate(batch_prompts):
+                generators.append(
+                    self.generate(prompt,
+                                  i,
+                                  gen_config=gen_config,
+                                  stream_response=True,
+                                  sequence_start=True,
+                                  sequence_end=True,
+                                  do_preprocess=do_preprocess,
+                                  **kwargs))
+
+            async def _inner_call(i, generator):
+                async for out in generator:
+                    outputs.put(
+                        Response(out.response, out.generate_token_len, i + j,
+                                 out.finish_reason))
+
+            async def gather():
+                await asyncio.gather(*[
+                    _inner_call(i, generators[i])
+                    for i in range(len(batch_prompts))
+                ])
+                outputs.put(None)
+
+            from threading import Thread
+            proc = Thread(
+                target=lambda: self.loop.run_until_complete(gather()))
+            proc.start()
+
+            while True:
+                if outputs.qsize() > 0:
+                    out = outputs.get()
+                    if out is None:
+                        break
+                    yield out
+            proc.join()
 
     async def generate(
             self,

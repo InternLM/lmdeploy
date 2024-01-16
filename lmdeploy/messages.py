@@ -166,4 +166,5 @@ class Response:
     """Pack all response information together."""
     text: str
     generate_token_len: int
+    request_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
