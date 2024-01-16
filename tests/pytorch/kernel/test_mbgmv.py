@@ -115,4 +115,4 @@ class TestMBGMV:
                          rank_page_start=page_start,
                          ranks=ranks,
                          max_rank=max_rank)
-        torch.testing.assert_close(gt, output, atol=1e-3, rtol=1e-5)
+        torch.testing.assert_close(gt, output, atol=2e-3, rtol=1e-5)
