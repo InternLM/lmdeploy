@@ -133,7 +133,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - Add chat template
   - Add a new model
   - gemm tuning
-  - Long context inference
+  - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
 
 ## Contributing

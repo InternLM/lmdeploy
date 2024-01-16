@@ -62,8 +62,9 @@ Welcome to LMDeploy's tutorials!
    :maxdepth: 1
    :caption: Advanced Guide
 
-   serving/qos.md
    advance/pytorch_new_model.md
+   advance/long_context.md
+   serving/qos.md
 
 Indices and tables
 ==================

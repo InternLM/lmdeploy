@@ -134,7 +134,7 @@ print(response)
   - 增加对话模板
   - 支持新模型
   - gemm tuning
-  - 长文本推理
+  - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](./docs/zh_cn/serving/proxy_server.md)
 
 ## 贡献指南
