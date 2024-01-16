@@ -124,6 +124,17 @@ def update_lora_linears(lora_linears: Dict,
                             adapter_names=adapter_names)
 
 
+def get_max_lora_weight_size(model: torch.nn.Module):
+    """Get max weight size."""
+    from peft.tuners.lora import Linear as LoRALinear
+    ret = 0
+    for _, mod in model.named_modules():
+        if isinstance(mod, LoRALinear):
+            weight = mod.base_layer.weight
+            ret = max(ret, max(weight.shape))
+    return ret
+
+
 @dataclass
 class TargetMeta:
     rank: int
