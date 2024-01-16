@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
+import random
 from argparse import ArgumentError
 from contextlib import contextmanager
 from typing import Dict, List, Literal, Optional, Union
@@ -342,6 +343,9 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        # set random if it is not set and sequence_start is True
+        if gen_config.random_seed is None and sequence_start:
+            gen_config.random_seed = random.getrandbits(64)
         prompt = messages
         if do_preprocess:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)
