@@ -278,6 +278,9 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        # set random if it is not set
+        if gen_config.random_seed is None:
+            gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
         outputs = [''] * prompt_num
         for j in range(0, prompt_num, self.instance_num):
