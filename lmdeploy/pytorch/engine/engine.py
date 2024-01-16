@@ -81,18 +81,6 @@ def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
     return adapter_ids
 
 
-def _update_blocksize(cache_config: CacheConfig, adapters: List[str], tp: int):
-    """update blocksize for adapters."""
-    if adapters is None:
-        return cache_config
-
-    if cache_config.block_size != tp:
-        logger.warning('Lora adapter require block size '
-                       f'= tp({tp}).')
-        cache_config.block_size = tp
-    return cache_config
-
-
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -122,9 +110,6 @@ class Engine:
         cache_config = CacheConfig(block_size=engine_config.block_size,
                                    num_cpu_blocks=engine_config.num_cpu_blocks,
                                    num_gpu_blocks=engine_config.num_gpu_blocks)
-        cache_config = _update_blocksize(cache_config,
-                                         adapters=adapters,
-                                         tp=tp)
 
         self.model_agent = AutoModelAgent.from_pretrained(
             model_path,

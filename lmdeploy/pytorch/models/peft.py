@@ -108,7 +108,7 @@ class LoRALinear(torch.nn.Module):
         """lora forward tp rowwise."""
 
         lora_input = self._make_packed_lora_input(x)
-        rank = dist.get_world_size()
+        rank = dist.get_rank()
         world_size = dist.get_world_size()
         out_size = self.base_layer.weight.size(0) // world_size
         if not lora_input.is_decoding:
