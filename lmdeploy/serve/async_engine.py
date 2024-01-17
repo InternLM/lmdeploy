@@ -2,9 +2,11 @@
 import asyncio
 import dataclasses
 import random
+import time
 from argparse import ArgumentError
 from contextlib import contextmanager
 from queue import Queue
+from threading import Thread
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
@@ -375,12 +377,13 @@ class AsyncEngine:
                 ])
                 outputs.put(None)
 
-            from threading import Thread
             proc = Thread(
                 target=lambda: self.loop.run_until_complete(gather()))
             proc.start()
 
             while True:
+                if self.backend == 'pytorch':
+                    time.sleep(0.001)  # avoid blocking in the loop
                 if outputs.qsize() > 0:
                     out = outputs.get()
                     if out is None:
