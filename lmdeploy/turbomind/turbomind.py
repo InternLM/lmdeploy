@@ -617,7 +617,6 @@ class TurboMindInstance:
             request_output_len=np.full(input_lengths.shape,
                                        gen_config.max_new_tokens,
                                        dtype=np.uint32),
-            min_length=_broadcast_np(gen_config.min_length, np.int32),
             runtime_top_k=_broadcast_np(gen_config.top_k, np.uint32),
             runtime_top_p=_broadcast_np(gen_config.top_p, np.float32),
             temperature=_broadcast_np(gen_config.temperature, np.float32),
@@ -668,6 +667,10 @@ class TurboMindInstance:
                                                   padding_value=-1)
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
+
+        if gen_config.min_length is not None:
+            inputs['min_length'] = _broadcast_np(gen_config.min_length,
+                                                 np.int32)
 
         bad_words = []
         if gen_config.bad_words is not None:

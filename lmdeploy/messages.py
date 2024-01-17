@@ -44,7 +44,7 @@ class GenerationConfig:
     random_seed: int = None
     stop_words: List[str] = None
     bad_words: List[str] = None
-    min_length: int = 0
+    min_length: int = None
 
 
 @dataclass
