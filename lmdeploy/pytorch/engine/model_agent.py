@@ -642,6 +642,7 @@ def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
                                                  device_mesh=device_mesh,
                                                  placements=[Replicate()
                                                              ]).to_local()
+    torch.cuda.synchronize()
 
     inputs = updated_inputs
     inputs.update(other_metas)
