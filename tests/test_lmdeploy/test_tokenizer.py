@@ -8,8 +8,10 @@ from lmdeploy.tokenizer import HuggingFaceTokenizer
     'baichuan-inc/Baichuan2-7B-Chat', 'codellama/CodeLlama-7b-hf',
     'upstage/SOLAR-0-70b-16bit'
 ])
-@pytest.mark.parametrize(
-    'input', ['hi, this is a test 😆😆! ' * 5, '為什麼我還在用繁體字 😆😆 gg! ' * 5])
+@pytest.mark.parametrize('input', [
+    'hi, this is a test 😆😆! ' * 5, '為什麼我還在用繁體字 😆😆 gg! ' * 5,
+    'License at\n#\n#' + ' ' * 100 + 'ht'
+])
 def test_tokenizer(model_path, input):
     tokenizer = HuggingFaceTokenizer(model_path)
     encoded = tokenizer.encode(input, False)

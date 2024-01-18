@@ -200,8 +200,12 @@ class HuggingFaceTokenizer:
 
     def _maybe_add_prefix_space(self, tokens: List[int], decoded: str):
         """maybe add prefix space for incremental decoding."""
-        if len(tokens) and not decoded.startswith(' ') and\
-                tokens[0] in self.prefix_space_tokens:
+        # requirements to add prefix space:
+        # 1. len(tokens) >0
+        # 2. tokenizer is a fast tokenizer or decoded does not starts with ' '
+        # 3. tokens[0] in self.prefix_space_tokens
+        if len(tokens) and (not decoded.startswith(' ') or self.model.is_fast)\
+                and tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
         else:
             return decoded
