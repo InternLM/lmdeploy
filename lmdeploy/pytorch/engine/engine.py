@@ -399,7 +399,7 @@ class Engine:
                            max_rank=max_rank,
                            meta=meta)
 
-    def _stoping_criteria(self, msg: SchedulerSequence, next_token_id: int):
+    def _stopping_criteria(self, msg: SchedulerSequence, next_token_id: int):
         """Check if the message should stop.
 
         Args:
@@ -489,8 +489,22 @@ class Engine:
             msg.meta = meta
             msg.update_token_ids(token)
             msg.remain_output_len -= 1
-            if self._stoping_criteria(msg, token):
+            if msg.remain_output_len < 0:
+                msg.token_ids = torch.empty((0, ), dtype=torch.long)
+            if self._stopping_criteria(msg, token):
                 msg.status = MessageStatus.STOPPED
+
+    def _can_output_token(self, token: torch.Tensor, msg: SchedulerSequence):
+        """check if output is necessary."""
+        if isinstance(token, torch.Tensor):
+            token = token.item()
+        if token == self.model_config.eos_token_id:
+            return False
+
+        if token in msg.sampling_param.stop_words:
+            return False
+
+        return True
 
     def _model_forward(self, inputs: ModelInputs, swap_in_map: Dict,
                        swap_out_map: Dict):
@@ -638,12 +652,16 @@ class Engine:
         outputs: Dict[int, InferOutput] = dict()
         for msg, next_id in zip(running, next_token_ids):
             session_id = msg.session_id
+            if self._can_output_token(next_id, msg):
+                out_token_ids = [next_id.item()]
+            else:
+                out_token_ids = []
             out = InferOutput(
                 session_id=session_id,
                 sender_id=msg.sender_id,
                 req_id=msg.req_id,
                 finish=(msg.status == MessageStatus.STOPPED),
-                token_ids=[next_id.item()],
+                token_ids=out_token_ids,
             )
             outputs[session_id] = out
 
