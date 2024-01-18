@@ -78,12 +78,14 @@ class ChatCompletionRequestQos(BaseModel):
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
-    messages: Union[str, List[Dict[str, str]]]
+    # yapf: disable
+    messages: Union[str, List[Dict[str, str]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
     max_tokens: Optional[int] = 512
-    stop: Optional[Union[str, List[str]]] = None
+    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
+    # yapf: enable
     stream: Optional[bool] = False
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
