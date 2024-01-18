@@ -632,6 +632,7 @@ def _tp_build_model(
                     trust_remote_code=trust_remote_code)
                 _load_adapters(param_model, adapters, device_map=device_map)
                 model.load_state_dict(param_model.state_dict(), assign=True)
+                param_model = param_model.to('meta')
                 del param_model
 
         patched_model = patch(
