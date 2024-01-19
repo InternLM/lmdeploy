@@ -5,8 +5,10 @@ from typing import List
 
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
+    """Formatter to output default value and type in help information."""
 
     def _get_help_string(self, action):
+        """Add default and type info into help."""
         help = action.help
         if '%(default)' not in action.help:
             if action.default is not argparse.SUPPRESS:
@@ -33,10 +35,10 @@ def get_lora_adapters(adapters: List[str]):
     """Parse lora adapers from cli input.
 
     Args:
-        adapters (List[str]): Command input string of lora adaters paths.
+        adapters (List[str]): CLI input string of lora adapter path(s).
 
     Returns:
-        Dict[str,str] or None
+        Dict[str,str] or None: Parsed lora adapter path(s).
     """
     if not adapters:
         return None
@@ -49,10 +51,10 @@ def get_lora_adapters(adapters: List[str]):
             name, path = path.split('=', 1)
         output[name] = path
     else:
-        for pairs in adapters:
-            assert '=' in pairs, f'Multiple lora paths must in format of ' \
-                                 f'xx==yy zz==ww. But given: {pairs}'
-            name, path = pairs.strip().split('=', 1)
+        for pair in adapters:
+            assert '=' in pair, f'Multiple lora paths must in format of ' \
+                                 f'xxx=yyy. But given: {pair}'
+            name, path = pair.strip().split('=', 1)
             assert name not in output, f'Multiple lora paths with ' \
                                        f'repeated lora name: {name}'
             output[name] = path
@@ -64,6 +66,8 @@ class ArgumentHelper:
 
     @staticmethod
     def model_name(parser):
+        """Add argument model_name to parser."""
+
         return parser.add_argument(
             '--model-name',
             type=str,
@@ -75,6 +79,8 @@ class ArgumentHelper:
 
     @staticmethod
     def model_format(parser):
+        """Add argument model_format to parser."""
+
         return parser.add_argument(
             '--model-format',
             type=str,
@@ -85,6 +91,8 @@ class ArgumentHelper:
 
     @staticmethod
     def tp(parser):
+        """Add argument tp to parser."""
+
         return parser.add_argument(
             '--tp',
             type=int,
@@ -93,6 +101,8 @@ class ArgumentHelper:
 
     @staticmethod
     def session_id(parser):
+        """Add argument session_id to parser."""
+
         return parser.add_argument('--session-id',
                                    type=int,
                                    default=1,
@@ -100,6 +110,8 @@ class ArgumentHelper:
 
     @staticmethod
     def session_len(parser):
+        """Add argument session_len to parser."""
+
         return parser.add_argument('--session-len',
                                    type=int,
                                    default=None,
@@ -107,6 +119,8 @@ class ArgumentHelper:
 
     @staticmethod
     def max_batch_size(parser):
+        """Add argument max_batch_size to parser."""
+
         return parser.add_argument('--max-batch-size',
                                    type=int,
                                    default=128,
@@ -114,6 +128,8 @@ class ArgumentHelper:
 
     @staticmethod
     def quant_policy(parser):
+        """Add argument quant_policy to parser."""
+
         return parser.add_argument('--quant-policy',
                                    type=int,
                                    default=0,
@@ -121,6 +137,8 @@ class ArgumentHelper:
 
     @staticmethod
     def rope_scaling_factor(parser):
+        """Add argument rope_scaling_factor to parser."""
+
         return parser.add_argument('--rope-scaling-factor',
                                    type=float,
                                    default=0.0,
@@ -128,6 +146,8 @@ class ArgumentHelper:
 
     @staticmethod
     def use_logn_attn(parser):
+        """Add argument use_logn_attn to parser."""
+
         return parser.add_argument(
             '--use-logn-attn',
             action='store_true',
@@ -136,6 +156,8 @@ class ArgumentHelper:
 
     @staticmethod
     def block_size(parser):
+        """Add argument block_size to parser."""
+
         return parser.add_argument('--block-size',
                                    type=int,
                                    default=64,
@@ -143,6 +165,8 @@ class ArgumentHelper:
 
     @staticmethod
     def top_p(parser):
+        """Add argument top_p to parser."""
+
         return parser.add_argument(
             '--top-p',
             type=float,
@@ -154,6 +178,8 @@ class ArgumentHelper:
 
     @staticmethod
     def top_k(parser):
+        """Add argument top_k to parser."""
+
         return parser.add_argument(
             '--top-k',
             type=int,
@@ -164,6 +190,8 @@ class ArgumentHelper:
 
     @staticmethod
     def temperature(parser):
+        """Add argument temperature to parser."""
+
         return parser.add_argument('--temperature',
                                    type=float,
                                    default=0.8,
@@ -171,6 +199,8 @@ class ArgumentHelper:
 
     @staticmethod
     def repetition_penalty(parser):
+        """Add argument repetition_penalty to parser."""
+
         return parser.add_argument('--repetition-penalty',
                                    type=float,
                                    default=1.0,
@@ -178,6 +208,8 @@ class ArgumentHelper:
 
     @staticmethod
     def cap(parser):
+        """Add argument cap to parser."""
+
         return parser.add_argument(
             '--cap',
             type=str,
@@ -188,6 +220,8 @@ class ArgumentHelper:
 
     @staticmethod
     def log_level(parser):
+        """Add argument log_level to parser."""
+
         import logging
         return parser.add_argument('--log-level',
                                    type=str,
@@ -197,6 +231,8 @@ class ArgumentHelper:
 
     @staticmethod
     def backend(parser):
+        """Add argument backend to parser."""
+
         return parser.add_argument('--backend',
                                    type=str,
                                    default='turbomind',
@@ -205,6 +241,8 @@ class ArgumentHelper:
 
     @staticmethod
     def engine(parser):
+        """Add argument engine to parser."""
+
         return parser.add_argument('--engine',
                                    type=str,
                                    default='turbomind',
@@ -213,6 +251,8 @@ class ArgumentHelper:
 
     @staticmethod
     def stream_output(parser):
+        """Add argument stream_output to parser."""
+
         return parser.add_argument(
             '--stream-output',
             action='store_true',
@@ -220,6 +260,8 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_dataset(parser):
+        """Add argument calib_dataset to parser."""
+
         return parser.add_argument('--calib-dataset',
                                    type=str,
                                    default='ptb',
@@ -227,6 +269,8 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_samples(parser):
+        """Add argument calib_samples to parser."""
+
         return parser.add_argument(
             '--calib-samples',
             type=int,
@@ -235,6 +279,8 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_seqlen(parser):
+        """Add argument calib_seqlen to parser."""
+
         return parser.add_argument('--calib-seqlen',
                                    type=int,
                                    default=2048,
@@ -242,6 +288,8 @@ class ArgumentHelper:
 
     @staticmethod
     def device(parser):
+        """Add argument device to parser."""
+
         return parser.add_argument('--device',
                                    type=str,
                                    default='cuda',
@@ -250,6 +298,8 @@ class ArgumentHelper:
 
     @staticmethod
     def meta_instruction(parser):
+        """Add argument meta_instruction to parser."""
+
         return parser.add_argument('--meta-instruction',
                                    type=str,
                                    default=None,
@@ -257,6 +307,8 @@ class ArgumentHelper:
 
     @staticmethod
     def cache_max_entry_count(parser):
+        """Add argument cache_max_entry_count to parser."""
+
         return parser.add_argument(
             '--cache-max-entry-count',
             type=float,
@@ -265,18 +317,22 @@ class ArgumentHelper:
 
     @staticmethod
     def adapters(parser):
+        """Add argument adapters to parser."""
+
         return parser.add_argument(
             '--adapters',
             nargs='*',
             type=str,
             default=None,
             help='Used to set path(s) of lora adapter(s). One can input '
-            'key-values pairs in xxx=yyy format for multiple lora '
+            'key-value pairs in xxx=yyy format for multiple lora '
             'adapters. If only have one adapter, one can only input '
             'the path of the adapter.')
 
     @staticmethod
     def work_dir(parser):
+        """Add argument work_dir to parser."""
+
         return parser.add_argument(
             '--work-dir',
             type=str,

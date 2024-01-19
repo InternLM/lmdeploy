@@ -19,6 +19,7 @@ class SubCliLite(object):
 
     @staticmethod
     def add_parser_auto_awq():
+        """Add parser for auto_awq command."""
         parser = SubCliLite.subparsers.add_parser(
             'auto_awq',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -48,6 +49,7 @@ class SubCliLite(object):
 
     @staticmethod
     def add_parser_calibrate():
+        """Add parser for calibrate command."""
         parser = SubCliLite.subparsers.add_parser(
             'calibrate',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -65,6 +67,7 @@ class SubCliLite(object):
 
     @staticmethod
     def add_parser_smooth_quant():
+        """Add parser for smooth_quant command."""
         parser = SubCliLite.subparsers.add_parser(
             'smooth_quant',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -86,6 +89,7 @@ class SubCliLite(object):
 
     @staticmethod
     def add_parser_kv_qparams():
+        """Add parser for kv_qparams command."""
         parser = SubCliLite.subparsers.add_parser(
             'kv_qparams',
             formatter_class=DefaultsAndTypesHelpFormatter,

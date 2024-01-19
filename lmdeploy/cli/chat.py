@@ -13,6 +13,7 @@ class SubCliChat(object):
 
     @staticmethod
     def add_parser_torch():
+        """Add parser for torch command."""
         parser = SubCliChat.subparsers.add_parser(
             'torch',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -38,6 +39,7 @@ class SubCliChat(object):
 
     @staticmethod
     def add_parser_turbomind():
+        """Add parser for turbomind command."""
         parser = SubCliChat.subparsers.add_parser(
             'turbomind',
             formatter_class=DefaultsAndTypesHelpFormatter,
