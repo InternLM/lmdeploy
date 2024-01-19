@@ -265,9 +265,13 @@ class InternLMChat7B(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.system}{self.meta_instruction}{self.eosys}' \
-                   f'{self.user}{prompt}{self.eoh}' \
+            ret = ''
+            if self.meta_instruction:
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+            ret += f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
+            return ret
+
         else:
             return f'\n{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
@@ -287,7 +291,7 @@ class InternLMChat7B(BaseModel):
         eox_map = dict(user=self.eoh, assistant=self.eoa, system=self.eosys)
         ret = ''
         if self.meta_instruction:
-            ret += f'{self.system}:{self.meta_instruction}{self.eosys}'
+            ret += f'{self.system}{self.meta_instruction}{self.eosys}'
 
         for message in messages:
             role = message['role']
