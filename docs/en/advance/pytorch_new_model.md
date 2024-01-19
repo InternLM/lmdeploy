@@ -243,6 +243,72 @@ MODEL_MAP.update({
 
 With these adjustments, the model is now capable of utilizing multiple GPUs for deploying Large Language Models (LLM). This enables efficient distribution of computations across different devices in a parallelized manner.
 
+## Debug Module
+
+When the output of the model does not meet expectations, we would like to debug a specific module to determine if the added rewrite is correct. `lmdeploy.pytorch` provides some tools to assist with accuracy alignment. Let’s take `LlamaAttention` module as an example.
+
+First, create an instance of the module that we want to debug:
+
+```python
+import torch
+from transformers import AutoModelForCausalLM
+
+# get module
+model_path = 'meta-llama/Llama-2-7b-chat-hf'
+dtype = torch.float16
+model = AutoModelForCausalLM.from_pretrained(model_path).to(torch.float16).cuda()
+self_attn = model.model.layers[0].self_attn
+```
+
+Extract the inputs/outputs with `ModuleIOExtractor`.
+
+```python
+from lmdeploy.pytorch.tools.make_inputs import ModuleIOExtractor
+
+# extract module input/output
+input_ids = torch.tensor([[1, 2, 3, 4, 5]]).cuda()
+extractor = ModuleIOExtractor(model, self_attn)
+attn_args, attn_kwargs, attn_output = extractor.extract(input_ids)
+```
+
+The inputs of rewrite module are different from the inputs of origin module:
+
+1. Module requires some special inputs, which are passed through `StepContext`. We can create one with `make_step_context`.
+2. `input_ids`, `hidden_states` should be continuous. We can use `continuous_tensor` to do the process.
+3. `past_key_value` should be paged to meet the demond of paged attention.
+
+Based on the reason above, the input should be updated:
+
+```python
+from lmdeploy.pytorch.tools.make_inputs import make_step_context
+from lmdeploy.pytorch.tools.layout_convert import continuous_tensor
+
+# create patched input/output
+context = make_step_context(input_ids,
+                            kv_cache_dtype=dtype)
+seq_length = context.seq_length
+attn_kwargs['hidden_states'] = continuous_tensor(
+    attn_kwargs['hidden_states'],
+    seq_length)
+attn_kwargs['past_key_value'] = context.kv_caches[0]
+```
+
+Then you can start the rewrite and compare the correctness of the results.
+
+```python
+from lmdeploy.pytorch.models import patch
+
+# patch and test
+patched_self_attn = patch(self_attn, extra_args=['context'])
+patched_output = patched_self_attn.patched_forward(*attn_args,
+                                                    **attn_kwargs,
+                                                    context=context)
+torch.testing.assert_close(patched_output[0],
+                            continuous_tensor(attn_output[0], seq_length))
+```
+
+Adjust the rewrite module until the output can be aligned.
+
 ## Appendix
 
 ### context info

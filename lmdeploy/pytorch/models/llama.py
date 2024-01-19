@@ -222,7 +222,9 @@ class LlamaAttention(nn.Module):
         assert not output_attentions
 
         json_config = self.context.context.json_config
-        use_rerope = 'rerope' in json_config and json_config['rerope']
+        use_rerope = False
+        if json_config is not None:
+            use_rerope = json_config.get('rerope', False)
         if use_rerope:
             return self._contiguous_batching_forward_rerope_impl(
                 hidden_states,
