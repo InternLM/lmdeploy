@@ -23,12 +23,6 @@ on:
       - "v*.*.*"
 
   workflow_dispatch:
-    inputs:
-      markers:
-        required: false
-        description: 'Tested markers. eg: "-m internlm_chat_7b"'
-        type: string
-        default: ''
 
   schedule:
     - cron:  '00 21 * * *'
@@ -100,8 +94,15 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy - quantization
         run: |
-          pytest autotest -m quantization -n 5 --alluredir=allure-results --clean-alluredir
-
+          pytest autotest -m quantization -n 6 --alluredir=allure-results --clean-alluredir
+      - name: Test lmdeploy - convert
+        run: |
+          pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2
+      - name: Test lmdeploy - chat
+        run: |
+          pytest autotest -m command_chat -m hf_command_chat -n 4 --alluredir=allure-results --reruns 3
+      - name: Test lmdeploy - restful
+        run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Test lmdeploy
         run: |
           pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
