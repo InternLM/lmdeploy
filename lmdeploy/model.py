@@ -992,7 +992,7 @@ def get_model_from_config(model_dir: str):
         'BaichuanForCausalLM': 'baichuan',
         'BaiChuanForCausalLM': 'baichuan2',  # not right for Baichuan2-13B-Chat
         'QWenLMHeadModel': 'qwen',
-        'ChatGLMForConditionalGeneration': default
+        # 'ChatGLMForConditionalGeneration': default
     }
 
     arch = 'LlamaForCausalLM'
