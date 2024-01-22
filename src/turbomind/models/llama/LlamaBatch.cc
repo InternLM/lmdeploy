@@ -1058,6 +1058,8 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
             }
         }
     }
+    // context_length for MinLengthPenalty
+    inputs.insert({"context_length", {MEMORY_CPU, TYPE_INT32, {(size_t)batch_size}, state_->h_context_length}});
 
     // init for eos
     std::fill_n(h_end_ids_buf_, batch_size, model_->end_id_);
