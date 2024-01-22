@@ -124,6 +124,7 @@ def run_local(model_path: str,
               server_name: str = 'localhost',
               server_port: int = 6006,
               tp: int = 1,
+              huggingface_demo: bool = False,
               **kwargs):
     """chat with AI assistant through web ui.
 
@@ -153,6 +154,8 @@ def run_local(model_path: str,
         server_name (str): the ip address of gradio server
         server_port (int): the port of gradio server
         tp (int): tensor parallel for Turbomind
+        huggingface_demo (bool): whether for huggingface space demo. Running
+            on huggingface space require no specified host name or port.
     """
     InterFace.async_engine = AsyncEngine(
         model_path=model_path,
@@ -220,15 +223,19 @@ def run_local(model_path: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
-    print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=InterFace.async_engine.instance_num,
-               max_size=100,
-               api_open=True).launch(
-                   max_threads=10,
-                   share=True,
-                   server_port=server_port,
-                   server_name=server_name,
-               )
+    if huggingface_demo is True:
+        demo.queue(concurrency_count=InterFace.async_engine.instance_num,
+                   max_size=100).launch()
+    else:
+        print(f'server is gonna mount on: http://{server_name}:{server_port}')
+        demo.queue(concurrency_count=InterFace.async_engine.instance_num,
+                   max_size=100,
+                   api_open=True).launch(
+                       max_threads=10,
+                       share=True,
+                       server_port=server_port,
+                       server_name=server_name,
+                   )
 
 
 if __name__ == '__main__':
