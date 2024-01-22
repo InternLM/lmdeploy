@@ -65,7 +65,7 @@ class EngineGenerationConfig(GenerationConfig):
             >>> tokenizer = Tokenizer('internlm/internlm-chat-7b')
             >>> gen_config = GenerationConfig(stop_words=['<eoa>'])
             >>> gen_config = EngineGenerationConfig.From(gen_config, tokenizer)
-        """ # noqa E501
+        """  # noqa E501
 
         def special_word_token_ids(words):
             if words is not None:
@@ -96,7 +96,6 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_name (str): the name of the deployed model
         model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq], `hf` meaning `hf_llama`, `llama` meaning `meta_llama`, `awq` meaning the quantized model by AWQ.
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
@@ -106,8 +105,6 @@ class TurbomindEngineConfig:
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
     """  # noqa: E501
-
-    model_name: Optional[str] = None
     model_format: Optional[str] = None
     tp: int = 1
     session_len: Optional[int] = None

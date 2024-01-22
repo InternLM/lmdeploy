@@ -903,7 +903,7 @@ class Yi(BaseModel):
         if sequence_start:
             if self.meta_instruction is None:
                 return f'{self.user}{prompt}{self.eoh}' \
-                   f'{self.assistant}'
+                    f'{self.assistant}'
             return f'{self.system}{self.meta_instruction}{self.eosys}' \
                    f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
@@ -947,7 +947,11 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
         List[str] | None: the possible model names or none.
     """
     model_names = list(MODELS.module_dict.keys())
-    if query.endswith('/'):
+    if 'models--' in query:
+        paths = query.split(os.sep)
+        paths = [x for x in paths if 'models--' in x]
+        query = paths[0].split('--')[-1]
+    elif query.endswith('/'):
         query = query[:-1]
     base_name = os.path.basename(query).lower()
     max_ratio, matched_name = float('-inf'), None
@@ -969,3 +973,32 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
     ]
 
     return matches[0] if matches else None
+
+
+def get_model_from_config(model_dir: str):
+    import json
+    config_file = os.path.join(model_dir, 'config.json')
+    default = 'llama'
+    if not os.path.exists(config_file):
+        return default
+
+    with open(config_file) as f:
+        config = json.load(f)
+
+    ARCH_MAP = {
+        'LlamaForCausalLM': default,
+        'InternLM2ForCausalLM': 'internlm2',
+        'InternLMForCausalLM': default,
+        'BaichuanForCausalLM': 'baichuan',
+        'BaiChuanForCausalLM': 'baichuan2',  # not right for Baichuan2-13B-Chat
+        'QWenLMHeadModel': 'qwen',
+        'ChatGLMForConditionalGeneration': default
+    }
+
+    arch = 'LlamaForCausalLM'
+    if 'auto_map' in config:
+        arch = config['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+    elif 'architectures' in config:
+        arch = config['architectures'][0]
+
+    return ARCH_MAP[arch]
