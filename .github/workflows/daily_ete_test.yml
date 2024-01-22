@@ -1,4 +1,4 @@
-name: test
+name: daily_ete_test
 
 on:
   pull_request:
@@ -30,6 +30,9 @@ on:
         type: string
         default: ''
 
+  schedule:
+    - cron:  '00 21 * * *'
+
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
@@ -38,7 +41,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 4320 # 72hours
+    timeout-minutes: 180 # 3hours
     environment: 'prod'
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
@@ -63,7 +66,7 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.0.1 torchvision==0.15.2 --extra-index-url https://download.pytorch.org/whl/cu117
+          python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
@@ -85,7 +88,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 datasets==2.14.7
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -95,6 +98,10 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+      - name: Test lmdeploy - quantization
+        run: |
+          pytest autotest -m quantization -n 5 --alluredir=allure-results --clean-alluredir
+
       - name: Test lmdeploy
         run: |
           pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
@@ -170,7 +177,11 @@ jobs:
                -DCMAKE_CUDA_ARCHITECTURES=80 \
                -DBUILD_TEST=OFF
           docker exec --workdir /__w/lmdeploy/lmdeploy/build $CONTAINER_ID  make -j$(nproc)
-          docker exec --workdir /__w/lmdeploy/lmdeploy/build $CONTAINER_ID  make install
+          docker exec --workdir /__w/lmdeploy/lmdeploy/build $CONTAINER_ID  make install \
+            --env http_proxy=${{secrets.PROXY}} \
+            --env https_proxy=${{secrets.PROXY}} \
+            --env HTTP_PROXY=${{secrets.PROXY}} \
+            --env HTTPS_PROXY=${{secrets.PROXY}}
       - name: Install lmdeploy
         run: |
           docker exec \

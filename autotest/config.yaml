@@ -3,12 +3,14 @@ dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 gradio_log_path: /lmdeploy/autotest/gradiotest
 
-
 model_map:
     llama2-chat-7b-w4: llama2
     internlm-chat-7b: internlm-chat-7b
     internlm-chat-20b: internlm-chat-20b
     internlm-chat-20b-inner-w4: internlm-chat-20b
+    internlm2-chat-7b: internlm2-chat-7b
+    internlm2-chat-20b: internlm2-chat-20b
+    internlm2-chat-20b-inner-w4: internlm2-chat-20b
     Qwen-7B-Chat: qwen-7b
     Qwen-7B-Chat-inner-w4: qwen-7b
     Qwen-14B-Chat: qwen-14b
@@ -21,3 +23,9 @@ model_map:
     Llama-2-7b-chat-hf-inner-w4: llama2
     llama-2-7b-chat: llama2
     llama-2-7b-chat-inner-w4: llama2
+
+tp_config:
+    internlm-chat-20b: 2
+    internlm-chat-20b-inner-w4: 2
+    internlm2-chat-20b: 2
+    internlm2-chat-20b-inner-w4: 2

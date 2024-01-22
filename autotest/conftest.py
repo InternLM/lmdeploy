@@ -13,9 +13,13 @@ def config(request):
     return env_config
 
 
+cli_prompt_case_file = 'autotest/chat_prompt_case.yaml'
+common_prompt_case_file = 'autotest/prompt_case.yaml'
+
+
 @pytest.fixture(scope='session')
-def case_config(request):
-    case_path = os.path.join(request.config.rootdir, 'chat_prompt_case.yaml')
+def cli_case_config():
+    case_path = os.path.join(cli_prompt_case_file)
     print(case_path)
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
@@ -23,9 +27,8 @@ def case_config(request):
 
 
 @pytest.fixture(scope='class', autouse=True)
-def restful_case_config(request):
-    case_path = os.path.join(request.config.rootdir,
-                             'restful_prompt_case.yaml')
+def common_case_config():
+    case_path = os.path.join(common_prompt_case_file)
     print(case_path)
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
@@ -33,20 +36,17 @@ def restful_case_config(request):
     return case_config
 
 
-def _init_case_list():
-    case_path = os.path.join('autotest/chat_prompt_case.yaml')
+def _init_cli_case_list():
+    case_path = os.path.join(cli_prompt_case_file)
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+    global global_cli_case_List
+    global_cli_case_List = list(case_config.keys())
 
-    global global_case_List
-    global_case_List = list(case_config.keys())
 
-
-def _init_restful_case_list():
-    case_path = os.path.join('autotest/chat_prompt_case.yaml')
+def _init_common_case_list():
+    case_path = os.path.join(common_prompt_case_file)
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        del case_config['session_len_error']
-
-    global global_restful_case_List
-    global_restful_case_List = list(case_config.keys())
+    global global_common_case_List
+    global_common_case_List = list(case_config.keys())
