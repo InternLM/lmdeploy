@@ -5,5 +5,4 @@ include lmdeploy/lib/*.dll
 include lmdeploy/lib/*.pyd
 include lmdeploy/bin/*
 include lmdeploy/serve/turbomind/service_docker_up.sh
-include lmdeploy/turbomind/hf_repo/config.json
 recursive-include lmdeploy/serve/turbomind/triton_models *
