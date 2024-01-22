@@ -13,6 +13,8 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
         default (str): default device type.
     """
     torch_dtype = getattr(config, 'torch_dtype', default)
+    # torch_dtype in config could be none
+    torch_dtype = torch_dtype or default
     return eval(f'torch.{torch_dtype}')
 
 

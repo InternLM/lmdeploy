@@ -2,7 +2,7 @@
 import enum
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from threading import Lock, Thread, ThreadError
+from threading import Lock, Thread
 from typing import Any, Callable, ClassVar, Dict, List
 
 from lmdeploy.messages import ResponseType
@@ -75,7 +75,8 @@ class RequestSender:
             except Empty:
                 timeout_counter -= self.THREAD_ALIVE_INTERVAL
             if self._thread and not self._thread.is_alive():
-                raise ThreadError('Engine main loop stopped.')
+                logger.error('Engine main loop stopped.')
+                exit(1)
 
         return self.resp_que.get(timeout=timeout_counter)
 
@@ -110,7 +111,8 @@ class RequestSender:
                            data: List[Any]) -> List[int]:
         """Batched send request asynchronize."""
         if self._thread and not self._thread.is_alive():
-            raise ThreadError('Engine main loop stopped.')
+            logger.error('Engine main loop stopped.')
+            exit(1)
         assert len(req_types) == len(data)
         batch_size = len(req_types)
 
