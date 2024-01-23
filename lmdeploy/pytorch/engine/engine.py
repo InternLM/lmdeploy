@@ -498,10 +498,13 @@ class Engine:
         """check if output is necessary."""
         if isinstance(token, torch.Tensor):
             token = token.item()
-        if token == self.model_config.eos_token_id:
+
+        ignore_eos = msg.sampling_param.ignore_eos
+        if not ignore_eos and token == self.model_config.eos_token_id:
             return False
 
-        if token in msg.sampling_param.stop_words:
+        stop_words = msg.sampling_param.stop_words
+        if stop_words is not None and token in stop_words:
             return False
 
         return True
