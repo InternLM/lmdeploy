@@ -7,5 +7,6 @@ myst-parser
 recommonmark
 sphinx==4.0.2
 sphinx-copybutton
+sphinx-tabs
 sphinx_markdown_tables>=0.0.16
 sphinxcontrib-mermaid
