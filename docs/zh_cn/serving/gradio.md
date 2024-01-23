@@ -23,3 +23,13 @@ run_local(model_path, backend_config=backend_config, huggingface_demo=True)
 ```
 lmdeploy
 ```
+
+## FAQs
+
+- ZeroGPU 适配问题。ZeroGPU 更适合类似 PyTorch 这样的推理方式，而非 Turbomind。可以改用 pytorch 后端，或者启用普通 GPU。
+- gradio 版本问题，目前不支持 4.0.0 以上版本，可以在 `app.py` 中修改，类似：
+  ```python
+  import os
+  os.system("pip uninstall -y gradio")
+  os.system("pip install gradio==3.43.0")
+  ```
