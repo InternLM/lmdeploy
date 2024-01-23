@@ -13,7 +13,7 @@ def getCaseList():
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.timeout(60)
-@pytest.mark.hf_command_chat
+@pytest.mark.command_chat_hf
 class TestCommandChat:
 
     @pytest.mark.llama2_chat_7b_w4
@@ -23,27 +23,27 @@ class TestCommandChat:
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'llama2-chat-7b-w4')
 
-    @pytest.mark.internlm_chat_7b
-    @allure.story('internlm-chat-7b')
+    @pytest.mark.internlm2_chat_7b
+    @allure.story('internlm2-chat-7b')
     @pytest.mark.parametrize('usercase', getCaseList())
-    def test_chat_internlm_chat_7b(self, config, cli_case_config, usercase):
+    def test_chat_internlm2_chat_7b(self, config, cli_case_config, usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
-                              'internlm-chat-7b')
+                              'internlm2-chat-7b')
 
-    @pytest.mark.internlm_chat_20b
-    @allure.story('internlm-chat-20b')
+    @pytest.mark.internlm2_chat_20b
+    @allure.story('internlm2-chat-20b')
     @pytest.mark.parametrize('usercase', getCaseList())
-    def test_chat_internlm_chat_20b(self, config, cli_case_config, usercase):
+    def test_chat_internlm2_chat_20b(self, config, cli_case_config, usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
-                              'internlm-chat-20b')
+                              'internlm2-chat-20b')
 
-    @pytest.mark.internlm_chat_20b
-    @allure.story('internlm-chat-20b-inner-w4')
+    @pytest.mark.internlm2_chat_20b
+    @allure.story('internlm2-chat-20b-inner-w4')
     @pytest.mark.parametrize('usercase', getCaseList())
-    def test_chat_internlm_chat_20b_inner_w4(self, config, cli_case_config,
-                                             usercase):
+    def test_chat_internlm2_chat_20b_inner_w4(self, config, cli_case_config,
+                                              usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
-                              'internlm-chat-20b-inner-w4')
+                              'internlm2-chat-20b-inner-w4')
 
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
@@ -104,6 +104,14 @@ class TestCommandChat:
     def test_chat_llama_2_7b_chat(self, config, cli_case_config, usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'llama-2-7b-chat')
+
+    @pytest.mark.llama_2_7b_chat
+    @allure.story('llama-2-7b-chat-inner-w4')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_llama_2_7b_chat_inner_w4(self, config, cli_case_config,
+                                           usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'llama-2-7b-chat-inner-w4')
 
 
 def run_command_line_test(config, case, case_info, model_case):

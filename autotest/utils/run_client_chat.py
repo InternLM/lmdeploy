@@ -29,7 +29,7 @@ def hf_command_line_test(config, case, case_info, model_case, model_name):
 
     cmd = get_command_with_extra(
         'lmdeploy chat turbomind ' + model_path + '/' + model_case +
-        ' --model-name ' + model_name, config, model_name)
+        ' --model-name ' + model_name, config, model_case)
 
     if case == 'session_len_error':
         cmd = cmd + ' --session-len 20'
@@ -39,23 +39,9 @@ def hf_command_line_test(config, case, case_info, model_case, model_name):
 def pytorch_command_line_test(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
-    # todo: restruct according to newest command
     cmd = get_command_with_extra(
-        'lmdeploy chat torch ' + model_path + '/' + model_case +
-        ' --max_new_tokens 2048 --top_p 0.95 --seed 0', config, model_case)
-
-    if case == 'session_len_error':
-        cmd = cmd + ' --session-len 20'
-    return command_test(config, [cmd], model_case, case_info, False)
-
-
-def deepspeed_command_line_test(config, case, case_info, model_case):
-    model_path = config.get('model_path')
-
-    cmd = get_command_with_extra(
-        'deepspeed --module --num_gpus 2 lmdeploy.pytorch.chat ' + model_path +
-        '/' + model_case + ' --max_new_tokens 64 --top_p 0.95 --seed 0',
-        config, model_case)
+        'lmdeploy chat torch ' + model_path + '/' + model_case, config,
+        model_case)
 
     if case == 'session_len_error':
         cmd = cmd + ' --session-len 20'

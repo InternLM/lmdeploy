@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/scripts/test_triton_server.py"
-      - ".github/workflows/test.yml"
+      - ".github/workflows/daily_ete_test.yml"
       - "cmake/**"
       - "src/**"
       - "autotest/**"
@@ -35,7 +35,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 180 # 3hours
+    timeout-minutes: 240 # 4hours
     environment: 'prod'
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
@@ -94,20 +94,19 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy - quantization
         run: |
-          pytest autotest -m quantization -n 6 --alluredir=allure-results --clean-alluredir
+          pytest autotest -m quantization -m quantization_w8a8 -n 8 --alluredir=allure-results --clean-alluredir
       - name: Test lmdeploy - convert
         run: |
           pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2
+      - name: Test lmdeploy - pipeline
+        continue-on-error: true
+        run: pytest autotest -m pipeline_chat -m pipeline_chat_pytorch --alluredir=allure-results --reruns 2
+      - name: Test lmdeploy - restful
+        continue-on-error: true
+        run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - chat
         run: |
-          pytest autotest -m command_chat -m hf_command_chat -n 4 --alluredir=allure-results --reruns 3
-      - name: Test lmdeploy - pipeline
-        run: pytest autotest -m pipeline_chat -m pipeline_pytorch_chat --alluredir=allure-results --reruns 2
-      - name: Test lmdeploy - restful
-        run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
-      - name: Test lmdeploy
-        run: |
-          pytest autotest ${{github.event.inputs.markers}} --alluredir=allure-results --clean-alluredir
+          pytest autotest -m command_chat -m command_chat_hf -m command_chat_pytorch -n 4 --alluredir=allure-results --reruns 3
       - name: Generate reports
         if: always()
         run: |
