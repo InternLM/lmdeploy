@@ -35,8 +35,9 @@ class BaichuanReader(LlamaReader):
 class Baichuan2Reader(BaichuanReader):
     """Baichuan2Reader."""
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
-        super().__init__(new_params, unused_params, last_bin)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def output_weight(self):
         """Get output."""

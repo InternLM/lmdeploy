@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
 LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
@@ -51,9 +50,6 @@ MODULE_MAP.update({
 # baichuan
 MODULE_MAP.update({
     'modeling_baichuan.Model':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
-    (f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.Baichuan2-7B-Chat'
-     '.modeling_baichuan.BaichuanModel'):
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
     'modeling_baichuan.BaichuanModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanModel',  # noqa

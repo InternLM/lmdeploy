@@ -265,9 +265,13 @@ class InternLMChat7B(BaseModel):
         assert self.capability == 'chat', \
             f'{type(self).__name__} has no capability of {self.capability}'
         if sequence_start:
-            return f'{self.system}{self.meta_instruction}{self.eosys}' \
-                   f'{self.user}{prompt}{self.eoh}' \
+            ret = ''
+            if self.meta_instruction:
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+            ret += f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
+            return ret
+
         else:
             return f'\n{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
@@ -287,7 +291,7 @@ class InternLMChat7B(BaseModel):
         eox_map = dict(user=self.eoh, assistant=self.eoa, system=self.eosys)
         ret = ''
         if self.meta_instruction:
-            ret += f'{self.system}:{self.meta_instruction}{self.eosys}'
+            ret += f'{self.system}{self.meta_instruction}{self.eosys}'
 
         for message in messages:
             role = message['role']
@@ -334,13 +338,13 @@ class InternLM2Chat7B(InternLMChat7B):
 
     def __init__(self,
                  session_len=32768,
-                 system='[UNUSED_TOKEN_146]system\n',
-                 user='[UNUSED_TOKEN_146]user\n',
-                 assistant='[UNUSED_TOKEN_146]assistant\n',
-                 eosys='[UNUSED_TOKEN_145]\n',
-                 eoh='[UNUSED_TOKEN_145]\n',
-                 eoa='[UNUSED_TOKEN_145]\n',
-                 stop_words=['[UNUSED_TOKEN_145]'],
+                 system='<|im_start|>system\n',
+                 user='<|im_start|>user\n',
+                 assistant='<|im_start|>assistant\n',
+                 eosys='<|im_end|>\n',
+                 eoh='<|im_end|>\n',
+                 eoa='<|im_end|>\n',
+                 stop_words=['<|im_end|>', '<|action_end|>'],
                  **kwargs):
         super(InternLM2Chat7B, self).__init__(session_len=session_len,
                                               system=system,
