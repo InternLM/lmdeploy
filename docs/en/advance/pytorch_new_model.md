@@ -275,7 +275,7 @@ The inputs of rewrite module are different from the inputs of origin module:
 
 1. Module requires some special inputs, which are passed through `StepContext`. We can create one with `make_step_context`.
 2. `input_ids`, `hidden_states` should be continuous. We can use `continuous_tensor` to do the process.
-3. `past_key_value` should be paged to meet the demond of paged attention.
+3. `past_key_value` should be paged to meet the demand of paged attention.
 
 Based on the reason above, the input should be updated:
 
