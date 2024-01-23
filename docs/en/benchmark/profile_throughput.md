@@ -43,7 +43,7 @@ git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy/benchmark
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
-python3 profile_throughput.py ./ShareGPT_V3_unfiltered_cleaned_split.json internlm/internlm-7b --cache-count 0.7
+python3 profile_throughput.py ./ShareGPT_V3_unfiltered_cleaned_split.json internlm/internlm-7b --cache-max-entry-count 0.7
 ```
 
 ## Command details
@@ -96,7 +96,7 @@ Optional arguments are listed as below:
 
   It is the seed used in sampling prompts from dataset with default value 0.
 
-- `--cache-count`
+- `--cache-max-entry-count`
 
   The ratio of k/v cache memory. Default to 0.5.
 
