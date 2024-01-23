@@ -52,6 +52,7 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
     'sphinx.ext.autosectionlabel',
+    'sphinx_tabs.tabs',
     'sphinx_markdown_tables',
     'myst_parser',
     'sphinx_copybutton',

@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
@@ -89,12 +90,27 @@ def parse_args():
     return args
 
 
+@contextmanager
+def get_stop_words():
+    from lmdeploy.tokenizer import Tokenizer
+    old_func = Tokenizer.indexes_containing_token
+
+    def new_func(self, token):
+        indexes = self.encode(token, add_bos=False)
+        return indexes
+
+    Tokenizer.indexes_containing_token = new_func
+    yield
+    Tokenizer.indexes_containing_token = old_func
+
+
 def load_preprocessor_model(args):
     """Load preprocessor and llm inference engine."""
     assert args.model_name in SUPPORTED_MODELS
     llm_ckpt = args.hf_ckpt if args.llm_ckpt is None else args.llm_ckpt
     preprocessor = SUPPORTED_MODELS[args.model_name](args.hf_ckpt)
-    model = TurboMind.from_pretrained(llm_ckpt, model_name=args.model_name)
+    with get_stop_words():
+        model = TurboMind.from_pretrained(llm_ckpt, model_name=args.model_name)
     return preprocessor, model
 
 
