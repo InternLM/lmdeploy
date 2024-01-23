@@ -585,6 +585,24 @@ def _tp_build_model(
     patched_model = None
     cache_engine = None
 
+    def __load_params_and_buffers(param_mod, mod):
+        """load param and buffer."""
+        for name, param in param_mod.named_parameters(recurse=False):
+            mod.register_parameter(name, param)
+        for name, buffer in param_mod.named_buffers(recurse=False):
+            mod.register_buffer(name, buffer)
+
+    def __load_state_dict_assign(param_model, model):
+        """load state dict assign."""
+        try:
+            model.load_state_dict(param_model.state_dict(), assign=True)
+        except Exception:
+            __load_params_and_buffers(param_model, model)
+            mods = dict(model.named_modules())
+            for mod_name, param_mod in param_model.named_modules():
+                mod = mods[mod_name]
+                __load_params_and_buffers(param_mod, mod)
+
     def _broadcast_config(cache_config):
         """broadcast cache config, use minimum cache."""
         if rank == 0:
@@ -631,7 +649,7 @@ def _tp_build_model(
                     device_map=device_map,
                     trust_remote_code=trust_remote_code)
                 _load_adapters(param_model, adapters, device_map=device_map)
-                model.load_state_dict(param_model.state_dict(), assign=True)
+                __load_state_dict_assign(param_model, model)
                 param_model = param_model.to('meta')
                 del param_model
 
@@ -655,6 +673,7 @@ def _tp_build_model(
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:
+        logger.error(f'rank[{rank}] failed with error: {e}')
         error_code = 1
         error_type = e
 
@@ -702,6 +721,7 @@ def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
                                                  device_mesh=device_mesh,
                                                  placements=[Replicate()
                                                              ]).to_local()
+    torch.cuda.synchronize()
 
     inputs = updated_inputs
     inputs.update(other_metas)
@@ -895,11 +915,11 @@ class TPModelAgent(AutoModelAgent):
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
-        mp.set_start_method('spawn')
+        self.mp_ctx = mp.get_context('spawn')
         super().__init__(model_config=model_config, cache_config=cache_config)
         self.world_size = world_size
-        self.tp_model_in_que = mp.Queue(10)
-        self.tp_model_out_que = mp.Queue(10)
+        self.tp_model_in_que = self.mp_ctx.Queue(10)
+        self.tp_model_out_que = self.mp_ctx.Queue(10)
 
         self.patch_model_tp(model_path,
                             model_config=model_config,
