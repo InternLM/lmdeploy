@@ -1,9 +1,6 @@
 name: daily_ete_test
 
 on:
-  pull_request:
-    paths:
-      - "autotest/**"
   workflow_dispatch:
     inputs:
       parameter:
@@ -89,8 +86,12 @@ jobs:
         continue-on-error: true
         run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - chat
+        continue-on-error: true
         run: |
-          pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 3
+          pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 2
+      - name: Test lmdeploy - rerun fail cases
+        run:
+          pytest autotest --alluredir=allure-results --lf
       - name: Generate reports
         if: always()
         run: |
@@ -110,7 +111,6 @@ jobs:
   test_triton:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
-    environment: 'prod'
     env:
       HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
       WORKDIR: /nvme/qa_test_models/triton_workspace

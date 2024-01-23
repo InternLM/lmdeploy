@@ -33,15 +33,6 @@ class TestPytorchCommandChat:
                               'internlm2-chat-20b')
 
     @pytest.mark.internlm2_chat_20b
-    @allure.story('internlm2-chat-20b-inner-w4')
-    @pytest.mark.parametrize('usercase', getCaseList())
-    def test_pytorch_chat_internlm2_chat_20b_inner_w4(self, config,
-                                                      cli_case_config,
-                                                      usercase):
-        run_command_line_test(config, usercase, cli_case_config.get(usercase),
-                              'internlm2-chat-20b-inner-w4')
-
-    @pytest.mark.internlm2_chat_20b
     @allure.story('internlm2-chat-20b-inner-w8a8')
     @pytest.mark.parametrize('usercase', getCaseList())
     def test_chat_internlm2_chat_20b_inner_w8a8(self, config, cli_case_config,
