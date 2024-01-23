@@ -1,28 +1,31 @@
 import pytest
 
-from lmdeploy.tokenizer import HuggingFaceTokenizer
+from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
 
 
 @pytest.mark.parametrize('model_path', [
     'internlm/internlm-chat-7b', 'Qwen/Qwen-7B-Chat',
-    'baichuan-inc/Baichuan2-7B-Chat', 'codellama/CodeLlama-7b-hf',
-    'upstage/SOLAR-0-70b-16bit'
+    'baichuan-inc/Baichuan2-7B-Chat', 'upstage/SOLAR-0-70b-16bit',
+    'baichuan-inc/Baichuan-7B', 'codellama/CodeLlama-7b-hf',
+    'THUDM/chatglm2-6b', '01-ai/Yi-6B-200k', '01-ai/Yi-34B-Chat',
+    '01-ai/Yi-6B-Chat', 'WizardLM/WizardLM-70B-V1.0',
+    'codellama/CodeLlama-34b-Instruct-hf', 'tiiuae/falcon-7b'
 ])
 @pytest.mark.parametrize('input', [
     'hi, this is a test 😆😆! ' * 5, '為什麼我還在用繁體字 😆😆 gg! ' * 5,
-    'License at\n#\n#' + ' ' * 100 + 'ht'
+    ' License at\n#\n#' + ' ' * 100 + 'ht', '   '
 ])
-def test_tokenizer(model_path, input):
+@pytest.mark.parametrize('interval', [1, 3])
+@pytest.mark.parametrize('skip_special_tokens', [True, False])
+def test_tokenizer(model_path, input, interval, skip_special_tokens):
     tokenizer = HuggingFaceTokenizer(model_path)
-    encoded = tokenizer.encode(input, False)
+    encoded = tokenizer.encode(input, False, add_special_tokens=False)
     output = ''
-    offset = 0
-    for i in range(1, len(encoded) + 1):
-        decoded = tokenizer.decode(encoded[:i], offset)
-        if decoded.endswith('�'):
-            continue
+    state = DetokenizeState()
+    for i in range(0, len(encoded), interval):
+        decoded, state = tokenizer.detokenize_incrementally(
+            encoded, state, skip_special_tokens)
         output += decoded
-        offset = i
     assert input == output, 'input string should equal to output after enc-dec'
 
 

@@ -12,6 +12,7 @@ from transformers import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
+from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.turbomind import TurboMind
 from lmdeploy.turbomind.utils import get_gen_param
 
@@ -208,19 +209,16 @@ class LMDeployForCausalLM(PreTrainedModel):
 
             _step = session._step
             _nth_round = session._nth_round
-            response_size = 0
+            state = DetokenizeState()
 
             for status, res, tokens in self.generate(input_ids,
                                                      session=session,
                                                      **gen_kwargs):
-                response = self.tm_model.tokenizer.decode(res,
-                                                          offset=response_size)
-                if response.endswith('�'):
-                    continue
-                response_size = tokens
+                response, state = self.tm_model.tokenizer.detokenize_incrementally(  # noqa
+                    res, state)
 
                 session._message[-1][-1] += response
                 session._nth_round = _nth_round + 1
-                session._step = _step + response_size
+                session._step = _step + tokens
 
                 yield response, session
