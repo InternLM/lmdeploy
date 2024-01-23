@@ -26,9 +26,9 @@ class TestFusedLogitsProcessor:
     @pytest.fixture
     def gt(self, input_ids, scores, sampling_param):
         logits_processor = LogitsProcessorList([
+            TemperatureLogitsWarper(sampling_param.temperature),
             TopKLogitsWarper(sampling_param.top_k),
             TopPLogitsWarper(sampling_param.top_p),
-            TemperatureLogitsWarper(sampling_param.temperature),
         ])
         yield logits_processor(input_ids, scores)
 
