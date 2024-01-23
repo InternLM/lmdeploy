@@ -15,6 +15,7 @@ jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 240 # 4hours
+    environment: 'prod'
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
