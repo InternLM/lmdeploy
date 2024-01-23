@@ -1,6 +1,9 @@
 name: daily_ete_test
 
 on:
+  pull_request:
+    paths:
+      - "autotest/**"
   workflow_dispatch:
     inputs:
       parameter:
