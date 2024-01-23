@@ -132,7 +132,6 @@ print(response)
 
 | Parameter             | Type          | Description                                                            | Default |
 | --------------------- | ------------- | ---------------------------------------------------------------------- | ------- |
-| model_name            | str, optional | 已部署模型的对话模板名称。                                             | None    |
 | model_format          | str, optional | 已部署模型的布局。可以是以下值之一：`hf`, `llama`, `awq`。             | None    |
 | tp                    | int           | 在张量并行中使用的GPU卡数量。                                          | 1       |
 | session_len           | int, optional | 序列的最大会话长度。                                                   | None    |
