@@ -1,17 +1,10 @@
 name: daily_ete_test
 
 on:
-  pull_request:
-    paths:
-      - "autotest/**"
-  push:
-    branches:
-      - main
-    paths:
-      - "lmdeploy/version.py"
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      parameter:
+        description: manual trigger
 
   schedule:
     - cron:  '00 21 * * *'

@@ -16,17 +16,17 @@ class TestW8a8Quantization:
     @allure.story('internlm2-chat-20b')
     def test_quantization_internlm2_chat_20b(self, config):
         w8a8_quantization(config, 'internlm2-chat-20b-inner-w8a8',
-                          'internlm2-chat-20b')
+                          'internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=7')
 
 
-def w8a8_quantization(config, w8a8_model_name, origin_model_name):
+def w8a8_quantization(config, w8a8_model_name, origin_model_name, cuda_prefix):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
 
     quantization_cmd = get_command_with_extra(
         'lmdeploy lite smooth_quant ' + model_path + '/' + origin_model_name +
         ' --work-dir ' + model_path + '/' + w8a8_model_name, config,
-        origin_model_name, False)
+        origin_model_name, False, cuda_prefix)
 
     quantization_log = os.path.join(log_path,
                                     'quantization_' + w8a8_model_name + '.log')

@@ -37,8 +37,13 @@ def get_tp_config(config, model, need_tp):
     return tp_info
 
 
-def get_command_with_extra(cmd, config, model, need_tp: bool = False):
-    cuda_prefix = get_conda_allcate_prefix(config, model)
+def get_command_with_extra(cmd,
+                           config,
+                           model,
+                           need_tp: bool = False,
+                           cuda_prefix: str = None):
+    if cuda_prefix is None:
+        cuda_prefix = get_conda_allcate_prefix(config, model)
     tp_config = get_tp_config(config, model, need_tp)
 
     if cuda_prefix is not None and len(cuda_prefix) > 0:
