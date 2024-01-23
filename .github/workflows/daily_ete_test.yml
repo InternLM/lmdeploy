@@ -94,19 +94,19 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy - quantization
         run: |
-          pytest autotest -m quantization -m quantization_w8a8 -n 8 --alluredir=allure-results --clean-alluredir
+          pytest autotest -m 'quantization or quantization_w8a8' -n 8 --alluredir=allure-results --clean-alluredir
       - name: Test lmdeploy - convert
         run: |
           pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - pipeline
         continue-on-error: true
-        run: pytest autotest -m pipeline_chat -m pipeline_chat_pytorch --alluredir=allure-results --reruns 2
+        run: pytest autotest -m 'pipeline_chat or pipeline_chat_pytorch' --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - restful
         continue-on-error: true
         run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - chat
         run: |
-          pytest autotest -m command_chat -m command_chat_hf -m command_chat_pytorch -n 4 --alluredir=allure-results --reruns 3
+          pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 3
       - name: Generate reports
         if: always()
         run: |
