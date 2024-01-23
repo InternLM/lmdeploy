@@ -32,7 +32,7 @@ def common_case_config():
     print(case_path)
     with open(case_path) as f:
         case_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
-        del case_config['session_len_error']
+        # del case_config['session_len_error']
     return case_config
 
 
