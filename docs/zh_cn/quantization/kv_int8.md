@@ -15,50 +15,26 @@ dequant: f = q * scale + zp
 
 ### **第一步**
 
-把 huggingface 格式的模型，转成 turbomind 推理格式，得到一个 workspace 目录
+通过以下命令，获取量化参数，并保存至原HF模型目录
 
 ```bash
-lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
-```
+# get minmax
+export HF_MODEL=internlm/internlm-chat-7b
 
-如果已经有 workspace 目录，可以跳过这步。
+lmdeploy lite calibrate \
+  $HF_MODEL \
+  --calib-dataset 'ptb' \
+  --calib-samples 128 \
+  --calib-seqlen 2048 \
+  --work-dir $HF_MODEL
+```
 
 ### **第二步**
 
-通过以下 2 步，获取量化参数
+测试聊天效果。注意需要添加参数`--quant-policy 4`以开启KV Cache int8模式。
 
 ```bash
-# 计算 minmax
-lmdeploy lite calibrate \
-  $HF_MODEL \
-  --calib-dataset 'ptb' \            # 校准数据集，支持 c4, ptb, wikitext2, pileval
-  --calib-samples 128 \              # 校准集的样本数，如果显存不够，可以适当调小
-  --calib-seqlen 2048 \              # 单条的文本长度，如果显存不够，可以适当调小
-  --work-dir $WORK_DIR \             # 保存 Pytorch 格式量化统计参数和量化后权重的文件夹
-
-# 通过 minmax 获取量化参数
-lmdeploy lite kv_qparams \
-  $WORK_DIR  \                                        # 上一步的结果
-  workspace/triton_models/weights/ \                  # 保存量化参数的目录，推理要用
-  --num-tp 1  \                                       # Tensor 并行使用的 GPU 数，和 deploy.py 保持一致
-```
-
-`kv_qparams` 会在 `weights` 目录生成 fp32 缩放系数，文件格式是 `numpy.tofile` 产生的二进制。
-
-也可以先把 `turbomind_dir` 设成私有目录，再把缩放系数拷贝进 `workspace/triton_models/weights/`。
-
-### **第三步**
-
-修改 `workspace/triton_models/weights/config.ini`：
-
-- quant_policy 设置为 4。表示打开 kv_cache int8
-
-### **第四步**
-
-测试聊天效果
-
-```bash
-lmdeploy chat turbomind ./workspace
+lmdeploy chat turbomind $HF_MODEL --model-format hf --quant-policy 4
 ```
 
 ## 显存测试
@@ -101,4 +77,8 @@ lmdeploy chat turbomind ./workspace
 | Understanding |   eprstmt-dev   |   accuracy    | 90.62 | 88.75 | +1.87 |
 |    Safety     |   crows_pairs   |   accuracy    | 32.56 | 31.43 | +1.13 |
 
-需要注意的是，`kCacheKVInt8` 和 `WeightInt4` 两种方案可以同时开启。
+需要注意的是，`kCacheKVInt8` 和 `WeightInt4` 两种方案可以同时开启。请参阅 [w4a16](./w4a16.md) 开启 `WeightInt4` ，然后测试聊天效果：
+
+```shell
+lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
+```
