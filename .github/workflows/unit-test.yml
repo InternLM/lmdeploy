@@ -46,7 +46,7 @@ jobs:
         run: |
           rm /etc/apt/sources.list.d/cuda*.list
           apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev libgl1
+              libgoogle-glog-dev
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v2
