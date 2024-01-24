@@ -55,6 +55,7 @@ void BaseSamplingLayer<T>::freeBuffer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
+        allocator_->free((void**)(&repetition_penalty_workspace_));
         allocator_->free((void**)(&temperature_buf_));
         allocator_->free((void**)(&repetition_penalty_buf_));
         allocator_->free((void**)(&min_lengths_buf_));
@@ -293,9 +294,12 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
         float default_value = getDefaultPenaltyValue(repetition_penalty_type_);
         if (!ALL_OF(repetition_penalty_ + ite * local_batch_size, local_batch_size, float, default_value)) {
+            repetition_penalty_workspace_ = reinterpret_cast<int*>(allocator_->reMalloc(
+                repetition_penalty_workspace_, batch_size * step * (sizeof(int) + sizeof(float)), false));
             invokeBatchApplyRepetitionPenalty(
                 logits,
                 repetition_penalty_buf_ + ite * local_batch_size,
+                repetition_penalty_workspace_ + ite * local_batch_size,
                 output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
                 batch_size,
                 local_batch_size,

@@ -33,6 +33,8 @@ protected:
     size_t vocab_size_;
     size_t vocab_size_padded_;
 
+    int* repetition_penalty_workspace_;
+
     size_t sampling_workspace_size_;
     void*  sampling_workspace_ = nullptr;
 
