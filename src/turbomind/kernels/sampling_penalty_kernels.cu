@@ -382,7 +382,7 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
     logits += batch_idx * vocab_size;
     penalty_workspace += batch_idx * vocab_size;
 
-    for (int index = threadIdx.x; index < step; index += blockDim.x) {
+    for (int index = threadIdx.x; index < vocab_size; index += blockDim.x) {
         penalty_workspace[index] = 0;
     }
     __syncthreads();
