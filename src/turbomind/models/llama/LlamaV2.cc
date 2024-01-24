@@ -182,7 +182,7 @@ void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_i
             }
             int    off_dst   = std::max(0, begin - seq.cache_len);
             int    off_src   = std::max(0, seq.cache_len - begin);
-            size_t byte_size = (end - begin) * hidden_units_ * sizeof(T);
+            size_t byte_size = (end - begin - off_src) * hidden_units_ * sizeof(T);
             T*     dst_ptr   = decoder_input + off_dst * hidden_units_;
             auto   src_ptr   = embeddings[j].data() + off_src * hidden_units_ * sizeof(T);
             cudaMemcpyAsync(dst_ptr, src_ptr, byte_size, cudaMemcpyDefault, stream_);
