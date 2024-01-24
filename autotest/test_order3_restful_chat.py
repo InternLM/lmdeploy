@@ -43,12 +43,12 @@ def prepare_environment(request, config):
 
     http_url = 'http://localhost:' + str(port)
     start_time = int(time())
-    for i in range(60):
+    for i in range(100):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 60:
+        if result or total_time >= 100:
             break
     yield
     if pid > 0:
@@ -69,7 +69,7 @@ def getCaseList():
 
 
 @pytest.mark.restful_api
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(150)
 class Test_restful:
 
     @pytest.mark.internlm_chat_7b
