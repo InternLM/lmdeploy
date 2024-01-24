@@ -3,6 +3,7 @@ from threading import Lock
 from typing import Sequence
 
 import gradio as gr
+from packaging.version import Version, parse
 
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
 from lmdeploy.serve.openai.api_client import (get_model_list,
@@ -200,11 +201,15 @@ def run_api_server(api_server_url: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
+    if parse(gr.__version__) >= Version('4.0.0'):
+        que_kwargs = {'default_concurrency_limit': batch_size}
+    else:
+        que_kwargs = {'concurrency_count': batch_size}
+
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=batch_size, max_size=100,
-               api_open=True).launch(
-                   max_threads=10,
-                   share=True,
-                   server_port=server_port,
-                   server_name=server_name,
-               )
+    demo.queue(**que_kwargs, max_size=100, api_open=True).launch(
+        max_threads=10,
+        share=True,
+        server_port=server_port,
+        server_name=server_name,
+    )

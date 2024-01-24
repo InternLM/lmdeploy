@@ -5,6 +5,7 @@ from threading import Lock
 from typing import Sequence
 
 import gradio as gr
+from packaging.version import Version, parse
 
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
 from lmdeploy.serve.turbomind.chatbot import Chatbot
@@ -152,8 +153,13 @@ def run_triton_server(triton_server_addr: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
+    if parse(gr.__version__) >= Version('4.0.0'):
+        que_kwargs = {'default_concurrency_limit': 4}
+    else:
+        que_kwargs = {'concurrency_count': 4}
+
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=4, max_size=100, api_open=True).launch(
+    demo.queue(**que_kwargs, max_size=100, api_open=True).launch(
         max_threads=10,
         share=True,
         server_port=server_port,

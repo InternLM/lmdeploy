@@ -4,6 +4,7 @@ from threading import Lock
 from typing import Literal, Optional, Sequence, Union
 
 import gradio as gr
+from packaging.version import Version, parse
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
@@ -220,15 +221,20 @@ def run_local(model_path: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
+    if parse(gr.__version__) >= Version('4.0.0'):
+        que_kwargs = {
+            'default_concurrency_limit': InterFace.async_engine.instance_num
+        }
+    else:
+        que_kwargs = {'concurrency_count': InterFace.async_engine.instance_num}
+
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=InterFace.async_engine.instance_num,
-               max_size=100,
-               api_open=True).launch(
-                   max_threads=10,
-                   share=True,
-                   server_port=server_port,
-                   server_name=server_name,
-               )
+    demo.queue(**que_kwargs, max_size=100, api_open=True).launch(
+        max_threads=10,
+        share=True,
+        server_port=server_port,
+        server_name=server_name,
+    )
 
 
 if __name__ == '__main__':
