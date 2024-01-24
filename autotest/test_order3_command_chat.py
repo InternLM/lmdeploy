@@ -66,9 +66,8 @@ class TestCommandChat:
     @allure.story('internlm2-chat-20b-inner-w4')
     @pytest.mark.timeout(90)
     @pytest.mark.parametrize('usercase', getCaseList())
-    def future_test_chat_internlm2_chat_20b_inner_w4(self, config,
-                                                     cli_case_config,
-                                                     usercase):
+    def test_chat_internlm2_chat_20b_inner_w4(self, config, cli_case_config,
+                                              usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'internlm2-chat-20b-inner-w4')
 

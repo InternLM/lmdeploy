@@ -5,23 +5,26 @@ from utils.get_run_config import get_command_with_extra
 from utils.rule_condition_assert import assert_result
 
 
-def command_line_test(config, case, case_info, model, type, extra):
+def command_line_test(config, case, case_info, model_case, type, extra):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
         cmd = get_command_with_extra('lmdeploy serve api_client ' + extra,
-                                     config, model)
+                                     config, model_case)
     elif type == 'triton_client':
         cmd = get_command_with_extra('lmdeploy serve triton_client ' + extra,
-                                     config, model)
+                                     config, model_case)
     else:
         cmd = get_command_with_extra(
-            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model,
-            config, model)
+            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model_case,
+            config, model_case)
+        if 'w4' in model_case:
+            cmd += ' --model-format awq'
 
     if case == 'session_len_error':
         cmd = cmd + ' --session-len 20'
-    return command_test(config, [cmd], model, case_info, type == 'turbomind')
+    return command_test(config, [cmd], model_case, case_info,
+                        type == 'turbomind')
 
 
 def hf_command_line_test(config, case, case_info, model_case, model_name):
@@ -135,15 +138,15 @@ def parse_dialogue(inputs: str, model: str):
 
 
 def extract_output(output: str, model: str):
-    if 'internlm' in model:
-        if len(output.split('<|Bot|>: ')) >= 2:
-            return output.split('<|Bot|>: ')[1]
     if 'Qwen' in model:
         if len(output.split('<|im_start|>assistant')) >= 2:
             return output.split('<|im_start|>assistant')[1]
-    if 'Baichuan2' in model:
+    if 'Baichuan2' in model or 'internlm2' in model:
         if len(output.split('<reserved_107>')) >= 2:
             return output.split('<reserved_107>')[1]
+    if 'internlm' in model:
+        if len(output.split('<|Bot|>: ')) >= 2:
+            return output.split('<|Bot|>: ')[1]
     if 'llama' in model or 'Llama' in model:
         if len(output.split('[/INST]')) >= 2:
             return output.split('[/INST]')[1]
