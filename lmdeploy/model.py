@@ -989,8 +989,8 @@ def get_model_from_config(model_dir: str):
         'LlamaForCausalLM': default,
         'InternLM2ForCausalLM': 'internlm2',
         'InternLMForCausalLM': default,
-        'BaichuanForCausalLM': 'baichuan',
-        'BaiChuanForCausalLM': 'baichuan2',  # not right for Baichuan2-13B-Chat
+        'BaiChuanForCausalLM': 'baichuan',  # Baichuan-7B
+        'BaichuanForCausalLM': 'baichuan2',  # not right for Baichuan-13B-Chat
         'QWenLMHeadModel': 'qwen',
         # 'ChatGLMForConditionalGeneration': default
     }
