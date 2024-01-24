@@ -32,7 +32,7 @@ on:
 
 jobs:
   unit_test:
-    runs-on: [self-hosted, linux-a100-142]
+    runs-on: [self-hosted, linux-a100-s2]
     timeout-minutes: 4320 # 72hours
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3

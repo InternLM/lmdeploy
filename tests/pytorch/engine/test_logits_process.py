@@ -13,6 +13,7 @@ class TestFusedLogitsProcessor:
 
     @pytest.fixture
     def scores(self):
+        torch.random.manual_seed(1234)
         yield torch.rand(4, 100).cuda().half()
 
     @pytest.fixture
