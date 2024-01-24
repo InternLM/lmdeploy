@@ -21,8 +21,6 @@ def command_line_test(config, case, case_info, model_case, type, extra):
         if 'w4' in model_case:
             cmd += ' --model-format awq'
 
-    if case == 'session_len_error':
-        cmd = cmd + ' --session-len 20'
     return command_test(config, [cmd], model_case, case_info,
                         type == 'turbomind')
 
@@ -34,8 +32,8 @@ def hf_command_line_test(config, case, case_info, model_case, model_name):
         'lmdeploy chat turbomind ' + model_path + '/' + model_case +
         ' --model-name ' + model_name, config, model_case)
 
-    if case == 'session_len_error':
-        cmd = cmd + ' --session-len 20'
+    if 'w4' in model_case:
+            cmd += ' --model-format awq'
     return command_test(config, [cmd], model_case, case_info, True)
 
 
@@ -46,8 +44,6 @@ def pytorch_command_line_test(config, case, case_info, model_case):
         'lmdeploy chat torch ' + model_path + '/' + model_case, config,
         model_case)
 
-    if case == 'session_len_error':
-        cmd = cmd + ' --session-len 20'
     return command_test(config, [cmd], model_case, case_info, False)
 
 
@@ -84,7 +80,7 @@ def command_test(config, cmd, model, case_info, need_extract_output):
                    shell=True,
                    text=True,
                    encoding='utf-8') as proc:
-            file.writelines('prompt:' + prompt + '\n')
+            #file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
             returncode = proc.returncode

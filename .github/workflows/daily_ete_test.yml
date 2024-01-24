@@ -83,6 +83,7 @@ jobs:
         run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - chat
         continue-on-error: true
+        timeout-minutes: 50
         run: |
           pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - rerun fail cases
@@ -106,7 +107,7 @@ jobs:
 
   test_triton:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 4320 # 72hours
+    timeout-minutes: 30 # 30mins
     env:
       HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
       WORKDIR: /nvme/qa_test_models/triton_workspace

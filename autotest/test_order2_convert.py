@@ -53,6 +53,12 @@ class TestConvert:
     def future_test_model_convert_internlm2_chat_20b_inner_w4(self, config):
         convert(config, 'internlm2-chat-20b-inner-w4')
 
+    @pytest.mark.internlm2_chat_20b
+    @pytest.mark.daily
+    @allure.story('internlm2-chat-20b')
+    def test_model_convert_internlm2_chat_20b_inner_w4(self, config):
+        convert(config, 'internlm2-chat-20b-inner-w4')
+
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
     def test_model_convert_Qwen_7B_Chat(self, config):
