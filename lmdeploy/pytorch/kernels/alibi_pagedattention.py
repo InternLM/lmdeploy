@@ -51,6 +51,20 @@ def get_slope(i, n):
 
 
 @triton.jit
+def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
+                        BLOCK: tl.constexpr):
+    if num_sub_blocks > 1:
+        offs_sub = tl.arange(0, num_sub_blocks)
+        offs_n = tl.arange(0, BLOCK // num_sub_blocks)
+        ret = tl.load(offset_ptr + block_id * num_sub_blocks + offs_sub)[
+            None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
+        return tl.ravel(ret)
+    else:
+        offs_n = tl.arange(0, BLOCK)
+        return tl.load(offset_ptr + block_id) * BLOCK + offs_n
+
+
+@triton.jit
 def _fwd_kernel(
     Q,
     K,
@@ -78,6 +92,7 @@ def _fwd_kernel(
     head_offset,
     num_heads,
     kv_group_num,
+    num_sub_blocks: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -104,10 +119,8 @@ def _fwd_kernel(
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
              cur_head * stride_qh + offs_d[None, :] * stride_qd)
-    off_k = (offs_n[None, :] * stride_kbs + cur_kv_head * stride_kh +
-             offs_d[:, None] * stride_kd)
-    off_v = (offs_n[:, None] * stride_vbs + cur_kv_head * stride_vh +
-             offs_d[None, :] * stride_vd)
+    off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
+    off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
@@ -123,18 +136,27 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
+    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks,
+                                   BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        start_block_id = start_n // BLOCK_N
-        b_offset = tl.load(block_offset_ptrs + start_block_id)
-
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset * BLOCK_N * stride_kbs,
+            k_ptrs + b_offset[None, :] * stride_kbs,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
+
+        v = tl.load(
+            v_ptrs + b_offset[:, None] * stride_vbs,
+            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
+            other=0.0,
+        )
+        if start_n + BLOCK_N < cur_batch_kv_len:
+            start_block_id = start_n // BLOCK_N + 1
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
+                                           num_sub_blocks, BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -159,13 +181,8 @@ def _fwd_kernel(
         # -- update output accumulator --
         # scale acc
         acc = acc * alpha[:, None]
-        # update acc
-        v = tl.load(
-            v_ptrs + b_offset * BLOCK_N * stride_vbs,
-            mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
-            other=0.0,
-        )
 
+        # update acc
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -181,21 +198,18 @@ def _fwd_kernel(
 
 
 @torch.no_grad()
-def alibi_paged_attention_fwd(
-    q: Tensor,
-    k: Tensor,
-    v: Tensor,
-    o: Tensor,
-    block_offsets: Tensor,
-    b_start_loc: Tensor,
-    b_seq_len: Tensor,
-    b_kv_seq_len: Tensor,
-    max_input_len: int,
-    head_offset: int = 0,
-    num_heads: int = -1,
-    alibi_scale: float = 1.0,
-    BLOCK: int = 64,
-):
+def alibi_paged_attention_fwd(q: Tensor,
+                              k: Tensor,
+                              v: Tensor,
+                              o: Tensor,
+                              block_offsets: Tensor,
+                              b_start_loc: Tensor,
+                              b_seq_len: Tensor,
+                              b_kv_seq_len: Tensor,
+                              max_input_len: int,
+                              head_offset: int = 0,
+                              num_heads: int = -1,
+                              alibi_scale: float = 1.0):
     """Paged attention forward with alibi bias.
 
     Args:
@@ -224,6 +238,9 @@ def alibi_paged_attention_fwd(
     kv_group_num = q.shape[-2] // k[0].shape[-2]
     if num_heads <= 0:
         num_heads = head
+
+    BLOCK = 64 if k.size(1) < 16 else k.size(1)
+    num_sub_blocks = BLOCK // k.size(1)
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
@@ -255,6 +272,7 @@ def alibi_paged_attention_fwd(
         head_offset=head_offset,
         num_heads=num_heads,
         kv_group_num=kv_group_num,
+        num_sub_blocks=num_sub_blocks,
         BLOCK_M=BLOCK,
         BLOCK_DMODEL=Lk,
         BLOCK_N=BLOCK,
