@@ -9,7 +9,9 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn, try_to_local)
-from .functional import attention_forward_with_paged_attention
+from ..kernels.alibi_pagedattention import alibi_paged_attention_fwd
+from ..kernels.fill_kv_cache import fill_kv_cache
+from ..kernels.pagedattention import paged_attention_fwd
 from .llama import apply_rotary_pos_emb
 
 
@@ -107,8 +109,17 @@ class Attention(nn.Module):
         assert not output_attentions
         context = self.context.context
         history_lengths = context.history_lengths
+        kv_seq_length = context.kv_seq_length
+        q_seq_length = context.seq_length
+        q_start_loc = context.q_start_loc
+        block_offsets = context.block_offsets
+
+        num_heads = self.num_heads // world_size
+        num_kv_heads = self.num_heads // world_size
+        head_dim = self.head_dim
 
         def _qkv_proj(hidden_states):
+            """qkv proj."""
             proj = self.W_pack(hidden_states)
             return proj.chunk(3, -1)
 
@@ -122,20 +133,44 @@ class Attention(nn.Module):
                     getattr(context, 'position_ids_1d', None))
             return query_states, key_states, value_states
 
-        attn_output = attention_forward_with_paged_attention(
-            hidden_states,
-            history_lengths=history_lengths,
-            block_offsets=context.block_offsets,
-            num_heads=self.num_heads // world_size,
-            num_kv_heads=self.num_heads // world_size,
-            head_dim=self.head_dim,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            context=context,
-            qkv_proj=_qkv_proj,
-            o_proj=self.o_proj,
-            rotary_emb_fn=_rotary_emb_fn,
+        query_states, key_states, value_states = _qkv_proj(hidden_states)
+
+        query_states = query_states.view(-1, num_heads, head_dim)
+        key_states = key_states.view(-1, num_kv_heads, head_dim)
+        value_states = value_states.view(-1, num_kv_heads, head_dim)
+
+        query_states, key_states, value_states = _rotary_emb_fn(
+            query_states, key_states, value_states)
+
+        fill_kv_cache(key_states,
+                      value_states,
+                      past_key_value[0],
+                      past_key_value[1],
+                      q_start_loc,
+                      q_seq_length,
+                      block_offsets=block_offsets,
+                      history_lengths=history_lengths,
+                      context=context)
+
+        attn_output = query_states
+        max_seq_len = position_ids.size(-1)
+        paged_attention_fwd(
+            query_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_output,
+            block_offsets,
+            b_start_loc=q_start_loc,
+            b_seq_len=q_seq_length,
+            b_kv_seq_len=kv_seq_length,
+            max_input_len=max_seq_len,
         )
+
+        hidden_size = num_heads * head_dim
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
+                                          hidden_size)
+
+        attn_output = self.o_proj(attn_output)
 
         return attn_output, None, past_key_value
 
@@ -201,28 +236,61 @@ class BaichuanAttention(nn.Module):
         context = self.context.context
         position_ids = context.position_ids
         history_lengths = context.history_lengths
+        kv_seq_length = context.kv_seq_length
+        q_seq_length = context.seq_length
+        q_start_loc = context.q_start_loc
+        block_offsets = context.block_offsets
+
+        num_heads = self.num_heads // world_size
+        num_kv_heads = self.num_heads // world_size
+        head_dim = self.head_dim
 
         def _qkv_proj(hidden_states):
             proj = self.W_pack(hidden_states)
             return proj.chunk(3, -1)
 
-        _rotary_emb_fn = None
+        query_states, key_states, value_states = _qkv_proj(hidden_states)
+        query_states = query_states.view(-1, num_heads, head_dim)
+        key_states = key_states.view(-1, num_kv_heads, head_dim)
+        value_states = value_states.view(-1, num_kv_heads, head_dim)
 
-        attn_output = attention_forward_with_paged_attention(
-            hidden_states,
-            history_lengths=history_lengths,
-            block_offsets=context.block_offsets,
-            num_heads=self.num_heads // world_size,
-            num_kv_heads=self.num_heads // world_size,
-            head_dim=self.head_dim,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            context=context,
-            qkv_proj=_qkv_proj,
-            o_proj=self.o_proj,
-            rotary_emb_fn=_rotary_emb_fn,
-            bias_type='alibi',
-        )
+        fill_kv_cache(key_states,
+                      value_states,
+                      past_key_value[0],
+                      past_key_value[1],
+                      q_start_loc,
+                      q_seq_length,
+                      block_offsets=block_offsets,
+                      history_lengths=history_lengths,
+                      context=context)
+
+        attn_output = query_states
+
+        num_heads_full = num_heads
+        head_offset = 0
+        max_seq_len = position_ids.size(-1)
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+            num_heads_full = num_heads * world_size
+            head_offset = num_heads * rank
+        alibi_paged_attention_fwd(query_states,
+                                  past_key_value[0],
+                                  past_key_value[1],
+                                  attn_output,
+                                  block_offsets,
+                                  b_start_loc=q_start_loc,
+                                  b_seq_len=q_seq_length,
+                                  b_kv_seq_len=kv_seq_length,
+                                  max_input_len=max_seq_len,
+                                  head_offset=head_offset,
+                                  num_heads=num_heads_full)
+
+        hidden_size = num_heads * head_dim
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
+                                          hidden_size)
+
+        attn_output = self.o_proj(attn_output)
 
         return attn_output, None, past_key_value
 
