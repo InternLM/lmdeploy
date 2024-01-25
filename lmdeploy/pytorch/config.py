@@ -126,11 +126,16 @@ class ModelConfig:
                                bos_token_id=hf_config.bos_token_id,
                                eos_token_id=hf_config.eos_token_id)
 
+        arch = getattr(hf_config, 'architectures', ['Unknown'])[0]
+        auto_map = getattr(hf_config, 'auto_map', dict())
+        causallm_name = auto_map.get('AutoModelForCausalLM', 'Unknown')
+
         if 'falcon' in model_path:
             model_config = __build_falcon()
         elif 'chatglm' in model_path:
             model_config = __build_chatglm()
-        elif hf_config.architectures[0] == 'InternLM2ForCausalLM':
+        elif (arch == 'InternLM2ForCausalLM'
+              or causallm_name == 'modeling_internlm2.InternLM2ForCausalLM'):
             model_config = __build_internlm2()
         else:
             model_config = __build_default()
