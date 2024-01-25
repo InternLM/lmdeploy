@@ -33,7 +33,7 @@ def hf_command_line_test(config, case, case_info, model_case, model_name):
         ' --model-name ' + model_name, config, model_case)
 
     if 'w4' in model_case:
-            cmd += ' --model-format awq'
+        cmd += ' --model-format awq'
     return command_test(config, [cmd], model_case, case_info, True)
 
 
@@ -80,7 +80,7 @@ def command_test(config, cmd, model, case_info, need_extract_output):
                    shell=True,
                    text=True,
                    encoding='utf-8') as proc:
-            #file.writelines('prompt:' + prompt + '\n')
+            # file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
             returncode = proc.returncode
