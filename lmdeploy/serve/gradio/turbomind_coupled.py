@@ -4,6 +4,7 @@ from threading import Lock
 from typing import Literal, Optional, Sequence, Union
 
 import gradio as gr
+from packaging.version import Version, parse
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
@@ -78,7 +79,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     state_chatbot = []
     # end the session
     InterFace.async_engine.end_session(session_id)
-    return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
+    return (state_chatbot, state_chatbot, gr.update(value=''))
 
 
 async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
@@ -197,7 +198,7 @@ def run_local(model_path: str,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
+            lambda: gr.update(value=''),
             [],
             [instruction_txtbox],
         )
@@ -220,15 +221,20 @@ def run_local(model_path: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
+    if parse(gr.__version__) >= Version('4.0.0'):
+        que_kwargs = {
+            'default_concurrency_limit': InterFace.async_engine.instance_num
+        }
+    else:
+        que_kwargs = {'concurrency_count': InterFace.async_engine.instance_num}
+
     print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=InterFace.async_engine.instance_num,
-               max_size=100,
-               api_open=True).launch(
-                   max_threads=10,
-                   share=True,
-                   server_port=server_port,
-                   server_name=server_name,
-               )
+    demo.queue(**que_kwargs, max_size=100, api_open=True).launch(
+        max_threads=10,
+        share=True,
+        server_port=server_port,
+        server_name=server_name,
+    )
 
 
 if __name__ == '__main__':
