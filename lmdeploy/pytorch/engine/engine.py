@@ -370,6 +370,7 @@ class Engine:
         local_adapter_ids = None
         global_adapter_ids = None
         adapter_offsets = None
+        local_adapter_scalings = None
         max_rank = 0
         if ADAPTER_MANAGER.num_adapters() > 1:
             local_adapter_ids = _get_adapter_ids(messages, adapters)
@@ -380,6 +381,10 @@ class Engine:
             global_adapter_ids = seq_length.new_tensor(global_adapter_ids)
             ranks = [ada.rank for ada in adapters]
             max_rank = max(ranks)
+            local_adapter_scalings = [
+                adapters[ada_ids].scaling for ada_ids in local_adapter_ids
+            ]
+            local_adapter_scalings = torch.tensor(local_adapter_scalings)
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
@@ -396,6 +401,7 @@ class Engine:
                            local_adapter_ids=local_adapter_ids,
                            global_adapter_ids=global_adapter_ids,
                            adapter_offsets=adapter_offsets,
+                           local_adapter_scalings=local_adapter_scalings,
                            max_rank=max_rank,
                            meta=meta)
 

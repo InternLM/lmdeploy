@@ -82,6 +82,7 @@ class ModelInputs:
     local_adapter_ids: torch.LongTensor
     global_adapter_ids: torch.LongTensor
     adapter_offsets: torch.LongTensor
+    local_adapter_scalings: torch.Tensor
     max_rank: int
     meta: Any
 
@@ -98,8 +99,10 @@ class ModelInputs:
         history_lengths = self.history_lengths[sli]
 
         local_adapter_ids = self.local_adapter_ids
+        local_adapter_scalings = self.local_adapter_scalings
         if local_adapter_ids is not None:
             local_adapter_ids = local_adapter_ids[sli]
+            local_adapter_scalings = local_adapter_scalings[sli]
 
         return ModelInputs(input_ids=input_ids,
                            seq_length=seq_length,
@@ -112,6 +115,7 @@ class ModelInputs:
                            local_adapter_ids=local_adapter_ids,
                            global_adapter_ids=self.global_adapter_ids,
                            adapter_offsets=self.adapter_offsets,
+                           local_adapter_scalings=local_adapter_scalings,
                            max_rank=self.max_rank,
                            meta=self.meta)
 
@@ -140,8 +144,10 @@ class ModelInputs:
                 block_end += 1
 
             local_adapter_ids = self.local_adapter_ids
+            local_adapter_scalings = self.local_adapter_scalings
             if local_adapter_ids is not None:
                 local_adapter_ids = local_adapter_ids[:, start:end]
+                local_adapter_scalings = local_adapter_scalings[:, start:end]
 
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
@@ -155,6 +161,7 @@ class ModelInputs:
                 local_adapter_ids=local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
+                local_adapter_scalings=local_adapter_scalings,
                 max_rank=self.max_rank,
                 meta=self.meta,
             )
@@ -198,6 +205,7 @@ class StepContext:
     local_adapter_ids: torch.LongTensor = None
     global_adapter_ids: torch.LongTensor = None
     adapter_offsets: torch.LongTensor = None
+    local_adapter_scalings: torch.Tensor = None
     max_rank: int = 0
 
     _outputs: Dict = field(default_factory=dict)
@@ -246,6 +254,7 @@ class StepContext:
                           local_adapter_ids=inputs.local_adapter_ids,
                           global_adapter_ids=inputs.global_adapter_ids,
                           adapter_offsets=inputs.adapter_offsets,
+                          local_adapter_scalings=inputs.local_adapter_scalings,
                           max_rank=inputs.max_rank)
         return ret
 

@@ -266,6 +266,11 @@ class SchedulerAdapter:
         """get rank."""
         return self.config.r
 
+    @property
+    def scaling(self):
+        """get scaling."""
+        return self.config.lora_alpha / self.rank
+
     def is_actived(self):
         """check if adapter is active."""
         return self._active
