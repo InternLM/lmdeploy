@@ -522,7 +522,7 @@ class TurboMindInstance:
             if k in config.__dict__:
                 config.__dict__[k] = v
                 deprecated_kwargs.append(k)
-        if kwargs.get('request_output_len'):
+        if 'request_output_len' in kwargs:
             config.max_new_tokens = kwargs['request_output_len']
             deprecated_kwargs.append('request_output_len')
         for k in deprecated_kwargs:
