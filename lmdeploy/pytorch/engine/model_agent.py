@@ -650,6 +650,7 @@ def _tp_build_model(
                     trust_remote_code=trust_remote_code)
                 _load_adapters(param_model, adapters, device_map=device_map)
                 __load_state_dict_assign(param_model, model)
+                param_model = param_model.to('meta')
                 del param_model
 
         patched_model = patch(
