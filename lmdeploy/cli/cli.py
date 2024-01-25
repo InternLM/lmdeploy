@@ -23,6 +23,7 @@ class CLI(object):
 
     @staticmethod
     def add_parser_convert():
+        """Add parser for convert command."""
         parser = CLI.subparsers.add_parser(
             'convert',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -65,6 +66,7 @@ class CLI(object):
 
     @staticmethod
     def add_parser_list():
+        """Add parser for list command."""
         parser = CLI.subparsers.add_parser(
             'list',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -76,6 +78,7 @@ class CLI(object):
 
     @staticmethod
     def add_parser_checkenv():
+        """Add parser for check_env command."""
         parser = CLI.subparsers.add_parser(
             'check_env',
             formatter_class=DefaultsAndTypesHelpFormatter,
