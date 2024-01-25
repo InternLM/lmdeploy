@@ -163,28 +163,23 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         repetition_penalty_type_ = RepetitionPenaltyType::None;
     }
 
-    const int default_min_length = 0;
-    Tensor    min_lengths = runtime_args->at("min_length", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &default_min_length));
-    if (min_lengths.size() == 1) {
-        int minlen = min_lengths.getVal<int>();
-        deviceFill(min_lengths_buf_, batch_size, minlen, stream_);
-        std::fill_n(min_lengths_, batch_size, minlen);
-    }
-    else {
-        cudaAutoCpy(min_lengths_buf_, min_lengths.getPtr<int>(), batch_size, stream_);
-        std::copy_n(min_lengths.getPtr<int>(), batch_size, min_lengths_);
-    }
-
     // min_length
-    const int default_context_length = 0;
-    Tensor    context_lengths =
-        runtime_args->at("context_length", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &default_context_length));
-    if (context_lengths.size() == 1) {
-        int context_length = context_lengths.getVal<int>();
-        std::fill_n(context_length_, batch_size, context_length);
+    if (runtime_args->isExist("min_length")) {
+        Tensor min_lengths     = runtime_args->at("min_length");
+        Tensor context_lengths = runtime_args->at("context_length");
+        Tensor prompt_lengths  = runtime_args->at("prompt_length");
+        auto   p1              = min_lengths.getPtr<int>();
+        auto   p2              = prompt_lengths.getPtr<int>();
+        for (int i = 0; i < batch_size; i++) {
+            min_lengths_[i] = p1[i] + p2[i];
+        }
+        cudaAutoCpy(min_lengths_buf_, min_lengths_, batch_size, stream_);
+        std::copy_n(context_lengths.getPtr<int>(), batch_size, context_length_);
     }
     else {
-        std::copy_n(context_lengths.getPtr<int>(), batch_size, context_length_);
+        std::fill_n(min_lengths_, batch_size, 0);
+        deviceFill(min_lengths_buf_, batch_size, 0, stream_);
+        std::fill_n(context_length_, batch_size, 0);
     }
 }
 

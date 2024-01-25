@@ -328,6 +328,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         }
 
         // total context length (history + input)
+        state.h_prompt_length[idx]  = output_ids - output_ids_base;
         state.h_context_length[idx] = output_ids - output_ids_base;
         state.h_finished[idx]       = false;
 
@@ -698,6 +699,7 @@ void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchSta
     }
 
     for (const auto& [s, d, si, di] : desc) {
+        d->h_prompt_length[di]  = s->h_prompt_length[si];
         d->h_context_length[di] = s->h_context_length[si];
         d->h_finished[di]       = s->h_finished[si];
         d->h_rope_theta[di]     = s->h_rope_theta[si];
@@ -828,6 +830,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
             (uintptr_t*)allocator_->reMalloc(h_v_block_ptrs_, sizeof(uintptr_t) * max_block_count, false, true);
 
         for (auto& s : states_) {
+            s.h_prompt_length =
+                (int*)allocator_->reMalloc(s.h_prompt_length, sizeof(int) * max_batch_size, false, true);
             s.h_context_length =
                 (int*)allocator_->reMalloc(s.h_context_length, sizeof(int) * max_batch_size, false, true);
             s.h_finished   = (bool*)allocator_->reMalloc(s.h_finished, sizeof(bool) * max_batch_size * 2, false, true);
@@ -1058,8 +1062,12 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
             }
         }
     }
-    // context_length for MinLengthPenalty
-    inputs.insert({"context_length", {MEMORY_CPU, TYPE_INT32, {(size_t)batch_size}, state_->h_context_length}});
+
+    // MinLengthPenalty
+    if (inputs.isExist("min_length")) {
+        inputs.insert({"prompt_length", {MEMORY_CPU, TYPE_INT32, {(size_t)batch_size}, state_->h_prompt_length}});
+        inputs.insert({"context_length", {MEMORY_CPU, TYPE_INT32, {(size_t)batch_size}, state_->h_context_length}});
+    }
 
     // init for eos
     std::fill_n(h_end_ids_buf_, batch_size, model_->end_id_);

@@ -20,6 +20,7 @@
 namespace turbomind {
 
 struct BatchState {
+    int*  h_prompt_length;  // history + input, ignore generated
     int*  h_context_length;
     bool* h_finished;
 
