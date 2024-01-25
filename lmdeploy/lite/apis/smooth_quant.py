@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import os.path as osp
 import shutil
 
 import fire
 import torch
 from torch import nn
 
+import lmdeploy
 from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
@@ -27,12 +29,17 @@ NORM_TYPE_MAP = {
     'LlamaForCausalLM': 'LlamaRMSNorm',
 }
 
+LMDEPLOY_ROOT = lmdeploy.__path__[0]
+
 MODEL_PATH_MAP = {
-    'InternLMForCausalLM': './lmdeploy/pytorch/modeling/modeling_internlm.py',
+    'InternLMForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm.py'),
     'InternLM2ForCausalLM':
-    './lmdeploy/pytorch/modeling/modeling_internlm2.py',
-    'LlamaForCausalLM': './lmdeploy/pytorch/modeling/modeling_llama.py',
-    'BaiChuanForCausalLM': './lmdeploy/pytorch/modeling/modeling_baichuan.py'
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm2.py'),
+    'LlamaForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_llama.py'),
+    'BaiChuanForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_baichuan.py')
 }
 
 AUTO_MAP = {

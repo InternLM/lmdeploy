@@ -32,6 +32,10 @@ jobs:
 #          check-modified-files-only: 'yes'
           config-file: '.github/md-link-config.json'
           file-path: './README.md, ./LICENSE, ./README_zh-CN.md'
+      - name: Check module init files
+        run: |
+          python -m pip install fire
+          python .github/scripts/check_lmdeploy.py check_module_init lmdeploy
       - name: Check doc link
         run: |
           python .github/scripts/doc_link_checker.py --target README_zh-CN.md
