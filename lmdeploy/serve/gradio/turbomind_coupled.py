@@ -121,7 +121,7 @@ def run_local(model_path: str,
               backend_config: Optional[Union[PytorchEngineConfig,
                                              TurbomindEngineConfig]] = None,
               chat_template_config: Optional[ChatTemplateConfig] = None,
-              server_name: str = 'localhost',
+              server_name: str = '0.0.0.0',
               server_port: int = 6006,
               tp: int = 1,
               huggingface_demo: bool = False,
@@ -151,11 +151,11 @@ def run_local(model_path: str,
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        server_name (str): the ip address of gradio server
+        server_name (str): the ip address of gradio server. Default to
+            "0.0.0.0". For huggingface space demo, it should be
+            "huggingface-space".
         server_port (int): the port of gradio server
         tp (int): tensor parallel for Turbomind
-        huggingface_demo (bool): whether for huggingface space demo. Running
-            on huggingface space require no specified host name or port.
     """
     InterFace.async_engine = AsyncEngine(
         model_path=model_path,
@@ -223,7 +223,7 @@ def run_local(model_path: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
-    if huggingface_demo is True:
+    if server_name == 'huggingface-space':
         demo.queue(concurrency_count=InterFace.async_engine.instance_num,
                    max_size=100).launch()
     else:

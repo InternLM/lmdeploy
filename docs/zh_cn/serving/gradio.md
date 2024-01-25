@@ -15,7 +15,7 @@ from lmdeploy.messages import TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(max_batch_size=1, cache_max_entry_count=0.05)
 model_path = 'internlm/internlm2-chat-7b'
-run_local(model_path, backend_config=backend_config, huggingface_demo=True)
+run_local(model_path, backend_config=backend_config, server_name="huggingface-space")
 ```
 
 创建`requirements.txt`文本文件，填写如下安装包：
