@@ -2,10 +2,9 @@
 import asyncio
 import dataclasses
 import random
-import time
 from argparse import ArgumentError
 from contextlib import contextmanager
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import Dict, List, Literal, Optional, Union
 
@@ -382,13 +381,14 @@ class AsyncEngine:
             proc.start()
 
             while True:
-                if self.backend == 'pytorch':
-                    time.sleep(0.001)  # avoid blocking in the loop
-                if outputs.qsize() > 0:
-                    out = outputs.get()
+                try:
+                    out = outputs.get(timeout=0.001)
                     if out is None:
                         break
                     yield out
+                except Empty:
+                    pass
+
             proc.join()
 
     async def generate(
