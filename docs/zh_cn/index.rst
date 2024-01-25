@@ -24,6 +24,7 @@
    benchmark/profile_throughput.md
    benchmark/profile_api_server.md
    benchmark/profile_triton_server.md
+   benchmark/evaluate_with_opencompass.md
 
 .. _支持的模型:
 .. toctree::

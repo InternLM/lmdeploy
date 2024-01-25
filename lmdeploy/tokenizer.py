@@ -8,7 +8,10 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
 
-from .utils import get_logger
+from lmdeploy.utils import get_logger
+
+# this file will be copied to triton server, make sure all
+# importing are starting from the package root lmdeploy
 
 
 @dataclass
