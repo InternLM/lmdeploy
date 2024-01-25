@@ -18,10 +18,10 @@
 #include <iostream>   // snprintf
 #include <math.h>     // expf, log
 #include <stdexcept>
-#include <stdlib.h>   // rand
-#include <string>     // std::string
+#include <stdlib.h>  // rand
+#include <string>    // std::string
 #include <unordered_map>
-#include <vector>     // std::vector
+#include <vector>  // std::vector
 
 #include <cublasLt.h>
 #include <cublas_v2.h>
@@ -386,6 +386,7 @@ protected:
     T*   d_bias_;
     int* d_output_ids_;
     int* d_input_lengths_;
+    int* d_penalty_workspace_;
 
     float* d_repetition_penalties_;
 
@@ -410,6 +411,8 @@ protected:
         d_bias_          = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * vocab_size_padded_));
         d_output_ids_    = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * sequence_length_ * batch_size_));
         d_input_lengths_ = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size_));
+        d_penalty_workspace_ =
+            reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size_ * vocab_size_padded_));
 
         cudaAutoCpy(d_logits_, h_logits_, batch_size_ * vocab_size_padded_, stream);
         cudaAutoCpy(d_bias_, h_bias_, vocab_size_padded_, stream);
@@ -501,6 +504,7 @@ public:
         else {
             invokeBatchApplyRepetitionPenalty(d_logits_,
                                               d_repetition_penalties_,
+                                              d_penalty_workspace_,
                                               d_output_ids_,
                                               batch_size_,
                                               batch_size_,
@@ -559,6 +563,7 @@ public:
         cudaAutoCpy(d_logits_batch, h_logits_, batch_size_ * vocab_size_padded_, stream);
         invokeBatchApplyRepetitionPenalty(d_logits_batch,
                                           d_repetition_penalties_,
+                                          d_penalty_workspace_,
                                           d_output_ids_,
                                           batch_size_,
                                           batch_size_,
