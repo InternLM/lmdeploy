@@ -443,7 +443,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
     //   output_ids [step, batch_size] : output token ids (with offset ite * local_batch_size).
     //   input_lengths [local_batch_size], input lengths (optional).
     //      Padding tokens at [input_length, max_input_length) of input will not be penalized.
-    dim3 block(min(step, 1024));
+    dim3 block(2048);
     dim3 grid(local_batch_size);
     if (penalty_type == RepetitionPenaltyType::Additive) {
         batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive><<<grid, block, 0, stream>>>(logits,
