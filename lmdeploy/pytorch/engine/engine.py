@@ -498,10 +498,12 @@ class Engine:
         """check if output is necessary."""
         if isinstance(token, torch.Tensor):
             token = token.item()
-        if token == self.model_config.eos_token_id:
+        ignore_eos = msg.sampling_param.ignore_eos
+        if not ignore_eos and token == self.model_config.eos_token_id:
             return False
 
-        if token in msg.sampling_param.stop_words:
+        stop_words = msg.sampling_param.stop_words
+        if stop_words is not None and token in stop_words:
             return False
 
         return True
@@ -810,6 +812,7 @@ class Engine:
             """send response callback."""
             while True:
                 step_tokens = send_resp_que.get()
+                time.sleep(0.02)
                 for _, out in step_tokens.items():
                     if out.finish:
                         resp_type = ResponseType.FINISH
@@ -950,7 +953,6 @@ class EngineInstance:
 
             resp = self.req_sender.recv(req_id)
             # avoid token decoding and scheduling simultaneously
-            time.sleep(0.02)
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:
