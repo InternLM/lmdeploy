@@ -253,7 +253,7 @@ class LoRALinear(torch.nn.Module):
             return self._lora_forward_tp_colwise(x)
         else:
             assert tp_mode is None, 'tp_mode == None failed.'
-            return self._lora_forward_tp(x)
+            return self._lora_forward_local(x)
 
     def _lora_forward(self, x):
         """lora forward."""
