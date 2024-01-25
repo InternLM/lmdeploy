@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import argparse
-
-from mmengine.config import DictAction
+from typing import List
 
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
@@ -28,6 +27,36 @@ def convert_args(args):
         for k in args._get_kwargs() if k[0] not in special_names
     }
     return kwargs
+
+
+def get_lora_adapters(adapters: List[str]):
+    """Parse lora adapers from cli input.
+
+    Args:
+        adapters (List[str]): Command input string of lora adaters paths.
+
+    Returns:
+        Dict[str,str] or None
+    """
+    if not adapters:
+        return None
+    n = len(adapters)
+    output = {}
+    if n == 1:
+        name = 'default'
+        path = adapters[0].strip()
+        if '=' in path:
+            name, path = path.split('=', 1)
+        output[name] = path
+    else:
+        for pairs in adapters:
+            assert '=' in pairs, f'Multiple lora paths must in format of ' \
+                                 f'xx==yy zz==ww. But given: {pairs}'
+            name, path = pairs.strip().split('=', 1)
+            assert name not in output, f'Multiple lora paths with ' \
+                                       f'repeated lora name: {name}'
+            output[name] = path
+    return output
 
 
 class ArgumentHelper:
@@ -238,10 +267,13 @@ class ArgumentHelper:
     def adapters(parser):
         return parser.add_argument(
             '--adapters',
+            nargs='*',
+            type=str,
             default=None,
-            action=DictAction,
-            help='Used key-values pairs in xxx=yyy format'
-            ' to set the path lora adapter')
+            help='Used to set path(s) of lora adapter(s). One can input '
+            'key-values pairs in xxx=yyy format for multiple lora '
+            'adapters. If only have one adapter, one can only input '
+            'the path of the adapter.')
 
     @staticmethod
     def work_dir(parser):

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .cli import CLI
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
+from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
+                    convert_args, get_lora_adapters)
 
 
 class SubCliChat(object):
@@ -69,11 +70,11 @@ class SubCliChat(object):
         """Chat with PyTorch inference engine through terminal."""
         from lmdeploy.messages import PytorchEngineConfig
         from lmdeploy.pytorch.chat import run_chat
-
+        adapters = get_lora_adapters(args.adapters)
         engine_config = PytorchEngineConfig(model_name=args.model_name,
                                             tp=args.tp,
                                             session_len=args.session_len,
-                                            adapters=args.adapters)
+                                            adapters=adapters)
         run_chat(args.model_path,
                  engine_config,
                  trust_remote_code=args.trust_remote_code)
