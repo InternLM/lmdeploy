@@ -9,7 +9,7 @@ The user can open the http url print by the following command in a browser.
 - **Please check the http url for the detailed api usage!!!**
 
 ```shell
-lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
+lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1  --cache-max-entry-count 0.1 
 ```
 
 We provide some RESTful APIs. Three of them are in OpenAI format.
@@ -166,3 +166,9 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 ### request distribution service
 
 Please refer to our [request distributor server](./proxy_server.md)
+
+### arguments that lmdeply serve supporting
+
+```
+ lmdeploy serve api_server -h
+```
