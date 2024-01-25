@@ -124,7 +124,6 @@ def run_local(model_path: str,
               server_name: str = '0.0.0.0',
               server_port: int = 6006,
               tp: int = 1,
-              huggingface_demo: bool = False,
               **kwargs):
     """chat with AI assistant through web ui.
 
