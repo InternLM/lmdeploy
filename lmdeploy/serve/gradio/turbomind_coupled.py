@@ -79,7 +79,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     state_chatbot = []
     # end the session
     InterFace.async_engine.end_session(session_id)
-    return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
+    return (state_chatbot, state_chatbot, gr.update(value=''))
 
 
 async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
@@ -198,7 +198,7 @@ def run_local(model_path: str,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
+            lambda: gr.update(value=''),
             [],
             [instruction_txtbox],
         )

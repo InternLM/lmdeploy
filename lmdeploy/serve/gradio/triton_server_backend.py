@@ -61,7 +61,7 @@ def reset_all_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
         llama_chatbot,
         state_chatbot,
         state_chatbot,
-        gr.Textbox.update(value=''),
+        gr.update(value=''),
     )
 
 

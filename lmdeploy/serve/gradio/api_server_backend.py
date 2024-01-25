@@ -78,7 +78,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State,
     return (
         state_chatbot,
         state_chatbot,
-        gr.Textbox.update(value=''),
+        gr.update(value=''),
     )
 
 
@@ -178,7 +178,7 @@ def run_api_server(api_server_url: str,
             state_session_id, top_p, temperature, request_output_len
         ], [state_chatbot, chatbot, cancel_btn, reset_btn])
         instruction_txtbox.submit(
-            lambda: gr.Textbox.update(value=''),
+            lambda: gr.update(value=''),
             [],
             [instruction_txtbox],
         )
