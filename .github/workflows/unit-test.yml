@@ -3,7 +3,7 @@ name: unit-test
 on:
   pull_request:
     paths:
-      - ".github/workflows/unit_test.yml"
+      - ".github/workflows/unit-test.yml"
       - "cmake/**"
       - "src/**"
       - "tests/**"
@@ -17,7 +17,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/unit_test.yml"
+      - ".github/workflows/unit-test.yml"
       - "cmake/**"
       - "src/**"
       - "tests/**"
@@ -30,42 +30,34 @@ on:
     tags:
       - "v*.*.*"
 
-env:
-  HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
-  HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-
-
 jobs:
   unit_test:
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-a100-s2]
     timeout-minutes: 4320 # 72hours
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=6,7"
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3"
       volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/packages:/root/packages
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
         run: |
           rm /etc/apt/sources.list.d/cuda*.list
           apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
-          dpkg -i /root/packages/allure_2.24.1-1_all.deb
+              libgoogle-glog-dev
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --extra-index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          # use cached build
           mkdir build
           cd build
           cmake .. \
