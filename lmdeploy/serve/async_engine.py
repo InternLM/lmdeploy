@@ -171,7 +171,7 @@ class AsyncEngine:
         self.backend_config = backend_config
 
     def __call__(self,
-                 prompts: List[str],
+                 prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,
                  request_output_len=512,
                  top_k: int = 40,
@@ -184,7 +184,9 @@ class AsyncEngine:
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str]): a batch of prompts
+            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+                prompts. It accepts: string prompt, a list of string prompts,
+                a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
             chat_template_config (ChatTemplateConfig | None):a instance of
@@ -256,7 +258,8 @@ class AsyncEngine:
         return generator
 
     def batch_infer(self,
-                    prompts: Union[List[str], str],
+                    prompts: Union[List[str], str, List[Dict],
+                                   List[List[Dict]]],
                     gen_config: Optional[Union[GenerationConfig,
                                                EngineGenerationConfig]] = None,
                     do_preprocess: bool = True,
@@ -264,11 +267,11 @@ class AsyncEngine:
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str] | str): a batch of prompts
+            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+                prompts. It accepts: string prompt, a list of string prompts,
+                a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
-            chat_template_config (ChatTemplateConfig | None):a instance of
-                ChatTemplateConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
@@ -318,7 +321,7 @@ class AsyncEngine:
 
     def stream_infer(
             self,
-            prompts: Union[List[str], str],
+            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
             gen_config: Optional[Union[GenerationConfig,
                                        EngineGenerationConfig]] = None,
             do_preprocess: bool = True,
@@ -326,11 +329,11 @@ class AsyncEngine:
         """Inference a batch of prompts with stream mode.
 
         Args:
-            prompts (List[str] | str): a batch of prompts
+            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+                prompts. It accepts: string prompt, a list of string prompts,
+                a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
-            chat_template_config (ChatTemplateConfig | None):a instance of
-                ChatTemplateConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
