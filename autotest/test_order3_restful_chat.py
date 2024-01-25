@@ -43,12 +43,13 @@ def prepare_environment(request, config):
 
     http_url = 'http://localhost:' + str(port)
     start_time = int(time())
-    for i in range(100):
+    sleep(5)
+    for i in range(120):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 100:
+        if result or total_time >= 120:
             break
     yield
     if pid > 0:

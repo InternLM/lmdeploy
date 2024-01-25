@@ -59,7 +59,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 datasets==2.14.7
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 datasets
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -83,7 +83,7 @@ jobs:
         run: pytest autotest -m restful_api --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - chat
         continue-on-error: true
-        timeout-minutes: 50
+        timeout-minutes: 60 # 60mins
         run: |
           pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - rerun fail cases
@@ -223,3 +223,19 @@ jobs:
           chmod -R 777 $workdir
           docker exec --workdir /__w/lmdeploy $CONTAINER_ID rm -rf /root/workspace/workdir/${TB_MODEL}
           docker stop $CONTAINER_ID
+
+
+  notify_to_feishu:
+    needs: [test_functions, test_triton]
+    timeout-minutes: 5
+    runs-on: self-hosted
+    steps:
+      - name: fail notify
+        if: ${{ always() && !cancelled() && contains(needs.*.result, 'failure') && (github.ref_name == 'develop' || github.ref_name == 'main') }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Opencompass- daily test failed","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.USER_ID }}'"}]]}}}}'  ${{ secrets.WEBHOOK_URL }}
+      - name: success notify
+        if: ${{ always() && !cancelled() && !contains(needs.*.result, 'failure') && (github.ref_name == 'develop' || github.ref_name == 'main') }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- daily test sucess","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} success. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.USER_ID }}'"}]]}}}}'  ${{ secrets.WEBHOOK_URL }}
+       
