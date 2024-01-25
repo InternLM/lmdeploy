@@ -15,50 +15,26 @@ dequant: f = q * scale + zp
 
 ### **Step One**
 
-Convert the Hugging Face model format to the TurboMind inference format to create a workspace directory.
-
-```bash
-lmdeploy convert internlm-chat-7b /path/to/internlm-chat-7b
-```
-
-If you already have a workspace directory, skip this step.
-
-### **Step Two**
-
-Get the quantization parameters by these two steps:
+Get the quantization parameters and save them to the original HF model directory:
 
 ```bash
 # get minmax
+export HF_MODEL=internlm/internlm-chat-7b
+
 lmdeploy lite calibrate \
   $HF_MODEL \
-  --calib-dataset 'ptb' \            # Support c4, ptb, wikitext2, pileval
-  --calib-samples 128 \              # Number of samples in the calibration set, if the memory is not enough, it can be adjusted appropriately
-  --calib-seqlen 2048 \              # Length of a single text, if the memory is not enough, you can adjust it appropriately
-  --work-dir $WORK_DIR \             # Directory for saving quantized statistical parameters and quantized weights in Pytorch format
-
-# get quant parameters
-lmdeploy lite kv_qparams \
-  $WORK_DIR  \                             # Directory of the last output
-  workspace/triton_models/weights/ \       # Directory to save the quantization parameters
-  --num-tp 1  \                            # Number of GPUs used for Tensor parallelization, keep it consistent with deploy.py
+  --calib-dataset 'ptb' \
+  --calib-samples 128 \
+  --calib-seqlen 2048 \
+  --work-dir $HF_MODEL
 ```
 
-`kv_qparams` will generate fp32 scaling factors in the `weights` directory. The file format is a binary produced by `numpy.tofile`.
+### **Step Two**
 
-You can also first set `turbomind_dir` to a private directory, then copy the scaling factors into `workspace/triton_models/weights/`.
-
-### **Step Three**
-
-Modify `workspace/triton_models/weights/config.ini`:
-
-- Set quant_policy to 4. This means enabling kv_cache int8
-
-### **Step Four**
-
-Test the chat performance.
+Test the chat performance. Note that setting `--quant-policy 4` would set to KV Cache int8 mode.
 
 ```bash
-lmdeploy chat turbomind ./workspace
+lmdeploy chat turbomind $HF_MODEL --model-format hf --quant-policy 4
 ```
 
 ## GPU Memory Test
@@ -102,3 +78,9 @@ Below is the result of PTQ quantization of `kCacheKVInt8` method with only 128 r
 |    Safety     |   crows_pairs   |   accuracy    | 32.56 | 31.43 | +1.13 |
 
 Note that both `kCacheKVInt8` and `WeightInt4` methods can be enabled at the same time.
+Please refer to [w4a16](./w4a16.md) do `WeightInt4` and then
+start chat like:
+
+```shell
+lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
+```
