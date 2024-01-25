@@ -12,7 +12,7 @@ The user can open the http url print by the following command in a browser.
 lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1 
 ```
 
-Tips: if you can not run serve api_server, due to Out of Memory, you may plus argument ` --cache-max-entry-count 0.1  ` at below start command.
+Tips: if you can not run serve api_server, due to Out of Memory, you may plus argument ` --cache-max-entry-count 0.1  ` after the above serve command.
 Because the default cache-max-entry-count be 0.5 will use much GPU RAM, lower the size from 0.5 to 0.1 will help you leave the OOM problem.
 
 We provide some RESTful APIs. Three of them are in OpenAI format.
