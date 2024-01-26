@@ -17,7 +17,8 @@ LMDeploy 提供了编译镜像 `openmmlab/lmdeploy-builder:cuda11.8`。使用之
 在 lmdeploy 源码的根目录下，运行以下命令：
 
 ```shell
-cd lmdeploy # lmdeploy 源码根目录
+# lmdeploy 源码根目录
+cd lmdeploy
 bash builder/manywheel/build_all_wheel.sh
 ```
 
@@ -67,8 +68,10 @@ wheel 文件存放在目录 `builder/manywheel/cuda11.8_dist` 下。
   ```
 - lmdeploy 编译安装:
   ```shell
-  apt install ninja-build # 安装更快的 Ninja
-  cd lmdeploy # lmdeploy 源码的根目录
+  # 安装更快的 Ninja
+  apt install ninja-build
+  # lmdeploy 源码的根目录
+  cd lmdeploy
   mkdir build && cd build
   sh ../generate.sh
   ninja && ninja install

@@ -162,23 +162,26 @@ def _dist_model(model: torch.nn.Module,
         """init params."""
         device = torch.device(f'cuda:{rank}')
         for name, param in model.named_parameters(recurse=False):
-            if rank == 0:
-                if device != param.device:
+            if device != param.device:
+                if rank == 0:
                     new_param = param.to(device)
-                    model.register_parameter(name,
-                                             torch.nn.Parameter(new_param))
-            else:
-                new_param = torch.empty_like(param, device=device)
-                model.register_parameter(name, torch.nn.Parameter(new_param))
+                    model.register_parameter(
+                        name, torch.nn.Parameter(new_param,
+                                                 requires_grad=False))
+                else:
+                    new_param = torch.empty_like(param, device=device)
+                    model.register_parameter(
+                        name, torch.nn.Parameter(new_param,
+                                                 requires_grad=False))
 
         for name, param in model.named_buffers(recurse=False):
-            if rank == 0:
-                if device != param.device:
+            if device != param.device:
+                if rank == 0:
                     new_param = param.to(device)
                     model.register_buffer(name, new_param)
-            else:
-                new_param = torch.empty_like(param, device=device)
-                model.register_buffer(name, new_param)
+                else:
+                    new_param = torch.empty_like(param, device=device)
+                    model.register_buffer(name, new_param)
 
     def _dist_params():
         """dist params."""
@@ -191,6 +194,7 @@ def _dist_model(model: torch.nn.Module,
             )
         else:
             replicate_module(model, device_mesh=device_mesh)
+        torch.cuda.empty_cache()
 
     def _register_hooks():
         """register hooks."""
