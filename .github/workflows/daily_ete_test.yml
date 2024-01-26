@@ -226,15 +226,12 @@ jobs:
 
 
   notify_to_feishu:
+    if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
     needs: [test_functions, test_triton]
     timeout-minutes: 5
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux-a100]
     steps:
       - name: fail notify
-        if: ${{ always() && !cancelled() && contains(needs.*.result, 'failure') }}
+        if: contains(needs.*.result, 'failure')
         run: |
           curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- daily test failed","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.USER_ID }}'"}]]}}}}'  ${{ secrets.WEBHOOK_URL }}
-      - name: success notify
-        if: ${{ always() && !cancelled() && !contains(needs.*.result, 'failure') }}
-        run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- daily test success","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} success. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.USER_ID }}'"}]]}}}}'  ${{ secrets.WEBHOOK_URL }}
