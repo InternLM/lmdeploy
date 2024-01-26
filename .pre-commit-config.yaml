@@ -3,7 +3,7 @@ repos:
     rev: 4.0.1
     hooks:
       - id: flake8
-        args: ["--exclude=lmdeploy/turbomind/triton_models/*", "--max-line-length=79"]
+        args: ["--exclude=lmdeploy/turbomind/triton_models/*,lmdeploy/pytorch/modeling/*", "--max-line-length=79"]
   - repo: https://github.com/PyCQA/isort
     rev: 5.11.5
     hooks:

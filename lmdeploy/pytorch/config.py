@@ -13,6 +13,8 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
         default (str): default device type.
     """
     torch_dtype = getattr(config, 'torch_dtype', default)
+    # torch_dtype in config could be none
+    torch_dtype = torch_dtype or default
     return eval(f'torch.{torch_dtype}')
 
 
@@ -26,6 +28,7 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
+    max_prefill_token_num: int = 16384
 
 
 @dataclass
@@ -105,6 +108,17 @@ class ModelConfig:
                                bos_token_id=hf_config.bos_token_id,
                                eos_token_id=hf_config.eos_token_id)
 
+        def __build_internlm2():
+            """build internlm2."""
+            num_key_value_groups = hf_config.num_attention_heads \
+                // hf_config.num_key_value_heads
+            return ModelConfig(hf_config.hidden_size // num_key_value_groups,
+                               hf_config.num_hidden_layers,
+                               hf_config.num_attention_heads //
+                               num_key_value_groups,
+                               bos_token_id=hf_config.bos_token_id,
+                               eos_token_id=hf_config.eos_token_id)
+
         def __build_default():
             return ModelConfig(hf_config.hidden_size,
                                hf_config.num_hidden_layers,
@@ -112,10 +126,17 @@ class ModelConfig:
                                bos_token_id=hf_config.bos_token_id,
                                eos_token_id=hf_config.eos_token_id)
 
+        arch = getattr(hf_config, 'architectures', ['Unknown'])[0]
+        auto_map = getattr(hf_config, 'auto_map', dict())
+        causallm_name = auto_map.get('AutoModelForCausalLM', 'Unknown')
+
         if 'falcon' in model_path:
             model_config = __build_falcon()
         elif 'chatglm' in model_path:
             model_config = __build_chatglm()
+        elif (arch == 'InternLM2ForCausalLM'
+              or causallm_name == 'modeling_internlm2.InternLM2ForCausalLM'):
+            model_config = __build_internlm2()
         else:
             model_config = __build_default()
 

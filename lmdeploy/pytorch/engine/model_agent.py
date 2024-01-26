@@ -13,7 +13,7 @@ from lmdeploy.pytorch.accel import LoadNoInit
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import (AdapterWeightMap, get_indexed_lora_linears,
-                               update_lora_linears)
+                               get_max_lora_weight_size, update_lora_linears)
 from ..config import CacheConfig, ModelConfig
 from ..models import patch
 from ..utils import get_gpu_memory
@@ -24,11 +24,29 @@ logger = get_logger('lmdeploy')
 _PATCH_ARG_NAMES = ['context', 'use_origin']
 
 
+def _infer_block_size(model: torch.nn.Module,
+                      model_config: ModelConfig,
+                      cache_config: CacheConfig,
+                      world_size: int = 1):
+    """infer block size."""
+    max_weight_dim = get_max_lora_weight_size(model)
+    if max_weight_dim == 0:
+        return cache_config.block_size
+
+    per_token_size = model_config.get_head_size(
+    ) * model_config.num_heads // world_size
+    block_size = 1
+    while block_size * per_token_size < max_weight_dim:
+        block_size *= 2
+    return block_size * world_size
+
+
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
                          gpu_id: int = 0,
                          gpu_mem_percent: float = 0.7,
-                         host_mem_size: int = 4 * (1 << 30)):
+                         host_mem_size: int = 4 * (1 << 30),
+                         world_size: int = 1):
     """Update the gpu mem and cpu mem according to model info.
 
     Args:
@@ -41,7 +59,7 @@ def _update_cache_config(model_config: ModelConfig,
     gpu_mem = gpu_mem_physical_free * gpu_mem_percent
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config)
+        cache_config.block_size, model_config) // world_size
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
@@ -56,16 +74,94 @@ class ModelInputs:
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
     attention_mask: torch.Tensor
-    block_offsets: List[List[int]]
+    block_offsets: torch.LongTensor
     position_ids: torch.LongTensor
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
-    local_adapter_ids: torch.LongTensor
-    global_adapter_ids: torch.LongTensor
-    adapter_offsets: torch.LongTensor
-    max_rank: int
-    meta: Any
+    local_adapter_ids: torch.LongTensor = None
+    global_adapter_ids: torch.LongTensor = None
+    adapter_offsets: torch.LongTensor = None
+    max_rank: int = 0
+    meta: Any = None
+
+    def slice(self, start: int, end: int):
+        """select by indices."""
+        sli = slice(start, end)
+
+        start_loc = self.q_start_loc[sli]
+        seq_length = self.seq_length[sli]
+        end_loc = start_loc[-1] + seq_length[-1]
+        input_ids = self.input_ids[:, start_loc[0]:end_loc]
+        start_loc = start_loc - start_loc[0]
+
+        history_lengths = self.history_lengths[sli]
+
+        local_adapter_ids = self.local_adapter_ids
+        if local_adapter_ids is not None:
+            local_adapter_ids = local_adapter_ids[sli]
+
+        return ModelInputs(input_ids=input_ids,
+                           seq_length=seq_length,
+                           attention_mask=self.attention_mask[sli],
+                           block_offsets=self.block_offsets[sli],
+                           position_ids=self.position_ids[sli],
+                           q_start_loc=start_loc,
+                           history_lengths=history_lengths,
+                           is_decoding=self.is_decoding,
+                           local_adapter_ids=local_adapter_ids,
+                           global_adapter_ids=self.global_adapter_ids,
+                           adapter_offsets=self.adapter_offsets,
+                           max_rank=self.max_rank,
+                           meta=self.meta)
+
+    def split(self, split_size: int, block_size: int):
+        """split inputs."""
+        assert len(
+            self.seq_length) == 1, ('Can not perform split on batched input.')
+        assert split_size % block_size == 0, (
+            'split_size should be multi of block_size.')
+
+        input_ids = self.input_ids
+        if input_ids.numel() < split_size:
+            return self
+
+        num_blocks = split_size // block_size
+        overlap = (self.history_lengths[0] % block_size != 0)
+        max_seq_len = self.seq_length[0].item()
+        ret = []
+        block_start = 0
+        history_len = self.history_lengths[0]
+        for i in range(0, max_seq_len, split_size):
+            start = i
+            end = min(max_seq_len, i + split_size)
+            block_end = block_start + num_blocks
+            if overlap:
+                block_end += 1
+
+            local_adapter_ids = self.local_adapter_ids
+            if local_adapter_ids is not None:
+                local_adapter_ids = local_adapter_ids[:, start:end]
+
+            inp = ModelInputs(
+                input_ids=self.input_ids[:, start:end],
+                seq_length=input_ids.new_tensor([end - start]),
+                attention_mask=self.attention_mask[:, start:end],
+                block_offsets=self.block_offsets[:, :block_end],
+                position_ids=self.position_ids[:, start:end],
+                q_start_loc=input_ids.new_zeros(1),
+                history_lengths=[history_len + start],
+                is_decoding=self.is_decoding,
+                local_adapter_ids=local_adapter_ids,
+                global_adapter_ids=self.global_adapter_ids,
+                adapter_offsets=self.adapter_offsets,
+                max_rank=self.max_rank,
+                meta=self.meta,
+            )
+            ret.append(inp)
+            block_start += num_blocks
+
+        return ret
 
     def to_device(self, device: str):
         """to device."""
@@ -362,6 +458,11 @@ class BaseModelAgent(AutoModelAgent):
             adapters=adapters,
             trust_remote_code=trust_remote_code)
 
+        block_size = _infer_block_size(self.patched_model, model_config,
+                                       cache_config)
+        if block_size != cache_config.block_size:
+            cache_config.block_size = block_size
+            logger.warning(f'infered block size: {block_size}')
         _update_cache_config(model_config, cache_config)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
@@ -484,6 +585,24 @@ def _tp_build_model(
     patched_model = None
     cache_engine = None
 
+    def __load_params_and_buffers(param_mod, mod):
+        """load param and buffer."""
+        for name, param in param_mod.named_parameters(recurse=False):
+            mod.register_parameter(name, param)
+        for name, buffer in param_mod.named_buffers(recurse=False):
+            mod.register_buffer(name, buffer)
+
+    def __load_state_dict_assign(param_model, model):
+        """load state dict assign."""
+        try:
+            model.load_state_dict(param_model.state_dict(), assign=True)
+        except Exception:
+            __load_params_and_buffers(param_model, model)
+            mods = dict(model.named_modules())
+            for mod_name, param_mod in param_model.named_modules():
+                mod = mods[mod_name]
+                __load_params_and_buffers(param_mod, mod)
+
     def _broadcast_config(cache_config):
         """broadcast cache config, use minimum cache."""
         if rank == 0:
@@ -530,7 +649,8 @@ def _tp_build_model(
                     device_map=device_map,
                     trust_remote_code=trust_remote_code)
                 _load_adapters(param_model, adapters, device_map=device_map)
-                model.load_state_dict(param_model.state_dict(), assign=True)
+                __load_state_dict_assign(param_model, model)
+                param_model = param_model.to('meta')
                 del param_model
 
         patched_model = patch(
@@ -540,13 +660,20 @@ def _tp_build_model(
             world_size=world_size,
         )
 
-        _update_cache_config(model_config, cache_config)
+        block_size = _infer_block_size(patched_model, model_config,
+                                       cache_config, world_size)
+        if block_size != cache_config.block_size:
+            cache_config.block_size = block_size
+            if rank == 0:
+                logger.warning(f'infered block size: {block_size}')
+        _update_cache_config(model_config, cache_config, world_size=world_size)
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
                                    rank=rank,
                                    world_size=world_size)
     except Exception as e:
+        logger.error(f'rank[{rank}] failed with error: {e}')
         error_code = 1
         error_type = e
 
@@ -594,6 +721,7 @@ def _tp_get_input(rank: int, in_que: mp.Queue, world_size: int):
                                                  device_mesh=device_mesh,
                                                  placements=[Replicate()
                                                              ]).to_local()
+    torch.cuda.synchronize()
 
     inputs = updated_inputs
     inputs.update(other_metas)
@@ -787,11 +915,11 @@ class TPModelAgent(AutoModelAgent):
                  world_size: int,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True) -> None:
-        mp.set_start_method('spawn')
+        self.mp_ctx = mp.get_context('spawn')
         super().__init__(model_config=model_config, cache_config=cache_config)
         self.world_size = world_size
-        self.tp_model_in_que = mp.Queue(10)
-        self.tp_model_out_que = mp.Queue(10)
+        self.tp_model_in_que = self.mp_ctx.Queue(10)
+        self.tp_model_out_que = self.mp_ctx.Queue(10)
 
         self.patch_model_tp(model_path,
                             model_config=model_config,

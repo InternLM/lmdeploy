@@ -19,11 +19,13 @@ class LlamaReader(BaseReader):
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
         self.last_bin = last_bin
+        self.model_cfg = model_cfg
         self.init_layer_id()
 
     def init_layer_id(self):
@@ -159,7 +161,7 @@ class LlamaModel(BaseInputModel):
                 else:
                     new_params = load_file(osp.join(self.ckpt_path, ckpt))
                 ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1)
+                                  i == self.nmgrs - 1, self.model_info())
                 yield ret
                 ret.clean_up(is_last_bin)
         except GeneratorExit:
@@ -181,6 +183,7 @@ class LlamaModel(BaseInputModel):
             model_arg = json.load(f)
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
+            attn_head_num = model_arg['num_attention_heads']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
@@ -192,6 +195,7 @@ class LlamaModel(BaseInputModel):
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
+                    attn_head_num=attn_head_num,
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,

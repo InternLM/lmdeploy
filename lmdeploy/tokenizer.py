@@ -7,7 +7,10 @@ from typing import List, Optional, Sequence, Union
 
 import torch
 
-from .utils import get_logger
+from lmdeploy.utils import get_logger
+
+# this file will be copied to triton server, make sure all
+# importing are starting from the package root lmdeploy
 
 
 class SentencePieceTokenizer:
@@ -164,6 +167,7 @@ class HuggingFaceTokenizer:
                 self.model.eos_token_id = self.model.eod_id
 
         # for stop words
+        self._vocab_size_with_added: int = None
         self._maybe_decode_bytes: bool = None
         # TODO maybe lack a constant.py
         self._indexes_tokens_deque = deque(maxlen=10)
@@ -174,6 +178,14 @@ class HuggingFaceTokenizer:
     def vocab_size(self):
         """vocabulary size."""
         return self.model.vocab_size
+
+    @property
+    def vocab_size_with_added(self):
+        """vocabulary size with added vocab."""
+        if self._vocab_size_with_added is not None:
+            return self._vocab_size_with_added
+        self._vocab_size_with_added = len(self.model.get_vocab())
+        return self._vocab_size_with_added
 
     @property
     def bos_token_id(self):
@@ -249,6 +261,14 @@ class HuggingFaceTokenizer:
             self.logger.warning(
                 f'There are too many(>{self.max_indexes_num}) possible '
                 f'indexes may decoding {token}, we will use {indexes} only')
+        # there might be token id that exceeds self.vocab_size
+        if len(indexes) == 0:
+            indexes = self.encode(token, False)
+            if len(indexes) != 1:
+                self.logger.warning(
+                    f'The token {token}, its length of indexes {indexes} is '
+                    'not 1. Currently, it can not be used as stop words')
+                indexes = []
         self._indexes_tokens_deque.append((token, indexes))
         return indexes
 
@@ -315,7 +335,7 @@ class Tokenizer:
         model_file_exists = osp.exists(model_file)
         config_exists = osp.exists(tokenizer_config_file)
         use_hf_model = config_exists or not model_file_exists
-
+        self.logger = get_logger('lmdeploy')
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:

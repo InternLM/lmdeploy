@@ -9,8 +9,9 @@ from .llama_awq import ensure_fp16orint32
 class BaichuanAwqReader(BaichuanReader):
     """BaichuanAwqReader."""
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
-        super().__init__(new_params, unused_params, last_bin)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def attn(self, i: int):
         """Get q, k, v, o qweight for layer i."""
@@ -40,8 +41,9 @@ class BaichuanAwqReader(BaichuanReader):
 class Baichuan2AwqReader(BaichuanAwqReader):
     """Baichuan2AwqReader."""
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool):
-        super().__init__(new_params, unused_params, last_bin)
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
+                 model_cfg: dict):
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def output_weight(self):
         """Get output."""

@@ -17,7 +17,8 @@ The docker image is `openmmlab/lmdeploy-builder:cuda11.8`. Make sure that docker
 In the root directory of the lmdeploy source code, please run the following command:
 
 ```shell
-cd lmdeploy # the home folder of lmdeploy source code
+# the home folder of lmdeploy source code
+cd lmdeploy
 bash builder/manywheel/build_all_wheel.sh
 ```
 
@@ -67,8 +68,10 @@ Then, follow the steps below to set up the compilation environment:
   ```
 - build and install lmdeploy libraries:
   ```shell
-  apt install ninja-build # install ninja
-  cd lmdeploy # the home folder of lmdeploy
+  # install ninja
+  apt install ninja-build
+  # the home folder of lmdeploy
+  cd lmdeploy
   mkdir build && cd build
   sh ../generate.sh
   ninja -j$(nproc) && ninja install

@@ -10,6 +10,14 @@ LMDeploy提供了快速安装、模型量化、离线批处理、在线推理服
 pip install lmdeploy
 ```
 
+LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
+
+```shell
+export LMDEPLOY_VERSION=0.2.0
+export PYTHON_VERSION=38
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+```
+
 ## 离线批处理
 
 ```python

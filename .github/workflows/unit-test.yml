@@ -1,0 +1,102 @@
+name: unit-test
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/unit-test.yml"
+      - "cmake/**"
+      - "src/**"
+      - "tests/**"
+      - "3rdparty/**"
+      - "lmdeploy/**"
+      - "requirements/**"
+      - "requirements.txt"
+      - "CMakeLists.txt"
+      - "setup.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/unit-test.yml"
+      - "cmake/**"
+      - "src/**"
+      - "tests/**"
+      - "3rdparty/**"
+      - "lmdeploy/**"
+      - "requirements/**"
+      - "requirements.txt"
+      - "CMakeLists.txt"
+      - "setup.py"
+    tags:
+      - "v*.*.*"
+
+jobs:
+  unit_test:
+    runs-on: [self-hosted, linux-a100-s2]
+    timeout-minutes: 4320 # 72hours
+    container:
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3"
+      volumes:
+        - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/packages:/root/packages
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev
+          rm -rf /var/lib/apt/lists/*
+      - name: Clone repository
+        uses: actions/checkout@v2
+      - name: Install pytorch
+        run: |
+          python3 -m pip cache dir
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+      - name: Build lmdeploy
+        run: |
+          python3 -m pip install cmake
+          python3 -m pip install -r requirements/build.txt
+          mkdir build
+          cd build
+          cmake .. \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
+              -DCMAKE_INSTALL_PREFIX=./install \
+              -DBUILD_PY_FFI=ON \
+              -DBUILD_MULTI_GPU=OFF \
+              -DCMAKE_CUDA_FLAGS="-lineinfo" \
+              -DUSE_NVTX=ON \
+              -DSM=80 \
+              -DCMAKE_CUDA_ARCHITECTURES=80 \
+              -DBUILD_TEST=OFF
+          make -j$(nproc) && make install
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install pynvml packaging protobuf transformers_stream_generator transformers==4.33.0
+          # manually install flash attn
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install -r requirements.txt -r requirements/test.txt
+          python3 -m pip install .
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
+      - name: Test lmdeploy csrc
+        run: |
+          #./build/bin/build/bin/unittest
+          echo "TODO"
+      - name: Test lmdeploy python UT
+        run: |
+          coverage run --branch --source lmdeploy -m pytest -rsE tests
+          coverage xml
+          coverage report -m
+      - name: Clear workfile
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir

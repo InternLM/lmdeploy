@@ -83,6 +83,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |       Llama        | 7B - 65B  |
 |       Llama2       | 7B - 70B  |
 |      InternLM      | 7B - 20B  |
+|     InternLM2      | 7B - 20B  |
 | InternLM-XComposer |    7B     |
 |        QWen        | 7B - 72B  |
 |      QWen-VL       |    7B     |
@@ -106,9 +107,17 @@ Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 pip install lmdeploy
 ```
 
-## Offline Batch Inference
+The default prebuilt package is compiled on CUDA 11.8. However, if CUDA 12+ is required, you can install lmdeploy by:
 
 ```shell
+export LMDEPLOY_VERSION=0.2.0
+export PYTHON_VERSION=38
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+```
+
+## Offline Batch Inference
+
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
@@ -133,7 +142,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - Add chat template
   - Add a new model
   - gemm tuning
-  - Long context inference
+  - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
 
 ## Contributing

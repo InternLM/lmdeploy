@@ -21,7 +21,7 @@ from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
                             best_match_model)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import _stop_words, get_logger
 
 from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
@@ -35,26 +35,6 @@ sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-
-def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
-    """return list of stop-words to numpy.ndarray."""
-    if stop_words is None:
-        return None
-    assert isinstance(stop_words, List) and \
-        all(isinstance(elem, str) for elem in stop_words), \
-        f'stop_words must be a list but got {type(stop_words)}'
-    stop_indexes = []
-    for stop_word in stop_words:
-        stop_indexes += tokenizer.indexes_containing_token(stop_word)
-    assert isinstance(stop_indexes, List) and all(
-        isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
-    # each id in stop_indexes represents a stop word
-    # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
-    # detailed explanation about fastertransformer's stop_indexes
-    stop_word_offsets = range(1, len(stop_indexes) + 1)
-    stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
-    return stop_words
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):
@@ -107,6 +87,31 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
     return TurbomindModelConfig.from_dict(dst_dict)
 
 
+def _compare_individual_gpu_memory(tp: int):
+    logging.basicConfig(level=logging.INFO)
+
+    try:
+        total_mem = []
+        free_mem = []
+
+        for i in range(tp):
+            torch.cuda.set_device(i)
+            free, total = torch.cuda.mem_get_info()
+            total_mem.append(total / (1024**2))
+            free_mem.append(free / (1024**2))
+
+        all_total_equal = all(total == total_mem[0] for total in total_mem)
+        all_free_equal = all(free == free_mem[0] for free in free_mem)
+
+        if not all_total_equal or not all_free_equal:
+            logging.warning(
+                f'Memory discrepancy detected: Total Memory={total_mem} MB, \
+Free Memory={free_mem} MB')
+
+    except Exception as e:
+        logging.error(f'An exception occurred: {e}')
+
+
 @contextmanager
 def cuda_ctx(device_id):
     old_device = torch.cuda.current_device()
@@ -140,7 +145,9 @@ class TurboMind:
                  tp: Optional[int] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
-
+        # check memory equality when tp
+        if tp is not None and tp > 1:
+            _compare_individual_gpu_memory(tp)
         # check model_name equal in engine_config and passed in
         if engine_config is not None and engine_config.model_name is not None:
             if model_name is not None:
@@ -542,7 +549,7 @@ class TurboMindInstance:
             if k in config.__dict__:
                 config.__dict__[k] = v
                 deprecated_kwargs.append(k)
-        if kwargs.get('request_output_len'):
+        if 'request_output_len' in kwargs:
             config.max_new_tokens = kwargs['request_output_len']
             deprecated_kwargs.append('request_output_len')
         for k in deprecated_kwargs:
