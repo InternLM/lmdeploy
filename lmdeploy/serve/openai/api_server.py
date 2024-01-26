@@ -54,7 +54,7 @@ async def check_api_key(
                 status_code=401,
                 detail={
                     'error': {
-                        'message': '',
+                        'message': 'Please request with valid api key!',
                         'type': 'invalid_request_error',
                         'param': None,
                         'code': 'invalid_api_key',
@@ -107,16 +107,6 @@ async def check_request(request) -> Optional[JSONResponse]:
     ret = create_error_response(
         HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
     return ret
-
-
-def ip2id(host_ip: str):
-    """Convert host ip address to session id."""
-    if '.' in host_ip:  # IPv4
-        return int(host_ip.replace('.', '')[-8:])
-    if ':' in host_ip:  # IPv6
-        return int(host_ip.replace(':', '')[-8:], 16)
-    print('Warning, could not get session id from ip, set it 0')
-    return 0
 
 
 @app.post('/v1/chat/completions_qos')
