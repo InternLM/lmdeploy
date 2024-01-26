@@ -79,10 +79,11 @@ def update_lora_linears(lora_linears: Dict,
             all_targets.update(targets)
         return all_targets
 
-    def __get_rank_and_start(target_names):
+    def __get_linear_meta(target_names):
         """get rank and start."""
         rank_map = dict()
         start_map = dict()
+        scaling_map = dict()
         for target in target_names:
             ranks = [0] + [
                 weight_map.target_modules[target].rank
@@ -92,15 +93,22 @@ def update_lora_linears(lora_linears: Dict,
                 weight_map.target_modules[target].block_start
                 for weight_map in weight_maps
             ]
+            scaling = [0] + [
+                weight_map.target_modules[target].scaling
+                for weight_map in weight_maps
+            ]
             rank_map[target] = torch.tensor(ranks)
             start_map[target] = torch.tensor(block_starts)
-        return rank_map, start_map
+            scaling_map[target] = torch.tensor(scaling)
+        return rank_map, start_map, scaling_map
 
-    def __update_linear(linear, idx, rank_map, start_map, adapter_names):
+    def __update_linear(linear, idx, rank_map, start_map, scaling_map,
+                        adapter_names):
         """update linear."""
         linear.layer_idx = idx
         linear.ranks = rank_map[target].to(device)
         linear.block_starts = start_map[target].to(device)
+        linear.scaling = scaling_map[target].to(device)
         for name in adapter_names:
             if name in linear.lora_A:
                 linear.lora_A.pop(name)
@@ -113,7 +121,7 @@ def update_lora_linears(lora_linears: Dict,
     for weight_map in weight_maps:
         weight_map.expand_targets(all_targets)
 
-    rank_map, start_map = __get_rank_and_start(all_targets)
+    rank_map, start_map, scaling_map = __get_linear_meta(all_targets)
 
     for idx, lora_linear in lora_linears.items():
         for target, linear in lora_linear.items():
@@ -121,6 +129,7 @@ def update_lora_linears(lora_linears: Dict,
                             idx,
                             rank_map=rank_map,
                             start_map=start_map,
+                            scaling_map=scaling_map,
                             adapter_names=adapter_names)
 
 
@@ -139,6 +148,7 @@ def get_max_lora_weight_size(model: torch.nn.Module):
 class TargetMeta:
     rank: int
     block_start: int
+    scaling: float
 
 
 @dataclass
@@ -149,12 +159,12 @@ class AdapterWeightMap:
 
     @classmethod
     def new(cls, adapter_name: str, rank: int, target_names: List[str],
-            block_table: Tensor):
+            block_table: Tensor, scaling: float):
         """create new weightmap."""
         block_start = 0
         target_modules: Dict[str, TargetMeta] = dict()
         for name in target_names:
-            target_modules[name] = TargetMeta(rank, block_start)
+            target_modules[name] = TargetMeta(rank, block_start, scaling)
             block_start += rank
 
         return AdapterWeightMap(adapter_name,
@@ -170,7 +180,7 @@ class AdapterWeightMap:
                     continue
                 else:
                     raise RuntimeError(f'target {name} exists.')
-            self.target_modules[name] = TargetMeta(0, 0)
+            self.target_modules[name] = TargetMeta(0, 0, 0.0)
 
     @classmethod
     def cache_lora_a(cls, cache: Tensor, weight: Tensor, block_table: Tensor):
@@ -266,6 +276,11 @@ class SchedulerAdapter:
         """get rank."""
         return self.config.r
 
+    @property
+    def scaling(self):
+        """get scaling."""
+        return self.config.lora_alpha / self.rank
+
     def is_actived(self):
         """check if adapter is active."""
         return self._active
@@ -291,7 +306,8 @@ class SchedulerAdapter:
         return AdapterWeightMap.new(self.name,
                                     rank=self.rank,
                                     target_names=self.target_modules,
-                                    block_table=block_table)
+                                    block_table=block_table,
+                                    scaling=self.scaling)
 
 
 class AdapterManager:

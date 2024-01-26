@@ -178,8 +178,6 @@ def attention_forward_with_paged_attention(
 
     attn_output = query_states
 
-    block_size = past_key_value[0].size(1)
-
     bias_type = bias_type.lower()
     if bias_type == 'default':
         paged_attention_fwd(
@@ -202,20 +200,17 @@ def attention_forward_with_paged_attention(
                 rank = dist.get_rank()
                 num_heads_full = num_heads * world_size
                 head_offset = num_heads * rank
-            alibi_paged_attention_fwd(
-                query_states,
-                past_key_value[0],
-                past_key_value[1],
-                attn_output,
-                block_offsets,
-                b_start_loc=q_start_loc,
-                b_seq_len=q_seq_length,
-                b_kv_seq_len=kv_seq_length,
-                max_input_len=max_seq_len,
-                head_offset=head_offset,
-                num_heads=num_heads_full,
-                BLOCK=block_size,
-            )
+            alibi_paged_attention_fwd(query_states,
+                                      past_key_value[0],
+                                      past_key_value[1],
+                                      attn_output,
+                                      block_offsets,
+                                      b_start_loc=q_start_loc,
+                                      b_seq_len=q_seq_length,
+                                      b_kv_seq_len=kv_seq_length,
+                                      max_input_len=max_seq_len,
+                                      head_offset=head_offset,
+                                      num_heads=num_heads_full)
         else:
             raise ValueError(f'Unknown bias type: {bias_type}')
     hidden_size = num_heads * head_dim
