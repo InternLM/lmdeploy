@@ -148,12 +148,11 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 可以使用 [OpenAOE](https://github.com/InternLM/OpenAOE) 无缝接入restful api服务.
 
 ```shell
-pip install -U openaoe 
+pip install -U openaoe
 openaoe -f /path/to/your/config-template.yaml
 ```
-具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md
-).
 
+具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md).
 
 ### FAQ
 

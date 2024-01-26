@@ -153,9 +153,10 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 You can use [OpenAOE](https://github.com/InternLM/OpenAOE) for seamless integration with LMDeploy.
 
 ```shell
-pip install -U openaoe 
+pip install -U openaoe
 openaoe -f /path/to/your/config-template.yaml
 ```
+
 Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md) for more deploy information.
 
 ### FAQ
