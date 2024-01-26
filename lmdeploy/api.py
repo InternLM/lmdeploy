@@ -147,13 +147,17 @@ def serve(model_path: str,
             pass
 
 
-def client(api_server_url: str = 'http://0.0.0.0:23333', **kwargs):
+def client(api_server_url: str = 'http://0.0.0.0:23333',
+           api_key: Optional[str] = None,
+           **kwargs):
     """
     Args:
         api_server_url (str): communicating address 'http://<ip>:<port>' of
             api_server
+        api_key (str | None): api key. Default to None, which means no
+            api key will be used.
     Return:
         Chatbot for LLaMA series models with turbomind as inference engine.
     """
     from lmdeploy.serve.openai.api_client import APIClient
-    return APIClient(api_server_url, **kwargs)
+    return APIClient(api_server_url, api_key, **kwargs)

@@ -167,6 +167,15 @@ class ArgumentHelper:
                                    help='Set the log level')
 
     @staticmethod
+    def api_keys(parser):
+        return parser.add_argument(
+            '--api-keys',
+            type=lambda s: s.split(','),
+            default=None,
+            help='Optional list of comma separated API keys',
+        )
+
+    @staticmethod
     def backend(parser):
         return parser.add_argument('--backend',
                                    type=str,

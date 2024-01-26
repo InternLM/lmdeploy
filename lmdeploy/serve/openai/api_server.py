@@ -7,9 +7,10 @@ from http import HTTPStatus
 from typing import AsyncGenerator, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
@@ -30,11 +31,40 @@ from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    api_keys: Optional[List[str]] = None
     qos_engine: QosEngine = None
     request_hosts = []
 
 
 app = FastAPI(docs_url='/')
+get_bearer_token = HTTPBearer(auto_error=False)
+
+
+async def check_api_key(
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token),
+) -> str:
+    """Check if client provide valid api key.
+
+    Adopted from https://github.com/lm-sys/FastChat/blob/v0.2.35/fastchat/serve/openai_api_server.py#L108-L127
+    """  # noqa
+    if VariableInterface.api_keys:
+        if auth is None or (
+                token := auth.credentials) not in VariableInterface.api_keys:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    'error': {
+                        'message': '',
+                        'type': 'invalid_request_error',
+                        'param': None,
+                        'code': 'invalid_api_key',
+                    }
+                },
+            )
+        return token
+    else:
+        # api_keys not set; allow all
+        return None
 
 
 def get_model_list():
@@ -45,7 +75,7 @@ def get_model_list():
     return [VariableInterface.async_engine.engine.model_name]
 
 
-@app.get('/v1/models')
+@app.get('/v1/models', dependencies=[Depends(check_api_key)])
 def available_models():
     """Show available models."""
     model_cards = []
@@ -231,7 +261,7 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     return response
 
 
-@app.post('/v1/chat/completions')
+@app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest,
                               raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -534,7 +564,7 @@ async def completions_v1_qos(request: CompletionRequestQos,
     return response
 
 
-@app.post('/v1/completions')
+@app.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest,
                          raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -706,7 +736,7 @@ async def create_embeddings(request: EmbeddingsRequest,
                                  'Unsupported by turbomind.')
 
 
-@app.post('/v1/encode')
+@app.post('/v1/encode', dependencies=[Depends(check_api_key)])
 async def encode(request: EncodeRequest, raw_request: Request = None):
     """Encode prompts.
 
@@ -807,10 +837,7 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
         return JSONResponse(ret)
 
 
-@app.post('/generate',
-          tags=['deprecated'],
-          description='please use /v1/chat/interactive')
-@app.post('/v1/chat/interactive')
+@app.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
 async def chat_interactive_v1(request: GenerateRequest,
                               raw_request: Request = None):
     """Generate completion for the request.
@@ -912,6 +939,7 @@ def serve(model_path: str,
           allow_methods: List[str] = ['*'],
           allow_headers: List[str] = ['*'],
           log_level: str = 'ERROR',
+          api_keys: Optional[Union[List[str], str]] = None,
           qos_config_path: str = '',
           **kwargs):
     """An example to perform model inference through the command line
@@ -947,6 +975,7 @@ def serve(model_path: str,
         allow_methods (List[str]): a list of allowed HTTP methods for CORS
         allow_headers (List[str]): a list of allowed HTTP headers for CORS
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+        api_keys (str | None): Optional list of comma separated API keys.
         qos_config_path (str): qos policy config path
     """ # noqa E501
     os.environ['TM_LOG_LEVEL'] = log_level
@@ -967,6 +996,10 @@ def serve(model_path: str,
         chat_template_config=chat_template_config,
         tp=tp,
         **kwargs)
+    if api_keys is not None:
+        if isinstance(api_keys, str):
+            api_keys = api_keys.split(',')
+        VariableInterface.api_keys = api_keys
 
     if qos_config_path:
         try:

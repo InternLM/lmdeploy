@@ -12,12 +12,14 @@ import numpy as np
 import requests
 import uvicorn
 import yaml
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security.http import HTTPBearer
 from pydantic import BaseModel, Field
 
-from lmdeploy.serve.openai.api_server import create_error_response
+from lmdeploy.serve.openai.api_server import (check_api_key,
+                                              create_error_response)
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
     ModelPermission)
@@ -312,9 +314,10 @@ app.add_middleware(
     allow_headers=['*'],
 )
 node_manager = NodeManager()
+get_bearer_token = HTTPBearer(auto_error=False)
 
 
-@app.get('/v1/models')
+@app.get('/v1/models', dependencies=[Depends(check_api_key)])
 def available_models():
     """Show available models."""
     model_cards = []
@@ -326,7 +329,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status')
+@app.get('/nodes/status', dependencies=[Depends(check_api_key)])
 def node_status():
     """Show nodes status."""
     try:
@@ -335,7 +338,7 @@ def node_status():
         return False
 
 
-@app.post('/nodes/add')
+@app.post('/nodes/add', dependencies=[Depends(check_api_key)])
 def add_node(node: Node, raw_request: Request = None):
     """Add a node to the manager.
 
@@ -352,7 +355,7 @@ def add_node(node: Node, raw_request: Request = None):
         return 'Failed to add, please check the input url.'
 
 
-@app.post('/nodes/remove')
+@app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
 def remove_node(node_url: str):
     """Show available models."""
     try:
@@ -362,7 +365,7 @@ def remove_node(node_url: str):
         return 'Failed to delete, please check the input url.'
 
 
-@app.post('/v1/chat/completions')
+@app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest,
                               raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -418,7 +421,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         return JSONResponse(json.loads(response))
 
 
-@app.post('/v1/completions')
+@app.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest,
                          raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -480,6 +483,7 @@ def proxy(server_name: str = '0.0.0.0',
           server_port: int = 10086,
           strategy: Literal['random', 'min_expected_latency',
                             'min_observed_latency'] = 'min_expected_latency',
+          api_keys: Optional[List[str]] = None,
           **kwargs):
     """To launch the proxy server.
 
