@@ -87,6 +87,31 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
     return TurbomindModelConfig.from_dict(dst_dict)
 
 
+def _compare_individual_gpu_memory(tp: int):
+    logging.basicConfig(level=logging.INFO)
+
+    try:
+        total_mem = []
+        free_mem = []
+
+        for i in range(tp):
+            torch.cuda.set_device(i)
+            free, total = torch.cuda.mem_get_info()
+            total_mem.append(total / (1024**2))
+            free_mem.append(free / (1024**2))
+
+        all_total_equal = all(total == total_mem[0] for total in total_mem)
+        all_free_equal = all(free == free_mem[0] for free in free_mem)
+
+        if not all_total_equal or not all_free_equal:
+            logging.warning(
+                f'Memory discrepancy detected: Total Memory={total_mem} MB, \
+Free Memory={free_mem} MB')
+
+    except Exception as e:
+        logging.error(f'An exception occurred: {e}')
+
+
 @contextmanager
 def cuda_ctx(device_id):
     old_device = torch.cuda.current_device()
@@ -120,7 +145,9 @@ class TurboMind:
                  tp: Optional[int] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
-
+        # check memory equality when tp
+        if tp is not None and tp > 1:
+            _compare_individual_gpu_memory(tp)
         # check model_name equal in engine_config and passed in
         if engine_config is not None and engine_config.model_name is not None:
             if model_name is not None:
