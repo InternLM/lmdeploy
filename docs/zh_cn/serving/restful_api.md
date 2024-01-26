@@ -132,7 +132,7 @@ restful api 服务可以通过客户端测试，例如
 lmdeploy serve api_client api_server_url
 ```
 
-### webui
+### webui through gradio
 
 也可以直接用 webui 测试使用 restful-api。
 
@@ -142,6 +142,17 @@ lmdeploy serve api_client api_server_url
 # 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
+
+### webui through OpenAOE
+
+可以使用 [OpenAOE](https://github.com/InternLM/OpenAOE) 无缝接入restful api服务.
+
+```shell
+pip install -U openaoe 
+openaoe -f /path/to/your/config-template.yaml
+```
+具体配置信息请参考 [配置文件说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/config-template.md).
+
 
 ### FAQ
 
