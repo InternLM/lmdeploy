@@ -16,7 +16,6 @@ import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security.http import HTTPBearer
 from pydantic import BaseModel, Field
 
 from lmdeploy.serve.openai.api_server import (check_api_key,
@@ -315,7 +314,6 @@ app.add_middleware(
     allow_headers=['*'],
 )
 node_manager = NodeManager()
-get_bearer_token = HTTPBearer(auto_error=False)
 
 
 @app.get('/v1/models', dependencies=[Depends(check_api_key)])
