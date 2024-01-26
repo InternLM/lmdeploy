@@ -34,7 +34,7 @@ def _infer_block_size(model: torch.nn.Module,
         return cache_config.block_size
 
     per_token_size = model_config.get_head_size(
-    ) * model_config.num_heads // world_size
+    ) * model_config.num_key_value_heads // world_size
     block_size = 1
     while block_size * per_token_size < max_weight_dim:
         block_size *= 2
@@ -628,8 +628,6 @@ def _tp_build_model(
 
     try:
         config = model_config.hf_config
-        # config = AutoConfig.from_pretrained(
-        #     model_path, trust_remote_code=trust_remote_code)
         torch_dtype = model_config.dtype
         with init_empty_weights():
             model = AutoModelForCausalLM.from_config(
