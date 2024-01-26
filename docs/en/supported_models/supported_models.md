@@ -14,6 +14,7 @@
 |      Baichuan      |    7B    |    Yes    |   Yes   |  Yes  |
 |     Baichuan2      |    7B    |    Yes    |   Yes   |  Yes  |
 |     Code Llama     | 7B - 34B |    Yes    |   No    |  No   |
+|         YI         | 6B - 34B |    Yes    |   No    |  No   |
 
 ## Models supported by PyTorch
 
@@ -26,3 +27,4 @@
 | Baichuan2 | 7B - 13B  |    Yes    |   No    | Yes  |
 | ChatGLM2  |    6B     |    Yes    |   No    |  No  |
 |  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
+|    YI     | 6B - 34B  |    Yes    |   No    |  No  |

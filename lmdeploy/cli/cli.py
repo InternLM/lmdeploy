@@ -106,8 +106,8 @@ class CLI(object):
         assert engine in ['turbomind', 'pytorch']
         if engine == 'pytorch':
             model_names = [
-                'llama', 'llama2', 'internlm', 'baichuan2', 'chatglm2',
-                'falcon'
+                'llama', 'llama2', 'internlm', 'internlm2', 'baichuan2',
+                'chatglm2', 'falcon', 'yi'
             ]
         elif engine == 'turbomind':
             from lmdeploy.model import MODELS
