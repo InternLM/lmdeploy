@@ -5,7 +5,7 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
 
 class PipelineChat:
 
-    def __init__(self, hf_path: str, tp: int == 1):
+    def __init__(self, hf_path: str, tp: int = 1):
         self.hf_path = hf_path
         if 'w4' in hf_path:
             backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
@@ -21,7 +21,7 @@ class PipelineChat:
 
 class PipelinePytorchChat:
 
-    def __init__(self, hf_path: str, tp: int == 1):
+    def __init__(self, hf_path: str, tp: int = 1):
         self.hf_path = hf_path
         backend_config = PytorchEngineConfig(tp=tp)
         pipe = pipeline(hf_path, backend_config=backend_config)
