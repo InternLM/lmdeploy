@@ -379,13 +379,11 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
     const float penalty      = penalties[batch_idx];
     const int   input_length = input_lengths != nullptr ? input_lengths[batch_idx] : max_input_length;
 
-    logits += batch_idx * vocab_size;
-    penalty_workspace += batch_idx * vocab_size;
+    penalty_workspace += batch_idx * step * 2;
+    float* penalty_logits  = (float*)penalty_workspace;
+    int*   penalty_indices = (int*)(penalty_workspace + step);
 
-    for (int index = threadIdx.x; index < vocab_size; index += blockDim.x) {
-        penalty_workspace[index] = 0;
-    }
-    __syncthreads();
+    logits += batch_idx * vocab_size;
 
     // Phase 1. Find indices to penalize and keep the penalized values.
     // A vocab id can appear multiple times but should be penalized once.
@@ -397,29 +395,30 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
         // output_ids shape: (input_len + output_len, batch_size)
         int penalty_index = output_ids[index * batch_size + batch_idx];
         assert(penalty_index < vocab_size);
-        penalty_workspace[penalty_index] += 1;
-    }
-    __syncthreads();
-
-    // Phase 2. Replace a logit value by the penalized one.
-    for (int index = threadIdx.x; index < vocab_size; index += blockDim.x) {
-        float logit = (float)logits[index];
+        penalty_indices[index] = penalty_index;
+        float logit            = (float)logits[penalty_index];
         if (penalty_type == RepetitionPenaltyType::Additive) {
-            logit = logit - penalty;
+            penalty_logits[index] = logit - penalty;
         }
         else if (penalty_type == RepetitionPenaltyType::Multiplicative) {
-            logit = logit < 0.0f ? logit * penalty : logit / penalty;
+            penalty_logits[index] = logit < 0.0f ? logit * penalty : logit / penalty;
         }
         else if (penalty_type == RepetitionPenaltyType::None) {
-            logit = logit;
+            penalty_logits[index] = logit;
         }
         else {
             // Unsupported type
             assert(false);
         }
-        if (penalty_workspace[index]) {
-            logits[index] = logit;
+    }
+
+    // Phase 2. Replace a logit value by the penalized one.
+    for (int index = threadIdx.x; index < step; index += blockDim.x) {
+        // Skip the padding tokens in input sequences.
+        if (index >= input_length && index < max_input_length) {
+            continue;
         }
+        logits[penalty_indices[index]] = penalty_logits[index];
     }
 }
 
@@ -443,7 +442,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
     //   output_ids [step, batch_size] : output token ids (with offset ite * local_batch_size).
     //   input_lengths [local_batch_size], input lengths (optional).
     //      Padding tokens at [input_length, max_input_length) of input will not be penalized.
-    dim3 block(2048);
+    dim3 block(min(step, 1024));
     dim3 grid(local_batch_size);
     if (penalty_type == RepetitionPenaltyType::Additive) {
         batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive><<<grid, block, 0, stream>>>(logits,

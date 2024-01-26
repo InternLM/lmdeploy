@@ -46,9 +46,6 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
     min_lengths_        = (int*)std::realloc((void*)min_lengths_, batch_size * sizeof(int));
     skip_decode_        = (bool*)std::realloc((void*)skip_decode_, batch_size * sizeof(bool));
 
-    repetition_penalty_workspace_ = reinterpret_cast<int*>(
-        allocator_->reMalloc(repetition_penalty_workspace_, sizeof(int) * batch_size * vocab_size_padded_, false));
-
     is_allocate_buffer_ = true;
 }
 
@@ -288,6 +285,8 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
         float default_value = getDefaultPenaltyValue(repetition_penalty_type_);
         if (!ALL_OF(repetition_penalty_ + ite * local_batch_size, local_batch_size, float, default_value)) {
+            repetition_penalty_workspace_ = reinterpret_cast<int*>(allocator_->reMalloc(
+                repetition_penalty_workspace_, batch_size * step * (sizeof(int) + sizeof(float)), false));
             invokeBatchApplyRepetitionPenalty(
                 logits,
                 repetition_penalty_buf_ + ite * local_batch_size,
