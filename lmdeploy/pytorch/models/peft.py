@@ -36,6 +36,7 @@ class LoRALinear(torch.nn.Module):
         layer_idx = self.layer_idx
         ranks = self.ranks[global_adapter_ids]
         block_starts = self.block_starts[global_adapter_ids]
+        scaling = self.scaling[global_adapter_ids]
         k_cache, v_cache = context.kv_caches[layer_idx]
         cache_len = k_cache.size(0)
         a_cache = k_cache.view(cache_len, -1)
@@ -47,7 +48,7 @@ class LoRALinear(torch.nn.Module):
                                b_start_loc=context.q_start_loc,
                                b_seq_lens=context.seq_length,
                                b_adapter_ids=context.local_adapter_ids,
-                               b_scaling=context.local_adapter_scalings,
+                               b_scaling=scaling,
                                rank_page_table=context.adapter_offsets,
                                rank_page_start=block_starts,
                                ranks=ranks,
