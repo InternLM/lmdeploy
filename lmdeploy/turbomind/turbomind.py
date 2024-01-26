@@ -91,8 +91,8 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
 def _compare_individual_gpu_memory():
     logging.basicConfig(level=logging.INFO)
 
-    devices = os.getenv("CUDA_VISIBLE_DEVICES", "")
-    device_ids = list(map(int, devices.split(","))) if devices else []
+    devices = os.getenv('CUDA_VISIBLE_DEVICES', '')
+    device_ids = list(map(int, devices.split(','))) if devices else []
 
     try:
         total_mem = []
@@ -112,11 +112,11 @@ def _compare_individual_gpu_memory():
 
         if not all_total_equal or not all_free_equal:
             logging.warning(
-                f"Memory discrepancy detected: Total Memory={total_mem} MB, Free Memory={free_mem} MB"
-            )
+                f'Memory discrepancy detected: Total Memory={total_mem} MB, \
+                    Free Memory={free_mem} MB')
 
     except Exception as e:
-        logging.error(f"An exception occurred: {e}")
+        logging.error(f'An exception occurred: {e}')
 
 
 @contextmanager
