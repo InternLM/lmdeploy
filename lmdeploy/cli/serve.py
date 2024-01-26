@@ -120,6 +120,7 @@ class SubCliServe:
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
         ArgumentHelper.api_keys(parser)
+        ArgumentHelper.ssl(parser)
 
         # chat template args
         ArgumentHelper.meta_instruction(parser)
@@ -247,6 +248,7 @@ class SubCliServe:
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
+                       ssl=args.ssl,
                        qos_config_path=args.qos_config_path)
 
     @staticmethod

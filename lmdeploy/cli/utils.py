@@ -176,6 +176,17 @@ class ArgumentHelper:
         )
 
     @staticmethod
+    def ssl(parser):
+        return parser.add_argument(
+            '--ssl',
+            action='store_true',
+            required=False,
+            default=False,
+            help='Enable SSL. Requires OS Environment variables'
+            " 'SSL_KEYFILE' and 'SSL_CERTFILE'.",
+        )
+
+    @staticmethod
     def backend(parser):
         return parser.add_argument('--backend',
                                    type=str,

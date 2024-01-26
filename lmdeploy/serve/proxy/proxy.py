@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import copy
 import json
+import os
 import os.path as osp
 import random
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Dict, List, Literal, Optional
+from typing import Deque, Dict, List, Literal, Optional, Union
 
 import numpy as np
 import requests
@@ -483,7 +484,8 @@ def proxy(server_name: str = '0.0.0.0',
           server_port: int = 10086,
           strategy: Literal['random', 'min_expected_latency',
                             'min_observed_latency'] = 'min_expected_latency',
-          api_keys: Optional[List[str]] = None,
+          api_keys: Optional[Union[List[str], str]] = None,
+          ssl: bool = False,
           **kwargs):
     """To launch the proxy server.
 
@@ -493,9 +495,25 @@ def proxy(server_name: str = '0.0.0.0',
         strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'
-    """
+        api_keys (List[str] | str | None): Optional list of comma separated API keys.
+        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
+    """  # noqa
     node_manager.strategy = Strategy.from_str(strategy)
-    uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
+    if api_keys is not None:
+        if isinstance(api_keys, str):
+            api_keys = api_keys.split(',')
+        from lmdeploy.serve.openai.api_server import VariableInterface
+        VariableInterface.api_keys = api_keys
+    ssl_keyfile, ssl_certfile = None, None
+    if ssl:
+        ssl_keyfile = os.environ['SSL_KEYFILE']
+        ssl_certfile = os.environ['SSL_CERTFILE']
+    uvicorn.run(app=app,
+                host=server_name,
+                port=server_port,
+                log_level='info',
+                ssl_keyfile=ssl_keyfile,
+                ssl_certfile=ssl_certfile)
 
 
 if __name__ == '__main__':

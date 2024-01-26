@@ -940,6 +940,7 @@ def serve(model_path: str,
           allow_headers: List[str] = ['*'],
           log_level: str = 'ERROR',
           api_keys: Optional[Union[List[str], str]] = None,
+          ssl: bool = False,
           qos_config_path: str = '',
           **kwargs):
     """An example to perform model inference through the command line
@@ -975,7 +976,8 @@ def serve(model_path: str,
         allow_methods (List[str]): a list of allowed HTTP methods for CORS
         allow_headers (List[str]): a list of allowed HTTP headers for CORS
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
-        api_keys (str | None): Optional list of comma separated API keys.
+        api_keys (List[str] | str | None): Optional list of comma separated API keys.
+        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
     """ # noqa E501
     os.environ['TM_LOG_LEVEL'] = log_level
@@ -988,6 +990,16 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+    if api_keys is not None:
+        if isinstance(api_keys, str):
+            api_keys = api_keys.split(',')
+        VariableInterface.api_keys = api_keys
+    ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
+    if ssl:
+        ssl_keyfile = os.environ['SSL_KEYFILE']
+        ssl_certfile = os.environ['SSL_CERTFILE']
+        http_or_https = 'https'
+
     VariableInterface.async_engine = AsyncEngine(
         model_path=model_path,
         model_name=model_name,
@@ -996,10 +1008,6 @@ def serve(model_path: str,
         chat_template_config=chat_template_config,
         tp=tp,
         **kwargs)
-    if api_keys is not None:
-        if isinstance(api_keys, str):
-            api_keys = api_keys.split(',')
-        VariableInterface.api_keys = api_keys
 
     if qos_config_path:
         try:
@@ -1014,9 +1022,16 @@ def serve(model_path: str,
             VariableInterface.qos_engine = None
 
     for i in range(3):
-        print(f'HINT:    Please open \033[93m\033[1mhttp://{server_name}:'
-              f'{server_port}\033[0m in a browser for detailed api usage!!!')
-    uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
+        print(
+            f'HINT:    Please open \033[93m\033[1m{http_or_https}://'
+            f'{server_name}:{server_port}\033[0m in a browser for detailed api'
+            ' usage!!!')
+    uvicorn.run(app=app,
+                host=server_name,
+                port=server_port,
+                log_level='info',
+                ssl_keyfile=ssl_keyfile,
+                ssl_certfile=ssl_certfile)
 
 
 if __name__ == '__main__':
