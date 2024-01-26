@@ -41,9 +41,35 @@ export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 
 很可能是机器上的 cuda 版本太低导致的。LMDeploy运行时要求 cuda 不低于 11.2
 
-## Turbomind 推理
+## 推理
 
-## Pytorch 推理
+### RuntimeError: \[TM\]\[ERROR\] CUDA runtime error: out of memory /workspace/lmdeploy/src/turbomind/utils/allocator.h
+
+这是因为 k/v cache内存比例默认是总内存的 50%，对于内存不足 40G 的显卡，这个比例过高了。
+
+如果在使用 pipeline 接口遇到该问题，请调低 `TurbomindEngineConfig` 中的 `cache_max_entry_count`，比如
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+# 调低 k/v cache内存占用比例为 20%
+backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+pipe = pipeline('internlm/internlm2-chat-7b',
+                backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+print(response)
+```
+
+如果在使用 CLI 工具时遇到此问题，请传入参数`--cache-max-entry-count`，调低 k/v cache缓存使用比例。比如，
+
+```shell
+# chat 命令
+lmdeploy chat turbomind internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+
+# server 命令
+lmdeploy serve api_server internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+```
 
 ## 服务
 

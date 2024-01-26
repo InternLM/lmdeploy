@@ -6,7 +6,7 @@ Then, we will describe the pipeline API in detail.
 
 ## Usage
 
-An example using default parameters:
+- An example using default parameters:
 
 ```python
 from lmdeploy import pipeline
@@ -16,7 +16,25 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-An example showing how to set tensor parallel num:
+In this example, the pipeline by default allocates 50% of the GPU total memory for k/v caches.
+Out Of Memory (OOM) errors may occur if a 7B model is deployed on a GPU with memory less than 40G.
+If you encounter an OOM error, please decrease the ratio of the k/v cache occupation as follows:
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+# decrease the ratio of the k/v cache occupation to 20%
+backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+pipe = pipeline('internlm/internlm2-chat-7b',
+                backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+print(response)
+```
+
+A better approach would be to allocate space for the k/v cache from the free GPU memory proportionally. We will improve it in future versions for a better user experience.
+
+- An example showing how to set tensor parallel num:
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -28,7 +46,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-An example for setting sampling parameters:
+- An example for setting sampling parameters:
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -45,7 +63,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
 print(response)
 ```
 
-An example for OpenAI format prompt input:
+- An example for OpenAI format prompt input:
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -69,7 +87,7 @@ response = pipe(prompts,
 print(response)
 ```
 
-An example for streaming mode:
+- An example for streaming mode:
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -92,7 +110,7 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
-Below is an example for pytorch backend. Please install triton first.
+- Below is an example for pytorch backend. Please install triton first.
 
 ```shell
 pip install triton>=2.1.0

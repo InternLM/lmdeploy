@@ -4,29 +4,46 @@
 
 ## 使用方法
 
-使用默认参数的例子:
+- 使用默认参数的例子:
 
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm-chat-7b')
+pipe = pipeline('internlm/internlm2-chat-7b')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-展示如何设置 tp 数的例子:
+在这个例子中，pipeline 默认申请 50% 显存，用来存储推理过程中产生的k/v。对于 7B 模型来说，如果显存小于 40G，会出现 OOM。
+当遇到 OOM 时，请按照下面的方法降低k/v cache分配比例：
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 
-backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm-chat-7b',
+# 调低 k/v cache内存占用比例为 20%
+backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-展示如何设置 sampling 参数:
+当然，更好的做法是，从**空闲显存**中按照一定的比例为k/v cache开辟空间。我们会在后续的版本中加以完善，让大家有更好的体验。
+
+- 展示如何设置 tp 数的例子:
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(tp=2)
+pipe = pipeline('internlm/internlm2-chat-7b',
+                backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+print(response)
+```
+
+- 展示如何设置 sampling 参数:
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -36,14 +53,14 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
 print(response)
 ```
 
-展示如何设置 OpenAI 格式输入的例子:
+- 展示如何设置 OpenAI 格式输入的例子:
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -53,7 +70,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -77,7 +94,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -104,7 +121,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
