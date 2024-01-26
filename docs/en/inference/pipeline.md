@@ -11,7 +11,7 @@ Then, we will describe the pipeline API in detail.
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm-chat-7b')
+pipe = pipeline('internlm/internlm2-chat-7b')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
@@ -40,7 +40,7 @@ A better approach would be to allocate space for the k/v cache from the free GPU
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
@@ -56,7 +56,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
@@ -73,7 +73,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -97,7 +97,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
