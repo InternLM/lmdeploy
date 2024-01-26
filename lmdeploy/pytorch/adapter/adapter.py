@@ -180,7 +180,7 @@ class AdapterWeightMap:
                     continue
                 else:
                     raise RuntimeError(f'target {name} exists.')
-            self.target_modules[name] = TargetMeta(0, 0)
+            self.target_modules[name] = TargetMeta(0, 0, 0.0)
 
     @classmethod
     def cache_lora_a(cls, cache: Tensor, weight: Tensor, block_table: Tensor):
