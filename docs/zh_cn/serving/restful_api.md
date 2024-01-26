@@ -151,7 +151,8 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 pip install -U openaoe 
 openaoe -f /path/to/your/config-template.yaml
 ```
-具体配置信息请参考 [配置文件说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/config-template.md).
+具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md
+).
 
 
 ### FAQ
