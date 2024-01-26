@@ -45,6 +45,7 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
     repetition_penalty_ = (float*)std::realloc((void*)repetition_penalty_, batch_size * sizeof(float));
     min_lengths_        = (int*)std::realloc((void*)min_lengths_, batch_size * sizeof(int));
     skip_decode_        = (bool*)std::realloc((void*)skip_decode_, batch_size * sizeof(bool));
+    context_length_     = (int*)std::realloc((void*)context_length_, batch_size * sizeof(int));
 
     is_allocate_buffer_ = true;
 }
@@ -63,6 +64,7 @@ void BaseSamplingLayer<T>::freeBuffer()
         std::free(repetition_penalty_);
         std::free(min_lengths_);
         std::free(skip_decode_);
+        std::free(context_length_);
         is_allocate_buffer_ = false;
     }
 }
@@ -161,16 +163,23 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         repetition_penalty_type_ = RepetitionPenaltyType::None;
     }
 
-    const int default_min_length = 0;
-    Tensor    min_lengths = runtime_args->at("min_length", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &default_min_length));
-    if (min_lengths.size() == 1) {
-        int minlen = min_lengths.getVal<int>();
-        deviceFill(min_lengths_buf_, batch_size, minlen, stream_);
-        std::fill_n(min_lengths_, batch_size, minlen);
+    // min_length
+    if (runtime_args->isExist("min_length")) {
+        Tensor min_lengths     = runtime_args->at("min_length");
+        Tensor context_lengths = runtime_args->at("context_length");
+        Tensor prompt_lengths  = runtime_args->at("prompt_length");
+        auto   p1              = min_lengths.getPtr<int>();
+        auto   p2              = prompt_lengths.getPtr<int>();
+        for (int i = 0; i < batch_size; i++) {
+            min_lengths_[i] = p1[i] + p2[i];
+        }
+        cudaAutoCpy(min_lengths_buf_, min_lengths_, batch_size, stream_);
+        std::copy_n(context_lengths.getPtr<int>(), batch_size, context_length_);
     }
     else {
-        cudaAutoCpy(min_lengths_buf_, min_lengths.getPtr<int>(), batch_size, stream_);
-        std::copy_n(min_lengths.getPtr<int>(), batch_size, min_lengths_);
+        std::fill_n(min_lengths_, batch_size, 0);
+        deviceFill(min_lengths_buf_, batch_size, 0, stream_);
+        std::fill_n(context_length_, batch_size, 0);
     }
 }
 
@@ -300,10 +309,12 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
         }
     }
 
-    const int  num_generated_tokens      = step - max_input_length;
-    const int* min_lengths               = min_lengths_ + ite * local_batch_size;
+    const int        num_generated_tokens = step - max_input_length;
+    const int*       min_lengths          = min_lengths_ + ite * local_batch_size;
+    std::vector<int> index(local_batch_size);
+    std::iota(index.begin(), index.end(), 0);
     const bool invoke_min_length_penalty = std::any_of(
-        min_lengths, min_lengths + local_batch_size, [&](int min_length) { return min_length > num_generated_tokens; });
+        index.begin(), index.end(), [&](int i) { return min_lengths[i] > context_length_[i] + num_generated_tokens; });
     if (invoke_min_length_penalty) {
         FT_CHECK_WITH_INFO(input_tensors->isExist("end_id"), "Need end_id to apply min length penlaty");
         invokeMinLengthPenalty(logits,

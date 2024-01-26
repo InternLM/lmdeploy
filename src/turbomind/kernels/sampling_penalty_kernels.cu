@@ -497,9 +497,8 @@ __global__ void batchApplyMinLengthPenalty(T*         logits,
                                            const int  vocab_size_padded)
 {
     int bid = threadIdx.x + blockIdx.x * blockDim.x;  // batch index
-    // We need +1 because sequence_lengths = max_input_length + num_gen_tokens - 1,
-    // which is equal to the length of k/v caches.
-    if (sequence_lengths[bid] + 1 - max_input_length < min_lengths[bid]) {
+    // In decoder, sequence_lengths means length of sequence that has kv cache already computed
+    if (sequence_lengths[bid] + 1 < min_lengths[bid]) {
         T mask_val                                     = (std::is_same<T, half>::value) ? -65504.0f : -FLT_MAX;
         logits[bid * vocab_size_padded + end_ids[bid]] = mask_val;
     }

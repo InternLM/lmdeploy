@@ -47,6 +47,7 @@ protected:
     int*   min_lengths_        = nullptr;
     bool*  skip_decode_        = nullptr;
     bool   skip_any_           = false;
+    int*   context_length_     = nullptr;
 
     RepetitionPenaltyType repetition_penalty_type_ = RepetitionPenaltyType::None;
 

@@ -328,6 +328,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         }
 
         // total context length (history + input)
+        state.h_prompt_length[idx]  = output_ids - output_ids_base;
         state.h_context_length[idx] = output_ids - output_ids_base;
         state.h_finished[idx]       = false;
 
@@ -698,6 +699,7 @@ void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchSta
     }
 
     for (const auto& [s, d, si, di] : desc) {
+        d->h_prompt_length[di]  = s->h_prompt_length[si];
         d->h_context_length[di] = s->h_context_length[si];
         d->h_finished[di]       = s->h_finished[si];
         d->h_rope_theta[di]     = s->h_rope_theta[si];
@@ -774,6 +776,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
     h_bad_words_ =
         (int*)allocator_->reMalloc(h_bad_words_, sizeof(int) * max_batch_size * kMaxStopBadWordsLen, true, true);
 
+    h_min_length_    = (int*)allocator_->reMalloc(h_min_length_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_k_ = (int*)allocator_->reMalloc(h_runtime_top_k_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_p_ = (float*)allocator_->reMalloc(h_runtime_top_p_, sizeof(float) * max_batch_size, true, true);
     h_temperature_   = (float*)allocator_->reMalloc(h_temperature_, sizeof(float) * max_batch_size, true, true);
@@ -796,6 +799,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
     sampling_params_ = {
         {"stop_words_list", (std::byte*)h_stop_words_, (std::byte*)d_stop_words_},
         {"bad_words_list", (std::byte*)h_bad_words_, (std::byte*)d_bad_words_},
+        {"min_length", (std::byte*)h_min_length_, nullptr},
         {"runtime_top_k", (std::byte*)h_runtime_top_k_, nullptr},
         {"runtime_top_p", (std::byte*)h_runtime_top_p_, nullptr},
         {"temperature", (std::byte*)h_temperature_, nullptr},
@@ -828,6 +832,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
             (uintptr_t*)allocator_->reMalloc(h_v_block_ptrs_, sizeof(uintptr_t) * max_block_count, false, true);
 
         for (auto& s : states_) {
+            s.h_prompt_length =
+                (int*)allocator_->reMalloc(s.h_prompt_length, sizeof(int) * max_batch_size, false, true);
             s.h_context_length =
                 (int*)allocator_->reMalloc(s.h_context_length, sizeof(int) * max_batch_size, false, true);
             s.h_finished   = (bool*)allocator_->reMalloc(s.h_finished, sizeof(bool) * max_batch_size * 2, false, true);
@@ -1058,6 +1064,12 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
                 TM_LOG_INFO("[initializeSampling] %s", format({name, inputs.at(name)}).c_str());
             }
         }
+    }
+
+    // MinLengthPenalty
+    if (inputs.isExist("min_length")) {
+        inputs.insert({"prompt_length", {MEMORY_CPU, TYPE_INT32, {(size_t)batch_size}, state_->h_prompt_length}});
+        inputs.insert({"context_length", {MEMORY_CPU, TYPE_INT32, {(size_t)batch_size}, state_->h_context_length}});
     }
 
     // init for eos
