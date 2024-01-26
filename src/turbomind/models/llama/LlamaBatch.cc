@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/macro.h"
+#include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -946,6 +947,10 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
 
     const size_t elem_bits = (quant_policy & QuantPolicy::kCacheKVInt8) ? 8 : sizeof(T) * 8;
 
+    auto get_free_size = [&] {
+        return GetSyncFreeMemSize(*model_->shared_state_->barrier, model_->shared_state_->free_size);
+    };
+
     sequence_manager_.reset(new SequenceManager{model_->num_layer_,
                                                 model_->local_kv_head_num_,
                                                 model_->size_per_head_,
@@ -954,7 +959,8 @@ LlamaBatch<T>::LlamaBatch(const EngineParams& params, int cache_block_seq_len, i
                                                 params.cache_chunk_size,
                                                 elem_bits,
                                                 model->tensor_para_.rank_,
-                                                allocator_});
+                                                allocator_,
+                                                get_free_size});
 
     const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
     if (max_session_len < session_len_) {

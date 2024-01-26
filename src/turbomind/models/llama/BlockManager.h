@@ -2,10 +2,12 @@
 
 #pragma once
 
+#include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <iterator>
@@ -63,9 +65,14 @@ struct Snapshot {
     std::vector<int> use_count;
 };
 
+using GetFreeMemSize = std::function<size_t()>;
+
+size_t GetSyncFreeMemSize(Barrier& barrier, std::atomic<size_t>& value);
+
 class BlockManager {
 public:
-    explicit BlockManager(size_t block_size, double block_count, int chunk_size, IAllocator* allocator);
+    explicit BlockManager(
+        size_t block_size, double block_count, int chunk_size, IAllocator* allocator, GetFreeMemSize get_free_size);
 
     ~BlockManager();
 
@@ -124,7 +131,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const BlockManager&);
 
 private:
-    static size_t GetBlockCount(size_t block_size, double ratio);
+    static size_t GetBlockCount(size_t block_size, double ratio, GetFreeMemSize get_free_size);
 
     // move indices between sets
     static void Move(BlockIds& src, const BlockIds& delta, BlockIds& dst);

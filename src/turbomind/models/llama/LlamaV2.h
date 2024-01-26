@@ -48,6 +48,7 @@ public:
         RequestQueue                          request_queue;
         std::shared_ptr<Barrier>              barrier;
         bool                                  abort;
+        std::atomic<size_t>                   free_size{size_t(-1)};
     };
 
     ~LlamaV2();
