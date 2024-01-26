@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <functional>
 #include <iterator>
 #include <numeric>
 #include <queue>
