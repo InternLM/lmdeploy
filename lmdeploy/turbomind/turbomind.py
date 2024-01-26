@@ -675,6 +675,10 @@ class TurboMindInstance:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
+        if gen_config.min_new_tokens is not None:
+            inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
+                                                 np.int32)
+
         bad_words = []
         if gen_config.bad_words is not None:
             bad_words.extend(gen_config.bad_words)

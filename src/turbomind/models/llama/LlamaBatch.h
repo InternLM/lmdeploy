@@ -20,6 +20,7 @@
 namespace turbomind {
 
 struct BatchState {
+    int*  h_prompt_length;  // history + input, ignore generated
     int*  h_context_length;
     bool* h_finished;
 
@@ -248,6 +249,7 @@ private:
     uintptr_t* h_k_block_ptrs_{};
     uintptr_t* h_v_block_ptrs_{};
 
+    int*   h_min_length_{};
     int*   h_runtime_top_k_{};
     float* h_runtime_top_p_{};
     float* h_temperature_{};
