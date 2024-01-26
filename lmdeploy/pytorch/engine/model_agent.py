@@ -74,16 +74,16 @@ class ModelInputs:
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
     attention_mask: torch.Tensor
-    block_offsets: List[List[int]]
+    block_offsets: torch.LongTensor
     position_ids: torch.LongTensor
     q_start_loc: torch.LongTensor
     history_lengths: List[int]
     is_decoding: bool
-    local_adapter_ids: torch.LongTensor
-    global_adapter_ids: torch.LongTensor
-    adapter_offsets: torch.LongTensor
-    max_rank: int
-    meta: Any
+    local_adapter_ids: torch.LongTensor = None
+    global_adapter_ids: torch.LongTensor = None
+    adapter_offsets: torch.LongTensor = None
+    max_rank: int = 0
+    meta: Any = None
 
     def slice(self, start: int, end: int):
         """select by indices."""
@@ -650,6 +650,7 @@ def _tp_build_model(
                     trust_remote_code=trust_remote_code)
                 _load_adapters(param_model, adapters, device_map=device_map)
                 __load_state_dict_assign(param_model, model)
+                param_model = param_model.to('meta')
                 del param_model
 
         patched_model = patch(

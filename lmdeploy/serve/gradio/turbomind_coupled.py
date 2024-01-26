@@ -121,7 +121,7 @@ def run_local(model_path: str,
               backend_config: Optional[Union[PytorchEngineConfig,
                                              TurbomindEngineConfig]] = None,
               chat_template_config: Optional[ChatTemplateConfig] = None,
-              server_name: str = 'localhost',
+              server_name: str = '0.0.0.0',
               server_port: int = 6006,
               tp: int = 1,
               **kwargs):
@@ -150,7 +150,9 @@ def run_local(model_path: str,
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        server_name (str): the ip address of gradio server
+        server_name (str): the ip address of gradio server. Default to
+            "0.0.0.0". For huggingface space demo, it should be
+            "huggingface-space".
         server_port (int): the port of gradio server
         tp (int): tensor parallel for Turbomind
     """
@@ -220,15 +222,19 @@ def run_local(model_path: str,
 
         demo.load(init, inputs=None, outputs=[state_session_id])
 
-    print(f'server is gonna mount on: http://{server_name}:{server_port}')
-    demo.queue(concurrency_count=InterFace.async_engine.instance_num,
-               max_size=100,
-               api_open=True).launch(
-                   max_threads=10,
-                   share=True,
-                   server_port=server_port,
-                   server_name=server_name,
-               )
+    if server_name == 'huggingface-space':
+        demo.queue(concurrency_count=InterFace.async_engine.instance_num,
+                   max_size=100).launch()
+    else:
+        print(f'server is gonna mount on: http://{server_name}:{server_port}')
+        demo.queue(concurrency_count=InterFace.async_engine.instance_num,
+                   max_size=100,
+                   api_open=True).launch(
+                       max_threads=10,
+                       share=True,
+                       server_port=server_port,
+                       server_name=server_name,
+                   )
 
 
 if __name__ == '__main__':
