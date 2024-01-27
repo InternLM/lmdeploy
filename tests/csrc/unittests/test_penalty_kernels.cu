@@ -412,7 +412,7 @@ protected:
         d_output_ids_    = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * sequence_length_ * batch_size_));
         d_input_lengths_ = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size_));
         d_penalty_workspace_ =
-            reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size_ * vocab_size_padded_));
+            reinterpret_cast<int*>(allocator->malloc((sizeof(int) + sizeof(float)) * batch_size_ * step_));
 
         cudaAutoCpy(d_logits_, h_logits_, batch_size_ * vocab_size_padded_, stream);
         cudaAutoCpy(d_bias_, h_bias_, vocab_size_padded_, stream);
