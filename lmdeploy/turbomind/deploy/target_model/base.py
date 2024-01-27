@@ -66,6 +66,7 @@ class TurbomindModelConfig:
     max_position_embeddings: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: int = 0
+    lora_policy: int = 0
 
     @classmethod
     def from_dict(cls, env, allow_none=False):

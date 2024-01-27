@@ -32,6 +32,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                             bool       attn_bias,
                             WeightType weight_type,
                             int        group_size,
+                            int        lora_policy,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank):
     hidden_units_(head_num * size_per_head),
@@ -56,6 +57,7 @@ LlamaWeight<T>::LlamaWeight(size_t     head_num,
                                                                        weight_type_,
                                                                        group_size,
                                                                        attn_bias,
+                                                                       lora_policy,
                                                                        tensor_para_size_,
                                                                        tensor_para_rank_));
     }
@@ -90,7 +92,7 @@ template<typename T>
 void LlamaWeight<T>::loadModel(std::string dir_path)
 {
     FtCudaDataType model_file_type = FtCudaDataType::FP16;
-    if(weight_type_ == WeightType::kBF16){
+    if (weight_type_ == WeightType::kBF16) {
         model_file_type = FtCudaDataType::BF16;
     }
     dir_path += '/';

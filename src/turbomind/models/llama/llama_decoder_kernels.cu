@@ -188,11 +188,54 @@ void invokeFusedAddBiasResidualRMSNorm(
         residual, in_out, bias, scale, eps, batch_size, n_dims);
 }
 
+template<typename T>
+__global__ void
+maskAddTwoLinearOutput(T* __restrict__ output1, T* __restrict__ output2, const int* __restrict__ mask, int dim)
+{
+    auto block = cg::this_thread_block();
+    auto grid  = cg::this_grid();
+
+    const auto batch_idx = block.group_index().x;
+    if (!mask[batch_idx]) {
+        return;
+    }
+
+    uint4* __restrict__ out1_ptr = reinterpret_cast<uint4*>(output1 + batch_idx * dim);
+    uint4* __restrict__ out2_ptr = reinterpret_cast<uint4*>(output2 + batch_idx * dim);
+
+    res_norm_t<T> ops;
+    constexpr int PACK_DIM = sizeof(uint4) / sizeof(T);
+    float         thread_sum{};
+    for (auto i = block.thread_rank(); i < dim / PACK_DIM; i += block.size()) {
+        auto  o1    = out1_ptr[i];
+        auto  o2    = out2_ptr[i];
+        uint4 b     = uint4{};
+        o1          = ops.addvec(o1, o2, b, thread_sum);
+        out1_ptr[i] = o1;
+    }
+}
+
+template<typename T>
+void invokeMaskAddTwoLinearOutput(T* output1, T* output2, const int* mask, int batch_size, int dim, cudaStream_t stream)
+{
+    constexpr int PACK_DIM = sizeof(uint4) / sizeof(T);
+    FT_CHECK(dim % PACK_DIM == 0);
+    const int n_pack    = dim / PACK_DIM;
+    const int n_iter    = ((n_pack + 1023) / 1024);        // iterations when block size == 1024
+    int       n_threads = (n_pack + n_iter - 1) / n_iter;  // adjust block size to avoid tail effect
+    n_threads           = (n_threads + 31) / 32 * 32;      // round up to the nearest multiple of warp size
+    maskAddTwoLinearOutput<<<batch_size, n_threads, 0, stream>>>(output1, output2, mask, dim);
+}
+
+template void invokeMaskAddTwoLinearOutput(float*, float*, const int*, int, int, cudaStream_t);
+template void invokeMaskAddTwoLinearOutput(half*, half*, const int*, int, int, cudaStream_t);
+
 template void
 invokeFusedAddBiasResidualRMSNorm(float*, float*, const float*, const float*, float, int, int, cudaStream_t);
 template void invokeFusedAddBiasResidualRMSNorm(half*, half*, const half*, const half*, float, int, int, cudaStream_t);
 #ifdef ENABLE_BF16
 template void invokeFusedAddBiasResidualRMSNorm(
     __nv_bfloat16*, __nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
+template void invokeMaskAddTwoLinearOutput(__nv_bfloat16*, __nv_bfloat16*, const int*, int, int, cudaStream_t);
 #endif
 }  // namespace turbomind

@@ -722,10 +722,12 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
 
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
-    context_decoder_output_buf_ =
-        (T*)allocator_->reMalloc(context_decoder_output_buf_, sizeof(T) * max_context_token_num_ * hidden_units, false);
+    // double buffer for lora
+    context_decoder_output_buf_ = (T*)allocator_->reMalloc(
+        context_decoder_output_buf_, sizeof(T) * max_context_token_num_ * hidden_units * 2, false);
     context_decoder_ids_buf_ =
         (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_context_token_num_, false);
+    lora_mask_buf_ = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_context_token_num_, false);
 
     tmp_k_cache_buf_ = (T*)allocator_->reMalloc(
         tmp_k_cache_buf_, sizeof(T) * max_context_token_num_ * local_kv_head_num * head_dim, false);
@@ -850,6 +852,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&context_decoder_input_buf_);
         allocator_->free((void**)&context_decoder_output_buf_);
         allocator_->free((void**)&context_decoder_ids_buf_);
+        allocator_->free((void**)&lora_mask_buf_);
 
         allocator_->free((void**)&tmp_k_cache_buf_);
         allocator_->free((void**)&tmp_v_cache_buf_);
@@ -1586,7 +1589,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                                max_context_cnts[p],
                                max_context_cnts[p],
                                h_input_length_buf_ + first,
-                               sequences.data());
+                               sequences.data(),
+                               lora_mask_buf_);
 
         if (iter == 0) {
             // compute logits of inputs if requested

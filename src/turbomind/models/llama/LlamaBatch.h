@@ -225,6 +225,7 @@ private:
     T*   decoder_output_buf_{};
     int* sequence_lengths_{};  // current sequence length
     int* init_ctx_lens_{};
+    int* lora_mask_buf_{};  // lora
 
     float* logits_buf_{};        // combined logits
     float* local_logits_buf_{};  // tensor parallel local logits

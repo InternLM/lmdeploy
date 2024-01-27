@@ -37,6 +37,7 @@ struct LlamaWeight {
                 bool       attn_bias,
                 WeightType weight_type,
                 int        group_size,
+                int        lora_policy,
                 size_t     tensor_para_size,
                 size_t     tensor_para_rank);
 

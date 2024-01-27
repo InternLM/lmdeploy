@@ -183,6 +183,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_bias_    = reader.GetInteger("llama", "attn_bias", 0);
     quant_policy_ = reader.GetInteger("llama", "quant_policy", 0);
     group_size_   = reader.GetInteger("llama", "group_size", 0);
+    lora_policy_  = reader.GetInteger("llama", "lora_policy", 0);
 
     // rotary embedding parameters
     attn_params_.rotary_embedding_dim    = reader.GetInteger("llama", "rotary_embedding");
@@ -308,6 +309,7 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   cublas_wrapper.get(),
                                                   allocator.get(),
                                                   false,  // is_free_buffer_after_forward,
+                                                  lora_policy_,
                                                   cuda_device_prop_ptr.get());
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
@@ -367,6 +369,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       attn_bias_,
                                                                       weight_type_,
                                                                       group_size_,
+                                                                      lora_policy_,
                                                                       tensor_para_size_,
                                                                       tensor_para_rank);
     // model inited with model_dir

@@ -36,6 +36,7 @@ public:
                             WeightType weight_type,
                             int        group_size,
                             bool       attn_bias,
+                            int        lora_policy,
                             size_t     tensor_para_size,
                             size_t     tensor_para_rank);
     ~LlamaDecoderLayerWeight();
@@ -60,6 +61,7 @@ private:
     WeightType weight_type_;
     size_t     bit_size_;
     bool       attn_bias_;
+    int        lora_policy_;
     size_t     tensor_para_size_;
     size_t     tensor_para_rank_;
     bool       is_maintain_buffer_ = false;

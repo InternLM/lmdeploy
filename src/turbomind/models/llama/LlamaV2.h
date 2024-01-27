@@ -73,6 +73,7 @@ public:
             cublasMMWrapper*             cublas_wrapper,
             IAllocator*                  allocator,
             bool                         is_free_buffer_after_forward,
+            int                          lora_policy,
             cudaDeviceProp*              cuda_device_prop);
 
     struct Control {
@@ -107,7 +108,13 @@ private:
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void updateEmbedding(T* decoder_input, const int bsz, const int* h_input_length, const Sequence** sequences);
+    void updateEmbedding(T*               decoder_input,
+                         const int        bsz,
+                         const int*       h_input_length,
+                         const Sequence** sequences,
+                         int              token_num,
+                         int*             lora_mask,
+                         bool*            have_embeddings);
 
     void forwardUnified(T*               out,
                         T*               decoder_output,
@@ -132,7 +139,8 @@ private:
                         int              pf_max_context_len,
                         int              pf_session_len,
                         const int*       h_input_length,
-                        const Sequence** sequences);
+                        const Sequence** sequences,
+                        int*             lora_mask);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 
@@ -163,6 +171,7 @@ private:
     const size_t vocab_size_;
     size_t       vocab_size_padded_;
     float        rmsnorm_eps_ = 1e-6f;
+    const int    lora_policy_{};
 
     const LlamaAttentionParams attn_params_;
 

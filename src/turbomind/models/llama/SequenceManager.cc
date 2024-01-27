@@ -22,8 +22,7 @@ SequenceManager::SequenceManager(size_t      layer_num,
                                  size_t      elem_bits,
                                  int         rank,
                                  IAllocator* allocator):
-    block_seq_len_(block_seq_len),
-    rank_(rank)
+    block_seq_len_(block_seq_len), rank_(rank)
 {
     constexpr int kBitsPerByte = 8;
 

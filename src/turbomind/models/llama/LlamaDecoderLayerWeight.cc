@@ -34,6 +34,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     head_num,
                                                     WeightType weight_type,
                                                     int        group_size,
                                                     bool       attn_bias,
+                                                    int        lora_policy,
                                                     size_t     tensor_para_size,
                                                     size_t     tensor_para_rank):
     head_num_(head_num),
@@ -43,6 +44,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(size_t     head_num,
     inter_size_(inter_size),
     weight_type_(weight_type),
     attn_bias_(attn_bias),
+    lora_policy_(lora_policy),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank)
 {
@@ -91,7 +93,7 @@ void freeWeights(LlamaDenseWeight<T>& weights)
 }
 
 template<typename T>
-void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
+void mallocWeights(LlamaDenseWeight<T>& weights, bool bias, int lora_policy)
 {
     if (bias) {
         deviceMalloc((T**)&weights.bias, weights.output_dims);
@@ -99,6 +101,9 @@ void mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
     const size_t bit_size = getBitSize(weights.type);
     if (bit_size >= 16) {  // fp16, fp32
         deviceMalloc((T**)&weights.kernel, weights.input_dims * weights.output_dims);
+        if (lora_policy) {
+            deviceMalloc((T**)&weights.lora_kernel, weights.input_dims * weights.output_dims);
+        }
     }
     else {  // int8, int4
         const int factor = sizeof(float) * 8 / bit_size;
@@ -244,6 +249,12 @@ void loadWeights(LlamaDenseWeight<T>& w,
             }
         }
         loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type, weight_slices);
+        if (w.lora_kernel) {
+            auto dot_pos          = prefix.rfind(".");
+            auto lora_weight_file = prefix.substr(0, dot_pos) + ".lora" + prefix.substr(dot_pos) + ".weight";
+            TM_LOG_INFO("loading %s", lora_weight_file.c_str());
+            loadWeightFromBin((T*)w.lora_kernel, {dim0, dim1}, lora_weight_file, type, weight_slices);
+        }
     }
     else {  // int8, int4
         const int factor = sizeof(float) * 8 / bit_size;
@@ -265,19 +276,19 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
     deviceMalloc((T**)&self_attn_norm_weights, hidden_units_);
     deviceMalloc((T**)&ffn_norm_weights, hidden_units_);
 
-    turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_);
-    turbomind::mallocWeights(self_attn_weights.output, attn_bias_);
+    turbomind::mallocWeights(self_attn_weights.qkv, attn_bias_, lora_policy_);
+    turbomind::mallocWeights(self_attn_weights.output, attn_bias_, lora_policy_);
     self_attn_weights.past_kv_scale = {1.f, 0.f, 1.f, 0.f};
 
     if (weight_type_ == WeightType::kINT4) {
-        turbomind::mallocWeights(ffn_weights.fused_gating_intermediate, false);
+        turbomind::mallocWeights(ffn_weights.fused_gating_intermediate, false, lora_policy_);
     }
     else {
-        turbomind::mallocWeights(ffn_weights.gating, false);
-        turbomind::mallocWeights(ffn_weights.intermediate, false);
+        turbomind::mallocWeights(ffn_weights.gating, false, lora_policy_);
+        turbomind::mallocWeights(ffn_weights.intermediate, false, lora_policy_);
     }
 
-    turbomind::mallocWeights(ffn_weights.output, false);
+    turbomind::mallocWeights(ffn_weights.output, false, lora_policy_);
 }
 
 template<typename T>

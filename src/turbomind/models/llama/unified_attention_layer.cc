@@ -49,8 +49,9 @@ void UnifiedAttentionLayer<T>::allocateBuffer(size_t num_token,
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    // no padding
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_, false);
+    // no padding, double buffer for lora
+    qkv_buf_ =
+        (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_ * 2, false);
 
     // qkv_buf_3_ padding is removed
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * num_token * local_head_num_ * size_per_head_, false);
@@ -179,6 +180,11 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     T* attention_out = outputs->getPtr<T>("hidden_features");
 
+    int* lora_mask = nullptr;
+    if (inputs->isExist("lora_mask")) {
+        lora_mask = inputs->at("lora_mask").getPtr<int>();
+    }
+
     /////////////////////////////////////////////
     /// allocate buffers
     allocateBuffer(num_token,  //
@@ -194,7 +200,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     //////////////////////////////////////////////
     /// qkv gemm
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_.forward(qkv_buf_, attention_input, num_token, weights->qkv);
+    linear_.forward(qkv_buf_, attention_input, num_token, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
 
     if (pf_batch_size) {
         const int offset       = dc_batch_size;
@@ -240,7 +246,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_.forward(attention_out, qkv_buf_3_, num_token, weights->output);
+    linear_.forward(attention_out, qkv_buf_3_, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);
@@ -628,6 +634,6 @@ template class UnifiedAttentionLayer<float>;
 template class UnifiedAttentionLayer<half>;
 #ifdef ENABLE_BF16
 template class UnifiedAttentionLayer<__nv_bfloat16>;
-#endif // ENABLE_BF16
+#endif  // ENABLE_BF16
 
 }  // namespace turbomind

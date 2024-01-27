@@ -63,6 +63,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
                     cublasMMWrapper*             cublas_wrapper,
                     IAllocator*                  allocator,
                     bool                         is_free_buffer_after_forward,
+                    int                          lora_policy,
                     cudaDeviceProp*              cuda_device_prop):
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -84,6 +85,7 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
     allocator_(allocator),
     is_free_buffer_after_forward_(is_free_buffer_after_forward),
     cuda_device_prop_(cuda_device_prop),
+    lora_policy_(lora_policy),
     debug_(isDebug()),
     shared_state_(shared_state)
 
@@ -166,9 +168,19 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_input_length, const Sequence** sequences)
+void LlamaV2<T>::updateEmbedding(T*               decoder_input,
+                                 const int        bsz,
+                                 const int*       h_input_length,
+                                 const Sequence** sequences,
+                                 int              token_num,
+                                 int*             lora_mask,
+                                 bool*            have_embeddings)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    std::vector<int> mask(token_num);
+    int*             mask_ptr = mask.data();
+    *have_embeddings          = false;
 
     for (int i = 0; i < bsz; i++) {
         const auto& seq        = *sequences[i];
@@ -177,18 +189,33 @@ void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_i
         for (int j = embeddings.size() - 1; j >= 0; j--) {
             int begin = ranges[j].first;
             int end   = ranges[j].second;
+            if (seq.cache_len + h_input_length[i] - 1 < begin) {
+                continue;
+            }
             if (end <= seq.cache_len) {
                 break;
             }
-            int    off_dst   = std::max(0, begin - seq.cache_len);
-            int    off_src   = std::max(0, seq.cache_len - begin);
+            int off_dst = std::max(0, begin - seq.cache_len);
+            int off_src = std::max(0, seq.cache_len - begin);
+            // calculate union of [begin, end) and [seq.cache_len, seq.cache_len + h_input_length[i])
+            begin            = std::max(begin, seq.cache_len);
+            end              = std::min(end, seq.cache_len + h_input_length[i]);
             size_t byte_size = (end - begin) * hidden_units_ * sizeof(T);
             T*     dst_ptr   = decoder_input + off_dst * hidden_units_;
             auto   src_ptr   = embeddings[j].data() + off_src * hidden_units_ * sizeof(T);
             cudaMemcpyAsync(dst_ptr, src_ptr, byte_size, cudaMemcpyDefault, stream_);
+            std::fill_n(mask_ptr + off_dst, (end - begin), 1);
+            *have_embeddings = true;
         }
         decoder_input += h_input_length[i] * hidden_units_;
+        mask_ptr += h_input_length[i];
     }
+
+    if (lora_policy_ && *have_embeddings) {
+        cudaMemcpyAsync(lora_mask, mask.data(), sizeof(int) * token_num, cudaMemcpyDefault, stream_);
+        cudaStreamSynchronize(stream_);
+    }
+
     sync_check_cuda_error();
 }
 
@@ -216,7 +243,8 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                 int              pf_max_context_len,
                                 int              pf_session_len,
                                 const int*       h_input_length,
-                                const Sequence** sequences)
+                                const Sequence** sequences,
+                                int*             lora_mask)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -233,7 +261,14 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                              hidden_units_,
                                              stream_);
 
-    updateEmbedding(decoder_input, dc_batch_size + pf_batch_size, h_input_length, sequences);
+    bool have_embeddings = false;
+    updateEmbedding(decoder_input,
+                    dc_batch_size + pf_batch_size,
+                    h_input_length,
+                    sequences,
+                    token_num,
+                    lora_mask,
+                    &have_embeddings);
 
     sync_check_cuda_error();
 
@@ -261,6 +296,10 @@ void LlamaV2<T>::forwardUnified(T*               out,
                       {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_k_ptrs}},
                       {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_v_ptrs}},
                       {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, out}}};
+
+    if (lora_policy_ && have_embeddings && lora_mask) {
+        inputs.insert({"lora_mask", {MEMORY_GPU, TYPE_INT32, {token_num}, lora_mask}});
+    }
 
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
 }

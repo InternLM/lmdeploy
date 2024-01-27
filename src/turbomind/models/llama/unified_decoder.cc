@@ -219,6 +219,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         /// feed-forward network
         TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
         TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
+        if (inputs->isExist("lora_mask")) {
+            ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
+        }
         ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
 
         const bool is_last_layer = layer == num_layer_ - 1;
@@ -263,6 +266,6 @@ template class UnifiedDecoder<float>;
 template class UnifiedDecoder<half>;
 #ifdef ENABLE_BF16
 template class UnifiedDecoder<__nv_bfloat16>;
-#endif // ENABLE_BF16
+#endif  // ENABLE_BF16
 
 }  // namespace turbomind

@@ -88,6 +88,14 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     const T* ffn_input_data  = input_tensors->at("ffn_input").getPtr<T>();
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
 
+    // lora
+    int* lora_mask = nullptr;
+    if (input_tensors->isExist("lora_mask")) {
+        lora_mask   = input_tensors->at("lora_mask").getPtr<int>();
+        inter_buf_  = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * num_token * inter_size_ * 2, false);
+        gating_buf_ = (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * num_token * inter_size_ * 2, false);
+    }
+
     if (weights->fused_gating_intermediate.kernel) {
         NvtxScope scope("fused_silu_ffn");
         linear_.forward(
@@ -96,11 +104,12 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     else {
         {  // w1(x)
             NvtxScope scope("w1");
-            linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating);
+            linear_.forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
         }
         {  // w3(x)
             NvtxScope scope("w3");
-            linear_.forward(inter_buf_, ffn_input_data, num_token, weights->intermediate);
+            linear_.forward(
+                inter_buf_, ffn_input_data, num_token, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
         }
         // silu(w1(x)) * w3(x)
         activation(num_token);
@@ -108,7 +117,7 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output);
+        linear_.forward(ffn_output_data, gating_buf_, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
     }
 
     if (tensor_para_.world_size_ > 1) {

@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/gemm_s_f16/gemm_s4_f16.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -25,14 +26,18 @@ public:
     {
     }
 
-    void
-    forward(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type = kGemm)
+    void forward(T*                         output_data,
+                 const T*                   input_data,
+                 int                        batch_size,
+                 const LlamaDenseWeight<T>& weight,
+                 Type                       type      = kGemm,
+                 int*                       lora_mask = nullptr)
     {
         switch (weight.type) {
             case WeightType::kFP16:
             case WeightType::kFP32:
             case WeightType::kBF16:
-                forwardFp(output_data, input_data, batch_size, weight, type);
+                forwardFp(output_data, input_data, batch_size, weight, type, lora_mask);
                 break;
             case WeightType::kINT4:
                 forwardInt4(output_data, input_data, batch_size, weight, type);
@@ -43,7 +48,12 @@ public:
     }
 
 private:
-    void forwardFp(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
+    void forwardFp(T*                         output_data,
+                   const T*                   input_data,
+                   int                        batch_size,
+                   const LlamaDenseWeight<T>& weight,
+                   Type                       type,
+                   int*                       lora_mask)
     {
         FT_CHECK(type == kGemm);
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
@@ -58,6 +68,28 @@ private:
                               output_data,
                               weight.output_dims);
         sync_check_cuda_error();
+
+        if (lora_mask && weight.lora_kernel) {
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  weight.output_dims,
+                                  batch_size,
+                                  weight.input_dims,
+                                  (const T*)weight.lora_kernel,
+                                  weight.output_dims,
+                                  input_data,
+                                  weight.input_dims,
+                                  output_data + batch_size * weight.output_dims,
+                                  weight.output_dims);
+
+            invokeMaskAddTwoLinearOutput(output_data,
+                                         output_data + batch_size * weight.output_dims,
+                                         lora_mask,
+                                         batch_size,
+                                         weight.output_dims,
+                                         stream_);
+            sync_check_cuda_error();
+        }
     }
 
     void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
