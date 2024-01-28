@@ -43,6 +43,7 @@ protected:
     int*   min_lengths_buf_        = nullptr;
     bool*  skip_decode_buf_        = nullptr;
     T*     runtime_logits_buf_     = nullptr;
+    int*   prompt_lengths_buf_     = nullptr;
 
     float* temperature_        = nullptr;
     float* repetition_penalty_ = nullptr;

@@ -371,13 +371,15 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
                                             const int*   output_ids,
                                             const int    batch_size,
                                             const int    vocab_size,
+                                            const int*   prompt_lengths,
                                             const int*   input_lengths,
                                             const int    max_input_length,
                                             const int    step)
 {
-    const int   batch_idx    = blockIdx.x;
-    const float penalty      = penalties[batch_idx];
-    const int   input_length = input_lengths != nullptr ? input_lengths[batch_idx] : max_input_length;
+    const int   batch_idx     = blockIdx.x;
+    const float penalty       = penalties[batch_idx];
+    const int   input_length  = input_lengths != nullptr ? input_lengths[batch_idx] : max_input_length;
+    const int   prompt_length = prompt_lengths != nullptr ? prompt_lengths[batch_idx] : 0;
 
     penalty_workspace += batch_idx * step * 2;
     float* penalty_logits  = (float*)penalty_workspace;
@@ -388,6 +390,10 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
     // Phase 1. Find indices to penalize and keep the penalized values.
     // A vocab id can appear multiple times but should be penalized once.
     for (int index = threadIdx.x; index < step; index += blockDim.x) {
+        // skip prompt
+        if (index < prompt_length) {
+            continue;
+        }
         // Skip the padding tokens in input sequences.
         if (index >= input_length && index < max_input_length) {
             continue;
@@ -414,6 +420,10 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
 
     // Phase 2. Replace a logit value by the penalized one.
     for (int index = threadIdx.x; index < step; index += blockDim.x) {
+        // skip prompt
+        if (index < prompt_length) {
+            continue;
+        }
         // Skip the padding tokens in input sequences.
         if (index >= input_length && index < max_input_length) {
             continue;
@@ -430,6 +440,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
                                        const int             batch_size,
                                        const int             local_batch_size,
                                        const int             vocab_size,
+                                       const int*            prompt_lengths,
                                        const int*            input_lengths,
                                        const int             max_input_length,
                                        const int             step,
@@ -451,6 +462,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
                                                                                                     output_ids,
                                                                                                     batch_size,
                                                                                                     vocab_size,
+                                                                                                    prompt_lengths,
                                                                                                     input_lengths,
                                                                                                     max_input_length,
                                                                                                     step);
@@ -463,6 +475,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
                                          output_ids,
                                          batch_size,
                                          vocab_size,
+                                         prompt_lengths,
                                          input_lengths,
                                          max_input_length,
                                          step);
@@ -479,6 +492,7 @@ template void invokeBatchApplyRepetitionPenalty(float*                logits,
                                                 const int             batch_size,
                                                 const int             local_batch_size,
                                                 const int             vocab_size,
+                                                const int*            prompt_lengths,
                                                 const int*            input_lengths,
                                                 const int             max_input_length,
                                                 const int             step,
@@ -492,6 +506,7 @@ template void invokeBatchApplyRepetitionPenalty(half*                 logits,
                                                 const int             batch_size,
                                                 const int             local_batch_size,
                                                 const int             vocab_size,
+                                                const int*            prompt_lengths,
                                                 const int*            input_lengths,
                                                 const int             max_input_length,
                                                 const int             step,

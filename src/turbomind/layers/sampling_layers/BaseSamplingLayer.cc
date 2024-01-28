@@ -39,6 +39,8 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
         allocator_->reMalloc(runtime_logits_buf_, sizeof(T) * batch_size * vocab_size_padded_, false));
     skip_decode_buf_ =
         reinterpret_cast<bool*>(allocator_->reMalloc(skip_decode_buf_, sizeof(bool) * batch_size, false));
+    prompt_lengths_buf_ =
+        reinterpret_cast<int*>(allocator_->reMalloc(prompt_lengths_buf_, sizeof(int) * batch_size, false));
 
     // host buffers.
     temperature_        = (float*)std::realloc((void*)temperature_, batch_size * sizeof(float));
@@ -59,6 +61,7 @@ void BaseSamplingLayer<T>::freeBuffer()
         allocator_->free((void**)(&temperature_buf_));
         allocator_->free((void**)(&repetition_penalty_buf_));
         allocator_->free((void**)(&min_lengths_buf_));
+        allocator_->free((void**)(&prompt_lengths_buf_));
         allocator_->free((void**)(&runtime_logits_buf_));
         allocator_->free((void**)(&skip_decode_buf_));
         std::free(temperature_);
@@ -162,6 +165,14 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     }
     else {
         repetition_penalty_type_ = RepetitionPenaltyType::None;
+    }
+
+    if (runtime_args->isExist("prompt_length")) {
+        Tensor prompt_lengths = runtime_args->at("prompt_length");
+        cudaAutoCpy(prompt_lengths_buf_, prompt_lengths.getPtr<int>(), batch_size, stream_);
+    }
+    else {
+        deviceFill(prompt_lengths_buf_, batch_size, 0, stream_);
     }
 
     // min_length
@@ -304,6 +315,7 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
                 batch_size,
                 local_batch_size,
                 vocab_size_padded_,
+                prompt_lengths_buf_ + ite * local_batch_size,
                 input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
                 max_input_length,
                 step,
