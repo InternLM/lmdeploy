@@ -47,6 +47,7 @@ struct RequestParam {
     float                  len_penalty;
     float                  repetition_penalty;
     float                  presence_penalty;
+    float                  frequency_penalty;
     int                    min_length;
     unsigned long long int random_seed;
     int                    start_id;
@@ -225,6 +226,13 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                 {"presence_penalty",
                  triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, presence_penalty_ptr}});
         }
+        if (param.frequency_penalty != 0.0f) {
+            float* frequency_penalty_ptr = new float(param.frequency_penalty);
+            pointer_record->push_back(frequency_penalty_ptr);
+            request_list[device_id]->insert(
+                {"frequency_penalty",
+                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, frequency_penalty_ptr}});
+        }
         int* min_length_ptr = new int(param.min_length);
         pointer_record->push_back(min_length_ptr);
         request_list[device_id]->insert(
@@ -300,6 +308,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     param.len_penalty                = reader.GetFloat("request", "len_penalty");
     param.repetition_penalty         = reader.GetFloat("request", "repetition_penalty", 1.0f);
     param.presence_penalty           = reader.GetFloat("request", "presence_penalty", 0.0f);
+    param.frequency_penalty           = reader.GetFloat("request", "frequency_penalty", 0.0f);
     param.min_length                 = reader.GetInteger("request", "min_length", 0);
     param.random_seed                = (unsigned long long int)0;
     param.start_id                   = start_id;
