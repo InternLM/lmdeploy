@@ -10,7 +10,7 @@ on:
         default: InternLM
       repo_ref:
         required: false
-        description: 'Set branch or tag or commit id. Default is ""'
+        description: 'Set branch or tag or commit id. Default is "main"'
         type: string
         default: 'main'
       models:
