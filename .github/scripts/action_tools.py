@@ -93,8 +93,11 @@ def evaluate(models: List[str], workspace: str):
         do_lite = precision in ['w4a16', 'w4kv8', 'w8a8']
         if do_lite:
             model = model_
-        engine_type, model = model.split('_', 1)
-        # assert engine_type in ['tb', 'pt', 'hf']
+        engine_type, model_ = model.split('_', 1)
+        if engine_type not in ['tb', 'pt', 'hf']:
+            engine_type = 'tb'
+        else:
+            model = model_
         assert engine_type == 'tb', 'current only support turbomind'
 
         opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
@@ -107,7 +110,10 @@ def evaluate(models: List[str], workspace: str):
             os.remove(config_path_new)
         shutil.copy(config_path, config_path_new)
         with open(config_path_new, 'a') as f:
-            f.write(f'\nmodels = [ {ori_model} ]\n')
+            target_model = f'{engine_type}_{model}'
+            if do_lite:
+                target_model = target_model + f'_{precision}'
+            f.write(f'\nmodels = [ {target_model} ]\n')
 
         work_dir = os.path.join(workspace, ori_model)
         cmd_eval = [

@@ -15,9 +15,9 @@ on:
         default: 'main'
       models:
         required: true
-        description: 'Tested models list. eg. [tb_internlm_chat_7b,tb_internlm_chat_7b_w8a16]'
+        description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[tb_internlm2_chat_7b,tb_internlm2_chat_20b,tb_internlm2_chat_20b_w4a16,tb_llama2_chat_7b,tb_qwen_chat_7b]'
+        default: '[internlm2_chat_7b,internlm2_chat_20b,internlm2_chat_20b_w4a16,llama2_chat_7b,qwen_chat_7b]'
       devices:
         required: true
         description: 'CUDA_VISIBLE_DEVICES.'
