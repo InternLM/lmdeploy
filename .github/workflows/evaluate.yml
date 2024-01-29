@@ -83,12 +83,8 @@ jobs:
           cd opencompass
           python3 -m pip install --user -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
-      - name: Evaluate models
+      - name: Setup paths for evaluation
         run: |
-          echo ${{github.event.inputs.models}}
-          echo ${{github.event.inputs.devices}}
-          export LMDEPLOY_DIR=$(pwd)
-          export CUDA_VISIBLE_DEVICES="${{github.event.inputs.devices}}"
           ln -s /root/opencompass-data ./data
           ln -s /root/models/InternLM ./internlm
           mkdir meta-llama
@@ -97,6 +93,13 @@ jobs:
           ln -s /root/models/llama2/huggingface/llama-2-70b-chat ./meta-llama/Llama-2-70b-chat-hf
           ln -s /root/models/Qwen ./Qwen
           ln -s /root/models/baichuan2 ./baichuan-inc
+      - name: Evaluate models
+        run: |
+          echo ${{github.event.inputs.models}}
+          echo ${{github.event.inputs.devices}}
+          export LMDEPLOY_DIR=$(pwd)
+          export CUDA_VISIBLE_DEVICES="${{github.event.inputs.devices}}"
+
           python3 .github/scripts/action_tools.py evaluate \
             --models "${{github.event.inputs.models}}" \
             --workspace /root/evaluation-reports/$TIME_STAMP
