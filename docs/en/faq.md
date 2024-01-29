@@ -47,12 +47,14 @@ It's probably due to a low-version cuda toolkit. LMDeploy runtime requires a min
 
 This is because the ratio of k/v cache memory is by default 50% of the total GPU memory, which may be too high for GPU cards with less than 40G memory.
 
+This is usually due to a disproportionately large memory ratio for the k/v cache, which is dictated by `TurbomindEngineConfig.cache_max_entry_count`.
+The implications of this parameter have slight variations in different versions of lmdeploy. For specifics, please refer to the source code for the \[detailed notes\] (https://github.com/InternLM/lmdeploy/blob/52419bd5b6fb419a5e3aaf3c3b4dea874b17e094/lmdeploy/messages.py#L107)
+
 If you encounter this issue while using the pipeline interface, please reduce the `cache_max_entry_count` in `TurbomindEngineConfig` like following:
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 
-# decrease the ratio of the k/v cache occupation to 20%
 backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
 
 pipe = pipeline('internlm/internlm2-chat-7b',
@@ -72,8 +74,6 @@ lmdeploy serve api_server internlm/internlm2-chat-7b --cache-max-entry-count 0.2
 ```
 
 ## Serve
-
-### OOM
 
 ## Quantization
 
