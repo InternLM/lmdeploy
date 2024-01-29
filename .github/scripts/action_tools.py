@@ -144,7 +144,7 @@ def evaluate(models: List[str], workspace: str):
                 acc = json.load(f)['accuracy']
                 acc = f'{float(acc):.2f}'
                 data.append(('crows_pairs', acc))
-        prec = '-' if precision == '' else precision
+        prec = precision if do_lite else '-'
         row = ','.join([model, engine_type, prec] + [_[1] for _ in data])
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
