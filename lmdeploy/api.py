@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
@@ -76,6 +76,8 @@ def serve(model_path: str,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           log_level: str = 'ERROR',
+          api_keys: Optional[Union[List[str], str]] = None,
+          ssl: bool = False,
           **kwargs):
     """This will run the api_server in a subprocess.
 
@@ -105,6 +107,8 @@ def serve(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+        api_keys (List[str] | str | None): Optional list of comma separated API keys.
+        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
 
     Return:
         APIClient: A client chatbot for LLaMA series models.
@@ -135,6 +139,8 @@ def serve(model_path: str,
                                server_port=server_port,
                                tp=tp,
                                log_level=log_level,
+                               api_keys=api_keys,
+                               ssl=ssl,
                                **kwargs))
     task.start()
     client = APIClient(f'http://{server_name}:{server_port}')
