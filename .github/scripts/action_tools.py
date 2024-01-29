@@ -3,43 +3,11 @@ import glob
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 from typing import List
 
 import fire
-
-MODEL_CFGS = {
-    'internlm_chat_7b': {
-        'model-path': 'internlm-chat-7b',
-        'model-name': 'internlm-chat-7b'
-    },
-    'internlm_chat_20b': {
-        'model-path': 'internlm-chat-20b',
-        'model-name': 'internlm-chat-20b'
-    },
-    'llama2_chat_7b': {
-        'model-path': 'llama-2-7b-chat',
-        'model-name': 'llama2'
-    },
-    'llama2_chat_13b': {
-        'model-path': 'llama-2-13b-chat',
-        'model-name': 'llama2'
-    },
-    'qwen_chat_7b': {
-        'model-path': 'Qwen-7B-Chat',
-        'model-name': 'qwen-7b'
-    },
-    'qwen_chat_14b': {
-        'model-path': 'Qwen-14B-Chat',
-        'model-name': 'qwen-14b'
-    },
-    'baichuan2_chat_7b': {
-        'model-path': 'Baichuan2-7B-Chat',
-        'model-name': 'baichuan2-7b'
-    },
-}
 
 
 def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
@@ -106,12 +74,11 @@ def add_summary(csv_path: str):
             _append_summary(line)
 
 
-def evaluate(models: List[str], model_root: str, workspace: str):
+def evaluate(models: List[str], workspace: str):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
         models: Input models.
-        model_root: Root directory of HF models.
         workspace: Working directory.
     """
     os.makedirs(workspace, exist_ok=True)
@@ -124,81 +91,11 @@ def evaluate(models: List[str], model_root: str, workspace: str):
             model = model_
         engine_type, model = model.split('_', 1)
         assert engine_type in ['tb', 'pt', 'hf']
-        if model not in MODEL_CFGS:
-            logging.error(f'Model {model} is not in {MODEL_CFGS.keys()}')
-            continue
-        hf_model_path = os.path.join(model_root,
-                                     MODEL_CFGS[model]['model-path'])
-        model_name = MODEL_CFGS[model]['model-name']
         if engine_type == 'tb':
-            extra_kwargs = {}
-            if do_lite:
-                tmp_hf_model = './hf_calibrate'
-                cmd_calibrate = [
-                    f'lmdeploy lite calibrate --model {hf_model_path}',
-                    '--calib-dataset c4', '--calib-samples 128',
-                    '--calib-seqlen 2048', f'--work-dir {tmp_hf_model}'
-                ]
-                calibrate_log = os.path.join(workspace,
-                                             f'calibrate.{ori_model}.txt')
-                ret = run_cmd(cmd_calibrate, calibrate_log)
-                if ret != 0:
-                    continue
-                cmd_awq = [
-                    f'lmdeploy lite auto_awq --model {hf_model_path}',
-                    '--w-bits 4', '--w-group-size 128',
-                    f'--work-dir {tmp_hf_model}'
-                ]
-                awq_log = os.path.join(workspace, f'awq.{ori_model}.txt')
-                ret = run_cmd(cmd_awq, awq_log)
-                if ret != 0:
-                    continue
-                hf_model_path = tmp_hf_model
-                extra_kwargs['model-format'] = 'awq'
-                extra_kwargs['group-size'] = 128
-
-            target_model = './turbomind'
-            # convert
-            cmd_convert = [
-                f'lmdeploy convert --model-path {hf_model_path}',
-                f'--model-name {model_name}', f'--dst-path {target_model}'
-            ]
-            # for lite models
-            cmd_convert += [f'--{k} {v}' for k, v in extra_kwargs.items()]
-            convert_log = os.path.join(workspace, f'convert.{ori_model}.txt')
-            ret = run_cmd(cmd_convert, log_path=convert_log)
-            if ret != 0:
-                logging.error(f'Convert failed for model {ori_model}')
-                continue
-
-            if do_lite and 'kv8' in precision:
-                cmd_kvint8 = [
-                    'lmdeploy lite kv_qparams', f'--work_dir {tmp_hf_model}',
-                    f'--turbomind_dir {target_model}/triton_models/weights',
-                    '--kv_sym False', '--num_tp 1'
-                ]
-                kvint8_log = os.path.join(workspace, f'kvint8.{ori_model}.txt')
-                ret = run_cmd(cmd_kvint8, kvint8_log)
-                if ret != 0:
-                    logging.error(f'Failed to run kvint8 for {ori_model}')
-                    continue
-                config_ini = os.path.join(target_model,
-                                          'triton_models/weights/config.ini')
-                # update config.ini
-                with open(config_ini, 'r+') as f:
-                    content = f.read()
-                    content = re.sub(r'quant_policy = [0-9]',
-                                     'quant_policy = 4', content)
-                    f.seek(0)
-                    f.write(content)
-
+            pass
         elif engine_type == 'pt':
-            if precision == '':
-                _, model_path_link = os.path.split(hf_model_path)
-                if not os.path.exists(model_path_link):
-                    os.symlink(hf_model_path, model_path_link)
-            elif precision == 'w8a8':
-                pass
+            raise RuntimeError('not support pytorch engine inference')
+
         opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
         config_path = os.path.join(
