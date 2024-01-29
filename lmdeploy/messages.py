@@ -115,7 +115,7 @@ class TurbomindEngineConfig:
     tp: int = 1
     session_len: Optional[int] = None
     max_batch_size: int = 128
-    cache_max_entry_count: float = 0.5
+    cache_max_entry_count: float = 0.8
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False

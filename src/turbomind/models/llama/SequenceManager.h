@@ -54,15 +54,16 @@ inline std::ostream& operator<<(std::ostream& os, const Sequence& seq)
 
 class SequenceManager {
 public:
-    explicit SequenceManager(size_t      layer_num,
-                             size_t      head_num,
-                             size_t      head_dim,
-                             size_t      block_seq_len,
-                             double      block_count,
-                             int         chunk_size,
-                             size_t      elem_bits,
-                             int         rank,
-                             IAllocator* allocator);
+    explicit SequenceManager(size_t         layer_num,
+                             size_t         head_num,
+                             size_t         head_dim,
+                             size_t         block_seq_len,
+                             double         block_count,
+                             int            chunk_size,
+                             size_t         elem_bits,
+                             int            rank,
+                             IAllocator*    allocator,
+                             GetFreeMemSize get_free_size);
 
     SequenceManager(const SequenceManager&)     = delete;
     SequenceManager(SequenceManager&&) noexcept = default;

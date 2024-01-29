@@ -33,6 +33,7 @@
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/instance_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
+#include <limits>
 #include <unordered_map>
 
 using ffi_api_lock_ctrl_t = std::function<void(int)>;
@@ -48,6 +49,7 @@ public:
         RequestQueue                          request_queue;
         std::shared_ptr<Barrier>              barrier;
         bool                                  abort;
+        std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
     };
 
     ~LlamaV2();
