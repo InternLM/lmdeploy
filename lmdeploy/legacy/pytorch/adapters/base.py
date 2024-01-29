@@ -7,7 +7,9 @@ import re
 from transformers import (PreTrainedTokenizer, PreTrainedTokenizerBase,
                           PreTrainedTokenizerFast)
 
-logger = logging.getLogger(__name__)
+from lmdeploy.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class BaseAdapter:

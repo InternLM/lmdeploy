@@ -181,7 +181,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
     ]
 
     throughput = np.round(token_latency_stats.size / elapsed_time, 2)
-    print(f'\n{"-" * 50}\ntotal time: {elapsed_time:.2f}s\n'
+    print(f'\n{' - ' * 50}\ntotal time: {elapsed_time:.2f}s\n'
           f'concurrency: {concurrency}, test_round: {test_round}\n'
           f'input_tokens: {input_seqlen}, output_tokens: {output_seqlen}\n'
           f'first_token latency(min, max, ave): '
@@ -190,7 +190,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'{token_latency_min}s, {token_latency_max}s, '
           f'{token_latency_ave}s\n'
           f'token_latency percentiles(50%,75%,95%,99%)(s): {percentiles}\n'
-          f'throughput: {throughput} token/s\n{"-" * 50}')
+          f'throughput: {throughput} token/s\n{' - ' * 50}')
     return tm_model.model_name, \
         [first_token_latency_min, first_token_latency_max,
          first_token_latency_ave], \

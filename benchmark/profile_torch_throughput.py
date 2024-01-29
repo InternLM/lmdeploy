@@ -187,7 +187,7 @@ class Engine:
             for percent in [0.5, 0.75, 0.95, 0.99]
         ]
 
-        print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
+        print(f'\n{' - ' * 50}\nconcurrency: {concurrency}\n'
               f'elapsed_time: {elapsed_time:.3f}s\n')
         if stream_output:
             print(f'first token latency(s)(min, max, ave): '
@@ -203,7 +203,7 @@ class Engine:
             f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
             f'RPS (request per second): {rps:.3f} req/s\n'
             f'RPM (request per minute): {rpm:.3f} req/min\n'
-            f'{"-" * 50}\n')
+            f'{' - ' * 50}\n')
 
         if self.csv:
             with open(self.csv, 'w') as csvfile:

@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
-import logging
 import queue
 import warnings
 from typing import List, Optional
@@ -11,6 +10,8 @@ import torch.multiprocessing as mp
 from torch.nn.utils.rnn import pad_sequence
 from transformers import (AutoTokenizer, PreTrainedModel,
                           PreTrainedTokenizerBase)
+
+from lmdeploy.utils import get_logger
 
 from .model import accel_model, init_model
 
@@ -371,7 +372,7 @@ if __name__ == '__main__':
     test_path = args.test_path
     prompts = args.prompts
 
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
     # logging.basicConfig(level=logging.DEBUG)
 
     # Use test file preferentially

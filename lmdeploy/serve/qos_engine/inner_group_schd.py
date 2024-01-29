@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import collections
-import logging
 
-logger = logging.getLogger(__name__)
+from lmdeploy.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class UserRequestQueue:

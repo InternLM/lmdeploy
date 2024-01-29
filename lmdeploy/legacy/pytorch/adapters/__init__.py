@@ -1,14 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import logging
-
 import torch.nn as nn
+
+from lmdeploy.utils import get_logger
 
 from .base import BasicAdapter, BasicAdapterFast
 from .internlm import InternLMAdapter
 from .llama2 import Llama2Adapter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_default_adapter(tokenizer):
