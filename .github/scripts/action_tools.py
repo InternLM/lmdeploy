@@ -83,18 +83,19 @@ def evaluate(models: List[str], workspace: str):
     """
     os.makedirs(workspace, exist_ok=True)
     output_csv = os.path.join(workspace, 'results.csv')
-    for ori_model in models:
+    num_model = len(models)
+    for idx, ori_model in enumerate(models):
+        print()
+        print(50 * '==')
+        print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
         model_, precision = model.rsplit('_', 1)
         do_lite = precision in ['w4a16', 'w4kv8', 'w8a8']
         if do_lite:
             model = model_
         engine_type, model = model.split('_', 1)
-        assert engine_type in ['tb', 'pt', 'hf']
-        if engine_type == 'tb':
-            pass
-        elif engine_type == 'pt':
-            raise RuntimeError('not support pytorch engine inference')
+        # assert engine_type in ['tb', 'pt', 'hf']
+        assert engine_type == 'tb', 'current only support turbomind'
 
         opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
