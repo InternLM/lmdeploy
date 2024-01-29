@@ -181,7 +181,7 @@ class LlamaAttention(nn.Module):
                 cos,
                 sin,
                 position_ids,
-                getattr(context, 'position_ids_1d', None),
+                context.position_ids_1d,
                 q_embed=query_states,
                 k_embed=key_states)
             return query_states, key_states, value_states
