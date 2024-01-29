@@ -135,7 +135,8 @@ def serve(model_path: str,
                                server_port=server_port,
                                tp=tp,
                                log_level=log_level,
-                               **kwargs))
+                               **kwargs),
+                   daemon=True)
     task.start()
     client = APIClient(f'http://{server_name}:{server_port}')
     while True:
