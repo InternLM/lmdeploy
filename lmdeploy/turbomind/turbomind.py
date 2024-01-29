@@ -146,8 +146,12 @@ class TurboMind:
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
         # check memory equality when tp
-        if tp is not None and tp > 1:
-            _compare_individual_gpu_memory(tp)
+        if tp is not None:
+            if tp > 1:
+                _compare_individual_gpu_memory(tp)
+        elif engine_config is not None and engine_config.tp is not None:
+            if engine_config.tp > 1:
+                _compare_individual_gpu_memory(engine_config.tp)
         # check model_name equal in engine_config and passed in
         if engine_config is not None and engine_config.model_name is not None:
             if model_name is not None:
@@ -674,6 +678,10 @@ class TurboMindInstance:
                                                   padding_value=-1)
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
+
+        if gen_config.min_new_tokens is not None:
+            inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
+                                                 np.int32)
 
         bad_words = []
         if gen_config.bad_words is not None:

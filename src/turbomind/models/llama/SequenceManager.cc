@@ -13,24 +13,24 @@
 
 namespace turbomind {
 
-SequenceManager::SequenceManager(size_t      layer_num,
-                                 size_t      head_num,
-                                 size_t      head_dim,
-                                 size_t      block_seq_len,
-                                 double      block_count,
-                                 int         chunk_size,
-                                 size_t      elem_bits,
-                                 int         rank,
-                                 IAllocator* allocator):
-    block_seq_len_(block_seq_len),
-    rank_(rank)
+SequenceManager::SequenceManager(size_t         layer_num,
+                                 size_t         head_num,
+                                 size_t         head_dim,
+                                 size_t         block_seq_len,
+                                 double         block_count,
+                                 int            chunk_size,
+                                 size_t         elem_bits,
+                                 int            rank,
+                                 IAllocator*    allocator,
+                                 GetFreeMemSize get_free_size):
+    block_seq_len_(block_seq_len), rank_(rank)
 {
     constexpr int kBitsPerByte = 8;
 
     // [2, L, H, block_seq_len, D]
     size_t block_size = 2UL * layer_num * head_num * block_seq_len * head_dim * elem_bits / kBitsPerByte;
 
-    block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator);
+    block_manager_ = std::make_unique<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
 
     val_offset_ = block_size / 2;
 }

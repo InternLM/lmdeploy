@@ -137,7 +137,7 @@ There is a client script for restful api server.
 lmdeploy serve api_client api_server_url
 ```
 
-### webui
+### webui through gradio
 
 You can also test restful-api through webui.
 
@@ -147,6 +147,17 @@ You can also test restful-api through webui.
 # example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
+
+### webui through OpenAOE
+
+You can use [OpenAOE](https://github.com/InternLM/OpenAOE) for seamless integration with LMDeploy.
+
+```shell
+pip install -U openaoe
+openaoe -f /path/to/your/config-template.yaml
+```
+
+Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md) for more deploy information.
 
 ### FAQ
 
