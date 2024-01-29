@@ -145,8 +145,12 @@ class TurboMind:
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
         # check memory equality when tp
-        if tp is not None and tp > 1:
-            _compare_individual_gpu_memory(tp)
+        if tp is not None:
+            if tp > 1:
+                _compare_individual_gpu_memory(tp)
+        elif engine_config is not None and engine_config.tp is not None:
+            if engine_config.tp > 1:
+                _compare_individual_gpu_memory(engine_config.tp)
         # check model_name equal in engine_config and passed in
         if engine_config is not None and engine_config.model_name is not None:
             if model_name is not None:
