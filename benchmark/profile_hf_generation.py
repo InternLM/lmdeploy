@@ -75,8 +75,9 @@ import torch
 from transformers import AutoModelForCausalLM, GenerationConfig
 
 from lmdeploy.pytorch.accel import LoadNoInit
+from lmdeploy.utils import get_logger
 
-logger = logging.getLogger(__file__)
+logger = get_logger(__file__)
 logger.setLevel(logging.DEBUG)
 info = logger.info
 warning = logger.warning

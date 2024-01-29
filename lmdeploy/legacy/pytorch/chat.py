@@ -54,13 +54,13 @@ from typing import Optional
 import torch
 from transformers import GenerationConfig, PreTrainedModel
 
+from lmdeploy.utils import get_logger
+
 from .adapters import init_adapter
 from .dist import get_local_rank, get_rank, get_world_size
 from .model import accel_model, init_model
 from .session import BasicSessionManagerWithHistory
 from .utils import BasicStreamer, TerminalIO, control
-
-logger = logging.getLogger(__name__)
 
 
 def set_logging(log_file: str, debug: bool):
@@ -69,15 +69,19 @@ def set_logging(log_file: str, debug: bool):
     log_file = log_file or 'chat.log'
     if r := get_rank() != 0:
         log_file = log_file + f'.{r}'
-    logging.basicConfig(level=level,
-                        format=('%(filename)s: '
-                                '%(levelname)s: '
-                                '%(funcName)s(): '
-                                '%(lineno)d:\t'
-                                '%(message)s'),
-                        filename=log_file,
-                        filemode='w')
+    format = '%(filename)s:   \
+              %(levelname)s:  \
+              %(funcName)s(): \
+              %(lineno)d:\t   \
+              %(message)s'
+
+    logger = get_logger(__name__,
+                        log_file=log_file,
+                        log_level=level,
+                        file_mode='w',
+                        log_formatter=format)
     print(f'Worker {get_rank()} logging to {log_file}')
+    return logger
 
 
 def main(
@@ -120,7 +124,7 @@ def main(
             based on `LlamaforCausalLM` class, this argument is required.
             Currently, only "llama1" is acceptable for llama1 models.
     """  # noqa: E501
-    set_logging(log_file, debug)
+    logger = set_logging(log_file, debug)
 
     # workers should sync in sampling
     torch.manual_seed(seed)

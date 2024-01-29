@@ -27,13 +27,13 @@ from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            CausalLMOutputWithPast)
-from transformers.utils import logging
 
 from lmdeploy.pytorch.modeling.convert_to_qmodules import convert_to_qmodules
+from lmdeploy.utils import get_logger
 
 from .configuration_baichuan import BaiChuanConfig
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
