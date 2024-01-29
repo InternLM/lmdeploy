@@ -19,11 +19,8 @@ class LogicalTokenBlocks:
     """Logical blocks."""
     ALLOC_SIZE = 128
 
-    def __init__(self, block_size: int):
-        self._block_size = block_size
-        reserve_size = _round_up(block_size, self.ALLOC_SIZE)
-        self._blocks = np.zeros((reserve_size, ), dtype=np.int64)
-        self._last_block_size = 0
+    def __init__(self):
+        self._blocks = np.zeros((self.ALLOC_SIZE, ), dtype=np.int64)
         self._num_real = 0
 
     def reserve(self, size: int):
@@ -55,61 +52,23 @@ class LogicalTokenBlocks:
         self._num_real += num_blocks
         self.__setitem__(slice(slice_start, slice_end), blocks)
 
-    def num_required_blocks(self, num_tokens: int):
-        """get num required blocks."""
-        if self._last_block_size == 0:
-            remain_tokens = num_tokens
-        else:
-            next_block_size = min(num_tokens,
-                                  self._block_size - self._last_block_size)
-            remain_tokens = num_tokens - next_block_size
-        return _div_up(remain_tokens, self._block_size)
-
-    def add_tokens(self, num_tokens: int):
-        """add tokens."""
-        total_tokens = self.num_tokens() + num_tokens
-        self._last_block_size = total_tokens % self._block_size
-        if self._last_block_size == 0:
-            self._last_block_size = self._block_size
-
-    def num_tokens(self):
-        """get num tokens."""
-        return max(
-            0, self._num_real - 1) * self._block_size + self._last_block_size
-
     def __len__(self):
         """get length."""
         return self._num_real
 
-    def reshape_by_tokens(self, num_tokens: int):
-        """resize logical blocks by num tokens."""
-        if num_tokens == 0:
-            self._num_real = 0
-            self._last_block_size = 0
-            return
-        assert num_tokens <= self.num_tokens()
-        self._num_real = _div_up(num_tokens, self._block_size)
-        self._last_block_size = num_tokens % self._block_size
-        if self._last_block_size == 0:
-            self._last_block_size = self._block_size
+    def resize(self, num_blocks: int):
+        """resize logical blocks."""
+        assert num_blocks <= len(self)
+        self._num_real = num_blocks
 
     def reset(self):
         """reset."""
-        self.reshape_by_tokens(0)
-
-    def get_block_size(self):
-        """get block size."""
-        return self._block_size
-
-    def last_block_size(self):
-        """get last block size."""
-        return self._last_block_size
+        self.resize(0)
 
     def clone(self):
         """clone logical blocks."""
-        ret = LogicalTokenBlocks(self.get_block_size())
+        ret = LogicalTokenBlocks()
         ret.append(self[:])
-        ret.add_tokens(self.num_tokens())
         return ret
 
 

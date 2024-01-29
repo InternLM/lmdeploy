@@ -186,10 +186,10 @@ def attention_forward_with_paged_attention(
             past_key_value[1],
             attn_output,
             block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_len,
         )
     else:
         if bias_type == 'alibi':

@@ -13,6 +13,11 @@ from lmdeploy.messages import EngineGenerationConfig
 from .block import LogicalTokenBlocks
 
 
+def _div_up(x, n):
+    """perform div up."""
+    return (x + n - 1) // n
+
+
 @dataclass
 class SamplingParam:
     """Sampling parameter."""
@@ -144,16 +149,13 @@ class SchedulerSequence:
     remain_output_len: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     status: MessageStatus = MessageStatus.WAITING
-    logical_blocks: LogicalTokenBlocks = None
+    logical_blocks: LogicalTokenBlocks = field(
+        default_factory=LogicalTokenBlocks)
     sender_id: int = -1
     req_id: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
-
-    def __post_init__(self):
-        self.logical_blocks = self.logical_blocks or LogicalTokenBlocks(
-            self.block_size)
 
     @property
     def history_len(self) -> int:
@@ -165,24 +167,9 @@ class SchedulerSequence:
         """get session id."""
         return self.session.session_id
 
-    def num_logical_tokens(self) -> int:
-        """num logitcal tokens."""
-        return self.logical_blocks.num_tokens()
-
     def num_all_tokens(self) -> int:
         """num all tokens."""
         return len(self.token_ids) + self.history_len
-
-    def num_required_tokens(self) -> int:
-        """num required tokens."""
-        num_all_tokens = self.num_all_tokens()
-        num_logical_tokens = self.num_logical_tokens()
-        return num_all_tokens - num_logical_tokens
-
-    def num_required_blocks(self) -> int:
-        """num required blocks."""
-        return self.logical_blocks.num_required_blocks(
-            self.num_required_tokens())
 
     def update_token_ids(self, token_ids: Tensor, update_history: bool = True):
         """Update token ids, old token ids will be added to history."""
@@ -204,5 +191,3 @@ class SchedulerSequence:
         new_token_ids = torch.cat([history_token_ids[step:], self.token_ids])
         self.history_token_ids = new_history_ids
         self.token_ids = new_token_ids
-
-        self.logical_blocks.reshape_by_tokens(step)

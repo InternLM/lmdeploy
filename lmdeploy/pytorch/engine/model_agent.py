@@ -188,7 +188,7 @@ class StepContext:
     position_ids_1d: torch.LongTensor
     q_start_loc: torch.LongTensor
     history_lengths: torch.LongTensor
-    seq_length: torch.LongTensor
+    q_seq_length: torch.LongTensor
     max_seq_length: int
     kv_seq_length: torch.LongTensor
     kv_caches: List
@@ -226,8 +226,8 @@ class StepContext:
         kv_seq_length = position_ids[..., -1] + 1
 
         # position ids 1d
-        seq_length = inputs.seq_length
-        position_ids_1d = cls.get_position_ids_1d(position_ids, seq_length,
+        q_seq_length = inputs.seq_length
+        position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
 
         ret = StepContext(inputs=inputs,
@@ -236,7 +236,7 @@ class StepContext:
                           position_ids_1d=position_ids_1d,
                           q_start_loc=inputs.q_start_loc,
                           history_lengths=inputs.history_lengths,
-                          seq_length=inputs.seq_length,
+                          q_seq_length=inputs.seq_length,
                           max_seq_length=max_seq_length,
                           kv_seq_length=kv_seq_length,
                           kv_caches=kv_caches,

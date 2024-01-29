@@ -425,7 +425,7 @@ class Engine:
         def _check_session_len(msg, max_session_len):
             if max_session_len is None:
                 return False
-            session_len = msg.logical_blocks.num_tokens()
+            session_len = msg.num_all_tokens() + 1
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param

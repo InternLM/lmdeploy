@@ -226,7 +226,7 @@ class Scheduler:
 
         def _try_append_slot(seq):
             """try append slot."""
-            if seq.num_required_blocks() == 0:
+            if self.block_manager.num_required_blocks(seq) == 0:
                 _to_running(seq)
                 return True
             if block_manager.can_append_slot(seq):

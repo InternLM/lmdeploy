@@ -7,6 +7,11 @@ from ...messages import SchedulerSequence
 from .base_eviction_helper import BaseEvictionHelper
 
 
+def _div_up(x, n):
+    """perform div up."""
+    return (x + n - 1) // n
+
+
 class RecomputeEvictionHelper(BaseEvictionHelper):
     """recompute eviction."""
 
@@ -25,6 +30,9 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         """sequence swap out."""
         self.block_manager.free(seq)
         seq.set_step(0)
+        # num_blocks = _div_up(seq, seq.block_size)
+        # seq.logical_blocks.resize(num_blocks)
+        seq.logical_blocks.reset()
 
     def try_swap_out(self, seq: SchedulerSequence, swap_out_map: Dict[int,
                                                                       int]):

@@ -110,7 +110,7 @@ class Attention(nn.Module):
         context = self.context.context
         history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
-        q_seq_length = context.seq_length
+        q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
 
@@ -160,10 +160,10 @@ class Attention(nn.Module):
             past_key_value[1],
             attn_output,
             block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_len,
         )
 
         hidden_size = num_heads * head_dim
@@ -237,7 +237,7 @@ class BaichuanAttention(nn.Module):
         position_ids = context.position_ids
         history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
-        q_seq_length = context.seq_length
+        q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
 

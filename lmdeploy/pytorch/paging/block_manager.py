@@ -8,6 +8,11 @@ from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..messages import SchedulerSequence
 
 
+def _div_up(x, n):
+    """perform div up."""
+    return (x + n - 1) // n
+
+
 class LogicalMemory:
     """Logical memory blocks."""
 
@@ -237,6 +242,30 @@ class BlockManager:
 
         self.block_tables: Dict[int, BlockTable] = {}
 
+    @classmethod
+    def num_required_blocks(ctx, obj: Union[SchedulerSequence,
+                                            SchedulerAdapter]):
+        """get num required blocks."""
+        if isinstance(obj, SchedulerSequence):
+            num_tokens = obj.num_all_tokens()
+            num_all_blocks = _div_up(num_tokens, obj.block_size)
+            return num_all_blocks - len(obj.logical_blocks)
+        else:
+            if obj.is_actived():
+                return 0
+            else:
+                return obj.rank * len(obj.target_modules)
+
+    @classmethod
+    def last_block_size(ctx, seq: SchedulerSequence) -> int:
+        """get last block size."""
+        num_blocks = len(seq.logical_blocks)
+        if num_blocks == 0:
+            return 0
+        elif num_blocks * seq.block_size < seq.history_len:
+            return seq.block_size
+        return seq.history_len % seq.block_size
+
     def get_block_table(self, msg: Union[SchedulerSequence, SchedulerAdapter]):
         """Get the block table of given msg.
 
@@ -249,28 +278,25 @@ class BlockManager:
 
     def can_allocate(self, msg: SchedulerSequence):
         """Return if physical block can be allocated for given message."""
-        num_required_blocks = msg.num_required_blocks()
+        num_required_blocks = self.num_required_blocks(msg)
         num_free_phy = self.get_num_free_gpu_blocks()
         if msg.adapter_name is not None:
             adapter = ADAPTER_MANAGER.get_adapter(msg.adapter_name)
-            num_required_blocks += adapter.num_required_blocks()
+            num_required_blocks += self.num_required_blocks(adapter)
         return num_required_blocks <= num_free_phy
 
     def allocate_msg(self, msg: SchedulerSequence):
         """Allocate physical blocks for given message according to logical
         blocks."""
         logical_blocks = msg.logical_blocks
-        num_required_tokens = msg.num_required_tokens()
-        num_required_blocks = logical_blocks.num_required_blocks(
-            num_required_tokens)
+        num_required_blocks = self.num_required_blocks(msg)
         if num_required_blocks > 0:
             blocks = self.allocator.allocate(num_required_blocks, 'gpu')
             logical_blocks.append(blocks)
-            logical_blocks.add_tokens(num_required_tokens)
 
     def allocate_adapter(self, adapter: SchedulerAdapter):
         """Allocate cpu blocks for given adapter."""
-        num_required_blocks = adapter.num_required_blocks()
+        num_required_blocks = self.num_required_blocks(adapter)
         if num_required_blocks > 0:
             blocks = self.allocator.allocate(num_required_blocks, 'cpu')
             adapter.logical_blocks.append(blocks)
@@ -300,7 +326,7 @@ class BlockManager:
     def can_fork(self, from_msg: SchedulerSequence):
         """Return true if blocks can be folked."""
         logical_blocks = from_msg.logical_blocks
-        if logical_blocks.last_block_size() == logical_blocks.get_block_size():
+        if self.last_block_size(from_msg) == from_msg.block_size:
             return True
 
         cpu_mem_offset = self.allocator.cpu_mem_offset()
@@ -329,7 +355,7 @@ class BlockManager:
 
         logical_blocks = from_msg.logical_blocks
         copy_map: Dict[int, int] = dict()
-        if logical_blocks.last_block_size() == logical_blocks.get_block_size():
+        if self.last_block_size(from_msg) == from_msg.block_size:
             self.allocator.add_ref_count(logical_blocks, 1)
         else:
             new_logical_blocks = logical_blocks.clone()

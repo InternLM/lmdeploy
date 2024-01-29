@@ -109,7 +109,7 @@ class LlamaAttention(nn.Module):
 
         # fill kv cache
         kv_seq_length = context.kv_seq_length
-        q_seq_length = context.seq_length
+        q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         fill_kv_cache(key_states,
                       value_states,
@@ -130,10 +130,10 @@ class LlamaAttention(nn.Module):
             past_key_value[1],
             attn_output,
             block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_len,
         )
         hidden_size = num_heads * head_dim
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], hidden_size)
@@ -286,7 +286,7 @@ from lmdeploy.pytorch.tools.layout_convert import continuous_tensor
 # create patched input/output
 context = make_step_context(input_ids,
                             kv_cache_dtype=dtype)
-seq_length = context.seq_length
+seq_length = context.q_seq_length
 attn_kwargs['hidden_states'] = continuous_tensor(
     attn_kwargs['hidden_states'],
     seq_length)
