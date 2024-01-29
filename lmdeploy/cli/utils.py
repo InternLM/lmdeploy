@@ -312,7 +312,7 @@ class ArgumentHelper:
         return parser.add_argument(
             '--cache-max-entry-count',
             type=float,
-            default=0.5,
+            default=0.8,
             help='The percentage of gpu memory occupied by the k/v cache')
 
     @staticmethod
