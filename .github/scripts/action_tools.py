@@ -109,13 +109,13 @@ def evaluate(models: List[str], workspace: str):
         if os.path.exists(config_path_new):
             os.remove(config_path_new)
         shutil.copy(config_path, config_path_new)
+        target_model = f'{engine_type}_{model}'
+        if do_lite:
+            target_model = target_model + f'_{precision}'
         with open(config_path_new, 'a') as f:
-            target_model = f'{engine_type}_{model}'
-            if do_lite:
-                target_model = target_model + f'_{precision}'
             f.write(f'\nmodels = [ {target_model} ]\n')
 
-        work_dir = os.path.join(workspace, ori_model)
+        work_dir = os.path.join(workspace, target_model)
         cmd_eval = [
             f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir}'
         ]
