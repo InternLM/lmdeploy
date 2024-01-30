@@ -104,7 +104,9 @@ class TurbomindEngineConfig:
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
         max_batch_size (int): the max batch size during inference, default to 128
-        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache, default to 0.5
+        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
+            For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
+            For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
         quant_policy (int): , default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False

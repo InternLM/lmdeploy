@@ -4,29 +4,53 @@
 
 ## 使用方法
 
-使用默认参数的例子:
+- **使用默认参数的例子:**
 
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm-chat-7b')
+pipe = pipeline('internlm/internlm2-chat-7b')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-展示如何设置 tp 数的例子:
+在这个例子中，pipeline 默认申请一定比例显存，用来存储推理过程中产生的 k/v。比例由参数 `TurbomindEngineConfig.cache_max_entry_count` 控制。
+
+LMDeploy 在研发过程中，k/v cache 比例的设定策略有变更，以下为变更记录：
+
+1. `v0.2.0 <= lmdeploy <= v0.2.1`
+
+   默认比例为 0.5，表示 **GPU总显存**的 50% 被分配给 k/v cache。 对于 7B 模型来说，如果显存小于 40G，会出现 OOM。当遇到 OOM 时，请按照下面的方法，酌情降低 k/v cache 占比：
+
+   ```python
+   from lmdeploy import pipeline, TurbomindEngineConfig
+
+   # 调低 k/v cache内存占比调整为总显存的 20%
+   backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+   pipe = pipeline('internlm/internlm2-chat-7b',
+                   backend_config=backend_config)
+   response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+   print(response)
+   ```
+
+2. `lmdeploy > v0.2.1`
+
+   分配策略改为从**空闲显存**中按比例为 k/v cache 开辟空间。默认比例值调整为 0.8。如果遇到 OOM，类似上面的方法，请酌情减少比例值，降低 k/v cache 的内存占用量
+
+- **如何设置 tp:**
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-展示如何设置 sampling 参数:
+- **如何设置 sampling 参数:**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -36,14 +60,14 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
 print(response)
 ```
 
-展示如何设置 OpenAI 格式输入的例子:
+- **如何设置 OpenAI 格式输入:**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -53,7 +77,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -67,7 +91,7 @@ response = pipe(prompts,
 print(response)
 ```
 
-展示流式返回处理结果的例子：
+- **流式返回处理结果：**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -77,7 +101,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -90,7 +114,9 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
-展示 pytorch 后端的例子,需要先安装 triton:
+- **使用 pytorch 后端**
+
+需要先安装 triton
 
 ```shell
 pip install triton>=2.1.0
@@ -104,7 +130,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
