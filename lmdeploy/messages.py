@@ -110,6 +110,8 @@ class TurbomindEngineConfig:
         quant_policy (int): , default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
+        download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
+        revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -121,6 +123,8 @@ class TurbomindEngineConfig:
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
+    download_dir: Optional[str] = None
+    revision: Optional[str] = None
 
 
 @dataclass

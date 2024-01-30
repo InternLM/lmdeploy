@@ -14,7 +14,6 @@ class ModelSource(ExplicitEnum):
     """Turbomind model source."""
     WORKSPACE = 'workspace'
     HF_MODEL = 'hf_model'
-    HF_LMDEPLOY = 'hf_lmdeploy'
 
 
 def create_hf_download_args(**kwargs) -> dict:
@@ -60,10 +59,7 @@ def get_model_source(pretrained_model_name_or_path: str,
                                      'triton_models')
     if os.path.exists(triton_model_path):
         return ModelSource.WORKSPACE
-    config = get_hf_config_content(pretrained_model_name_or_path, **kwargs)
-    model_source = ModelSource.HF_LMDEPLOY if 'turbomind' in config \
-        else ModelSource.HF_MODEL
-    return model_source
+    return ModelSource.HF_MODEL
 
 
 def check_tm_model_input(pretrained_model_name_or_path, **kwargs):
