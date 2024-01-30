@@ -157,6 +157,7 @@ This class provides the configuration parameters for TurboMind backend.
 
 | Parameter             | Type          | Description                                                                                              | Default |
 | --------------------- | ------------- | -------------------------------------------------------------------------------------------------------- | ------- |
+| model_name            | str, Optional | The chat template name of the deployed model, deprecated and has no effect when version > 0.2.1          | None    |
 | model_format          | str, Optional | The layout of the deployed model. Can be one of the following values: hf, llama, awq.                    | None    |
 | tp                    | int           | The number of GPU cards used in tensor parallelism.                                                      | 1       |
 | session_len           | int, Optional | The maximum session length of a sequence.                                                                | None    |
