@@ -23,6 +23,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/restful_api.md)
 - \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](./docs/zh_cn/serving/proxy_server.md)
 - \[2024/01\] 增加 [PyTorch 推理引擎](./docs/zh_cn/inference/pytorch.md)，作为 TurboMind 引擎的补充。帮助降低开发门槛，和快速实验新特性、新技术
 
@@ -93,6 +94,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |     Code Llama     | 7B - 34B  |
 |      ChatGLM2      |    6B     |
 |       Falcon       | 7B - 180B |
+|         YI         | 6B - 34B  |
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 

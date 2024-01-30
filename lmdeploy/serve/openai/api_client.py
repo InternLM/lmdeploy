@@ -6,8 +6,6 @@ import requests
 
 from lmdeploy.utils import get_logger
 
-logger = get_logger('lmdeploy')
-
 
 def get_model_list(api_url: str):
     """Get model list from api server."""
@@ -25,6 +23,7 @@ def json_loads(content):
         content = json.loads(content)
         return content
     except:  # noqa
+        logger = get_logger('lmdeploy')
         logger.warning(f'weird json content {content}')
         return ''
 

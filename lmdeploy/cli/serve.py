@@ -17,6 +17,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_gradio():
+        """Add parser for gradio command."""
         parser = SubCliServe.subparsers.add_parser(
             'gradio',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -67,6 +68,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_api_server():
+        """Add parser for api_server command."""
         parser = SubCliServe.subparsers.add_parser(
             'api_server',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -148,6 +150,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_api_client():
+        """Add parser for api_client command."""
         parser = SubCliServe.subparsers.add_parser(
             'api_client',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -165,6 +168,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_triton_client():
+        """Add parser for triton_client command."""
         parser = SubCliServe.subparsers.add_parser(
             'triton_client',
             formatter_class=DefaultsAndTypesHelpFormatter,

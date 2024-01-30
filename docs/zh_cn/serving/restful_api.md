@@ -134,7 +134,7 @@ restful api 服务可以通过客户端测试，例如
 lmdeploy serve api_client api_server_url
 ```
 
-### webui
+### webui through gradio
 
 也可以直接用 webui 测试使用 restful-api。
 
@@ -144,6 +144,17 @@ lmdeploy serve api_client api_server_url
 # 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
+
+### webui through OpenAOE
+
+可以使用 [OpenAOE](https://github.com/InternLM/OpenAOE) 无缝接入restful api服务.
+
+```shell
+pip install -U openaoe
+openaoe -f /path/to/your/config-template.yaml
+```
+
+具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md).
 
 ### FAQ
 
@@ -155,7 +166,7 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 
 4. `/v1/chat/interactive` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
 
-5. 如需调整会话默认的其他参数，比如 system 等字段的内容，可以直接将[对话模板](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py)初始化参数传入。比如 internlm-chat-7b 模型，可以通过启动`api_server`时，设置`--meta_instruction`参数。
+5. 如需调整会话默认的其他参数，比如 system 等字段的内容，可以直接将[对话模板](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py)初始化参数传入。比如 internlm-chat-7b 模型，可以通过启动`api_server`时，设置`--meta-instruction`参数。
 
 6. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
 

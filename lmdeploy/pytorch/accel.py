@@ -13,6 +13,7 @@ class LoadNoInit:
         self.normal_ = torch.nn.init.normal_
         self.kaiming_uniform_ = torch.nn.init.kaiming_uniform_
         self.kaiming_normal_ = torch.nn.init.kaiming_normal_
+        self.tensor_normal_ = torch.Tensor.normal_
 
     def __enter__(self, *args, **kwargs):
         """Replace initializers with no-op."""
@@ -24,6 +25,7 @@ class LoadNoInit:
         torch.nn.init.normal_ = lambda *args, **kwargs: None
         torch.nn.init.kaiming_uniform_ = lambda *args, **kwargs: None
         torch.nn.init.kaiming_normal_ = lambda *args, **kwargs: None
+        torch.Tensor.normal_ = lambda *args, **kwargs: None
 
     def __exit__(self, *args, **kwargs):
         """Recover."""
@@ -35,3 +37,4 @@ class LoadNoInit:
         torch.nn.init.normal_ = self.normal_
         torch.nn.init.kaiming_uniform_ = self.kaiming_uniform_
         torch.nn.init.kaiming_normal_ = self.kaiming_normal_
+        torch.Tensor.normal_ = self.tensor_normal_

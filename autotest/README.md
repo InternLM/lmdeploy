@@ -29,7 +29,6 @@ Then generate the test report and view the corresponding HTML page by using the 
 
 ```bash
 allure generate -c -o allure-reports
-
 allure open ./allure-reports
 ```
 
@@ -47,29 +46,35 @@ If you want to create a test environment, you need to prepare the above content 
 
 The test cases cover the following functionalities:
 
-![image](https://github.com/InternLM/lmdeploy/assets/145004780/19737e19-5798-4be0-b809-119da4cc65e5)
+![image](https://github.com/InternLM/lmdeploy/assets/145004780/85d6a2d3-cc4f-459c-8dc1-22c17b69954f)
 
 The relationship between functionalities and test cases is as follows:
 
-|      Function      |         Test Case File         |
-| :----------------: | :----------------------------: |
-| w4a16 quantization |  test_order1_w4_quantization   |
-|      convert       |      test_order2_convert       |
-|  cli command chat  |    test_order3_command_chat    |
-|  hf command chat   | test_order3_hf_command_chat.py |
-|  restful_api chat  |    test_order4_restful_chat    |
+|        Function         |          Test Case File           |
+| :---------------------: | :-------------------------------: |
+|   w4a16 quantization    |    test_order1_quantization_w4    |
+|    w8a8 quantization    |   test_order1_quantization_w8a8   |
+|         convert         |        test_order2_convert        |
+|      pipeline chat      |     test_order3_pipeline_chat     |
+| pipeline chat - pytorch | test_order3_pipeline_chat_pytorch |
+|    restful_api chat     |     test_order3_restful_chat      |
+|   command chat - cli    |     test_order3_command_chat      |
+|    command chat - hf    |    test_order3_command_chat_hf    |
+| command chat - pytorch  | test_order3_command_chat_pytorch  |
 
 The modules and models currently covered by the test cases are listed below:
 
-|                                   Models                                   | w4a16 quantization | convert | cli command chat | restful_api chat | hf command chat |
-| :------------------------------------------------------------------------: | :----------------: | :-----: | :--------------: | :--------------: | :-------------: |
-|   [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)   |         No         |   Yes   |       Yes        |        No        |       Yes       |
-|    [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)    |         No         |   Yes   |       Yes        |        No        |       Yes       |
-|   [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)   |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
-|          [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)          |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
-|         [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)         |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
-| [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
-|    [llama_2_7b_chat](https://huggingface.co/meta-llama/Llama-2-7b-chat)    |        Yes         |   Yes   |       Yes        |        No        |       Yes       |
+|                                   Models                                   | w4a16 quantization | w8a8 quantization | kvint8 quantization | convert | pipeline chat | pipeline chat - pytorch | restful_api chat | command chat - cli | command chat - hf | command chat - pytorch |
+| :------------------------------------------------------------------------: | :----------------: | :---------------: | :-----------------: | :-----: | :-----------: | :---------------------: | :--------------: | :----------------: | :---------------: | :--------------------: |
+|   [internlm2_chat_7b](https://huggingface.co/internlm/internlm2-chat-7b)   |         No         |        No         |         No          |   Yes   |      Yes      |           Yes           |        No        |        Yes         |        Yes        |          Yes           |
+|  [internlm2_chat_20b](https://huggingface.co/internlm/internlm2-chat-20b)  |        Yes         |        Yes        |         No          |   Yes   |      Yes      |           No            |       Yes        |        Yes         |        Yes        |          Yes           |
+|    [internlm_chat_7b](https://huggingface.co/internlm/internlm-chat-7b)    |         No         |        No         |         No          |   Yes   |      Yes      |           Yes           |       Yes        |        Yes         |        Yes        |           No           |
+|   [internlm_chat_20b](https://huggingface.co/internlm/internlm-chat-20b)   |        Yes         |        No         |         No          |   Yes   |      Yes      |           No            |        No        |        Yes         |        Yes        |           No           |
+|   [llama2_chat_7b_w4](https://huggingface.co/lmdeploy/llama2-chat-7b-w4)   |         No         |        No         |         No          |   Yes   |      Yes      |           No            |        No        |        Yes         |        Yes        |           No           |
+|          [Qwen_7B_Chat](https://huggingface.co/Qwen/Qwen-7B-Chat)          |        Yes         |        No         |         No          |   Yes   |      Yes      |           No            |        No        |        Yes         |        Yes        |           No           |
+|         [Qwen_14B_Chat](https://huggingface.co/Qwen/Qwen-14B-Chat)         |        Yes         |        No         |         No          |   Yes   |      Yes      |           No            |        No        |        Yes         |        Yes        |           No           |
+| [Baichuan2_7B_Chat](https://huggingface.co/baichuan-inc/Baichuan2-7B-Chat) |        Yes         |        No         |         No          |   Yes   |      Yes      |           No            |        No        |        Yes         |        Yes        |           No           |
+|    [llama_2_7b_chat](https://huggingface.co/meta-llama/Llama-2-7b-chat)    |        Yes         |        No         |         No          |   Yes   |      Yes      |           No            |        No        |        Yes         |        Yes        |           No           |
 
 ## How to add a testcase
 
@@ -78,7 +83,7 @@ you need to confirm that the corresponding model is ready <a href="##Preparation
 ## How to add a chatcase template
 
 We have provided some basic cases in the YAML file for dialogue testing.
-For CLI command usage with `chat_prompt_case.yaml` file, use `restful_prompt_case.yaml` file for restful api and gradio testing.
+For CLI command usage with `chat_prompt_case.yaml` file, use `prompt_case.yaml` file for pipeline chat、 restful api and gradio testing.
 
 If you want to add a dialogue case, you need to modify the corresponding YAML file.
 
