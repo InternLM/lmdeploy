@@ -163,7 +163,8 @@ class SubCliServe:
         parser.add_argument('--api-key',
                             type=str,
                             default=None,
-                            help='The api key to make request to server.')
+                            help='api key. Default to None, which means no '
+                            'api key will be used.')
         ArgumentHelper.session_id(parser)
 
     @staticmethod

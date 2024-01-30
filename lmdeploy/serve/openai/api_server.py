@@ -966,7 +966,8 @@ def serve(model_path: str,
         allow_methods (List[str]): a list of allowed HTTP methods for CORS
         allow_headers (List[str]): a list of allowed HTTP headers for CORS
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
-        api_keys (List[str] | str | None): Optional list of comma separated API keys.
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
+            a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
     """ # noqa E501

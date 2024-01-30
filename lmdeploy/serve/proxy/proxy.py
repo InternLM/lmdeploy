@@ -493,7 +493,8 @@ def proxy(server_name: str = '0.0.0.0',
         strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'
-        api_keys (List[str] | str | None): Optional list of comma separated API keys.
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
+            a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
     """  # noqa
     node_manager.strategy = Strategy.from_str(strategy)

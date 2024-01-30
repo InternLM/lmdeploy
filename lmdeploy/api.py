@@ -107,7 +107,8 @@ def serve(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
-        api_keys (List[str] | str | None): Optional list of comma separated API keys.
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
+            a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
 
     Return:

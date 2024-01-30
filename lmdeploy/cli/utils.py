@@ -233,9 +233,10 @@ class ArgumentHelper:
     def api_keys(parser):
         return parser.add_argument(
             '--api-keys',
-            type=lambda s: s.split(','),
+            type=str,
+            nargs='*',
             default=None,
-            help='Optional list of comma separated API keys',
+            help='Optional list of space separated API keys',
         )
 
     @staticmethod
