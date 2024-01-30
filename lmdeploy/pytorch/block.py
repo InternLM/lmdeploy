@@ -19,9 +19,14 @@ class LogicalTokenBlocks:
     """Logical blocks."""
     ALLOC_SIZE = 128
 
-    def __init__(self):
-        self._blocks = np.zeros((self.ALLOC_SIZE, ), dtype=np.int64)
-        self._num_real = 0
+    def __init__(self, blocks: np.ndarray = None):
+        if blocks is None:
+            self._blocks = np.zeros((self.ALLOC_SIZE, ), dtype=np.int64)
+            self._num_real = 0
+        else:
+            assert blocks.ndim == 1
+            self._blocks = blocks
+            self._num_real = len(blocks)
 
     def reserve(self, size: int):
         """reserve cache size."""

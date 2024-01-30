@@ -38,6 +38,7 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    window_size: int = -1
 
 
 @dataclass

@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Dict
 
-from lmdeploy.pytorch.paging.block_manager import BlockManager
-
 from ...messages import SchedulerSequence
 from .base_eviction_helper import BaseEvictionHelper
 
@@ -15,7 +13,7 @@ def _div_up(x, n):
 class RecomputeEvictionHelper(BaseEvictionHelper):
     """recompute eviction."""
 
-    def __init__(self, block_manager: BlockManager):
+    def __init__(self, block_manager):
         super().__init__(block_manager)
 
     def need_swap_in(self, seq: SchedulerSequence):
