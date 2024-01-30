@@ -127,6 +127,12 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
+> **NOTE**
+>
+> LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，可以设置环境变量：
+>
+> `export LMDEPLOY_USE_MODELSCOPE=True`
+
 关于 pipeline 的更多推理参数说明，请参考[这里](./docs/zh_cn/inference/pipeline.md)
 
 # 用户教程

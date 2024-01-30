@@ -190,6 +190,8 @@ print(response)
 | quant_policy          | int           | 默认为0。当k/v量化为8位时，设置为4。                                   | 0       |
 | rope_scaling_factor   | float         | 用于动态ntk的缩放因子。TurboMind遵循transformer LlamaAttention的实现。 | 0.0     |
 | use_logn_attn         | bool          | 是否使用对数注意力。                                                   | False   |
+| download_dir          | str, optional | 模型缓存路径                                                           | None    |
+| revision              | str, optional | Git revision id, 可以是branch，tag或者commit id                        | None    |
 
 ## PytorchEngineConfig
 
