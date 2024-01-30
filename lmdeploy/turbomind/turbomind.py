@@ -130,6 +130,8 @@ class TurboMind:
     Args:
         model_path (str): the path of turbomind's model
         model_source (int): model source
+        model_name (str): needed when model_path is a hf model and not
+            managed by lmdeploy
         model_format (str): needed when model_path is a hf model and not
             managed by lmdeploy
         group_size (int): needed when model_path is a hf model and not
@@ -141,6 +143,7 @@ class TurboMind:
                  model_path: str,
                  engine_config: TurbomindEngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
+                 model_name: Optional[str] = None,
                  model_format: Optional[str] = None,
                  group_size: Optional[int] = None,
                  tp: Optional[int] = None,
@@ -391,6 +394,7 @@ class TurboMind:
             cls,
             pretrained_model_name_or_path: str,
             engine_config: TurbomindEngineConfig = None,
+            model_name: Optional[str] = None,
             model_format: Optional[str] = None,
             group_size: Optional[int] = None,
             tp: Optional[int] = None,
@@ -412,6 +416,7 @@ class TurboMind:
                       on huggingface.co, such as "internlm/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
+            model_name (str): needed when pretrained_model_name_or_path is c)
             model_format (str): model format
             group_size (int): group size
             tp (int): tensor parallel size
