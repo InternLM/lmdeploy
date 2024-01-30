@@ -67,6 +67,29 @@ response = pipe(prompts,
 print(response)
 ```
 
+展示流式返回处理结果的例子：
+
+```python
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(tp=2)
+gen_config = GenerationConfig(top_p=0.8,
+                              top_k=40,
+                              temperature=0.8,
+                              max_new_tokens=1024)
+pipe = pipeline('internlm/internlm-chat-7b',
+                backend_config=backend_config)
+prompts = [[{
+    'role': 'user',
+    'content': 'Hi, pls intro yourself'
+}], [{
+    'role': 'user',
+    'content': 'Shanghai is'
+}]]
+for item in pipe.stream_infer(prompts, gen_config=gen_config):
+    print(item)
+```
+
 展示 pytorch 后端的例子,需要先安装 triton:
 
 ```shell
@@ -76,7 +99,7 @@ pip install triton>=2.1.0
 ```python
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
 
-backend_config = PytorchEngineConfig(session_len=2024)
+backend_config = PytorchEngineConfig(session_len=2048)
 gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,

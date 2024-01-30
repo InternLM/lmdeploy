@@ -11,11 +11,28 @@
 
 namespace turbomind {
 
-BlockManager::BlockManager(size_t block_size, double block_count, int chunk_size, IAllocator* allocator):
+size_t GetSyncFreeMemSize(Barrier& barrier, std::atomic<size_t>& value)
+{
+    size_t free{};
+    size_t total{};
+    check_cuda_error(cudaMemGetInfo(&free, &total));
+
+    // atomicMin
+    auto old = value.load();
+    while (old > free && !value.compare_exchange_weak(old, free)) {}
+
+    // wait for all ranks
+    barrier.wait();
+
+    return value.load();
+}
+
+BlockManager::BlockManager(
+    size_t block_size, double block_count, int chunk_size, IAllocator* allocator, GetFreeMemSize get_free_size):
     block_size_(block_size), allocator_(allocator)
 {
     if (block_count < 1.) {
-        max_block_count_ = GetBlockCount(block_size, block_count);
+        max_block_count_ = GetBlockCount(block_size, block_count, get_free_size);
     }
     else {
         max_block_count_ = block_count;
@@ -81,12 +98,10 @@ bool BlockManager::Malloc()
     return true;
 }
 
-size_t BlockManager::GetBlockCount(size_t block_size, double ratio)
+size_t BlockManager::GetBlockCount(size_t block_size, double ratio, GetFreeMemSize get_free_size)
 {
-    size_t free{};
-    size_t total{};
-    check_cuda_error(cudaMemGetInfo(&free, &total));
-    return static_cast<size_t>(total * ratio) / block_size;
+    size_t free = get_free_size();
+    return static_cast<size_t>(free * ratio) / block_size;
 }
 
 void BlockManager::Move(std::vector<int>& src, const std::vector<int>& delta, std::vector<int>& dst)

@@ -7,6 +7,22 @@ from torch import Tensor
 
 assert triton.__version__ >= '2.1.0'
 
+_NV_CAP = torch.cuda.get_device_capability()
+if _NV_CAP[0] >= 8:
+
+    @triton.jit
+    def _convert_pv(p, v):
+        """convert pv."""
+        p = p.to(v.dtype)
+        return p, v
+else:
+
+    @triton.jit
+    def _convert_pv(p, v):
+        """convert pv."""
+        v = v.to(p.dtype)
+        return p, v
+
 
 @triton.jit
 def _fwd_kernel(
@@ -124,7 +140,7 @@ def _fwd_kernel(
             other=0.0,
         )
 
-        p = p.to(v.dtype)
+        p, v = _convert_pv(p, v)
         acc += tl.dot(p, v)
         # update m_i and l_i
         l_i = l_i_new

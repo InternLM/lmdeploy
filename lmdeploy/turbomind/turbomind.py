@@ -90,6 +90,31 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
     return TurbomindModelConfig.from_dict(dst_dict)
 
 
+def _compare_individual_gpu_memory(tp: int):
+    logging.basicConfig(level=logging.INFO)
+
+    try:
+        total_mem = []
+        free_mem = []
+
+        for i in range(tp):
+            torch.cuda.set_device(i)
+            free, total = torch.cuda.mem_get_info()
+            total_mem.append(total / (1024**2))
+            free_mem.append(free / (1024**2))
+
+        all_total_equal = all(total == total_mem[0] for total in total_mem)
+        all_free_equal = all(free == free_mem[0] for free in free_mem)
+
+        if not all_total_equal or not all_free_equal:
+            logging.warning(
+                f'Memory discrepancy detected: Total Memory={total_mem} MB, \
+Free Memory={free_mem} MB')
+
+    except Exception as e:
+        logging.error(f'An exception occurred: {e}')
+
+
 @contextmanager
 def cuda_ctx(device_id):
     old_device = torch.cuda.current_device()
@@ -120,6 +145,13 @@ class TurboMind:
                  tp: Optional[int] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  **kwargs):
+        # check memory equality when tp
+        if tp is not None:
+            if tp > 1:
+                _compare_individual_gpu_memory(tp)
+        elif engine_config is not None and engine_config.tp is not None:
+            if engine_config.tp > 1:
+                _compare_individual_gpu_memory(engine_config.tp)
 
         # if loading from workspace and engine_config is None, use config.ini
         # and ignore passed args like model_format, tp, etc.
@@ -495,7 +527,7 @@ class TurboMindInstance:
             if k in config.__dict__:
                 config.__dict__[k] = v
                 deprecated_kwargs.append(k)
-        if kwargs.get('request_output_len'):
+        if 'request_output_len' in kwargs:
             config.max_new_tokens = kwargs['request_output_len']
             deprecated_kwargs.append('request_output_len')
         for k in deprecated_kwargs:
@@ -620,6 +652,10 @@ class TurboMindInstance:
                                                   padding_value=-1)
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
+
+        if gen_config.min_new_tokens is not None:
+            inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
+                                                 np.int32)
 
         bad_words = []
         if gen_config.bad_words is not None:
