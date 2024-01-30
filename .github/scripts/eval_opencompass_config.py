@@ -30,6 +30,16 @@ internlm_meta_template = dict(round=[
 ],
                               eos_token_id=103028)
 
+internlm2_meta_template = dict(round=[
+    dict(role='HUMAN', begin='<|im_start|>user\n', end='<|im_end|>\n'),
+    dict(role='SYSTEM', begin='<|im_start|>system\n', end='<|im_end|>\n'),
+    dict(role='BOT',
+         begin='<|im_start|>assistant\n',
+         end='<|im_end|>\n',
+         generate=True),
+],
+                               eos_token_id=92542)
+
 llama2_meta_template = dict(
     round=[
         dict(role='HUMAN', begin='[INST] ', end=' [/INST]'),
@@ -133,7 +143,7 @@ tb_internlm2_chat_7b = dict(type=TurboMindModel,
                             max_seq_len=2048,
                             batch_size=32,
                             concurrency=32,
-                            meta_template=internlm_meta_template,
+                            meta_template=internlm2_meta_template,
                             run_cfg=dict(num_gpus=1, num_procs=1))
 
 # config for internlm2-chat-7b-w4
@@ -149,7 +159,7 @@ tb_internlm2_chat_7b_w4a16 = dict(
     max_seq_len=2048,
     batch_size=32,
     concurrency=32,
-    meta_template=internlm_meta_template,
+    meta_template=internlm2_meta_template,
     run_cfg=dict(num_gpus=1, num_procs=1),
 )
 
@@ -166,7 +176,7 @@ tb_internlm2_chat_20b = dict(
     max_seq_len=2048,
     batch_size=8,
     concurrency=8,
-    meta_template=internlm_meta_template,
+    meta_template=internlm2_meta_template,
     run_cfg=dict(num_gpus=1, num_procs=1),
 )
 
@@ -183,7 +193,7 @@ tb_internlm2_chat_20b_w4a16 = dict(
     max_seq_len=2048,
     batch_size=8,
     concurrency=8,
-    meta_template=internlm_meta_template,
+    meta_template=internlm2_meta_template,
     run_cfg=dict(num_gpus=1, num_procs=1),
 )
 
