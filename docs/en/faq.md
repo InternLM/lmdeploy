@@ -41,9 +41,35 @@ export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
 
 It's probably due to a low-version cuda toolkit. LMDeploy runtime requires a minimum CUDA version of 11.2
 
-## Turbomind Inference
+## Inference
 
-## Pytorch Inference
+### RuntimeError: \[TM\]\[ERROR\] CUDA runtime error: out of memory /workspace/lmdeploy/src/turbomind/utils/allocator.h
+
+This is usually due to a disproportionately large memory ratio for the k/v cache, which is dictated by `TurbomindEngineConfig.cache_max_entry_count`.
+The implications of this parameter have slight variations in different versions of lmdeploy. For specifics, please refer to the source code for the \[detailed notes\] (https://github.com/InternLM/lmdeploy/blob/52419bd5b6fb419a5e3aaf3c3b4dea874b17e094/lmdeploy/messages.py#L107)
+
+If you encounter this issue while using the pipeline interface, please reduce the `cache_max_entry_count` in `TurbomindEngineConfig` like following:
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+pipe = pipeline('internlm/internlm2-chat-7b',
+                backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+print(response)
+```
+
+If OOM occurs when you run CLI tools, please pass `--cache-max-entry-count` to decrease k/v cache memory ratio. For example:
+
+```shell
+# chat command
+lmdeploy chat turbomind internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+
+# server command
+lmdeploy serve api_server internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+```
 
 ## Serve
 

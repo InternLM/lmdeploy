@@ -135,13 +135,18 @@ def serve(model_path: str,
                                server_port=server_port,
                                tp=tp,
                                log_level=log_level,
-                               **kwargs))
+                               **kwargs),
+                   daemon=True)
     task.start()
     client = APIClient(f'http://{server_name}:{server_port}')
     while True:
         time.sleep(1)
         try:
             client.available_models
+            print(
+                f'Launched the api_server in process {task.pid}, user can '
+                f'kill the server by:\nimport os,signal\nos.kill({task.pid}, '
+                'signal.SIGKILL)')
             return client
         except:  # noqa
             pass
