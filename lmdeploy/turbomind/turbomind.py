@@ -91,8 +91,7 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
 
 
 def _compare_individual_gpu_memory(tp: int):
-    logging.basicConfig(level=logging.INFO)
-
+    logger.setLevel(level=logging.INFO)
     try:
         total_mem = []
         free_mem = []
@@ -107,12 +106,12 @@ def _compare_individual_gpu_memory(tp: int):
         all_free_equal = all(free == free_mem[0] for free in free_mem)
 
         if not all_total_equal or not all_free_equal:
-            logging.warning(
+            logger.warning(
                 f'Memory discrepancy detected: Total Memory={total_mem} MB, \
 Free Memory={free_mem} MB')
 
     except Exception as e:
-        logging.error(f'An exception occurred: {e}')
+        logger.error(f'An exception occurred: {e}')
 
 
 @contextmanager
