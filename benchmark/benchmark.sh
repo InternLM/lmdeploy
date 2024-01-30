@@ -21,7 +21,7 @@ benchmark_rpm () {
             ${dataset_path} \
             ${model_path} \
             --concurrency "$batch" \
-            --cache-count "$cache_count" \
+            --cache-max-entry-count "$cache_count" \
             --csv ${output_path}/rpm_localhost_batch_"${batch}".csv
     done
 }
@@ -38,7 +38,7 @@ benchmark_generation () {
         ${model_path} \
         --concurrency 1 16 32 64 \
         --warmup-round 1 --test-round 3 \
-        --cache-count "$cache_count" \
+        --cache-max-entry-count "$cache_count" \
         --csv ${output_path}/generation.csv
 }
 
