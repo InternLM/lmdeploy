@@ -81,6 +81,7 @@ def _acc_b_mv_kernel(
     LoRA_B,
     Out,
     B_adapter_id,
+    B_scaling,
     Rank_page_table,
     Rank_page_start,
     Ranks,
@@ -100,6 +101,7 @@ def _acc_b_mv_kernel(
 
     r_off = tl.arange(0, BLOCK_R)
     adapter_id = tl.load(B_adapter_id + cur_batch)
+    scaling = tl.load(B_scaling + cur_batch)
     rank = tl.load(Ranks + adapter_id)
     page_start = tl.load(Rank_page_start + adapter_id)
 
@@ -130,6 +132,7 @@ def _acc_b_mv_kernel(
         # compute
         out = tl.sum(acc[:, None] * lb, 0)
         out = out.to(lb.dtype)
+        out = out * scaling
 
         # store o
         oh_off = cur_dm_off * stride_oh
@@ -198,6 +201,7 @@ def mbgmv_a(x: Tensor,
 def mbgmv_b(xa: Tensor,
             lora_b: Tensor,
             b_adapter_ids: Tensor,
+            b_scaling: Tensor,
             rank_page_table: Tensor,
             ranks: Tensor,
             rank_page_start: Tensor,
@@ -232,6 +236,7 @@ def mbgmv_b(xa: Tensor,
                            lora_b,
                            output,
                            b_adapter_ids,
+                           b_scaling,
                            Rank_page_table=rank_page_table,
                            Rank_page_start=rank_page_start,
                            Ranks=ranks,

@@ -48,6 +48,10 @@ class TestMBGMM:
         yield ret
 
     @pytest.fixture
+    def scaling(self, adapter_ids):
+        yield torch.ones(adapter_ids.size(0)).cuda()
+
+    @pytest.fixture
     def lora_a(self, ranks, head_size, dtype):
         out = []
         for rank in ranks:
@@ -99,8 +103,8 @@ class TestMBGMM:
         yield torch.cat(out)
 
     def test_mbgmm(self, input, paged_lora_a, paged_lora_b, out_head_size,
-                   start_loc, seq_lens, adapter_ids, page_table, ranks,
-                   page_start, gt):
+                   start_loc, seq_lens, adapter_ids, scaling, page_table,
+                   ranks, page_start, gt):
         max_seq_len = max(seq_lens).item()
         max_rank = page_table.size(-1)
 
@@ -120,6 +124,7 @@ class TestMBGMM:
                          b_start_loc=start_loc,
                          b_seq_lens=seq_lens,
                          b_adapter_ids=adapter_ids,
+                         b_scaling=scaling,
                          rank_page_table=page_table,
                          rank_page_start=page_start,
                          ranks=ranks,

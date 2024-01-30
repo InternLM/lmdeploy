@@ -95,3 +95,19 @@ def interactive_test(config, case_info, model, url):
             result = result & case_result
     file.close()
     return result, interactive_log, msg
+
+
+def health_check(url):
+    try:
+        api_client = APIClient(url)
+        model_name = api_client.available_models[0]
+        messages = []
+        messages.append({'role': 'user', 'content': '你好'})
+        for output in api_client.chat_completions_v1(model=model_name,
+                                                     messages=messages,
+                                                     temperature=0.0):
+            if output.get('code') is not None and output.get('code') != 0:
+                return False
+            return True
+    except Exception:
+        return False

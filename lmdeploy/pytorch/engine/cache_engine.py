@@ -49,7 +49,7 @@ class CacheEngine:
 
         self.head_size = model_config.get_head_size()
         self.num_layers = model_config.num_layers
-        self.num_heads = model_config.num_heads
+        self.num_heads = model_config.num_key_value_heads
 
         if 'kv_cache_dtype' in model_config.json_config:
             self.kv_cache_dtype = eval(
@@ -213,7 +213,7 @@ class CacheEngine:
         """
         head_size = model_config.get_head_size()
         num_layers = model_config.num_layers
-        num_heads = model_config.num_heads
+        num_heads = model_config.num_key_value_heads
 
         key_cache_block = block_size * num_heads * head_size
         value_cache_block = key_cache_block

@@ -137,7 +137,7 @@ There is a client script for restful api server.
 lmdeploy serve api_client api_server_url
 ```
 
-### webui
+### webui through gradio
 
 You can also test restful-api through webui.
 
@@ -147,6 +147,17 @@ You can also test restful-api through webui.
 # example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
+
+### webui through OpenAOE
+
+You can use [OpenAOE](https://github.com/InternLM/OpenAOE) for seamless integration with LMDeploy.
+
+```shell
+pip install -U openaoe
+openaoe -f /path/to/your/config-template.yaml
+```
+
+Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md) for more deploy information.
 
 ### FAQ
 
@@ -159,7 +170,7 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 
 4. The `/v1/chat/interactive` api disables engaging in multiple rounds of conversation by default. The input argument `prompt` consists of either single strings or entire chat histories.
 
-5. If you need to adjust other default parameters of the session, such as the content of fields like system. You can directly pass in the initialization parameters of the [dialogue template](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py). For example, for the internlm-chat-7b model, you can set the `--meta_instruction` parameter when starting the `api_server`.
+5. If you need to adjust other default parameters of the session, such as the content of fields like system. You can directly pass in the initialization parameters of the [dialogue template](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py). For example, for the internlm-chat-7b model, you can set the `--meta-instruction` parameter when starting the `api_server`.
 
 6. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
 
