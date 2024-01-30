@@ -973,32 +973,3 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
     ]
 
     return matches[0] if matches else None
-
-
-def get_model_from_config(model_dir: str):
-    import json
-    config_file = os.path.join(model_dir, 'config.json')
-    default = 'llama'
-    if not os.path.exists(config_file):
-        return default
-
-    with open(config_file) as f:
-        config = json.load(f)
-
-    ARCH_MAP = {
-        'LlamaForCausalLM': default,
-        'InternLM2ForCausalLM': 'internlm2',
-        'InternLMForCausalLM': default,
-        'BaiChuanForCausalLM': 'baichuan',  # Baichuan-7B
-        'BaichuanForCausalLM': 'baichuan2',  # not right for Baichuan-13B-Chat
-        'QWenLMHeadModel': 'qwen',
-        # 'ChatGLMForConditionalGeneration': default
-    }
-
-    arch = 'LlamaForCausalLM'
-    if 'auto_map' in config:
-        arch = config['auto_map']['AutoModelForCausalLM'].split('.')[-1]
-    elif 'architectures' in config:
-        arch = config['architectures'][0]
-
-    return ARCH_MAP[arch]

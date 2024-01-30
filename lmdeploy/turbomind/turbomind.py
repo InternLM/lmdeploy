@@ -19,7 +19,7 @@ import lmdeploy
 from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
                                TurbomindEngineConfig)
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
-                            best_match_model, get_model_from_config)
+                            best_match_model)
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import _stop_words, get_logger
 
@@ -27,7 +27,8 @@ from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .utils import ModelSource, create_hf_download_args, get_model_source
+from .utils import (ModelSource, create_hf_download_args,
+                    get_model_from_config, get_model_source)
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
