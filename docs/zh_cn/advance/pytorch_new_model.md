@@ -298,9 +298,10 @@ from lmdeploy.pytorch.models import patch
 
 # patch and test
 patched_self_attn = patch(self_attn, extra_args=['context'])
-patched_output = patched_self_attn.patched_forward(*attn_args,
-                                                    **attn_kwargs,
-                                                    context=context)
+with torch.inference_mode():
+    patched_output = patched_self_attn.patched_forward(*attn_args,
+                                                       **attn_kwargs,
+                                                       context=context)
 torch.testing.assert_close(patched_output[0],
                             continuous_tensor(attn_output[0], seq_length))
 ```

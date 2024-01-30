@@ -64,6 +64,7 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
+    cache_config.window_size = model_config.sliding_window
 
     logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
 
@@ -664,7 +665,10 @@ def _tp_build_model(
             cache_config.block_size = block_size
             if rank == 0:
                 logger.warning(f'infered block size: {block_size}')
-        _update_cache_config(model_config, cache_config, world_size=world_size)
+        _update_cache_config(model_config,
+                             cache_config,
+                             gpu_id=rank,
+                             world_size=world_size)
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
