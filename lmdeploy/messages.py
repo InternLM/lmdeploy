@@ -147,6 +147,11 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
+        download_dir (str): Directory to download and load the weights,
+            default to the default cache directory of huggingface.
+        revision (str): The specific model version to use.
+            It can be a branch name, a tag name, or a commit id.
+            If unspecified, will use the default version.
     """
     model_name: str = ''
     tp: int = 1
@@ -159,6 +164,8 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 16384
+    download_dir: str = None
+    revision: str = None
 
 
 class ResponseType(enum.Enum):

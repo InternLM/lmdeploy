@@ -201,18 +201,20 @@ This class provides the configuration parameters for Pytorch backend.
 
 ### Arguments
 
-| Parameter        | Type | Description                                                                                              | Default     |
-| ---------------- | ---- | -------------------------------------------------------------------------------------------------------- | ----------- |
-| model_name       | str  | The chat template name of the deployed model                                                             | ''          |
-| tp               | int  | Tensor Parallelism.                                                                                      | 1           |
-| session_len      | int  | Maximum session length.                                                                                  | None        |
-| max_batch_size   | int  | Maximum batch size.                                                                                      | 128         |
-| eviction_type    | str  | Action to perform when kv cache is full. Options are \['recompute', 'copy'\].                            | 'recompute' |
-| prefill_interval | int  | Interval to perform prefill.                                                                             | 16          |
-| block_size       | int  | Paging cache block size.                                                                                 | 64          |
-| num_cpu_blocks   | int  | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
-| num_gpu_blocks   | int  | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
-| adapters         | dict | The path configs to lora adapters.                                                                       | None        |
+| Parameter        | Type | Description                                                                                                                           | Default     |
+| ---------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| model_name       | str  | The chat template name of the deployed model                                                                                          | ''          |
+| tp               | int  | Tensor Parallelism.                                                                                                                   | 1           |
+| session_len      | int  | Maximum session length.                                                                                                               | None        |
+| max_batch_size   | int  | Maximum batch size.                                                                                                                   | 128         |
+| eviction_type    | str  | Action to perform when kv cache is full. Options are \['recompute', 'copy'\].                                                         | 'recompute' |
+| prefill_interval | int  | Interval to perform prefill.                                                                                                          | 16          |
+| block_size       | int  | Paging cache block size.                                                                                                              | 64          |
+| num_cpu_blocks   | int  | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment.                              | 0           |
+| num_gpu_blocks   | int  | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment.                              | 0           |
+| adapters         | dict | The path configs to lora adapters.                                                                                                    | None        |
+| download_dir     | str  | Directory to download and load the weights, default to the default cache directory of huggingface.                                    | None        |
+| revision         | str  | The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version. | None        |
 
 ## GenerationConfig
 
