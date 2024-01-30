@@ -27,7 +27,8 @@ from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .utils import ModelSource, create_hf_download_args, get_model_source
+from .utils import (ModelSource, create_hf_download_args,
+                    get_model_from_config, get_model_source)
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -74,6 +75,9 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
             get_logger('turbomind').warning(
                 f'kwargs {k} is deprecated to initialize model, '
                 'use TurbomindEngineConfig instead.')
+    if config.model_name is not None:
+        logger.warning('model_name is deprecated in TurbomindEngineConfig '
+                       'and has no effect')
     return config
 
 
@@ -152,12 +156,6 @@ class TurboMind:
         elif engine_config is not None and engine_config.tp is not None:
             if engine_config.tp > 1:
                 _compare_individual_gpu_memory(engine_config.tp)
-        # check model_name equal in engine_config and passed in
-        if engine_config is not None and engine_config.model_name is not None:
-            if model_name is not None:
-                assert model_name == engine_config.model_name, 'Got different'
-                f' model names. model_name: {model_name}, engine_config model '
-                f'name: {engine_config.model_name}'
 
         # if loading from workspace and engine_config is None, use config.ini
         # and ignore passed args like model_format, tp, etc.
@@ -170,10 +168,7 @@ class TurboMind:
                         args.append(k)
                 return args
 
-            args = _catch_args(**kwargs,
-                               model_name=model_name,
-                               model_format=model_format,
-                               tp=tp)
+            args = _catch_args(**kwargs, model_format=model_format, tp=tp)
             if len(args) > 0:
                 get_logger('turbomind').warning(
                     f'loading from workspace, ignore args {args} '
@@ -181,22 +176,10 @@ class TurboMind:
 
         else:
             engine_config = _update_engine_config(engine_config,
-                                                  model_name=model_name,
                                                   model_format=model_format,
                                                   group_size=group_size,
                                                   tp=tp,
                                                   **kwargs)
-
-        # match model name
-        if model_source == ModelSource.HF_MODEL and \
-                engine_config.model_name is None:
-            potential_names = best_match_model(model_path)
-            if potential_names is None:
-                logger.warning(f'Please input a model_name for {model_source}')
-            else:
-                engine_config.model_name = potential_names
-                logger.warning('Best matched chat template name: '
-                               f'{engine_config.model_name}')
 
         tp = engine_config.tp if engine_config is not None else 1
         assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
@@ -293,9 +276,6 @@ class TurboMind:
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
-        assert engine_config.model_name in MODELS.module_dict.keys(), \
-            f"'{engine_config.model_name}' is not supported. " \
-            f'The supported models are: {MODELS.module_dict.keys()}'
         assert engine_config.model_format in supported_formats, \
             f'The model format should be in {supported_formats}'
 
@@ -304,18 +284,24 @@ class TurboMind:
                 engine_config.model_format is None:
             engine_config.model_format = 'awq'
 
+        # when convert model, use architectures in config.json
+        model_arch = get_model_from_config(model_path)
         data_type = 'fp16'
         output_format = 'fp16'
-        inferred_model_format = get_model_format(engine_config.model_name,
+        inferred_model_format = get_model_format(model_arch,
                                                  engine_config.model_format)
         cfg = TurbomindModelConfig.from_engine_config(engine_config)
+        match_name = best_match_model(model_path)
+        # for session len
+        cfg.model_name = match_name \
+            if match_name is not None else 'base'
         if inferred_model_format.find('awq') != -1:
             cfg.weight_type = 'int4'
             output_format = 'w4'
             data_type = 'int4'
             cfg.group_size = 128
         else:
-            output_format = update_output_format(engine_config.model_name,
+            output_format = update_output_format(cfg.model_name,
                                                  inferred_model_format,
                                                  model_path, output_format)
             data_type = output_format
@@ -331,8 +317,8 @@ class TurboMind:
         if engine_config.session_len is not None:
             cfg.session_len = engine_config.session_len
 
+        self.model_name = cfg.model_name
         self.config = cfg
-        self.model_name = engine_config.model_name
         self.data_type = data_type
 
         logger.warning(f'model_config:\n\n{cfg.toini()}')
@@ -441,11 +427,6 @@ class TurboMind:
         if model_source == ModelSource.WORKSPACE:
             local_path = pretrained_model_name_or_path
         else:
-            if model_name is None and (engine_config is None
-                                       or engine_config.model_name is None):
-                # huggingface repo id will be changed to local path in .cache
-                # have to match name in ahead.
-                model_name = best_match_model(pretrained_model_name_or_path)
             if not osp.exists(pretrained_model_name_or_path):
                 download_kwargs = create_hf_download_args(**kwargs)
                 local_path = snapshot_download(pretrained_model_name_or_path,
@@ -457,7 +438,6 @@ class TurboMind:
         return cls(model_path=local_path,
                    engine_config=engine_config,
                    model_source=model_source,
-                   model_name=model_name,
                    model_format=model_format,
                    group_size=group_size,
                    tp=tp,
