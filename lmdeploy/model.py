@@ -947,7 +947,7 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
         List[str] | None: the possible model names or none.
     """
     model_names = list(MODELS.module_dict.keys())
-    if 'models--' in query:
+    if ('models--' in query) and ('snapshots' in query):
         paths = query.split(os.sep)
         paths = [x for x in paths if 'models--' in x]
         query = paths[0].split('--')[-1]
