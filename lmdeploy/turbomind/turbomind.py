@@ -74,6 +74,9 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
             get_logger('turbomind').warning(
                 f'kwargs {k} is deprecated to initialize model, '
                 'use TurbomindEngineConfig instead.')
+    if config.model_name is not None:
+        logger.warning('model_name is deprecated in TurbomindEngineConfig '
+                       'and has no effect')
     return config
 
 

@@ -105,6 +105,8 @@ class TurbomindEngineConfig:
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
     """  # noqa: E501
+
+    model_name: Optional[str] = None
     model_format: Optional[str] = None
     tp: int = 1
     session_len: Optional[int] = None
