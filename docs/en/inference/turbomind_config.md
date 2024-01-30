@@ -88,6 +88,7 @@ For the llama2-7b model, when storing k/v as the `half` type, the memory of a k/
 The meaning of `cache_max_entry_count` varies depending on its value:
 
 - When it's a decimal between (0, 1), `cache_max_entry_count` represents the percentage of memory used by k/v blocks. For example, if turbomind launches on a A100-80G GPU with `cache_max_entry_count` being `0.5`, the total memory used by the k/v blocks is `80 * 0.5 = 40G`.
+- When lmdeploy is greater than v0.2.1, `cache_max_entry_count` determines the percentage of **free memory** for k/v blocks, defaulting to `0.8`. For example, with Turbomind on an A100-80G GPU running a 13b model, the memory for k/v blocks would be `(80 - 26) * 0.8 = 43.2G`, utilizing 80% of the free 54G.
 - When it's an integer > 0, it represents the total number of k/v blocks
 
 The `cache_chunk_size` indicates the size of the k/v cache chunk to be allocated each time new k/v cache blocks are needed. Different values represent different meanings:

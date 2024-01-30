@@ -90,6 +90,7 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 `cache_max_entry_count` 根据取值不同，表示不同的含义：
 
 - 当值为 (0, 1) 之间的小数时，`cache_max_entry_count` 表示 k/v block 使用的内存百分比。比如 A100-80G 显卡内存是80G，当`cache_max_entry_count`为0.5时，表示 k/v block 使用的内存总量为 80 * 0.5 = 40G
+- 当 lmdeploy 版本大于 0.2.1 时，`cache_max_entry_count` 将**空闲**内存的百分比用于 k/v blocks，默认值为 `0.8`。例如，在 A100-80G GPU 上运行 Turbomind 加载 13b 模型时，k/v blocks 使用的内存为 `(80 - 26) * 0.8 = 43.2G`，即利用剩余 54G 中的 80%
 - 当值为 > 1的整数时，表示 k/v block 数量
 
 `cache_chunk_size` 表示在每次需要新的 k/v cache 块时，开辟 k/v cache 块的大小。不同的取值，表示不同的含义：
