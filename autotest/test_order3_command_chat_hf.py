@@ -45,6 +45,28 @@ class TestCommandChat:
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'internlm2-chat-20b-inner-w4')
 
+    @pytest.mark.internlm_chat_7b
+    @allure.story('internlm-chat-7b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm_chat_7b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-7b')
+
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm_chat_20b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-20b')
+
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b-inner-w4')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm_chat_20b_inner_w4(self, config, cli_case_config,
+                                             usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-20b-inner-w4')
+
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
     @pytest.mark.parametrize('usercase', getCaseList())
@@ -89,6 +111,23 @@ class TestCommandChat:
                                              usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'Baichuan2-7B-Chat-inner-w4')
+
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def future_test_chat_Baichuan2_13B_Chat(self, config, cli_case_config,
+                                            usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Baichuan2-13B-Chat')
+
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat-inner-w4')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def future_test_chat_Baichuan2_13B_Chat_inner_w4(self, config,
+                                                     cli_case_config,
+                                                     usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Baichuan2-13B-Chat-inner-w4')
 
     @pytest.mark.CodeLlama_7b_Instruct_hf
     @allure.story('CodeLlama-7b-Instruct-hf')

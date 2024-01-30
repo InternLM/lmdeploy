@@ -41,6 +41,12 @@ class TestPipelinePytorchChat:
         run_pipeline_pytorch_chat_test(config, common_case_config,
                                        'Baichuan2-7B-Chat')
 
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    def future_test_chat_Baichuan2_13B_Chat(self, config, common_case_config):
+        run_pipeline_pytorch_chat_test(config, common_case_config,
+                                       'Baichuan2-13B-Chat')
+
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
     def future_test_chat_Qwen_7B_Chat(self, config, common_case_config):
@@ -87,7 +93,7 @@ def run_pipeline_pytorch_chat_test(config, cases_info, model_case):
                 if result is False:
                     break
                 prompt = list(prompt_detail.keys())[0]
-                prompts = [{'role': 'user', 'content': prompt}]
+                prompts = {'role': 'user', 'content': prompt}
                 file.writelines('prompt:' + prompt + '\n')
 
                 response = pipe.default_pipeline_chat(prompts).text
@@ -95,6 +101,7 @@ def run_pipeline_pytorch_chat_test(config, cases_info, model_case):
                 case_result, reason = assert_result(response,
                                                     prompt_detail.values(),
                                                     model_name)
+                prompts.append({'role': 'assistant', 'content': response})
                 file.writelines('output:' + response + '\n')
                 file.writelines('result:' + str(case_result) + ',reason:' +
                                 reason + '\n')
@@ -105,4 +112,4 @@ def run_pipeline_pytorch_chat_test(config, cases_info, model_case):
             allure.attach.file(pipeline_chat_log,
                                attachment_type=allure.attachment_type.TEXT)
             with assume:
-                result, msg
+                assert result, msg

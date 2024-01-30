@@ -83,6 +83,19 @@ class TestPipelineChat:
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-7B-Chat-inner-w4')
 
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    def futurn_test_chat_Baichuan2_13B_Chat(self, config, common_case_config):
+        run_pipeline_chat_test(config, common_case_config,
+                               'Baichuan2-13B-Chat')
+
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat-inner-w4')
+    def futurn_test_chat_Baichuan2_13B_Chat_inner_w4(self, config,
+                                                     common_case_config):
+        run_pipeline_chat_test(config, common_case_config,
+                               'Baichuan2-13B-Chat-inner-w4')
+
     @pytest.mark.CodeLlama_7b_Instruct_hf
     @allure.story('CodeLlama-7b-Instruct-hf')
     def future_test_chat_CodeLlama_7b_Instruct_hf(self, config,
@@ -130,7 +143,7 @@ def run_pipeline_chat_test(config, cases_info, model_case):
                 if result is False:
                     break
                 prompt = list(prompt_detail.keys())[0]
-                prompts = [{'role': 'user', 'content': prompt}]
+                prompts = {'role': 'user', 'content': prompt}
                 file.writelines('prompt:' + prompt + '\n')
 
                 response = pipe.default_pipeline_chat(prompts).text
@@ -138,6 +151,7 @@ def run_pipeline_chat_test(config, cases_info, model_case):
                 case_result, reason = assert_result(response,
                                                     prompt_detail.values(),
                                                     model_name)
+                prompts.append({'role': 'assistant', 'content': response})
                 file.writelines('output:' + response + '\n')
                 file.writelines('result:' + str(case_result) + ',reason:' +
                                 reason + '\n')
@@ -148,4 +162,4 @@ def run_pipeline_chat_test(config, cases_info, model_case):
             allure.attach.file(pipeline_chat_log,
                                attachment_type=allure.attachment_type.TEXT)
             with assume:
-                result, msg
+                assert result, msg

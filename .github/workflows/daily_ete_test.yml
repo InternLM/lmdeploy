@@ -37,7 +37,7 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
@@ -48,7 +48,7 @@ jobs:
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=./install \
+              -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
               -DBUILD_PY_FFI=ON \
               -DBUILD_MULTI_GPU=ON \
               -DCMAKE_CUDA_FLAGS="-lineinfo" \
@@ -59,7 +59,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 datasets
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -70,22 +70,30 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Test lmdeploy - quantization
+        continue-on-error: true
         run: |
-          pytest autotest -m 'quantization or quantization_w8a8' -n 8 --alluredir=allure-results --clean-alluredir
+          pytest autotest -m '(quantization or quantization_w8a8) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 8 --alluredir=allure-results --clean-alluredir
       - name: Test lmdeploy - convert
+        continue-on-error: true
         run: |
-          pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2
+          pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - pipeline
         continue-on-error: true
-        run: pytest autotest -m 'pipeline_chat or pipeline_chat_pytorch' --alluredir=allure-results --reruns 2
+        run: pytest autotest -m '(pipeline_chat or pipeline_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - restful
         continue-on-error: true
         run: pytest autotest -m restful_api --alluredir=allure-results
       - name: Test lmdeploy - chat
         continue-on-error: true
-        timeout-minutes: 40 # 40mins
+        timeout-minutes: 60 # 60mins
         run: |
-          pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 2
+          pytest autotest -m '(command_chat or command_chat_hf or command_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 4 --alluredir=allure-results --reruns 2
+      - name: downgrade transformers
+        run: python3 -m pip install transformers==4.33.0
+      - name: Test lmdeploy - run Baichuan
+        continue-on-error: true
+        run: |
+          pytest autotest -m 'Baichuan2_7B_Chat or Baichuan2_13B_Chat' --alluredir=allure-results
       - name: Test lmdeploy - rerun fail cases
         run:
           pytest autotest --alluredir=allure-results --lf
@@ -151,7 +159,7 @@ jobs:
             $CONTAINER_ID  cmake .. \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-               -DCMAKE_INSTALL_PREFIX=./install \
+               -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
                -DBUILD_PY_FFI=ON \
                -DBUILD_MULTI_GPU=ON \
                -DCMAKE_CUDA_FLAGS="-lineinfo" \

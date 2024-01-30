@@ -28,9 +28,12 @@ def command_line_test(config, case, case_info, model_case, type, extra):
 def hf_command_line_test(config, case, case_info, model_case, model_name):
     model_path = config.get('model_path')
 
-    cmd = get_command_with_extra(
-        'lmdeploy chat turbomind ' + model_path + '/' + model_case +
-        ' --model-name ' + model_name, config, model_case)
+    cmd = get_command_with_extra('lmdeploy chat turbomind ' + model_path +
+                                 '/' + model_case + ' --model-name ' +
+                                 model_name,
+                                 config,
+                                 model_case,
+                                 need_tp=True)
 
     if 'w4' in model_case:
         cmd += ' --model-format awq'
@@ -40,9 +43,11 @@ def hf_command_line_test(config, case, case_info, model_case, model_name):
 def pytorch_command_line_test(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
-    cmd = get_command_with_extra(
-        'lmdeploy chat torch ' + model_path + '/' + model_case, config,
-        model_case)
+    cmd = get_command_with_extra('lmdeploy chat torch ' + model_path + '/' +
+                                 model_case,
+                                 config,
+                                 model_case,
+                                 need_tp=True)
 
     return command_test(config, [cmd], model_case, case_info, False)
 
