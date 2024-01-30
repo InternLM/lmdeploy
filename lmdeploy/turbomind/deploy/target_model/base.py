@@ -14,6 +14,7 @@ from mmengine import Registry
 from pydantic.dataclasses import dataclass
 
 from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy.model import MODELS
 
 from ..source_model.base import BaseInputModel, BaseReader
 
@@ -147,10 +148,12 @@ class BaseOutputModel(ABC):
     def get_config(self, cfg: TurbomindModelConfig) -> TurbomindModelConfig:
         """Generate turbomind model config (config.ini)."""
         _, bos_id, eos_id = self.input_model.tokenizer_info()
+        model = MODELS.get(cfg.model_name)()
         final_cfg = cfg.__dict__
-        session_len = max(cfg.max_position_embeddings, 2048)
         final_cfg.update(
-            dict(start_id=bos_id, end_id=eos_id, session_len=session_len + 8))
+            dict(start_id=bos_id,
+                 end_id=eos_id,
+                 session_len=model.session_len + 8))
         final_cfg.update(self.input_model.model_info())
 
         # head_num, vocab_size
