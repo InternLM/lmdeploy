@@ -405,9 +405,11 @@ def get_streaming_response(
             yield output, tokens, finish_reason
 
 
-def main(api_server_url: str, session_id: int = 0):
+def main(api_server_url: str,
+         session_id: int = 0,
+         api_key: Optional[str] = None):
     """Main function to chat in terminal."""
-    api_client = APIClient(api_server_url)
+    api_client = APIClient(api_server_url, api_key=api_key)
     while True:
         prompt = input_prompt()
         if prompt in ['exit', 'end']:
