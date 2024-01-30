@@ -45,8 +45,6 @@ It's probably due to a low-version cuda toolkit. LMDeploy runtime requires a min
 
 ### RuntimeError: \[TM\]\[ERROR\] CUDA runtime error: out of memory /workspace/lmdeploy/src/turbomind/utils/allocator.h
 
-This is because the ratio of k/v cache memory is by default 50% of the total GPU memory, which may be too high for GPU cards with less than 40G memory.
-
 This is usually due to a disproportionately large memory ratio for the k/v cache, which is dictated by `TurbomindEngineConfig.cache_max_entry_count`.
 The implications of this parameter have slight variations in different versions of lmdeploy. For specifics, please refer to the source code for the \[detailed notes\] (https://github.com/InternLM/lmdeploy/blob/52419bd5b6fb419a5e3aaf3c3b4dea874b17e094/lmdeploy/messages.py#L107)
 
