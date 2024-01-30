@@ -247,7 +247,7 @@ class ArgumentHelper:
             required=False,
             default=False,
             help='Enable SSL. Requires OS Environment variables'
-            " 'SSL_KEYFILE' and 'SSL_CERTFILE'.",
+            " 'SSL_KEYFILE' and 'SSL_CERTFILE'",
         )
 
     @staticmethod

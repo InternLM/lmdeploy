@@ -164,7 +164,7 @@ class SubCliServe:
                             type=str,
                             default=None,
                             help='api key. Default to None, which means no '
-                            'api key will be used.')
+                            'api key will be used')
         ArgumentHelper.session_id(parser)
 
     @staticmethod
