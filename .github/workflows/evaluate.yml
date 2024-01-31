@@ -85,8 +85,7 @@ jobs:
           python3 -m pip install .
       - name: Install opencompass
         run: |
-          # TODO: update after PR
-          git clone --depth=1 -b fix_internlm2 https://github.com/RunningLeon/opencompass.git
+          git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
           python3 -m pip install --user -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
