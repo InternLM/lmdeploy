@@ -116,7 +116,7 @@ class WindowBlockManager(DefaultBlockManager):
         def __reuse_droped_blocks(num_required_blocks, num_drop_blocks,
                                   droped_blocks):
             """reuse dropped blocks."""
-            num_used_blocks = min(num_required_blocks - num_drop_blocks,
+            num_used_blocks = min(num_drop_blocks - num_required_blocks,
                                   num_required_blocks)
             reused_blocks = droped_blocks[:num_used_blocks]
             logical_blocks.append(reused_blocks)
