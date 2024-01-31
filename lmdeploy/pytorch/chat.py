@@ -6,7 +6,7 @@ from typing import List
 
 from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.model import MODELS, best_match_model
-from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -107,7 +107,7 @@ def run_chat(model_path: str,
                 continue
 
             print(f'{prompt} ', end='', flush=True)
-            response_size = 0
+            state = DetokenizeState()
             gen_config.random_seed = seed
             gen_config.stop_words = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
@@ -116,15 +116,10 @@ def run_chat(model_path: str,
                                                   adapter_name=adapter_name):
                 status, res, tokens = outputs
                 # decode res
-                response = tokenizer.decode(res, offset=response_size)
-                # utf-8 char at the end means it's a potential unfinished
-                # byte sequence, continue to concate it with the next
-                # sequence and decode them together
-                if response.endswith('�'):
-                    continue
+                response, state = tokenizer.detokenize_incrementally(
+                    res, state)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
-                response_size = tokens
 
             # update step
             step += len(input_ids) + tokens

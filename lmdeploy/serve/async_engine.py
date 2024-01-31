@@ -12,6 +12,7 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
+from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words, get_logger
 
 
@@ -452,7 +453,7 @@ class AsyncEngine:
         else:
             generator = await self.get_generator(False, session_id)
             with self.safe_run(session_id):
-                response_size = 0
+                state = DetokenizeState()
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         input_ids=input_ids,
@@ -461,25 +462,20 @@ class AsyncEngine:
                         sequence_start=(sequence_start),
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
-                    status, res, tokens = outputs
+                    _, res, tokens = outputs
                     # decode res
-                    response = self.tokenizer.decode(res, offset=response_size)
-                    # utf-8 char at the end means it's a potential unfinished
-                    # byte sequence, continue to concate it with the next
-                    # sequence and decode them together
-                    if response.endswith('�'):
-                        continue
+                    response, state = self.tokenizer.detokenize_incrementally(
+                        res, state)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason)
-                    response_size = tokens
 
                 finish_reason = 'length' \
                     if tokens >= gen_config.max_new_tokens else 'stop'
-                # `response_size` might be note updated since
-                # ` if response.endswith('�')`
-                if response_size == tokens:
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence
+                if not response.endswith('�'):
                     response = ''  # avaid returning the last response twice
                 yield GenOut(response, self.id2step[str(session_id)],
                              len(input_ids), tokens, finish_reason)
