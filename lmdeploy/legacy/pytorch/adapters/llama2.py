@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 import re
 
 from transformers import PreTrainedTokenizerFast
 
+from lmdeploy.utils import get_logger
+
 from .base import BasicAdapterFast
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 B_INST, E_INST = '[INST]', '[/INST]'
 B_SYS, E_SYS = '<<SYS>>\n', '\n<</SYS>>\n\n'
