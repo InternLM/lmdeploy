@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-import os
 import os.path as osp
 from collections import deque
 from typing import List, Optional, Sequence, Union
@@ -139,7 +138,6 @@ class HuggingFaceTokenizer:
 
     def __init__(self, model_dir: str):
         from transformers import AutoTokenizer
-        model_file = osp.join(model_dir, 'tokenizer.model')
         self.logger = get_logger('lmdeploy')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
