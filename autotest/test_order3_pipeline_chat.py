@@ -13,99 +13,122 @@ class TestPipelineChat:
 
     @pytest.mark.llama2_chat_7b_w4
     @allure.story('llama2-chat-7b-w4')
-    def test_chat_llama2_chat_7b_w4(self, config, common_case_config):
+    def test_pipeline_chat_llama2_chat_7b_w4(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'llama2-chat-7b-w4')
 
     @pytest.mark.internlm_chat_7b
     @allure.story('internlm-chat-7b')
-    def test_chat_internlm_chat_7b(self, config, common_case_config):
+    def test_pipeline_chat_internlm_chat_7b(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'internlm-chat-7b')
 
     @pytest.mark.internlm2_chat_7b
     @allure.story('internlm2-chat-7b')
-    def test_chat_internlm2_chat_7b(self, config, common_case_config):
+    def test_pipeline_chat_internlm2_chat_7b(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'internlm2-chat-7b')
 
     @pytest.mark.internlm_chat_20b
     @allure.story('internlm-chat-20b')
-    def test_chat_internlm_chat_20b(self, config, common_case_config):
+    def test_pipeline_chat_internlm_chat_20b(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'internlm-chat-20b')
 
     @pytest.mark.internlm_chat_20b
     @allure.story('internlm-chat-20b-inner-w4')
-    def test_chat_internlm_chat_20b_inner_w4(self, config, common_case_config):
+    def test_pipeline_chat_internlm_chat_20b_inner_w4(self, config,
+                                                      common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'internlm-chat-20b-inner-w4')
 
     @pytest.mark.internlm2_chat_20b
     @allure.story('internlm2-chat-20b')
-    def test_chat_internlm2_chat_20b(self, config, common_case_config):
+    def test_pipeline_chat_internlm2_chat_20b(self, config,
+                                              common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'internlm2-chat-20b')
 
     @pytest.mark.internlm2_chat_20b
     @allure.story('internlm2-chat-20b-inner-w4')
-    def test_chat_internlm2_chat_20b_inner_w4(self, config,
-                                              common_case_config):
+    def test_pipeline_chat_internlm2_chat_20b_inner_w4(self, config,
+                                                       common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'internlm2-chat-20b-inner-w4')
 
+    @pytest.mark.internlm2_20b
+    @allure.story('internlm2-20b')
+    def test_pipeline_chat_internlm2_20b(self, config, common_case_config):
+        run_pipeline_chat_test(config, common_case_config, 'internlm2-20b')
+
+    @pytest.mark.internlm2_chat_1_8b
+    @allure.story('internlm2-chat-1_8b')
+    def test_pipeline_chat_internlm2_chat_1_8b(self, config,
+                                               common_case_config):
+        run_pipeline_chat_test(config, common_case_config,
+                               'internlm2-chat-1_8b')
+
+    @pytest.mark.internlm2_1_8b
+    @allure.story('internlm2-1_8b')
+    def test_pipeline_chat_internlm2_1_8b(self, config, common_case_config):
+        run_pipeline_chat_test(config, common_case_config, 'internlm2-1_8b')
+
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
-    def test_chat_Qwen_7B_Chat(self, config, common_case_config):
+    def test_pipeline_chat_Qwen_7B_Chat(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'Qwen-7B-Chat')
 
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat-inner-w4')
-    def test_chat_Qwen_7B_Chat_inner_w4(self, config, common_case_config):
+    def test_pipeline_chat_Qwen_7B_Chat_inner_w4(self, config,
+                                                 common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Qwen-7B-Chat-inner-w4')
 
     @pytest.mark.Qwen_14B_Chat
     @allure.story('Qwen-14B-Chat')
-    def test_chat_Qwen_14B_Chat(self, config, common_case_config):
+    def test_pipeline_chat_Qwen_14B_Chat(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'Qwen-14B-Chat')
 
     @pytest.mark.Qwen_14B_Chat
     @allure.story('Qwen-14B-Chat-inner-w4')
-    def test_chat_Qwen_14B_Chat_inner_w4(self, config, common_case_config):
+    def test_pipeline_chat_Qwen_14B_Chat_inner_w4(self, config,
+                                                  common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Qwen-14B-Chat-inner-w4')
 
     @pytest.mark.Baichuan2_7B_Chat
     @allure.story('Baichuan2-7B-Chat')
-    def test_chat_Baichuan2_7B_Chat(self, config, common_case_config):
+    def test_pipeline_chat_Baichuan2_7B_Chat(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'Baichuan2-7B-Chat')
 
     @pytest.mark.Baichuan2_7B_Chat
     @allure.story('Baichuan2-7B-Chat-inner-w4')
-    def test_chat_Baichuan2_7B_Chat_inner_w4(self, config, common_case_config):
+    def test_pipeline_chat_Baichuan2_7B_Chat_inner_w4(self, config,
+                                                      common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-7B-Chat-inner-w4')
 
     @pytest.mark.Baichuan2_13B_Chat
     @allure.story('Baichuan2-13B-Chat')
-    def futurn_test_chat_Baichuan2_13B_Chat(self, config, common_case_config):
+    def futurn_test_pipeline_chat_Baichuan2_13B_Chat(self, config,
+                                                     common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-13B-Chat')
 
     @pytest.mark.Baichuan2_13B_Chat
     @allure.story('Baichuan2-13B-Chat-inner-w4')
-    def futurn_test_chat_Baichuan2_13B_Chat_inner_w4(self, config,
-                                                     common_case_config):
+    def futurn_test_pipeline_chat_Baichuan2_13B_Chat_inner_w4(
+            self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-13B-Chat-inner-w4')
 
     @pytest.mark.CodeLlama_7b_Instruct_hf
     @allure.story('CodeLlama-7b-Instruct-hf')
-    def future_test_chat_CodeLlama_7b_Instruct_hf(self, config,
-                                                  common_case_config):
+    def future_test_pipeline_chat_CodeLlama_7b_Instruct_hf(
+            self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'CodeLlama-7b-Instruct-hf')
 
     @pytest.mark.llama_2_7b_chat
     @allure.story('llama-2-7b-chat')
-    def test_chat_llama_2_7b_chat(self, config, common_case_config):
+    def test_pipeline_chat_llama_2_7b_chat(self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'llama-2-7b-chat')
 
 

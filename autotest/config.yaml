@@ -10,8 +10,11 @@ model_map:
     internlm-chat-20b-inner-w4: internlm-chat-20b
     internlm2-chat-7b: internlm2-chat-7b
     internlm2-chat-20b: internlm2-chat-20b
+    internlm2-20b: internlm2-20b
     internlm2-chat-20b-inner-w4: internlm2-chat-20b
     internlm2-chat-20b-inner-w8a8: internlm2-chat-20b
+    internlm2-chat-1_8b: internlm2-chat-1_8b
+    internlm2-1_8b: internlm2-1_8b
     Qwen-7B-Chat: qwen-7b
     Qwen-7B-Chat-inner-w4: qwen-7b
     Qwen-14B-Chat: qwen-14b
