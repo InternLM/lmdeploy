@@ -322,7 +322,8 @@ class InternLMBaseModel20B(BaseModel):
                          **kwargs)
 
 
-@MODELS.register_module(name=['internlm2-7b', 'internlm2-20b'])
+@MODELS.register_module(
+    name=['internlm2', 'internlm2-1_8b', 'internlm2-7b', 'internlm2-20b'])
 class InternLM2BaseModel7B(BaseModel):
     """Generation parameters of InternLM2-7B-Base model."""
 
