@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-import os
 import os.path as osp
 from collections import deque
 from typing import List, Optional, Sequence, Union
@@ -139,22 +138,10 @@ class HuggingFaceTokenizer:
 
     def __init__(self, model_dir: str):
         from transformers import AutoTokenizer
-        model_file = osp.join(model_dir, 'tokenizer.model')
-        backend_tokenizer_file = osp.join(model_dir, 'tokenizer.json')
-        model_file_exists = osp.exists(model_file)
         self.logger = get_logger('lmdeploy')
-        if not osp.exists(backend_tokenizer_file) and model_file_exists:
-            self.logger.warning(
-                'Can not find tokenizer.json. '
-                'It may take long time to initialize the tokenizer.')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
         self._prefix_space_tokens = None
-        # save tokenizer.json to reuse
-        if not osp.exists(backend_tokenizer_file) and model_file_exists:
-            if hasattr(self.model, 'backend_tokenizer'):
-                if os.access(model_dir, os.W_OK):
-                    self.model.backend_tokenizer.save(backend_tokenizer_file)
 
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir,
