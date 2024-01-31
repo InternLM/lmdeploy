@@ -6,6 +6,8 @@ from torch import Tensor, nn
 from torch.distributed._tensor import (DeviceMesh, DTensor, Replicate, Shard,
                                        distribute_tensor)
 
+from lmdeploy.pytorch.models.q_modules import QLinear
+
 try:
     from peft.tuners.lora import Linear as LoRALinear
 except ImportError:
@@ -128,7 +130,7 @@ def rowwise_parallelize_linear_fn(module: nn.Module,
     Returns:
         None
     """
-    if isinstance(module, torch.nn.Linear):
+    if isinstance(module, (torch.nn.Linear, QLinear)):
         return rowwise_parallelize_linear(module,
                                           device_mesh=device_mesh,
                                           to_local=to_local)
@@ -205,7 +207,7 @@ def colwise_parallelize_linear_fn(module: nn.Module,
     Returns:
         None
     """
-    if isinstance(module, torch.nn.Linear):
+    if isinstance(module, (torch.nn.Linear, QLinear)):
         return colwise_parallelize_linear(module,
                                           device_mesh=device_mesh,
                                           to_local=to_local)
