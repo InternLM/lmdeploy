@@ -98,25 +98,54 @@ class AsyncEngine:
             tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
-        if backend_config is None:
-            backend_config = TurbomindEngineConfig(model_name=model_name,
+        self.model_name = model_name
+        # try fuzzy matching to get a model_name
+        if self.model_name is None and (backend_config is None
+                                        or backend_config.model_name == ''
+                                        or backend_config.model_name is None):
+            potential_names = best_match_model(model_path)
+            if potential_names is None:
+                raise ArgumentError('Please set model_name or backend_config.')
+            else:
+                self.model_name = potential_names
+                logger = get_logger('lmdeploy')
+                logger.warning(
+                    f'Best matched chat template name: {self.model_name}')
+        elif self.model_name is not None and backend_config is not None:
+            if self.model_name != backend_config.model_name:
+                raise ArgumentError(
+                    f'Got different model names from model_name = '
+                    f'{self.model_name}, backend_config = {backend_config}')
+        if self.model_name is not None and backend_config is None:
+            backend_config = TurbomindEngineConfig(model_name=self.model_name,
                                                    tp=tp)
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
+        if chat_template_config is None:
+            chat_template_config = ChatTemplateConfig(self.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.model_name
+
+        # prevent bc
+        for k in list(kwargs.keys()):
+            if hasattr(chat_template_config, k):
+                v = kwargs.pop(k)
+                setattr(chat_template_config, k, v)
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path,
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
-        if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.engine.model_name)
-        elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.engine.model_name
+
         self.chat_template = chat_template_config.chat_template
         self.session_len = self.engine.session_len
         self.backend_config = backend_config
+        self.stop_words = _stop_words(self.chat_template.stop_words,
+                                      self.engine.tokenizer)
+        if self.stop_words is not None:
+            self.stop_words = self.stop_words[0][0].tolist()
 
     def _build_pytorch(
             self,
