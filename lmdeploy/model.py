@@ -332,7 +332,10 @@ class InternLM2BaseModel7B(BaseModel):
                          **kwargs)
 
 
-@MODELS.register_module(name=['internlm2-chat-7b', 'internlm2-chat-20b'])
+@MODELS.register_module(name=[
+    'internlm2-chat', 'internlm2-chat-1_8b', 'internlm2-chat-7b',
+    'internlm2-chat-20b'
+])
 class InternLM2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM2-Chat-7B."""
 
