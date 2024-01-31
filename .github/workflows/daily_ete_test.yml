@@ -13,7 +13,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 120 # 2hours
+    timeout-minutes: 180 # 2hours
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -79,6 +79,7 @@ jobs:
           pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - pipeline
         continue-on-error: true
+        timeout-minutes: 60 # 60mins
         run: pytest autotest -m '(pipeline_chat or pipeline_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results --reruns 2
       - name: Test lmdeploy - restful
         continue-on-error: true
@@ -92,6 +93,7 @@ jobs:
         run: python3 -m pip install transformers==4.33.0
       - name: Test lmdeploy - run Baichuan
         continue-on-error: true
+        timeout-minutes: 30 # 60mins
         run: |
           pytest autotest -m 'Baichuan2_7B_Chat or Baichuan2_13B_Chat' --alluredir=allure-results
       - name: Test lmdeploy - rerun fail cases
