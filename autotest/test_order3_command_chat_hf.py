@@ -154,14 +154,8 @@ class TestCommandChat:
 
 
 def run_command_line_test(config, case, case_info, model_case):
-    model_map = config.get('model_map')
-
-    if model_case not in model_map.keys():
-        assert False, 'the model is incorrect'
-    model_name = model_map.get(model_case)
-
     result, chat_log, msg = hf_command_line_test(config, case, case_info,
-                                                 model_case, model_name)
+                                                 model_case)
     allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg

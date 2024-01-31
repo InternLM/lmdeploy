@@ -30,7 +30,8 @@ def open_chat_test(config, case_info, model, url):
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages=messages,
-                                                     temperature=0.01):
+                                                     temperature=0.01,
+                                                     request_output_len=1024):
             if output.get('code') is not None and output.get('code') != 0:
                 file.writelines('output error:' + output.get('message') + '\n')
                 msg = output.get('message')
@@ -82,7 +83,8 @@ def interactive_test(config, case_info, model, url):
         for output in api_client.chat_interactive_v1(prompt=prompt,
                                                      interactive_mode=True,
                                                      session_id=random_chars,
-                                                     temperature=0.01):
+                                                     temperature=0.01,
+                                                     request_output_len=1024):
             output_content = output.get('text')
             file.writelines('output:' + output_content + '\n')
 

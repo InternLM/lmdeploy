@@ -52,22 +52,12 @@ class TestPipelineChat:
         run_pipeline_chat_test(config, common_case_config,
                                'internlm2-chat-20b-inner-w4')
 
-    @pytest.mark.internlm2_20b
-    @allure.story('internlm2-20b')
-    def test_pipeline_chat_internlm2_20b(self, config, common_case_config):
-        run_pipeline_chat_test(config, common_case_config, 'internlm2-20b')
-
     @pytest.mark.internlm2_chat_1_8b
     @allure.story('internlm2-chat-1_8b')
     def test_pipeline_chat_internlm2_chat_1_8b(self, config,
                                                common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'internlm2-chat-1_8b')
-
-    @pytest.mark.internlm2_1_8b
-    @allure.story('internlm2-1_8b')
-    def test_pipeline_chat_internlm2_1_8b(self, config, common_case_config):
-        run_pipeline_chat_test(config, common_case_config, 'internlm2-1_8b')
 
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')

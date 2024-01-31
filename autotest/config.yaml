@@ -21,8 +21,8 @@ model_map:
     Qwen-14B-Chat-inner-w4: qwen-14b
     Baichuan2-7B-Chat: baichuan2-7b
     Baichuan2-7B-Chat-inner-w4: baichuan2-7b
-    Baichuan2-13B-Chat: baichuan2-7b
-    Baichuan2-13B-Chat-inner-w4: baichuan2-7b
+    Baichuan2-13B-Chat: baichuan2-13b
+    Baichuan2-13B-Chat-inner-w4: baichuan2-13b
     Yi-6B-Chat: yi-chat
     CodeLlama-7b-Instruct-hf: codellama
     CodeLlama-7b-Instruct-hf-inner-w4: codellama
@@ -39,5 +39,5 @@ tp_config:
     internlm2-chat-20b: 2
     internlm2-chat-20b-inner-w4: 2
     internlm2-chat-20b-inner-w8a8: 2
-    Baichuan2-7B-Chat: 2
-    Baichuan2-7B-Chat-inner-w4: 2
+    Baichuan2-13B-Chat: 2
+    Baichuan2-13B-Chat-inner-w4: 2

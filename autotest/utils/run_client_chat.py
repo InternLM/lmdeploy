@@ -21,23 +21,22 @@ def command_line_test(config, case, case_info, model_case, type, extra):
         if 'w4' in model_case:
             cmd += ' --model-format awq'
 
-    return command_test(config, [cmd], model_case, case_info,
+    return command_test(config, [cmd], model_case, case, case_info,
                         type == 'turbomind')
 
 
-def hf_command_line_test(config, case, case_info, model_case, model_name):
+def hf_command_line_test(config, case, case_info, model_case):
     model_path = config.get('model_path')
 
     cmd = get_command_with_extra('lmdeploy chat turbomind ' + model_path +
-                                 '/' + model_case + ' --model-name ' +
-                                 model_name,
+                                 '/' + model_case,
                                  config,
                                  model_case,
                                  need_tp=True)
 
     if 'w4' in model_case:
         cmd += ' --model-format awq'
-    return command_test(config, [cmd], model_case, case_info, True)
+    return command_test(config, [cmd], model_case, case, case_info, True)
 
 
 def pytorch_command_line_test(config, case, case_info, model_case):
@@ -49,16 +48,17 @@ def pytorch_command_line_test(config, case, case_info, model_case):
                                  model_case,
                                  need_tp=True)
 
-    return command_test(config, [cmd], model_case, case_info, False)
+    return command_test(config, [cmd], model_case, case, case_info, False)
 
 
-def command_test(config, cmd, model, case_info, need_extract_output):
+def command_test(config, cmd, model, case, case_info, need_extract_output):
     try:
         log_path = config.get('log_path')
         model_map = config.get('model_map')
         model_name = model_map.get(model)
 
-        chat_log = os.path.join(log_path, 'chat_' + model + '.log')
+        chat_log = os.path.join(log_path,
+                                'chat_' + case + '_' + model + '.log')
 
         file = open(chat_log, 'w')
 
