@@ -12,6 +12,8 @@
 lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
+api_server 启动时支持的参数可以通过命令行`lmdeploy serve api_server -h`查看。
+
 我们提供的 restful api，其中三个仿照 OpenAI 的形式。
 
 - /v1/chat/completions

@@ -121,6 +121,8 @@ class SubCliServe:
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
+        ArgumentHelper.api_keys(parser)
+        ArgumentHelper.ssl(parser)
 
         # chat template args
         ArgumentHelper.meta_instruction(parser)
@@ -158,6 +160,11 @@ class SubCliServe:
         parser.add_argument('api_server_url',
                             type=str,
                             help='The URL of api server')
+        parser.add_argument('--api-key',
+                            type=str,
+                            default=None,
+                            help='api key. Default to None, which means no '
+                            'api key will be used')
         ArgumentHelper.session_id(parser)
 
     @staticmethod
@@ -249,6 +256,8 @@ class SubCliServe:
                        allow_methods=args.allow_methods,
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
+                       api_keys=args.api_keys,
+                       ssl=args.ssl,
                        qos_config_path=args.qos_config_path)
 
     @staticmethod

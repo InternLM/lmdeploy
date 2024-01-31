@@ -230,6 +230,27 @@ class ArgumentHelper:
                                    help='Set the log level')
 
     @staticmethod
+    def api_keys(parser):
+        return parser.add_argument(
+            '--api-keys',
+            type=str,
+            nargs='*',
+            default=None,
+            help='Optional list of space separated API keys',
+        )
+
+    @staticmethod
+    def ssl(parser):
+        return parser.add_argument(
+            '--ssl',
+            action='store_true',
+            required=False,
+            default=False,
+            help='Enable SSL. Requires OS Environment variables'
+            " 'SSL_KEYFILE' and 'SSL_CERTFILE'",
+        )
+
+    @staticmethod
     def backend(parser):
         """Add argument backend to parser."""
 
