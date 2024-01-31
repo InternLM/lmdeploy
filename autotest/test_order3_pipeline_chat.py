@@ -139,11 +139,12 @@ def run_pipeline_chat_test(config, cases_info, model_case):
 
             file = open(pipeline_chat_log, 'w')
 
+            prompts = []
             for prompt_detail in case_info:
                 if result is False:
                     break
                 prompt = list(prompt_detail.keys())[0]
-                prompts = {'role': 'user', 'content': prompt}
+                prompts.append({'role': 'user', 'content': prompt})
                 file.writelines('prompt:' + prompt + '\n')
 
                 response = pipe.default_pipeline_chat(prompts).text

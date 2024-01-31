@@ -80,7 +80,7 @@ jobs:
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         timeout-minutes: 60 # 60mins
-        run: pytest autotest -m '(pipeline_chat or pipeline_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results --reruns 2
+        run: pytest autotest -m '(pipeline_chat or pipeline_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results
       - name: Test lmdeploy - restful
         continue-on-error: true
         run: pytest autotest -m restful_api --alluredir=allure-results
