@@ -185,7 +185,7 @@ void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_i
             }
             int off_dst = std::max(0, begin - seq.cache_len);
             int off_src = std::max(0, seq.cache_len - begin);
-            // calculate union of [begin, end) and [seq.cache_len, seq.cache_len + h_input_length[i])
+            // calculate intersection of [begin, end) and [seq.cache_len, seq.cache_len + h_input_length[i])
             begin            = std::max(begin, seq.cache_len);
             end              = std::min(end, seq.cache_len + h_input_length[i]);
             size_t byte_size = (end - begin) * hidden_units_ * sizeof(T);
