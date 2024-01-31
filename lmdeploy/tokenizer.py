@@ -2,7 +2,8 @@
 import json
 import os.path as osp
 from collections import deque
-from typing import List, Optional, Sequence, Union
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
 
@@ -10,6 +11,31 @@ from lmdeploy.utils import get_logger
 
 # this file will be copied to triton server, make sure all
 # importing are starting from the package root lmdeploy
+
+
+@dataclass
+class DetokenizeState:
+    """A state collection of incrementally detekenization.
+
+    Args:
+        ids_offset (int): offset to all input ids. In LMDeploy, the output
+            ids length is not one by one. It could be random by random.
+        prev_tokens (List[str] | None): for incrementally decoding.
+            Default to None, which means the first round.
+        prefix_offset (int): the start index of tokens to be converted to
+            string (prev + new tokens). Default to 0 for the first round.
+        read_offset (int): the end index of tokens to be converted to
+            string (prev token). Default to 0 for the first round.
+    """
+    ids_offset: int = 0
+    prev_tokens: Optional[List[str]] = None
+    prefix_offset: int = 0
+    read_offset: int = 0
+
+    def as_tuple(self) -> Tuple:
+        """Return a tuple of states."""
+        return (self.ids_offset, self.prev_tokens, self.prefix_offset,
+                self.read_offset)
 
 
 class SentencePieceTokenizer:
@@ -112,6 +138,34 @@ class SentencePieceTokenizer:
         if offset:
             out_string = self._maybe_add_prefix_space(t, out_string)
         return out_string
+
+    def detokenize_incrementally(self,
+                                 all_input_ids: Sequence[int],
+                                 state: DetokenizeState,
+                                 skip_special_tokens: bool = True,
+                                 spaces_between_special_tokens: bool = True):
+        """Incrementally detokenize the input indexes.
+
+        Args:
+            all_input_ids (List[int]): a list of token ids. Expected to be
+                different sections of a long sequence.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
+            spaces_between_special_tokens (bool): Whether or not to add spaces
+                between special tokens. Default to be True.
+        Returns:
+            str: decoding output string of the current round.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+        """
+        out_string = self.model.Decode(all_input_ids)
+        if state.prev_tokens is not None:
+            out_string = self._maybe_add_prefix_space(all_input_ids,
+                                                      out_string)
+        state.prev_tokens = []  # not None for the above condition
+        return out_string, state
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
@@ -289,8 +343,116 @@ class HuggingFaceTokenizer:
         out_string = self.model.decode(t,
                                        skip_special_tokens=skip_special_tokens)
         if offset:
+            logger = get_logger('lmdeploy')
+            logger.warning('For incrementally detokenization, please try'
+                           'detokenize_incrementally function instead.')
             out_string = self._maybe_add_prefix_space(t, out_string)
         return out_string
+
+    @staticmethod
+    def _convert_tokens_to_string_with_added_encoders(
+        tokenizer,
+        output_tokens: List[str],
+        skip_special_tokens: bool,
+        spaces_between_special_tokens: bool,
+    ) -> str:
+        if tokenizer.is_fast or not tokenizer.get_added_vocab():
+            return tokenizer.convert_tokens_to_string(output_tokens)
+        # Adapted from
+        # https://github.com/vllm-project/vllm/blob/v0.2.7/vllm/transformers_utils/tokenizer.py#L68-L99
+        sub_texts = []
+        current_sub_text = []
+        all_special_tokens = set(tokenizer.all_special_tokens)
+        for token in output_tokens:
+            if skip_special_tokens and token in all_special_tokens:
+                continue
+            if token in tokenizer.get_added_vocab():
+                if current_sub_text:
+                    sub_text = tokenizer.convert_tokens_to_string(
+                        current_sub_text)
+                    sub_texts.append(sub_text)
+                    current_sub_text = []
+                sub_texts.append(token)
+            else:
+                current_sub_text.append(token)
+        if current_sub_text:
+            sub_text = tokenizer.convert_tokens_to_string(current_sub_text)
+            sub_texts.append(sub_text)
+        if spaces_between_special_tokens:
+            return ' '.join(sub_texts)
+        else:
+            return ''.join(sub_texts)
+
+    # Based on
+    # https://github.com/vllm-project/vllm/blob/v0.2.7/vllm/transformers_utils/tokenizer.py#L105-L165
+    def detokenize_incrementally(self,
+                                 all_input_ids: Sequence[int],
+                                 state: DetokenizeState,
+                                 skip_special_tokens: bool = True,
+                                 spaces_between_special_tokens: bool = True):
+        """Incrementally detokenize the input indexes.
+
+        Args:
+            all_input_ids (List[int]): a list of token ids. Expected to be
+                different sections of a long sequence.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
+            spaces_between_special_tokens (bool): Whether or not to add spaces
+                between special tokens. Default to be True.
+        Returns:
+            str: decoding output string of the current round.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+        """
+        tokenizer = self.model
+        ids_offset, prev_tokens, prefix_offset, read_offset = state.as_tuple()
+        # This is the first iteration for this sequence
+        new_tokens = tokenizer.convert_ids_to_tokens(
+            all_input_ids[ids_offset:],
+            skip_special_tokens=skip_special_tokens)
+        if prev_tokens is None:
+            # Please notice that in VLLM, indexes are detokenized one by one
+            # while in LMDeploy, every turn, the detokenized indexes length
+            # can be different.
+            if skip_special_tokens and new_tokens[
+                    0] in tokenizer.all_special_ids:
+                read_offset = 1  # skip special token
+            output_tokens = new_tokens
+            prev_tokens = new_tokens
+        else:
+            # Put new_token_id in a list so skip_special_tokens is respected
+            output_tokens = prev_tokens + new_tokens
+            prev_tokens += new_tokens
+
+        prefix_text = self._convert_tokens_to_string_with_added_encoders(
+            tokenizer,
+            output_tokens[prefix_offset:read_offset],
+            skip_special_tokens=skip_special_tokens,
+            spaces_between_special_tokens=spaces_between_special_tokens,
+        )
+        new_text = self._convert_tokens_to_string_with_added_encoders(
+            tokenizer,
+            output_tokens[prefix_offset:],
+            skip_special_tokens=skip_special_tokens,
+            spaces_between_special_tokens=spaces_between_special_tokens,
+        )
+
+        # update state and get final decoded output
+        if len(new_text) > len(prefix_text) and not new_text.endswith('�'):
+            # utf-8 char at the end means it's a potential unfinished byte
+            # sequence from byte fallback tokenization.
+            # If it's in the middle, it's probably a real invalid id generated
+            # by the model
+            prefix_offset = read_offset
+            read_offset = len(output_tokens)
+            new_text = new_text[len(prefix_text):]
+        else:
+            new_text = ''
+
+        return new_text, DetokenizeState(len(all_input_ids), prev_tokens,
+                                         prefix_offset, read_offset)
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
@@ -364,6 +526,33 @@ class Tokenizer:
             str: text of decoding tokens
         """
         return self.model.decode(t, offset)
+
+    def detokenize_incrementally(self,
+                                 all_input_ids: Sequence[int],
+                                 state: DetokenizeState,
+                                 skip_special_tokens: bool = True,
+                                 spaces_between_special_tokens: bool = True):
+        """Incrementally detokenize the input indexes.
+
+        Args:
+            all_input_ids (List[int]): a list of token ids. Expected to be
+                different sections of a long sequence.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
+            spaces_between_special_tokens (bool): Whether or not to add spaces
+                between special tokens. Default to be True.
+        Returns:
+            str: decoding output string of the current round.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+        """
+        return self.model.detokenize_incrementally(
+            all_input_ids,
+            state=state,
+            skip_special_tokens=skip_special_tokens,
+            spaces_between_special_tokens=spaces_between_special_tokens)
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
