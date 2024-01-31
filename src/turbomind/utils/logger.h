@@ -20,6 +20,10 @@
 #include <map>
 #include <string>
 
+#ifndef _MSC_VER
+#include <spdlog/spdlog.h>
+#endif
+
 #include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
@@ -30,11 +34,41 @@ namespace turbomind {
 #undef ERROR
 #endif
 
+#ifndef _MSC_VER
+class SpdLogger {
+public:
+    static SpdLogger& get_instance()
+    {
+        static SpdLogger spdlogger;
+        return spdlogger;
+    }
+    spdlog::logger* get_logger()
+    {
+        return logger_.get();
+    }
+
+    void set_log_path(const std::string& path)
+    {
+        path_ = path;
+    }
+    void init();
+
+private:
+    SpdLogger()                            = default;
+    ~SpdLogger()                           = default;
+    SpdLogger(const SpdLogger&)            = delete;
+    SpdLogger& operator=(const SpdLogger&) = delete;
+
+    std::string                     path_;
+    bool                            inited_ = false;
+    std::shared_ptr<spdlog::logger> logger_;
+};
+#endif
+
 class Logger {
 
 public:
-    enum Level
-    {
+    enum Level {
         TRACE   = 0,
         DEBUG   = 10,
         INFO    = 20,
@@ -47,17 +81,20 @@ public:
         thread_local Logger instance;
         return instance;
     }
-    Logger(Logger const&) = delete;
+    Logger(Logger const&)         = delete;
     void operator=(Logger const&) = delete;
 
     template<typename... Args>
     void log(const Level level, const std::string format, const Args&... args)
     {
         if (level_ <= level) {
-            std::string fmt = getPrefix(level) + format + "\n";
-            // FILE*       out    = level_ < WARNING ? stdout : stderr;
+            std::string fmt    = getPrefix(level) + format + "\n";
             std::string logstr = fmtstr(fmt, args...);
+#ifdef _MSC_VER
             fprintf(stderr, "%s", logstr.c_str());
+#else
+            SpdLogger::get_instance().get_logger()->log(spdlog::level::trace, logstr);
+#endif
         }
     }
 
@@ -65,10 +102,13 @@ public:
     void log(const Level level, const int rank, const std::string format, const Args&... args)
     {
         if (level_ <= level) {
-            std::string fmt = getPrefix(level, rank) + format + "\n";
-            // FILE*       out    = level_ < WARNING ? stdout : stderr;
+            std::string fmt    = getPrefix(level, rank) + format + "\n";
             std::string logstr = fmtstr(fmt, args...);
+#ifdef _MSC_VER
             fprintf(stderr, "%s", logstr.c_str());
+#else
+            SpdLogger::get_instance().get_logger()->log(spdlog::level::trace, logstr);
+#endif
         }
     }
 
