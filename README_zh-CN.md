@@ -127,8 +127,7 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-> **NOTE**
->
+> \[!NOTE\]
 > LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，可以设置环境变量：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
