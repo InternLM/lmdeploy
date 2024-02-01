@@ -3,6 +3,7 @@ import asyncio
 import dataclasses
 import random
 from argparse import ArgumentError
+from asyncio.log import logger
 from contextlib import contextmanager
 from queue import Empty, Queue
 from threading import Thread
@@ -65,29 +66,57 @@ class AsyncEngine:
                  tp: int = 1,
                  **kwargs) -> None:
         if backend == 'turbomind':
-            self._build_turbomind(model_path=model_path,
-                                  model_name=model_name,
-                                  backend_config=backend_config,
-                                  chat_template_config=chat_template_config,
-                                  tp=tp,
-                                  **kwargs)
+            self._build_turbomind(
+                model_path=model_path,
+                model_name=model_name,
+                backend_config=backend_config,
+                chat_template_config=chat_template_config.copy(),
+                tp=tp,
+                **kwargs)
         elif backend == 'pytorch':
-            self._build_pytorch(model_path=model_path,
-                                model_name=model_name,
-                                backend_config=backend_config,
-                                chat_template_config=chat_template_config,
-                                **kwargs)
+            self._build_pytorch(
+                model_path=model_path,
+                model_name=model_name,
+                backend_config=backend_config,
+                chat_template_config=chat_template_config.copy(),
+                **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend = backend
         self.instance_num = self.backend_config.max_batch_size
         self.tokenizer = self.engine.tokenizer
+        self._load_chat_template(chat_template_config)
         self.id2step = {}
         self.id2generator = {}
         self.loop = asyncio.get_event_loop()
         self.gens_set = set()
         for i in range(self.instance_num):
             self.gens_set.add(self.engine.create_instance())
+
+    def _load_chat_template(self, chat_template_config: ChatTemplateConfig):
+        """Load a chat template from chat_template_config.
+
+        Priority:
+        1. chat_template_config.model_name
+        2. chat_template_config.jinja_template
+        3. jinja template in tokenizer_config.json
+        4. deduced chat_template in lmdeploy
+        """
+        # if model_name is given, lmdeploy template will be applied
+        # no matter what Jinja template
+        if chat_template_config and chat_template_config.model_name:
+            return
+        # if no model_name passed in, will choose tokenizer's template
+        # it could be a Jinja if it exists in tokenizer_config.json
+        # if there is no Jinja template in tokenizer_config.json, a deduced
+        # lmdeploy template will be applied
+        if type(self.tokenizer.model.chat_template) == str:
+            self.chat_template = self.tokenizer.model.chat_template
+
+        # user defined Jinja template will be applied once a user pass
+        # a Jinja template in instead of a model name
+        if chat_template_config and chat_template_config.jinja_template:
+            self.chat_template = chat_template_config.get_jinja_template()
 
     def _build_turbomind(
             self,
@@ -440,7 +469,21 @@ class AsyncEngine:
             gen_config.random_seed = random.getrandbits(64)
         prompt = messages
         if do_preprocess:
-            prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+            if type(prompt) == str:
+                if hasattr(self.chat_template, 'messages2prompt'):
+                    prompt = self.chat_template.messages2prompt(
+                        prompt, sequence_start)
+                else:
+                    # TODO better logger
+                    logger.warning(f'{self.chat_template} Jinja chat template'
+                                   f' Can not be used for interactive chat. '
+                                   'Please use lmdeploy defined chat template '
+                                   'by passing in a model name.')
+            else:
+                # support
+                prompt = self.tokenizer.apply_chat_template(prompt,
+                                                            self.chat_template,
+                                                            tokenize=False)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
         if self.id2step[str(session_id)] + len(

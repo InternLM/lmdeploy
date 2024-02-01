@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import codecs
 import dataclasses
 import os
 from abc import abstractmethod
+from copy import deepcopy
 from typing import List, Literal, Optional
 
 from fuzzywuzzy import fuzz, process
@@ -34,7 +36,7 @@ class ChatTemplateConfig:
         capability: ('completion' | 'infilling' | 'chat' | 'python') = None
     """  # noqa: E501
 
-    model_name: str
+    model_name: str = None
     system: Optional[str] = None
     meta_instruction: Optional[str] = None
     eosys: Optional[str] = None
@@ -44,16 +46,34 @@ class ChatTemplateConfig:
     eoa: Optional[str] = None
     capability: Optional[Literal['completion', 'infilling', 'chat',
                                  'python']] = None
+    jinja_template: Optional[str] = None
 
     @property
     def chat_template(self):
         attrs = {
             key: value
             for key, value in dataclasses.asdict(self).items()
-            if value is not None
+            if value is not None and key != 'jinja_template'
         }
         model: BaseModel = MODELS.get(self.model_name).from_config(**attrs)
         return model
+
+    def get_jinja_template(self):
+        """Get the jinja template."""
+        if self.jinja_template is not None:
+            try:
+                with open(self.jinja_template, 'r') as f:
+                    template = f.read()
+            except OSError:
+                # If opening a file fails, set chat template to be args to
+                # ensure we decode so our escape are interpreted correctly
+                template = codecs.decode(self.jinja_template, 'unicode_escape')
+            return template
+        return None
+
+    def copy(self):
+        """Get a copy of the class."""
+        return deepcopy(self)
 
 
 @MODELS.register_module(name='internlm')

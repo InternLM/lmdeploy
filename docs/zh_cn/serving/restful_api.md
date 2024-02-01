@@ -156,6 +156,13 @@ openaoe -f /path/to/your/config-template.yaml
 
 具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md).
 
+### 自定义对话模板
+
+LMDeploy 支持两种添加对话模板的形式：
+
+- 一种是以 LMDeploy 现有对话模板，自定义一个python对话模板类，注册成功后直接用即可。优点是自定义程度高，可控性强。
+- 一种是传入 Huggingface 的对话模板，即 Jinja 模板。
+
 ### FAQ
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。

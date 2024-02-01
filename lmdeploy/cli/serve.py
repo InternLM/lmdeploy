@@ -126,6 +126,7 @@ class SubCliServe:
 
         # chat template args
         ArgumentHelper.meta_instruction(parser)
+        ArgumentHelper.jinja_template(parser)
         ArgumentHelper.cap(parser)
 
         # pytorch engine args
@@ -210,6 +211,7 @@ class SubCliServe:
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
+            jinja_template=args.jinja_template,
             capability=args.cap)
         run(args.model_path_or_server,
             server_name=args.server_name,
@@ -244,7 +246,8 @@ class SubCliServe:
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
-            capability=args.cap)
+            capability=args.cap,
+            jinja_template=args.jinja_template)
         run_api_server(args.model_path,
                        backend=args.backend,
                        backend_config=backend_config,

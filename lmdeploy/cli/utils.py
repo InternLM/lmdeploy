@@ -327,6 +327,18 @@ class ArgumentHelper:
                                    help='System prompt for ChatTemplateConfig')
 
     @staticmethod
+    def jinja_template(parser):
+        """Add argument jinjia template to parser."""
+
+        return parser.add_argument(
+            '--jinja-template',
+            type=str,
+            default=None,
+            help=\
+            'The file path to the chat template, or the template in single-line form. Could refer to https://huggingface.co/docs/transformers/main/en/chat_templating'  # noqa
+        )
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 

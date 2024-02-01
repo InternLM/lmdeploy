@@ -957,7 +957,6 @@ def serve(model_path: str,
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
-            Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
         tp (int): tensor parallel

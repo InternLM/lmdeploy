@@ -3,10 +3,11 @@ import json
 import os.path as osp
 from collections import deque
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 
+from lmdeploy.model import MODELS, BaseModel, best_match_model
 from lmdeploy.utils import get_logger
 
 # this file will be copied to triton server, make sure all
@@ -195,6 +196,16 @@ class HuggingFaceTokenizer:
         self.logger = get_logger('lmdeploy')
         self.model = AutoTokenizer.from_pretrained(model_dir,
                                                    trust_remote_code=True)
+
+        # get chat template from hf
+        self.chat_template = self.model.chat_template
+        deduced_name = best_match_model(model_dir)
+        self.lmdeploy_chat_template = None  # for interactive chat
+        if deduced_name is not None:
+            # will apply if hf chat template is None
+            self.lmdeploy_chat_template = MODELS.get(deduced_name)()
+            self.chat_template = self.lmdeploy_chat_template
+
         self._prefix_space_tokens = None
 
         if self.model.eos_token_id is None:
@@ -465,6 +476,49 @@ class HuggingFaceTokenizer:
         add_special_tokens = False
         return self.model(s, add_special_tokens=add_special_tokens)
 
+    def apply_chat_template(
+        self,
+        conversation: List[Dict[str, str]],
+        chat_template: Optional[Union[str, BaseModel]] = None,
+        add_generation_prompt: bool = False,
+        tokenize: bool = True,
+        padding: bool = False,
+        truncation: bool = False,
+        max_length: Optional[int] = None,
+        return_tensors: Optional[str] = None,
+        **tokenizer_kwargs,
+    ) -> Union[str, List[int]]:
+        """This is a function compatible with huggingface
+        AutoTokenizer.apply_chat_template.
+
+        Args:
+            conversation (List | str): type string for interactive chat.
+                List refers to OpenAI format messages.
+        """
+        if chat_template is None:
+            chat_template = self.chat_template
+        if hasattr(chat_template, 'messages2prompt'):
+            prompt = chat_template.messages2prompt(conversation)
+            if tokenize:
+                return self.encode(prompt)
+            else:
+                return prompt
+        elif isinstance(chat_template, str) or chat_template is None:
+            # apply hf chat template
+            return self.model.apply_chat_template(
+                conversation,
+                chat_template=chat_template,
+                add_generation_prompt=add_generation_prompt,
+                tokenize=tokenize,
+                padding=padding,
+                truncation=truncation,
+                max_length=max_length,
+                return_tensors=return_tensors,
+                **tokenizer_kwargs)
+        else:
+            raise TypeError(f'Unsupported chat_template type: {chat_template}'
+                            f' for {conversation}')
+
 
 class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
@@ -574,3 +628,28 @@ class Tokenizer:
                 'than 1. Currently, it can not be used as stop words')
             return []
         return self.model.indexes_containing_token(token)
+
+    def apply_chat_template(
+        self,
+        conversation: Union[List[Dict[str, str]], str],
+        chat_template: Optional[str] = None,
+        add_generation_prompt: bool = False,
+        tokenize: bool = True,
+        padding: bool = False,
+        truncation: bool = False,
+        max_length: Optional[int] = None,
+        return_tensors: Optional[str] = None,
+        **tokenizer_kwargs,
+    ) -> Union[str, List[int]]:
+        """This is a function compatible with huggingface
+        AutoTokenizer.apply_chat_template."""
+        return self.model.apply_chat_template(
+            conversation,
+            chat_template=chat_template,
+            add_generation_prompt=add_generation_prompt,
+            tokenize=tokenize,
+            padding=padding,
+            truncation=truncation,
+            max_length=max_length,
+            return_tensors=return_tensors,
+            **tokenizer_kwargs)
