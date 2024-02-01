@@ -32,7 +32,6 @@ internlm_meta_template = dict(round=[
 
 internlm2_meta_template = dict(round=[
     dict(role='HUMAN', begin='<|im_start|>user\n', end='<|im_end|>\n'),
-    dict(role='SYSTEM', begin='<|im_start|>system\n', end='<|im_end|>\n'),
     dict(role='BOT',
          begin='<|im_start|>assistant\n',
          end='<|im_end|>\n',
