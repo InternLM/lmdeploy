@@ -33,7 +33,7 @@ lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):
@@ -70,9 +70,8 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
     for k, v in kwargs.items():
         if v and hasattr(config, k):
             setattr(config, k, v)
-            get_logger('turbomind').warning(
-                f'kwargs {k} is deprecated to initialize model, '
-                'use TurbomindEngineConfig instead.')
+            logger.warning(f'kwargs {k} is deprecated to initialize model, '
+                           'use TurbomindEngineConfig instead.')
     if config.model_name is not None:
         logger.warning('model_name is deprecated in TurbomindEngineConfig '
                        'and has no effect')
@@ -90,8 +89,7 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
 
 
 def _compare_individual_gpu_memory(tp: int):
-    logging.basicConfig(level=logging.INFO)
-
+    logger.setLevel(level=logging.INFO)
     try:
         total_mem = []
         free_mem = []
@@ -106,12 +104,12 @@ def _compare_individual_gpu_memory(tp: int):
         all_free_equal = all(free == free_mem[0] for free in free_mem)
 
         if not all_total_equal or not all_free_equal:
-            logging.warning(
+            logger.warning(
                 f'Memory discrepancy detected: Total Memory={total_mem} MB, \
 Free Memory={free_mem} MB')
 
     except Exception as e:
-        logging.error(f'An exception occurred: {e}')
+        logger.error(f'An exception occurred: {e}')
 
 
 @contextmanager
@@ -168,7 +166,7 @@ class TurboMind:
 
             args = _catch_args(**kwargs, model_format=model_format, tp=tp)
             if len(args) > 0:
-                get_logger('turbomind').warning(
+                logger.warning(
                     f'loading from workspace, ignore args {args} '
                     'please use TurbomindEngineConfig or modify config.ini')
 
@@ -361,8 +359,7 @@ class TurboMind:
         # check whether input tp is valid
         if cfg.tensor_para_size != 1 and \
                 self.gpu_count != cfg.tensor_para_size:
-            get_logger('turbomind').info(
-                f'found tp={cfg.tensor_para_size} in config.ini.')
+            logger.info(f'found tp={cfg.tensor_para_size} in config.ini.')
             self.gpu_count = cfg.tensor_para_size
 
         # update cfg
@@ -528,9 +525,8 @@ class TurboMindInstance:
             config.max_new_tokens = kwargs['request_output_len']
             deprecated_kwargs.append('request_output_len')
         for k in deprecated_kwargs:
-            get_logger('turbomind').warning(
-                f'kwargs {k} is deprecated for inference, '
-                'use GenerationConfig instead.')
+            logger.warning(f'kwargs {k} is deprecated for inference, '
+                           'use GenerationConfig instead.')
         return config
 
     def end(self, session_id: int):

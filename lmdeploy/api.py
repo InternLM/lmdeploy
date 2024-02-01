@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
@@ -44,7 +44,8 @@ def pipeline(model_path: str,
         >>> print(response)
     """ # noqa E501
     from lmdeploy.serve.async_engine import AsyncEngine
-    os.environ['TM_LOG_LEVEL'] = log_level
+    if os.getenv('TM_LOG_LEVEL') is None:
+        os.environ['TM_LOG_LEVEL'] = log_level
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
@@ -76,6 +77,8 @@ def serve(model_path: str,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           log_level: str = 'ERROR',
+          api_keys: Optional[Union[List[str], str]] = None,
+          ssl: bool = False,
           **kwargs):
     """This will run the api_server in a subprocess.
 
@@ -105,6 +108,9 @@ def serve(model_path: str,
         server_name (str): host ip for serving
         server_port (int): server port
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
+            a single api_key. Default to None, which means no api key applied.
+        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
 
     Return:
         APIClient: A client chatbot for LLaMA series models.
@@ -135,6 +141,8 @@ def serve(model_path: str,
                                server_port=server_port,
                                tp=tp,
                                log_level=log_level,
+                               api_keys=api_keys,
+                               ssl=ssl,
                                **kwargs),
                    daemon=True)
     task.start()
@@ -152,13 +160,17 @@ def serve(model_path: str,
             pass
 
 
-def client(api_server_url: str = 'http://0.0.0.0:23333', **kwargs):
+def client(api_server_url: str = 'http://0.0.0.0:23333',
+           api_key: Optional[str] = None,
+           **kwargs):
     """
     Args:
         api_server_url (str): communicating address 'http://<ip>:<port>' of
             api_server
+        api_key (str | None): api key. Default to None, which means no
+            api key will be used.
     Return:
         Chatbot for LLaMA series models with turbomind as inference engine.
     """
     from lmdeploy.serve.openai.api_client import APIClient
-    return APIClient(api_server_url, **kwargs)
+    return APIClient(api_server_url, api_key, **kwargs)

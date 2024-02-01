@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.pytorch.engine import Engine as LMEngine
-from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 
 
 def sample_requests(
@@ -83,7 +83,7 @@ class Engine:
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
             _per_token_latency_stats = [0] * (output_seqlen + 1)
-            offset = 0
+            state = DetokenizeState
             prev = time.perf_counter()
             n_prev_token = 0
 
@@ -98,8 +98,7 @@ class Engine:
                                                    input_ids=input_ids,
                                                    gen_config=gen_config):
                 res, n_token = outputs[-2:]
-                self.tokenizer.decode(res, offset)
-                offset = n_token
+                _, state = self.tokenizer.detokenize_incrementally(res, state)
                 now = time.perf_counter()
                 if n_prev_token != n_token:
                     _per_token_latency_stats[n_prev_token] = np.round(

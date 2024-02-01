@@ -1,13 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
-import logging
 import os
 
 from huggingface_hub import hf_hub_download
 from transformers.utils import ExplicitEnum
 
-logger = logging.getLogger(__name__)
+from lmdeploy.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class ModelSource(ExplicitEnum):
