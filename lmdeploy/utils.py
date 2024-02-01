@@ -14,7 +14,7 @@ class FilterDuplicateWarning(logging.Filter):
         name (str): name of the filter.
     """
 
-    def __init__(self, name: str = 'mmengine'):
+    def __init__(self, name: str = 'lmdeploy'):
         super().__init__(name)
         self.seen: set = set()
 
