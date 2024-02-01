@@ -57,4 +57,3 @@ def convert_to_qmodules(model):
     norm_type = NORM_TYPE_MAP[type(model).__name__]
     convert(model, layer_type, norm_type)
     return
-    

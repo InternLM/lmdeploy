@@ -40,11 +40,12 @@ class QRMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     @classmethod
-    def from_float(cls, 
-                   mod: nn.Module,
-                   initialization: bool=True):
+    def from_float(cls, mod: nn.Module, initialization: bool = True):
         """Class method to create a QRMSNorm instance from a floating-point
-        module. initialization for dummy init."""
+        module.
+
+        initialization for dummy init.
+        """
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
         q_mod = cls(hidden_size, eps)
@@ -101,23 +102,24 @@ class QLinear(nn.Module):
             self.register_parameter('bias', None)
 
     @classmethod
-    def from_float(cls, 
-                   mod: nn.Module,
-                   initialization: bool = True):
+    def from_float(cls, mod: nn.Module, initialization: bool = True):
         """Class method to create a QLinear instance from a floating-point
-        module. initialization for dummy init."""
+        module.
+
+        initialization for dummy init.
+        """
         q_mod = cls(mod.in_features,
                     mod.out_features,
                     mod.bias is not None,
                     device=mod.weight.device,
                     dtype=mod.weight.dtype)
-        
+
         if initialization:
             weight_quant, scale = per_channel_quant(mod.weight.detach(), 8,
                                                     torch.int8)
             q_mod.weight.data = weight_quant
             q_mod.scale = scale
-            
+
         if mod.bias is not None:
             q_mod.bias.data = mod.bias.detach()
         return q_mod
@@ -149,4 +151,3 @@ class QLinear(nn.Module):
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}'.format(
             self.in_features, self.out_features, self.bias is not None)
-      
