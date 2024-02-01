@@ -142,7 +142,7 @@ class SentencePieceTokenizer:
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],
                                  state: DetokenizeState,
-                                 skip_special_tokens: bool = True,
+                                 skip_special_tokens: bool = False,
                                  spaces_between_special_tokens: bool = True):
         """Incrementally detokenize the input indexes.
 
@@ -390,7 +390,7 @@ class HuggingFaceTokenizer:
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],
                                  state: DetokenizeState,
-                                 skip_special_tokens: bool = True,
+                                 skip_special_tokens: bool = False,
                                  spaces_between_special_tokens: bool = True):
         """Incrementally detokenize the input indexes.
 
@@ -532,7 +532,7 @@ class Tokenizer:
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],
                                  state: DetokenizeState,
-                                 skip_special_tokens: bool = True,
+                                 skip_special_tokens: bool = False,
                                  spaces_between_special_tokens: bool = True):
         """Incrementally detokenize the input indexes.
 
