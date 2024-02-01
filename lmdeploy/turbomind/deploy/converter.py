@@ -15,13 +15,14 @@ from lmdeploy.turbomind.utils import create_hf_download_args
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
 
-supported_formats = ['llama', 'hf', 'awq', None]
+
 special_input_model_map = {
     'qwen': 'qwen',
     'baichuan': 'baichuan',
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2'
 }
+supported_formats = ['llama', 'hf', 'awq', *special_input_model_map.keys(), None]
 
 
 def get_package_root_path():
