@@ -29,8 +29,12 @@ namespace turbomind {
 Logger::Logger()
 {
 #ifndef _MSC_VER
-    // TODO: use config
-    SpdLogger::get_instance().set_log_path("/var/log/lmdeploy.log");
+    char* log_path = std::getenv("TM_LOG_PATH");
+    if (log_path != nullptr) {
+        SpdLogger::get_instance().set_log_path(std::string(log_path));
+    } else {
+        SpdLogger::get_instance().set_log_path("/var/log/lmdeploy.log");
+    }
     SpdLogger::get_instance().init();
 #endif
     char* is_first_rank_only_char = std::getenv("TM_LOG_FIRST_RANK_ONLY");
