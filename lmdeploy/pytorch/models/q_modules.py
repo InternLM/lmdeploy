@@ -107,7 +107,8 @@ class QLinear(nn.Module):
         """Class method to create a QLinear instance from a floating-point
         module.
 
-        initialization for dummy init.
+        `initialization = True` for real init.
+        `initialization = False` for dummy init.
         """
         q_mod = cls(mod.in_features,
                     mod.out_features,
