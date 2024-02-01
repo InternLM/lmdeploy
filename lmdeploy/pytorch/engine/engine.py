@@ -240,6 +240,13 @@ class Engine:
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
+
+        def __update_bad_words(msg):
+            """update bad words."""
+            sampling_param = msg.sampling_param
+            if sampling_param.ignore_eos:
+                sampling_param.bad_words.append(self.model_config.eos_token_id)
+
         for req in reqs:
             session_id = req.data['session_id']
             if session_id not in self.scheduler.sessions:
@@ -260,6 +267,7 @@ class Engine:
                     sampling_param=req.data['sampling_param'],
                     adapter_name=req.data['adapter_name'])
                 msg = next(iter(sess.sequences.values()))
+                __update_bad_words(msg)
                 self.scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
@@ -267,6 +275,7 @@ class Engine:
                 msg.remain_output_len = req.data['max_request_output_len']
                 msg.sampling_param = req.data['sampling_param']
                 msg.status = MessageStatus.WAITING
+                __update_bad_words(msg)
 
             msg.sender_id = req.sender_id
             msg.req_id = req.req_id
@@ -411,9 +420,8 @@ class Engine:
         """
 
         # check eof
-        def _check_eof(sampling_param, next_token_id, eos_token_id):
-            return (not sampling_param.ignore_eos
-                    ) and next_token_id == eos_token_id
+        def _check_eof(next_token_id, eos_token_id):
+            return next_token_id == eos_token_id
 
         def _check_stop_word(sampling_param, next_token_id):
             return (sampling_param.stop_words is not None
@@ -429,8 +437,7 @@ class Engine:
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
-        if _check_eof(sampling_param, next_token_id,
-                      self.model_config.eos_token_id):
+        if _check_eof(next_token_id, self.model_config.eos_token_id):
             return True
         if _check_stop_word(sampling_param, next_token_id):
             return True
@@ -498,8 +505,7 @@ class Engine:
         """check if output is necessary."""
         if isinstance(token, torch.Tensor):
             token = token.item()
-        ignore_eos = msg.sampling_param.ignore_eos
-        if not ignore_eos and token == self.model_config.eos_token_id:
+        if token == self.model_config.eos_token_id:
             return False
 
         stop_words = msg.sampling_param.stop_words
