@@ -328,7 +328,10 @@ class HuggingFaceTokenizer:
                 encoded = encoded[1:]
         return encoded
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None):
+    def decode(self,
+               t: Sequence[int],
+               offset: Optional[int] = None,
+               skip_special_tokens: bool = False):
         """De-tokenize.
 
         Args:
@@ -338,7 +341,6 @@ class HuggingFaceTokenizer:
         Returns:
             str: text of decoding tokens
         """
-        skip_special_tokens = True
         t = t[offset:]
         out_string = self.model.decode(t,
                                        skip_special_tokens=skip_special_tokens)
