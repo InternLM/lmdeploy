@@ -83,7 +83,7 @@ class Engine:
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
             _per_token_latency_stats = [0] * (output_seqlen + 1)
-            state = DetokenizeState
+            state = DetokenizeState()
             prev = time.perf_counter()
             n_prev_token = 0
 
