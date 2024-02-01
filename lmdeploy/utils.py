@@ -1,10 +1,39 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
 import sys
-from logging import Logger
+from logging import Logger, LogRecord
 from typing import List, Optional
 
 logger_initialized = {}
+
+
+class FilterDuplicateWarning(logging.Filter):
+    """Filter the repeated warning message.
+
+    Args:
+        name (str): name of the filter.
+    """
+
+    def __init__(self, name: str = 'mmengine'):
+        super().__init__(name)
+        self.seen: set = set()
+
+    def filter(self, record: LogRecord) -> bool:
+        """Filter the repeated warning message.
+
+        Args:
+            record (LogRecord): The log record.
+
+        Returns:
+            bool: Whether to output the log record.
+        """
+        if record.levelno != logging.WARNING:
+            return True
+
+        if record.msg not in self.seen:
+            self.seen.add(record.msg)
+            return True
+        return False
 
 
 def get_logger(
@@ -56,7 +85,6 @@ def get_logger(
         file_handler = logging.FileHandler(log_file, file_mode)
         handlers.append(file_handler)
 
-    from mmengine.logging.logger import FilterDuplicateWarning
     formatter = logging.Formatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
