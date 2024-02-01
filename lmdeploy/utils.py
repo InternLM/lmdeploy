@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
+import sys
 from logging import Logger
 from typing import List, Optional
 
@@ -45,7 +46,7 @@ def get_logger(
         if type(handler) is logging.StreamHandler:
             handler.setLevel(logging.ERROR)
 
-    stream_handler = logging.StreamHandler()
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
     if log_file is not None:
@@ -55,13 +56,16 @@ def get_logger(
         file_handler = logging.FileHandler(log_file, file_mode)
         handlers.append(file_handler)
 
+    from mmengine.logging.logger import FilterDuplicateWarning
     formatter = logging.Formatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
         handler.setLevel(log_level)
+        handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
     logger.setLevel(log_level)
+    logger.propagate = False
     logger_initialized[name] = True
 
     return logger
