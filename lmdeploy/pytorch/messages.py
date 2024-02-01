@@ -24,6 +24,8 @@ class SamplingParam:
     random_seed: int = None
     stop_words: List[int] = None
     bad_words: List[int] = None
+    max_new_tokens: int = 512
+    min_new_tokens: int = 0
 
     def __hash__(self):
         """hash."""
@@ -34,7 +36,7 @@ class SamplingParam:
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
         """from gen config."""
-
+        min_new_tokens = gen_config.min_new_tokens or 0
         return SamplingParam(top_p=gen_config.top_p,
                              top_k=gen_config.top_k,
                              temperature=gen_config.temperature,
@@ -42,7 +44,9 @@ class SamplingParam:
                              ignore_eos=gen_config.ignore_eos,
                              random_seed=gen_config.random_seed,
                              stop_words=gen_config.stop_words,
-                             bad_words=gen_config.bad_words)
+                             bad_words=gen_config.bad_words,
+                             max_new_tokens=gen_config.max_new_tokens,
+                             min_new_tokens=min_new_tokens)
 
 
 class MessageStatus(enum.Enum):
@@ -77,7 +81,6 @@ class SchedulerSession:
 
     def add_sequence(self,
                      token_ids: Tensor,
-                     max_output_len: int = 512,
                      sampling_param: SamplingParam = None,
                      adapter_name: str = None) -> 'SchedulerSequence':
         """Add a new message."""
@@ -93,7 +96,7 @@ class SchedulerSession:
                                 session=self,
                                 block_size=self.block_size,
                                 status=MessageStatus.WAITING,
-                                remain_output_len=max_output_len,
+                                num_new_tokens=0,
                                 sampling_param=sampling_param,
                                 adapter_name=adapter_name,
                                 arrive_time=time.time())
@@ -104,7 +107,6 @@ class SchedulerSession:
             self,
             token_ids: Tensor,
             seq: 'SchedulerSequence',
-            max_output_len: int = 512,
             sampling_param: SamplingParam = None) -> 'SchedulerSequence':
         """Fork a new message from exist message."""
         if sampling_param is None:
@@ -121,7 +123,7 @@ class SchedulerSession:
             session=self,
             block_size=self.block_size,
             history_token_ids=seq.history_token_ids.copy(),
-            remain_output_len=max_output_len,
+            num_new_tokens=0,
             sampling_param=sampling_param,
             status=seq.status,
             logical_blocks=seq.logical_blocks.clone(),
@@ -141,7 +143,7 @@ class SchedulerSequence:
     session: SchedulerSession
     block_size: int
     history_token_ids: list = field(default_factory=list)
-    remain_output_len: int = 0
+    num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     status: MessageStatus = MessageStatus.WAITING
     logical_blocks: LogicalTokenBlocks = None
