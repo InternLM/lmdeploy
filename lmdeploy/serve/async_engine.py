@@ -126,21 +126,21 @@ class AsyncEngine:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
-
         # prevent bc
         for k in list(kwargs.keys()):
             if hasattr(chat_template_config, k):
                 v = kwargs.pop(k)
                 setattr(chat_template_config, k, v)
+        self.chat_template = chat_template_config.chat_template
+        if backend_config.session_len is None:
+            backend_config.session_len = self.chat_template.session_len
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path,
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
-
-        self.chat_template = chat_template_config.chat_template
-        self.session_len = self.engine.session_len
+        self.session_len = backend_config.session_len
         self.backend_config = backend_config
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
@@ -177,25 +177,23 @@ class AsyncEngine:
                     f'Got different model names from model_name = '
                     f'{self.model_name}, backend_config = {backend_config}')
         if self.model_name is not None and backend_config is None:
-            backend_config = PytorchEngineConfig(self.model_name,
-                                                 session_len=2048)
+            backend_config = PytorchEngineConfig(self.model_name)
         if backend_config.model_name is None \
                 or backend_config.model_name == '':  # cli may pass None
             backend_config.model_name = self.model_name
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
-        self.engine = Engine(model_path=model_path,
-                             engine_config=backend_config)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
         self.chat_template = chat_template_config.chat_template
-        if self.engine.session_len is None:
-            self.session_len = self.chat_template.session_len
-        else:
-            self.session_len = self.engine.session_len
+        if backend_config.session_len is None:
+            backend_config.session_len = self.chat_template.session_len
+        self.engine = Engine(model_path=model_path,
+                             engine_config=backend_config)
+        self.session_len = backend_config.session_len
         self.backend_config = backend_config
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
