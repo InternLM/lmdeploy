@@ -449,7 +449,7 @@ class Engine:
 
         def _group_params(running):
             sampling_params: List[SamplingParam] = [
-                msg.sampling_param for msg in running
+                msg.sampling_param.logical_sampling_param() for msg in running
             ]
             grouped_params = dict()
             for i, key in enumerate(sampling_params):

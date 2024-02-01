@@ -27,11 +27,21 @@ class SamplingParam:
     max_new_tokens: int = 512
     min_new_tokens: int = 0
 
+    def logical_sampling_param(self):
+        """create a SamplingParam for logical sampling."""
+        return SamplingParam(top_p=self.top_p,
+                             top_k=self.top_k,
+                             temperature=self.temperature,
+                             repetition_penalty=self.repetition_penalty,
+                             ignore_eos=self.ignore_eos,
+                             random_seed=self.random_seed,
+                             bad_words=self.bad_words)
+
     def __hash__(self):
         """hash."""
         return hash(
             (self.top_k, self.top_p, self.temperature, self.repetition_penalty,
-             self.ignore_eos, self.random_seed))
+             self.ignore_eos, self.random_seed, self.bad_words))
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
