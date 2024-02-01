@@ -1,14 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
+from logging import Logger
 from typing import List, Optional
 
 logger_initialized = {}
 
 
-def get_logger(name: str,
-               log_file: Optional[str] = None,
-               log_level: int = logging.INFO,
-               file_mode: str = 'w'):
+def get_logger(
+    name: Optional[str] = None,
+    log_file: Optional[str] = None,
+    log_level: int = logging.INFO,
+    file_mode: str = 'w',
+    log_formatter: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+) -> Logger:
     """Initialize and get a logger by name.
 
     If the logger has not been initialized, this method will initialize the
@@ -22,25 +26,10 @@ def get_logger(name: str,
         log_level (int): The logger level.
         file_mode (str): The file mode used in opening log file.
             Defaults to 'w'.
+        log_formatter (str): The logger output format.
     Returns:
         logging.Logger: The expected logger.
     """
-    # use logger in mmengine if exists.
-    try:
-        from mmengine.logging import MMLogger
-        if MMLogger.check_instance_created(name):
-            logger = MMLogger.get_instance(name)
-        else:
-            logger = MMLogger.get_instance(name,
-                                           logger_name=name,
-                                           log_file=log_file,
-                                           log_level=log_level,
-                                           file_mode=file_mode)
-        return logger
-
-    except Exception:
-        pass
-
     logger = logging.getLogger(name)
     if name in logger_initialized:
         return logger
@@ -66,8 +55,7 @@ def get_logger(name: str,
         file_handler = logging.FileHandler(log_file, file_mode)
         handlers.append(file_handler)
 
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
         handler.setLevel(log_level)

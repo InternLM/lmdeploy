@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import json
-import logging
 import threading
 import time
 from typing import List
@@ -11,8 +10,9 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequestQos,
                                             GenerateRequestQos)
 from lmdeploy.serve.qos_engine.inner_group_schd import UserRequestQueue
 from lmdeploy.serve.qos_engine.usage_stats import UsageStats
+from lmdeploy.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QosConfig:

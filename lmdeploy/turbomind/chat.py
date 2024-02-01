@@ -4,6 +4,7 @@ import os
 import random
 
 from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.turbomind.utils import get_gen_param
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -113,7 +114,7 @@ def main(model_path: str,
                                       step, request_output_len, **kwargs)
 
             print(f'{prompt} ', end='', flush=True)
-            response_size = 0
+            state = DetokenizeState()
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
@@ -123,15 +124,10 @@ def main(model_path: str,
                     random_seed=seed if nth_round == 1 else None):
                 _, res, tokens = outputs
                 # decode res
-                response = tokenizer.decode(res, offset=response_size)
-                # utf-8 char at the end means it's a potential unfinished
-                # byte sequence, continue to concate it with the next
-                # sequence and decode them together
-                if response.endswith('�'):
-                    continue
+                response, state = tokenizer.detokenize_incrementally(
+                    res, state=state)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
-                response_size = tokens
 
             # update step
             step += len(input_ids) + tokens

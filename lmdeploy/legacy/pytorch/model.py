@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 import time
 import warnings
 from typing import Optional
@@ -7,9 +6,11 @@ from typing import Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from lmdeploy.utils import get_logger
+
 from .dist import get_local_rank
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LoadWoInit:

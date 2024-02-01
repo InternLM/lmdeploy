@@ -3,7 +3,6 @@
 # https://huggingface.co/tiiuae/falcon-7b-instruct
 # https://github.com/huggingface/transformers/blob/v4.33-release/src/transformers/models/falcon/modeling_falcon.py  # noqa
 
-import logging
 from typing import Optional, Tuple, Union
 
 import torch
@@ -19,8 +18,6 @@ from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import (alibi_paged_attention_fwd, fill_kv_cache,
                        paged_attention_fwd)
-
-logger = logging.getLogger()
 
 
 # rotary pos emb helpers
