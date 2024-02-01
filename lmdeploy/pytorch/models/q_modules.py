@@ -44,7 +44,7 @@ class QRMSNorm(nn.Module):
         """Class method to create a QRMSNorm instance from a floating-point
         module.
 
-        initialization for dummy init.
+        `initialization = True` for real init and initialization = False` for dummy init.
         """
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
