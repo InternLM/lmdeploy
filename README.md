@@ -127,7 +127,7 @@ print(response)
 ```
 
 > \[!NOTE\]
-> By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please set the environment variable:
+> By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please install ModelScope by `pip install modelscope` and set the environment variable:
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
 

@@ -128,7 +128,7 @@ print(response)
 ```
 
 > \[!NOTE\]
-> LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，可以设置环境变量：
+> LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，请通过命令 `pip install modelscope` 安装ModelScope，并设置环境变量：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
 
