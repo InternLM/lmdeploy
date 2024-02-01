@@ -17,6 +17,9 @@ memory_test:
             - 火锅
             - hotpot
             - hot pot
+        - falcon:
+            - len_g:
+                10
 new_session_without_memory:
     - 介绍成都的景点#please introduce some attractions in Chengdu:
         - contain:

@@ -17,6 +17,9 @@ memory_test:
             - 火锅
             - hotpot
             - hot pot
+        - falcon:
+            - len_g:
+                10
 new_session_without_memory:
     - 介绍美食#please introduce some delicious foods:
         - not_contain:
@@ -51,6 +54,11 @@ emoji_case:
         - contain:
             - 👍
             - 😊
+        - baichuan2-7b:
+            - contain:
+                - 👍
+                - 😊
+                - \u2714
 traditional_chinese_case:
     - 請介紹香港維多利亞港，用繁體中文回答:
         - contain:

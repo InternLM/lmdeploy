@@ -97,14 +97,14 @@ class TestPipelineChat:
 
     @pytest.mark.Baichuan2_13B_Chat
     @allure.story('Baichuan2-13B-Chat')
-    def futurn_test_pipeline_chat_Baichuan2_13B_Chat(self, config,
+    def future_test_pipeline_chat_Baichuan2_13B_Chat(self, config,
                                                      common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-13B-Chat')
 
     @pytest.mark.Baichuan2_13B_Chat
     @allure.story('Baichuan2-13B-Chat-inner-w4')
-    def futurn_test_pipeline_chat_Baichuan2_13B_Chat_inner_w4(
+    def future_test_pipeline_chat_Baichuan2_13B_Chat_inner_w4(
             self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-13B-Chat-inner-w4')
