@@ -22,7 +22,10 @@ special_input_model_map = {
     'baichuan2': 'baichuan2',
     'internlm2': 'internlm2'
 }
-supported_formats = ['llama', 'hf', 'awq', *special_input_model_map.keys(), None]
+
+supported_formats = [
+    'llama', 'hf', 'awq', *special_input_model_map.keys(), None
+]
 
 
 def get_package_root_path():
