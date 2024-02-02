@@ -12,7 +12,7 @@ import fire
 import numpy as np
 from tqdm import tqdm
 
-from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.turbomind import TurboMind
 
 
@@ -80,7 +80,7 @@ class Engine:
         for prompt, input_seqlen, output_seqlen in iter(
                 req_queue.get, [None, None, None]):
             _per_token_latency_stats = [0] * (output_seqlen + 1)
-            offset = 0
+            state = DetokenizeState()
             prev = time.perf_counter()
             n_prev_token = 0
 
@@ -96,8 +96,7 @@ class Engine:
                     ignore_eos=True,
                     stream_output=stream_output):
                 _, res, n_token = outputs
-                self.tokenizer.decode(res, offset)
-                offset = n_token
+                _, state = self.tokenizer.detokenize_incrementally(res, state)
                 now = time.perf_counter()
                 if n_prev_token != n_token:
                     _per_token_latency_stats[n_prev_token] = np.round(
