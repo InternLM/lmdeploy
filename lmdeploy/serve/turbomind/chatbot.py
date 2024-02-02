@@ -496,15 +496,16 @@ class Chatbot:
         session.status = StatusCode.TRITON_SESSION_READY
 
         que = queue.Queue()
-        producer = threading.Thread(
-            target=self._stream_producer,
-            args=(self.tritonserver_addr, session, que, self.cfg, input_ids,
-                  input_lengths, request_output_len, sequence_start,
-                  sequence_end, preseq_length, cancel, skip_special_tokens))
+        producer = threading.Thread(target=self._stream_producer,
+                                    args=(self.tritonserver_addr, session, que,
+                                          self.cfg, input_ids, input_lengths,
+                                          request_output_len, sequence_start,
+                                          sequence_end, preseq_length, cancel))
         producer.start()
         for status, res, n_token in self.stream_consumer(
                 self.postprocess, que, session, input_tokens, preseq_length,
-                cancel, logger, self.display, self.eos_id):
+                cancel, logger, self.display, self.eos_id,
+                skip_special_tokens):
             yield status, res, n_token
 
         producer.join()

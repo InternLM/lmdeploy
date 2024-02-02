@@ -125,11 +125,12 @@ class TritonPythonModel:
                         skip_special_tokens):
         """decode token ids into texts."""
         outputs = []
-        for beam_tokens, beam_len in zip(tokens_batch, sequence_length,
-                                         skip_special_tokens):
-            for tokens, _len in zip(beam_tokens, beam_len):
+        for beam_tokens, beam_len, beam_skip_special in zip(
+                tokens_batch, sequence_length, skip_special_tokens):
+            for tokens, _len, skip_special in zip(beam_tokens, beam_len,
+                                                  beam_skip_special):
                 output = self.tokenizer.decode(
-                    tokens, _len, skip_special_tokens=skip_special_tokens)
+                    tokens, _len, skip_special_tokens=skip_special)
                 output = output.encode('utf8')
                 outputs.append(output)
         return outputs

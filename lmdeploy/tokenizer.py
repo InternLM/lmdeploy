@@ -121,7 +121,11 @@ class SentencePieceTokenizer:
         """
         return self.model.Encode(s, add_bos=add_bos, **kwargs)
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None):
+    def decode(self,
+               t: Sequence[int],
+               offset: Optional[int] = None,
+               *args,
+               **kwargs):
         """De-tokenize.
 
         Args:
@@ -517,7 +521,12 @@ class Tokenizer:
         """
         return self.model.encode(s, add_bos, **kwargs)
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None):
+    def decode(
+        self,
+        t: Sequence[int],
+        offset: Optional[int] = None,
+        skip_special_tokens: bool = True,
+    ):
         """De-tokenize.
 
         Args:
@@ -527,7 +536,7 @@ class Tokenizer:
         Returns:
             str: text of decoding tokens
         """
-        return self.model.decode(t, offset)
+        return self.model.decode(t, offset, skip_special_tokens)
 
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],
