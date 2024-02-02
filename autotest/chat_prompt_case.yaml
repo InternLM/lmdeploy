@@ -2,24 +2,51 @@ identity_case:
     - 你好，你叫什么名字#hi, what's your name:
 
 memory_test:
-    - 小明喜欢吃苹果#Xiaoming like eating apple:
+    - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
-            - 苹果
-            - apple
-    - 小明喜欢吃什么#What does Xiao Ming like to eat?:
+            - chengdu
+            - 成都
         - contain:
-            - 苹果
-            - apple
+            - 熊猫
+            - panda
+            - 宽窄巷子
+            - jinli
+            - leshan
+        - falcon:
+            - contain:
+                - chengdu
+                - 成都
+    - 介绍相应美食#please introduce some delicious foods:
+        - contain:
+            - 成都
+            - chengdu
+        - contain:
+            - 火锅
+            - hotpot
+            - hot pot
+        - falcon:
+            - len_g:
+                10
 new_session_without_memory:
-    - 小明喜欢吃苹果#Xiaoming like eating apple:
+    - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
-            - 苹果
-            - apple
+            - chengdu
+            - 成都
+        - contain:
+            - 熊猫
+            - panda
+            - 宽窄巷子
+            - jinli
+            - leshan
+        - falcon:
+            - contain:
+                - chengdu
+                - 成都
     - end:
-    - 小明喜欢吃什么#What does Xiao Ming like to eat?:
+    - 介绍相应美食#please introduce some delicious foods:
         - not_contain:
-            - 苹果
-            - apple
+            - 成都
+            - chengdu
 chinese_poem_case:
     - 给我一首中文打油诗，需要添加标点符号。和，Give me a Chinese poem in Chinese:
         - len_g:
