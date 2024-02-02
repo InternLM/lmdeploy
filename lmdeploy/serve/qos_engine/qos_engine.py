@@ -12,7 +12,7 @@ from lmdeploy.serve.qos_engine.inner_group_schd import UserRequestQueue
 from lmdeploy.serve.qos_engine.usage_stats import UsageStats
 from lmdeploy.utils import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 
 class QosConfig:
