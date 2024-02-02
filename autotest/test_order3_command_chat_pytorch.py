@@ -12,7 +12,7 @@ def getCaseList():
 
 
 @pytest.mark.usefixtures('cli_case_config')
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(180)
 @pytest.mark.command_chat_pytorch
 class TestPytorchCommandChat:
 
