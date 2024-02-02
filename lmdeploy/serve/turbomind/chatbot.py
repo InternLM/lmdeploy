@@ -106,6 +106,7 @@ class Chatbot:
                      request_output_len: int = None,
                      sequence_start: bool = False,
                      sequence_end: bool = False,
+                     skip_special_tokens: bool = True,
                      *args,
                      **kwargs):
         """Start a new round conversion of a session.
@@ -117,6 +118,8 @@ class Chatbot:
             request_output_len (int): the expected generated token numbers
             sequence_start (bool): start flag of a session
             sequence_end (bool): end flag of a session
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
         Returns:
             iterator: The generated content by chatbot
         """
@@ -142,11 +145,13 @@ class Chatbot:
         self.cfg.update(**kwargs)
 
         self._session.prompt = self._get_prompt(prompt, sequence_start)
-        for status, res, tokens in self._stream_infer(self._session,
-                                                      self._session.prompt,
-                                                      request_output_len,
-                                                      sequence_start,
-                                                      sequence_end):
+        for status, res, tokens in self._stream_infer(
+                self._session,
+                self._session.prompt,
+                request_output_len,
+                sequence_start,
+                sequence_end,
+                skip_special_tokens=skip_special_tokens):
             if status == StatusCode.TRITON_STREAM_END:  # remove stop_words
                 res = filter_suffix(res, self.model.stop_words)
             if status.value < 0:
@@ -294,6 +299,7 @@ class Chatbot:
               request_output_len: int = None,
               sequence_start: bool = False,
               sequence_end: bool = False,
+              skip_special_tokens: bool = True,
               *args,
               **kwargs):
         """Start a new round conversion of a session. Return the chat
@@ -306,6 +312,8 @@ class Chatbot:
             request_output_len (int): the expected generated token numbers
             sequence_start (bool): start flag of a session
             sequence_end (bool): end flag of a session
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
         Returns:
             tuple(Status, str, int): status, text/chat completion,
             generated token number
@@ -331,11 +339,13 @@ class Chatbot:
 
         self._session.prompt = self._get_prompt(prompt, sequence_start)
         status, res, tokens = None, '', 0
-        for status, res, tokens in self._stream_infer(self._session,
-                                                      self._session.prompt,
-                                                      request_output_len,
-                                                      sequence_start,
-                                                      sequence_end):
+        for status, res, tokens in self._stream_infer(
+                self._session,
+                self._session.prompt,
+                request_output_len,
+                sequence_start,
+                sequence_end,
+                skip_special_tokens=skip_special_tokens):
             if status.value < 0:
                 break
             if status == StatusCode.TRITON_STREAM_END:  # remove stop_words
@@ -413,6 +423,7 @@ class Chatbot:
                       request_output_len: int = 512,
                       sequence_start: bool = True,
                       sequence_end: bool = False,
+                      skip_special_tokens: bool = True,
                       cancel: bool = False):
         """communicate with inference server to chat, or cancel a session, or
         end a session.
@@ -424,6 +435,8 @@ class Chatbot:
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
             cancel (bool): indicator for cancelling the session
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
         Yields:
             tuple: status, text, generated token number
         """
@@ -483,11 +496,11 @@ class Chatbot:
         session.status = StatusCode.TRITON_SESSION_READY
 
         que = queue.Queue()
-        producer = threading.Thread(target=self._stream_producer,
-                                    args=(self.tritonserver_addr, session, que,
-                                          self.cfg, input_ids, input_lengths,
-                                          request_output_len, sequence_start,
-                                          sequence_end, preseq_length, cancel))
+        producer = threading.Thread(
+            target=self._stream_producer,
+            args=(self.tritonserver_addr, session, que, self.cfg, input_ids,
+                  input_lengths, request_output_len, sequence_start,
+                  sequence_end, preseq_length, cancel, skip_special_tokens))
         producer.start()
         for status, res, n_token in self.stream_consumer(
                 self.postprocess, que, session, input_tokens, preseq_length,
@@ -584,7 +597,8 @@ class Chatbot:
 
     @staticmethod
     def stream_consumer(postprocess, res_queue, session, n_input_token,
-                        preseq_length, cancel, logger, display, eos_id):
+                        preseq_length, cancel, logger, display, eos_id,
+                        skip_special_tokens):
         """Consume the response from the triton inference server.
 
         Args:
@@ -598,6 +612,8 @@ class Chatbot:
             logger (util.Logger):
             display (bool): display the text in the consolo interface or not
             eos_id (int): eos token id
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
 
         Yields:
             tuple: status, text, generated token number
@@ -642,7 +658,8 @@ class Chatbot:
                     output_ids = output_ids[:, :, :-1]
 
                 output_str = postprocess(
-                    output_ids, np.array([[n_token]], dtype=np.uint32))
+                    output_ids, np.array([[n_token]], dtype=np.uint32),
+                    np.array([[int(skip_special_tokens)]], dtype=np.int32))
                 text = output_str[0].decode()
                 # utf-8 char at the end means it's a potential unfinished
                 # byte sequence, continue to concate it with the next

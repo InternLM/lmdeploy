@@ -84,10 +84,13 @@ class TritonPythonModel:
                 request, 'TOKENS_BATCH').as_numpy()
             sequence_length = pb_utils.get_input_tensor_by_name(
                 request, 'sequence_length').as_numpy()
+            skip_special_tokens = pb_utils.get_input_tensor_by_name(
+                request, 'skip_special_tokens').as_numpy()
 
             # Postprocessing output data.
             outputs = self._postprocessing(tokens_batch.tolist(),
-                                           sequence_length)
+                                           sequence_length,
+                                           skip_special_tokens)
 
             # Create output tensors. You need pb_utils.Tensor
             # objects to create pb_utils.InferenceResponse.
@@ -118,12 +121,15 @@ class TritonPythonModel:
         """
         print('Cleaning up...')
 
-    def _postprocessing(self, tokens_batch, sequence_length):
+    def _postprocessing(self, tokens_batch, sequence_length,
+                        skip_special_tokens):
         """decode token ids into texts."""
         outputs = []
-        for beam_tokens, beam_len in zip(tokens_batch, sequence_length):
+        for beam_tokens, beam_len in zip(tokens_batch, sequence_length,
+                                         skip_special_tokens):
             for tokens, _len in zip(beam_tokens, beam_len):
-                output = self.tokenizer.decode(tokens, _len)
+                output = self.tokenizer.decode(
+                    tokens, _len, skip_special_tokens=skip_special_tokens)
                 output = output.encode('utf8')
                 outputs.append(output)
         return outputs

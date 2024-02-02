@@ -32,6 +32,8 @@ class GenerationConfig:
         bad_words (List[str]): Words that the engine will never generate
         min_new_tokens (int): The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
+        skip_special_tokens (bool): Whether or not to remove special tokens
+            in the decoding. Default to be True.
     """
 
     n: int = 1
@@ -45,6 +47,7 @@ class GenerationConfig:
     stop_words: List[str] = None
     bad_words: List[str] = None
     min_new_tokens: int = None
+    skip_special_tokens: bool = True
 
 
 @dataclass
