@@ -247,28 +247,19 @@ class AsyncEngine:
 
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
-        if self.backend == 'pytorch':
-            if stop:
-                return self.engine.create_instance()
-            while self.gens_set == set():
-                await asyncio.sleep(0)
-            if str(session_id) in self.id2generator:
-                # pytorch engine instance is bind to session
-                generator = self.id2generator[str(session_id)]
-                if generator in self.gens_set:
-                    self.gens_set.remove(generator)
-            else:
-                generator = self.gens_set.pop()
-                self.id2generator[str(session_id)] = generator
-            return generator
+        if stop:
+            return self.engine.create_instance()
+        while self.gens_set == set():
+            await asyncio.sleep(0)
+        if str(session_id) in self.id2generator and self.backend == 'pytorch':
+            # pytorch engine instance is bind to session
+            generator = self.id2generator[str(session_id)]
+            if generator in self.gens_set:
+                self.gens_set.remove(generator)
         else:
-            if stop:
-                return self.tm_model.create_instance()
-            while self.gens_set == set():
-                await asyncio.sleep(0)
             generator = self.gens_set.pop()
             self.id2generator[str(session_id)] = generator
-            return generator
+        return generator
 
     def batch_infer(self,
                     prompts: Union[List[str], str, List[Dict],
