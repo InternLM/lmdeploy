@@ -15,7 +15,7 @@ class PipelineChat:
         self.pipe = pipe
 
     def default_pipeline_chat(self, prompt):
-        gen_config = GenerationConfig(temperature=0.01)
+        gen_config = GenerationConfig(temperature=0.01, max_new_tokens=2048)
         return self.pipe([prompt], gen_config=gen_config)[0]
 
 
@@ -28,5 +28,5 @@ class PipelinePytorchChat:
         self.pipe = pipe
 
     def default_pipeline_chat(self, prompt):
-        gen_config = GenerationConfig(temperature=0.01)
+        gen_config = GenerationConfig(temperature=0.01, max_new_tokens=2048)
         return self.pipe([prompt], gen_config=gen_config)[0]
