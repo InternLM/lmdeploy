@@ -5,10 +5,13 @@ from lmdeploy.utils import get_logger
 
 
 def _handle_exception(e: Exception, mod_name: str, logger: Logger):
+    red_color = '\033[31m'
+    reset_color = '\033[0m'
     logger.debug('Exception', exc_info=1)
     logger.error(f'{type(e).__name__}: {e}')
-    logger.error(f'<{mod_name}> environment test failed. '
-                 'Please ensure it has been installed correctly.')
+    logger.error(f'{red_color}<{mod_name}> environment test failed. '
+                 'Please ensure it has been installed correctly.'
+                 f'{reset_color}')
     exit(1)
 
 
