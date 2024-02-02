@@ -1390,8 +1390,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // Padded len
     const int padd_len = (params.total_padding_tokens == nullptr) ? 0 : params.total_padding_tokens[bi];
     if (params.rotary_embedding_dim > 0) {
-        apply_rotary_embedding(
-            q, k, tidx, params.rotary_embedding_dim, rotary_embedding_base, params.timestep - padd_len);
+        // apply_rotary_embedding(
+        //     q, k, tidx, params.rotary_embedding_dim, rotary_embedding_base, params.timestep - padd_len);
     }
 
     if (params.use_logn_attn) {
@@ -1472,7 +1472,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
         }
         // We don't need to apply the linear position bias here since qi - ki = 0 yields the position bias 0.
 
-        printf("QK_last[%d] = %f\n", hi, qk);
+        // printf("QK_last[%d] = %f\n", hi, qk);
 
         qk_max                        = qk;
         qk_smem[tlength - first_step] = qk;
@@ -1598,7 +1598,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
 
                 qk += mul<float, T, float>(params.linear_bias_slopes[hi], dist);
             }
-            // printf("QK_%d = %f\n", (int)ti, qk);
+            // printf("QK_[%3d] = %f\n", (int)ti, qk);
             qk_max                   = is_mask ? qk_max : fmaxf(qk_max, qk);
             qk_smem[ti - first_step] = qk;
         }
@@ -1635,9 +1635,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // Broadcast to all the threads in the warp.
     qk_max = __shfl_sync(uint32_t(-1), qk_max, 0);
 
-    if (threadIdx.x == 0) {
-        printf("QK_MAX[%d] = %f\n", hi, (float)qk_max);
-    }
+    // if (threadIdx.x == 0) {
+    //     printf("QK_MAX[%d] = %f\n", hi, (float)qk_max);
+    // }
 
     // Compute the logits and start the sum.
     float sum = 0.f;
@@ -1664,9 +1664,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T> 
     // Compute the sum.
     sum = block_sum<WARPS_PER_BLOCK>(&red_smem[WARPS_PER_BLOCK], sum);
 
-    if (threadIdx.x == 0) {
-        printf("SUM[%d] = %f\n", hi, (float)sum);
-    }
+    // if (threadIdx.x == 0) {
+    //     printf("SUM[%d] = %f\n", hi, (float)sum);
+    // }
 
     // Normalize the logits.
     float inv_sum = __fdividef(1.f, sum + 1.e-6f);

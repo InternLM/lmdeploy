@@ -14,6 +14,12 @@ namespace turbomind {
 #define TURBOMIND_S4_DEQUANT_USE_FMA 0
 #endif
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 700))
+#define TURBOMIND_ARCH_SM70 1
+#else
+#define TURBOMIND_ARCH_SM70 0
+#endif
+
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 750))
 #define TURBOMIND_ARCH_SM75 1
 #else
@@ -157,21 +163,26 @@ __inline__ __device__ uint4 dequantize_s4_to_fp16x2_v2(uint32_t const& source)
 
 __inline__ __device__ uint32_t cast_smem_ptr_to_uint(void const* const ptr)
 {
-    uint32_t smem_int_ptr;
-
-    asm("{.reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
-        : "=r"(smem_int_ptr)
-        : "l"(ptr));
-
-    return smem_int_ptr;
+    return (uint32_t)__cvta_generic_to_shared(ptr);
 }
 
 __inline__ __device__ void ldmatrix_m8n8_x4_b16(uint& d0, uint& d1, uint& d2, uint& d3, uint32_t smem_int_ptr)
 {
 #if TURBOMIND_ARCH_SM75
-    asm("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
-        : "=r"(d0), "=r"(d1), "=r"(d2), "=r"(d3)
-        : "r"(smem_int_ptr));
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                 : "=r"(d0), "=r"(d1), "=r"(d2), "=r"(d3)
+                 : "r"(smem_int_ptr));
+#else
+    assert(TURBOMIND_ARCH_SM75);
+#endif
+}
+
+__inline__ __device__ void ldsm_x4_trans(uint& d0, uint& d1, uint& d2, uint& d3, uint32_t smem_int_ptr)
+{
+#if TURBOMIND_ARCH_SM75
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                 : "=r"(d0), "=r"(d1), "=r"(d2), "=r"(d3)
+                 : "r"(smem_int_ptr));
 #else
     assert(TURBOMIND_ARCH_SM75);
 #endif
@@ -180,33 +191,50 @@ __inline__ __device__ void ldmatrix_m8n8_x4_b16(uint& d0, uint& d1, uint& d2, ui
 __inline__ __device__ void ldmatrix_m8n8_x2_b16(uint& d0, uint& d1, uint32_t smem_int_ptr)
 {
 #if TURBOMIND_ARCH_SM75
-    asm("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(d0), "=r"(d1) : "r"(smem_int_ptr));
+    asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(d0), "=r"(d1) : "r"(smem_int_ptr));
 #else
     assert(TURBOMIND_ARCH_SM75);
 #endif
 }
 
-__inline__ __device__ void wait_flag(int* lock, int status, int thread_id)
+__inline__ __device__ int sem_fetch(int* lock, bool pred)
+{
+    int state{};
+    if (pred) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+        asm volatile("ld.global.acquire.gpu.b32 %0, [%1];\n" : "=r"(state) : "l"(lock));
+#else
+        asm volatile("ld.global.cg.b32 %0, [%1];\n" : "=r"(state) : "l"(lock));
+#endif
+    }
+    return state;
+}
+
+__inline__ __device__ void sem_wait(int* lock, int status, bool pred)
 {
     int state = 0;
     while (__syncthreads_and(state != status)) {
-        if (thread_id == 0) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
-            asm volatile("ld.global.acquire.gpu.b32 %0, [%1];\n" : "=r"(state) : "l"(lock));
-#else
-            asm volatile("ld.global.cg.b32 %0, [%1];\n" : "=r"(state) : "l"(lock));
-#endif
-        }
+        state = sem_fetch(lock, pred);
     }
 
     __syncthreads();  // memory fence
 }
 
-__inline__ __device__ void release_flag(int* lock, int status, int thread_id)
+__inline__ __device__ void sem_wait_many(int* lock, int count, bool pred)
+{
+    int state = 0;
+    while (__syncthreads_count(state) != count) {
+        state = sem_fetch(lock, pred);
+    }
+
+    __syncthreads();  // memory fence
+}
+
+__inline__ __device__ void sem_post(int* lock, int status, bool pred)
 {
     __syncthreads();  // memory fence
 
-    if (thread_id == 0) {
+    if (pred) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
         asm volatile("st.global.release.gpu.b32 [%0], %1;\n" : : "l"(lock), "r"(status));
 #else
@@ -365,5 +393,65 @@ struct Shape {
         return (Ns * ...);
     }
 };
+
+__inline__ __device__ void
+mma_m16n8k8_row_col(Array<float, 4>& d, const Array<half, 4>& a, const Array<half, 2>& b, Array<float, 4>& c)
+{
+#if TURBOMIND_ARCH_SM75
+    uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
+    uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
+    float const*    C = reinterpret_cast<float const*>(&c);
+    float*          D = reinterpret_cast<float*>(&d);
+    asm volatile("mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32  {%0,%1,%2,%3}, "
+                 "{%4,%5}, {%6}, {%7,%8,%9,%10};\n"
+                 : "=f"(D[0]), "=f"(D[1]), "=f"(D[2]), "=f"(D[3])
+                 : "r"(A[0]), "r"(A[1]), "r"(B[0]), "f"(C[0]), "f"(C[1]), "f"(C[2]), "f"(C[3]));
+#else
+    assert(TURBOMIND_ARCH_SM75);
+#endif
+}
+
+__inline__ __device__ void
+mma_m16n8k16_row_col(Array<float, 4>& d, const Array<half, 8>& a, const Array<half, 4>& b, Array<float, 4>& c)
+{
+#if TURBOMIND_ARCH_SM80
+    uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
+    uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
+    float const*    C = reinterpret_cast<float const*>(&c);
+    float*          D = reinterpret_cast<float*>(&d);
+    asm volatile(
+        "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32  {%0,%1,%2,%3}, "
+        "{%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
+        : "=f"(D[0]), "=f"(D[1]), "=f"(D[2]), "=f"(D[3])
+        : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[0]), "r"(B[1]), "f"(C[0]), "f"(C[1]), "f"(C[2]), "f"(C[3]));
+#else
+    const Array<half, 4>* _a = (const Array<half, 4>*)&a;
+    const Array<half, 2>* _b = (const Array<half, 2>*)&b;
+    mma_m16n8k8_row_col(d, _a[0], _b[0], c);
+    mma_m16n8k8_row_col(d, _a[1], _b[1], d);
+#endif
+}
+
+__inline__ __device__ void ldsm_x4_trans(Array<uint32_t, 4>& d, uint32_t smem_int_ptr)
+{
+    ldsm_x4_trans(d[0], d[1], d[2], d[3], smem_int_ptr);
+}
+
+__inline__ __device__ void ldsm_x4(Array<uint32_t, 4>& d, uint32_t smem_int_ptr)
+{
+    ldmatrix_m8n8_x4_b16(d[0], d[1], d[2], d[3], smem_int_ptr);
+}
+
+template<class T, int N>
+__device__ void CpAsync(T* dst, const Array<T, N>* __restrict__ src)
+{
+    const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
+    constexpr int cp_size      = sizeof(Array<T, N>);
+#if TURBOMIND_ARCH_SM80
+    asm volatile("cp.async.ca.shared.global [%0], [%1], %2;\n" ::"r"(smem_int_ptr), "l"(src), "n"(cp_size));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
+}
 
 }  // namespace turbomind
