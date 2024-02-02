@@ -44,7 +44,8 @@ def pipeline(model_path: str,
         >>> print(response)
     """ # noqa E501
     from lmdeploy.serve.async_engine import AsyncEngine
-    os.environ['TM_LOG_LEVEL'] = log_level
+    if os.getenv('TM_LOG_LEVEL') is None:
+        os.environ['TM_LOG_LEVEL'] = log_level
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)

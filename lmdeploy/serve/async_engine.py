@@ -251,7 +251,7 @@ class AsyncEngine:
             return self.engine.create_instance()
         while self.gens_set == set():
             await asyncio.sleep(0)
-        if str(session_id) in self.id2generator:
+        if str(session_id) in self.id2generator and self.backend == 'pytorch':
             # pytorch engine instance is bind to session
             generator = self.id2generator[str(session_id)]
             if generator in self.gens_set:
