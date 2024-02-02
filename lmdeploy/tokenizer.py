@@ -416,7 +416,7 @@ class HuggingFaceTokenizer:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
-            if skip_special_tokens and new_tokens[
+            if skip_special_tokens and new_tokens and new_tokens[
                     0] in tokenizer.all_special_ids:
                 read_offset = 1  # skip special token
             output_tokens = new_tokens

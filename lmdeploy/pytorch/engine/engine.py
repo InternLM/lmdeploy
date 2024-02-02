@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -877,6 +876,7 @@ class EngineInstance:
                                  session_id: int,
                                  input_ids: List[int],
                                  gen_config: EngineGenerationConfig = None,
+                                 adapter_name: str = None,
                                  **kwargs):
         """Send stream inference request.
 
@@ -891,12 +891,38 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
-        for item in self.stream_infer(session_id=session_id,
-                                      input_ids=input_ids,
-                                      gen_config=gen_config,
-                                      **kwargs):
-            await asyncio.sleep(0)
-            yield item
+        gen_config = gen_config or EngineGenerationConfig()
+        request_output_len = gen_config.max_new_tokens
+        sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
+        self._try_add_session(session_id)
+        msg = dict(
+            token_ids=input_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            sampling_param=sampling_param,
+            adapter_name=adapter_name,
+        )
+        req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+
+        token_ids = []
+        while True:
+            if not self.engine.loop_threads.is_alive():
+                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
+                break
+            resp = await self.req_sender.async_recv(req_id)
+            # avoid token decoding and scheduling simultaneously
+            if resp.req_id != req_id:
+                continue
+            if resp.type == ResponseType.SUCCESS:
+                token_ids += resp.data['token_ids']
+                yield (resp.type, token_ids, len(token_ids))
+            elif resp.type == ResponseType.FINISH:
+                token_ids += resp.data['token_ids']
+                yield (resp.type, token_ids, len(token_ids))
+                break
+            else:
+                yield (resp.type, [], 0)
+                break
 
     def stream_infer(self,
                      session_id: int,
@@ -937,7 +963,6 @@ class EngineInstance:
             if not self.engine.loop_threads.is_alive():
                 yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
                 break
-
             resp = self.req_sender.recv(req_id)
             # avoid token decoding and scheduling simultaneously
             if resp.req_id != req_id:
