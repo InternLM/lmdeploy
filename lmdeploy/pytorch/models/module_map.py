@@ -99,6 +99,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
     'transformers.models.mistral.modeling_mistral.MistralFlashAttention2':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
     'transformers.models.mistral.modeling_mistral.MistralModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'transformers.models.mistral.modeling_mistral.MistralMLP':

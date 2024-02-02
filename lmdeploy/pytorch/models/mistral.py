@@ -8,9 +8,9 @@ from torch.distributed._tensor import DeviceMesh
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
+from ..kernels import apply_rotary_pos_emb
 from ..kernels.fill_kv_cache import fill_kv_cache
 from ..kernels.pagedattention import paged_attention_fwd
-from .llama import apply_rotary_pos_emb
 
 
 class MistralFlashAttention2(nn.Module):
