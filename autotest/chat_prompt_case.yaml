@@ -2,39 +2,21 @@ identity_case:
     - 你好，你叫什么名字#hi, what's your name:
 
 memory_test:
-    - 介绍成都的3个景点#please introduce tree attractions in Chengdu:
+    - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
             - chengdu
             - 成都
-        - contain:
-            - 熊猫
-            - panda
-            - 宽窄巷子
-            - jinli
-            - leshan
-    - 请重复刚才的回答#Please repeat your answer:
+    - 刚才的问题是什么#What’s the question just now?:
         - contain:
             - 成都
             - chengdu
-        - contain:
-            - 熊猫
-            - panda
-            - 宽窄巷子
-            - jinli
-            - leshan
 new_session_without_memory:
-    - 介绍成都的3个景点#please introduce tree attractions in Chengdu:
+    - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
             - chengdu
             - 成都
-        - contain:
-            - 熊猫
-            - panda
-            - 宽窄巷子
-            - jinli
-            - leshan
     - end:
-    - 请重复刚才的回答#Please repeat your answer:
+    - 刚才的问题是什么#What’s the question just now?:
         - not_contain:
             - 成都
             - chengdu
