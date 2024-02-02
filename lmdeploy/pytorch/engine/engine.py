@@ -14,6 +14,7 @@ from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..check_env import check_env
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
@@ -93,6 +94,8 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig,
                  trust_remote_code: bool = True) -> None:
+        check_env()
+
         self.engine_config = engine_config
         model_name = engine_config.model_name
         tp = engine_config.tp
