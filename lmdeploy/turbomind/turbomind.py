@@ -35,7 +35,7 @@ lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):

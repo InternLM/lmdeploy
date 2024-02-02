@@ -3,7 +3,7 @@ import collections
 
 from lmdeploy.utils import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 
 class UserRequestQueue:
