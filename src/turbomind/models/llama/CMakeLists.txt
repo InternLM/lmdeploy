@@ -27,7 +27,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         DynamicDecodeLayer
         activation_kernels
         decoder_masked_multihead_attention
-        decoder_multihead_attention
+        attention
         bert_preprocess_kernels
         decoding_kernels
         unfused_attention_kernels
@@ -51,8 +51,8 @@ target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils 
 
 install(TARGETS llama_gemm DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/bin)
 
-find_package(Catch2 3 QUIET)
-if (Catch2_FOUND)
-        add_executable(test_cache_manager test_cache_manager.cc)
-        target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
-endif ()
+# find_package(Catch2 3 QUIET)
+# if (Catch2_FOUND)
+#         add_executable(test_cache_manager test_cache_manager.cc)
+#         target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
+# endif ()

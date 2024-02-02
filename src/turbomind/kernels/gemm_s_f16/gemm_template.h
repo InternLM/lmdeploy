@@ -9,43 +9,6 @@
 
 namespace turbomind {
 
-__inline__ __device__ void
-mma_m16n8k8_row_col(Array<float, 4>& d, const Array<half, 4>& a, const Array<half, 2>& b, Array<float, 4>& c)
-{
-#if TURBOMIND_ARCH_SM75
-    uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
-    uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
-    float const*    C = reinterpret_cast<float const*>(&c);
-    float*          D = reinterpret_cast<float*>(&d);
-    asm("mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32  {%0,%1,%2,%3}, "
-        "{%4,%5}, {%6}, {%7,%8,%9,%10};\n"
-        : "=f"(D[0]), "=f"(D[1]), "=f"(D[2]), "=f"(D[3])
-        : "r"(A[0]), "r"(A[1]), "r"(B[0]), "f"(C[0]), "f"(C[1]), "f"(C[2]), "f"(C[3]));
-#else
-    assert(TURBOMIND_ARCH_SM75);
-#endif
-}
-
-__inline__ __device__ void
-mma_m16n8k16_row_col(Array<float, 4>& d, const Array<half, 8>& a, const Array<half, 4>& b, Array<float, 4>& c)
-{
-#if TURBOMIND_ARCH_SM80
-    uint32_t const* A = reinterpret_cast<uint32_t const*>(&a);
-    uint32_t const* B = reinterpret_cast<uint32_t const*>(&b);
-    float const*    C = reinterpret_cast<float const*>(&c);
-    float*          D = reinterpret_cast<float*>(&d);
-    asm("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32  {%0,%1,%2,%3}, "
-        "{%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
-        : "=f"(D[0]), "=f"(D[1]), "=f"(D[2]), "=f"(D[3])
-        : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[0]), "r"(B[1]), "f"(C[0]), "f"(C[1]), "f"(C[2]), "f"(C[3]));
-#else
-    const Array<half, 4>* _a = (const Array<half, 4>*)&a;
-    const Array<half, 2>* _b = (const Array<half, 2>*)&b;
-    mma_m16n8k8_row_col(d, _a[0], _b[0], c);
-    mma_m16n8k8_row_col(d, _a[1], _b[1], d);
-#endif
-}
-
 __inline__ __device__ uint transpose_m8n8_b16_warp_shuffle(uint value, int lane_id)
 {
     int    src_lane = lane_id / 8 + lane_id % 4 * 8;

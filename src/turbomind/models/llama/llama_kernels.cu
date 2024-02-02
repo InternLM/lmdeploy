@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/attention/array_ops.h"
 #include "src/turbomind/kernels/decoder_masked_multihead_attention_utils.h"
-#include "src/turbomind/kernels/decoder_multihead_attention/array_ops.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/macro.h"
@@ -192,8 +192,8 @@ template void invokeSliceCausalMask(float*, int, int, int, int, cudaStream_t);
 template<typename T>
 __global__ void createCausalMasks(T* mask, const int* q_lens, const int* k_lens, int max_q_len, int max_k_len)
 {
-    const auto q_len = q_lens[blockIdx.x];
-    const auto k_len = k_lens[blockIdx.x];
+    const auto q_len = q_lens ? q_lens[blockIdx.x] : max_q_len;
+    const auto k_len = k_lens ? k_lens[blockIdx.x] : max_k_len;
     mask += blockIdx.x * max_q_len * max_k_len;
     for (int i = threadIdx.x; i < max_q_len * max_k_len; i += blockDim.x) {
         const int q        = i / max_k_len;  // [0, max_q_len)

@@ -20,9 +20,8 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/GptContextAttentionLayer.cc
 
 #include "src/turbomind/models/llama/unified_attention_layer.h"
+#include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
-#include "src/turbomind/kernels/decoder_multihead_attention/decoder_multihead_attention.h"
-#include "src/turbomind/kernels/decoder_multihead_attention/kv_cache.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
@@ -328,22 +327,22 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
 
     const int kv_cache_elem_bits = quant_policy_ & QuantPolicy::kCacheKVInt8 ? 8 : sizeof(T) * 8;
 
-    FT_CHECK(weights->past_kv_scale.size() == 4);
-    ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
-                                  (const void**)v_cache_ptrs,
-                                  (T**)tmp_k_ptrs,
-                                  (T**)tmp_v_ptrs,
-                                  cu_block_count,
-                                  context_length,
-                                  layer_offset,
-                                  kv_cache_block_len_,
-                                  pf_session_len,
-                                  local_kv_head_num_,
-                                  size_per_head_,
-                                  pf_batch_size,
-                                  quant_policy_,
-                                  weights->past_kv_scale.data(),
-                                  stream_);
+    // FT_CHECK(weights->past_kv_scale.size() == 4);
+    // ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
+    //                               (const void**)v_cache_ptrs,
+    //                               (T**)tmp_k_ptrs,
+    //                               (T**)tmp_v_ptrs,
+    //                               cu_block_count,
+    //                               context_length,
+    //                               layer_offset,
+    //                               kv_cache_block_len_,
+    //                               pf_session_len,
+    //                               local_kv_head_num_,
+    //                               size_per_head_,
+    //                               pf_batch_size,
+    //                               quant_policy_,
+    //                               weights->past_kv_scale.data(),
+    //                               stream_);
     sync_check_cuda_error();
 
     if (use_fmha_) {
@@ -395,7 +394,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
                                       int               max_split_k,
                                       const WeightType* weights)
 {
-    DecoderMultiHeadAttentionParams<T> params{};
+    AttentionParams<T> params{};
 
     params.out    = output;
     params.q      = (T*)qkv;
@@ -410,15 +409,16 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.batch_size    = batch_size;
     params.cu_block_cnts = (int*)cu_block_count;
 
-    params.k_cache_block_ptrs  = (void**)k_cache_ptrs;
-    params.v_cache_block_ptrs  = (void**)v_cache_ptrs;
+    params.k_cache_block_ptrs = (void**)k_cache_ptrs;
+    // params.v_cache_block_ptrs  = (void**)v_cache_ptrs;
     params.kv_cache_block_size = kv_cache_block_len_;
 
     params.finished       = is_finished;
     params.context_length = context_length;
     params.rope_theta     = rope_theta;
 
-    params.layer_offset = layer_offset;
+    // params.layer_offset = layer_offset;
+    /// TODO: set key_offset & val_offset
 
     params.num_heads     = local_head_num_;
     params.num_kv_heads  = local_kv_head_num_;
@@ -441,18 +441,18 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     max_split_k = std::max(1, (int)std::ceil(max_split_k / avg_batch_size));
 
     params.max_split_k = max_split_k;
-    params.max_seq_len = dc_max_seq_len;
+    params.max_k_len   = dc_max_seq_len;
 
     params.arch   = arch_;
     params.stream = stream_;
 
-    params.quant_policy = quant_policy_;
-    FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
-    std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
+    // params.quant_policy = quant_policy_;
+    // FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
+    // std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
 
     {
         NvtxScope scope("decoder_multihead_attention");
-        DispatchDecoderMultiheadAttention<T>(params);
+        // dispatchAttention<T>(params);
     }
 }
 
