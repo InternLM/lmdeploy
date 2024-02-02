@@ -12,17 +12,16 @@ memory_test:
             - 宽窄巷子
             - jinli
             - leshan
-    - 美食#some delicious foods:
+    - 请重复刚才的回答#Please repeat your answer:
         - contain:
             - 成都
             - chengdu
         - contain:
-            - 火锅
-            - hotpot
-            - hot pot
-        - falcon:
-            - len_g:
-                10
+            - 熊猫
+            - panda
+            - 宽窄巷子
+            - jinli
+            - leshan
 new_session_without_memory:
     - 介绍成都的3个景点#please introduce tree attractions in Chengdu:
         - contain:
@@ -35,7 +34,7 @@ new_session_without_memory:
             - jinli
             - leshan
     - end:
-    - 美食#some delicious foods:
+    - 请重复刚才的回答#Please repeat your answer:
         - not_contain:
             - 成都
             - chengdu
