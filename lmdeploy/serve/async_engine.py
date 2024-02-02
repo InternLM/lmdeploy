@@ -251,14 +251,8 @@ class AsyncEngine:
             return self.engine.create_instance()
         while self.gens_set == set():
             await asyncio.sleep(0)
-        if str(session_id) in self.id2generator:
-            # pytorch engine instance is bind to session
-            generator = self.id2generator[str(session_id)]
-            if generator in self.gens_set:
-                self.gens_set.remove(generator)
-        else:
-            generator = self.gens_set.pop()
-            self.id2generator[str(session_id)] = generator
+        generator = self.gens_set.pop()
+        self.id2generator[str(session_id)] = generator
         return generator
 
     def batch_infer(self,
