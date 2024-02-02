@@ -41,7 +41,7 @@ from lmdeploy.utils import get_logger
 
 from .configuration_internlm import InternLMConfig
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 _CONFIG_FOR_DOC = 'InternLMConfig'
 

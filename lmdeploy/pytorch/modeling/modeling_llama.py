@@ -38,7 +38,7 @@ from transformers.utils import (add_start_docstrings,
 from lmdeploy.pytorch.modeling.convert_to_qmodules import convert_to_qmodules
 from lmdeploy.utils import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 _CONFIG_FOR_DOC = 'LlamaConfig'
 
