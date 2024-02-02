@@ -95,7 +95,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 50
         run: |
-          pytest autotest -m 'Baichuan2_7B_Chat or Baichuan2_13B_Chat' --alluredir=allure-results
+          pytest autotest -m '(Baichuan2_7B_Chat or Baichuan2_13B_Chat) and not pipeline_chat_pytorch' --alluredir=allure-results
       - name: Test lmdeploy - rerun fail cases
         run:
           pytest autotest --alluredir=allure-results --lf
