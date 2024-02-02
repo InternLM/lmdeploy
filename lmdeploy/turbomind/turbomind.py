@@ -951,7 +951,7 @@ class TurboMindInstance:
             max([len(input_id)
                  for input_id in input_ids]) / max_input_len).astype(int)
 
-        device = 'cpu' if n_max_iter > 0 else 'cuda'
+        device = 'cpu' if n_max_iter > 1 else 'cuda'
 
         index_range_starts = []
         index_range_ends = []
