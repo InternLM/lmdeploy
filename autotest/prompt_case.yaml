@@ -12,7 +12,7 @@ memory_test:
             - 宽窄巷子
             - jinli
             - leshan
-    - 介绍美食#please introduce some delicious foods:
+    - 美食#some delicious foods:
         - contain:
             - 成都
             - chengdu
@@ -24,7 +24,7 @@ memory_test:
             - len_g:
                 10
 new_session_without_memory:
-    - 介绍美食#please introduce some delicious foods:
+    - 美食#some delicious foods:
         - not_contain:
             - 成都
             - chengdu
