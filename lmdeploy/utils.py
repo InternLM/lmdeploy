@@ -1,9 +1,39 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
-from logging import Logger
+import sys
+from logging import Logger, LogRecord
 from typing import List, Optional
 
 logger_initialized = {}
+
+
+class FilterDuplicateWarning(logging.Filter):
+    """Filter the repeated warning message.
+
+    Args:
+        name (str): name of the filter.
+    """
+
+    def __init__(self, name: str = 'lmdeploy'):
+        super().__init__(name)
+        self.seen: set = set()
+
+    def filter(self, record: LogRecord) -> bool:
+        """Filter the repeated warning message.
+
+        Args:
+            record (LogRecord): The log record.
+
+        Returns:
+            bool: Whether to output the log record.
+        """
+        if record.levelno != logging.WARNING:
+            return True
+
+        if record.msg not in self.seen:
+            self.seen.add(record.msg)
+            return True
+        return False
 
 
 def get_logger(
@@ -45,7 +75,7 @@ def get_logger(
         if type(handler) is logging.StreamHandler:
             handler.setLevel(logging.ERROR)
 
-    stream_handler = logging.StreamHandler()
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
     if log_file is not None:
@@ -59,9 +89,11 @@ def get_logger(
     for handler in handlers:
         handler.setFormatter(formatter)
         handler.setLevel(log_level)
+        handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
     logger.setLevel(log_level)
+    logger.propagate = False
     logger_initialized[name] = True
 
     return logger
