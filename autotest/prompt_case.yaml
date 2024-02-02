@@ -2,16 +2,16 @@ identity_case:
     - 你好，你叫什么名字#hi, what's your name:
 
 memory_test:
-    - 介绍成都的景点#please introduce attractions in Chengdu:
+    - 小明喜欢吃苹果#Xiaoming like eating apple:
         - contain:
-            - chengdu
-            - 成都
-    - 刚才的问题是什么#What’s the question just now?:
+            - 苹果
+            - apple
+    - 小明喜欢吃什么#What does Xiao Ming like to eat?:
         - contain:
-            - 成都
-            - chengdu
+            - 苹果
+            - apple
 new_session_without_memory:
-    - 刚才的问题是什么#What’s the question just now?:
+    - 小明喜欢吃什么#What does Xiao Ming like to eat?:
         - not_contain:
             - 成都
             - chengdu
