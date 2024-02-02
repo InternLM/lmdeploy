@@ -27,10 +27,10 @@ def convert_decoder_layer(module, norm_type):
     """
     for name, child in module.named_children():
         if isinstance(child, nn.Linear):
-            new_child = QLinear.from_float(child)
+            new_child = QLinear.from_float(child, initialization=False)
             setattr(module, name, new_child)
         elif type(child).__name__ == norm_type:
-            new_child = QRMSNorm.from_float(child)
+            new_child = QRMSNorm.from_float(child, initialization=False)
             setattr(module, name, new_child)
         else:
             convert_decoder_layer(child, norm_type)

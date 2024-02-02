@@ -971,7 +971,8 @@ def serve(model_path: str,
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
     """ # noqa E501
-    os.environ['TM_LOG_LEVEL'] = log_level
+    if os.getenv('TM_LOG_LEVEL') is None:
+        os.environ['TM_LOG_LEVEL'] = log_level
 
     if allow_origins:
         app.add_middleware(
