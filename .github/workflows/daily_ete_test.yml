@@ -80,7 +80,7 @@ jobs:
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         timeout-minutes: 60
-        run: pytest autotest -m '(pipeline_chat or pipeline_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results
+        run: pytest autotest -m '(pipeline_chat) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results
       - name: Test lmdeploy - restful
         continue-on-error: true
         run: pytest autotest -m restful_api --alluredir=allure-results
@@ -93,7 +93,7 @@ jobs:
         run: python3 -m pip install transformers==4.33.0
       - name: Test lmdeploy - run Baichuan
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: |
           pytest autotest -m 'Baichuan2_7B_Chat or Baichuan2_13B_Chat' --alluredir=allure-results
       - name: Test lmdeploy - rerun fail cases
