@@ -2,7 +2,7 @@ identity_case:
     - 你好，你叫什么名字#hi, what's your name:
 
 memory_test:
-    - 介绍成都的景点#please introduce some attractions in Chengdu:
+    - 介绍成都的3个景点#please introduce tree attractions in Chengdu:
         - contain:
             - chengdu
             - 成都
@@ -21,7 +21,7 @@ memory_test:
             - len_g:
                 10
 new_session_without_memory:
-    - 介绍成都的景点#please introduce some attractions in Chengdu:
+    - 介绍成都的3个景点#please introduce tree attractions in Chengdu:
         - contain:
             - chengdu
             - 成都

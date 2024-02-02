@@ -2,7 +2,7 @@ identity_case:
     - 你好，你叫什么名字#hi, what's your name:
 
 memory_test:
-    - 介绍成都的景点#please introduce some attractions in Chengdu:
+    - 介绍成都的3个景点#please introduce tree attractions in Chengdu:
         - contain:
             - chengdu
             - 成都
@@ -59,6 +59,7 @@ emoji_case:
                 - 👍
                 - 😊
                 - \u2714
+                - 赞
 traditional_chinese_case:
     - 請介紹香港維多利亞港，用繁體中文回答:
         - contain:
