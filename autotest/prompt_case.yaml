@@ -9,6 +9,9 @@ memory_test:
         - contain:
             - 熊猫
             - panda
+            - 宽窄巷子
+            - jinli
+            - leshan
     - 介绍美食#please introduce some delicious foods:
         - contain:
             - 成都

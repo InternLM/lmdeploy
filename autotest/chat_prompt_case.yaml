@@ -9,6 +9,9 @@ memory_test:
         - contain:
             - 熊猫
             - panda
+            - 宽窄巷子
+            - jinli
+            - leshan
     - 介绍美食#please introduce some delicious foods:
         - contain:
             - 成都
@@ -25,6 +28,12 @@ new_session_without_memory:
         - contain:
             - chengdu
             - 成都
+        - contain:
+            - 熊猫
+            - panda
+            - 宽窄巷子
+            - jinli
+            - leshan
     - end:
     - 介绍美食#please introduce some delicious foods:
         - not_contain:
