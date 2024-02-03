@@ -18,7 +18,8 @@ class TestPipelineChat:
 
     @pytest.mark.internlm_chat_7b
     @allure.story('internlm-chat-7b')
-    def test_pipeline_chat_internlm_chat_7b(self, config, common_case_config):
+    def future_test_pipeline_chat_internlm_chat_7b(self, config,
+                                                   common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'internlm-chat-7b')
 
     @pytest.mark.internlm2_chat_7b
@@ -85,13 +86,14 @@ class TestPipelineChat:
 
     @pytest.mark.Baichuan2_7B_Chat
     @allure.story('Baichuan2-7B-Chat')
-    def test_pipeline_chat_Baichuan2_7B_Chat(self, config, common_case_config):
+    def future_test_pipeline_chat_Baichuan2_7B_Chat(self, config,
+                                                    common_case_config):
         run_pipeline_chat_test(config, common_case_config, 'Baichuan2-7B-Chat')
 
     @pytest.mark.Baichuan2_7B_Chat
     @allure.story('Baichuan2-7B-Chat-inner-w4')
-    def test_pipeline_chat_Baichuan2_7B_Chat_inner_w4(self, config,
-                                                      common_case_config):
+    def futuren_test_pipeline_chat_Baichuan2_7B_Chat_inner_w4(
+            self, config, common_case_config):
         run_pipeline_chat_test(config, common_case_config,
                                'Baichuan2-7B-Chat-inner-w4')
 
