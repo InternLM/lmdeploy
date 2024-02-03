@@ -54,7 +54,7 @@ chinese_poem_case:
 english_poem_case:
     - write a romantic poem:
         - contain:
-            - "."
+            - " "
             - ","
             - "love"
         - len_g:

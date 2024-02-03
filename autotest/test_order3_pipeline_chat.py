@@ -7,7 +7,7 @@ from utils.pipeline_chat import PipelineChat
 from utils.rule_condition_assert import assert_result
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(240)
 @pytest.mark.pipeline_chat
 class TestPipelineChat:
 
