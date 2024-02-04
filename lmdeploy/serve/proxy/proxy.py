@@ -1,23 +1,25 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import copy
 import json
+import os
 import os.path as osp
 import random
 import time
 from collections import deque
 from http import HTTPStatus
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Literal, Optional, Union
 
 import numpy as np
 import requests
 import uvicorn
 import yaml
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.serve.openai.api_server import create_error_response
+from lmdeploy.serve.openai.api_server import (check_api_key,
+                                              create_error_response)
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
     ModelPermission)
@@ -30,6 +32,7 @@ logger = get_logger('lmdeploy')
 
 
 class Status(BaseModel):
+    """Status protocol consists of models' information."""
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
     latency: Deque = Field(default=deque(maxlen=LATENCY_DEEQUE_LEN),
@@ -38,6 +41,7 @@ class Status(BaseModel):
 
 
 class Node(BaseModel):
+    """Node protocol consists of url and status."""
     url: str
     status: Optional[Status] = None
 
@@ -312,7 +316,7 @@ app.add_middleware(
 node_manager = NodeManager()
 
 
-@app.get('/v1/models')
+@app.get('/v1/models', dependencies=[Depends(check_api_key)])
 def available_models():
     """Show available models."""
     model_cards = []
@@ -324,7 +328,7 @@ def available_models():
     return ModelList(data=model_cards)
 
 
-@app.get('/nodes/status')
+@app.get('/nodes/status', dependencies=[Depends(check_api_key)])
 def node_status():
     """Show nodes status."""
     try:
@@ -333,7 +337,7 @@ def node_status():
         return False
 
 
-@app.post('/nodes/add')
+@app.post('/nodes/add', dependencies=[Depends(check_api_key)])
 def add_node(node: Node, raw_request: Request = None):
     """Add a node to the manager.
 
@@ -350,7 +354,7 @@ def add_node(node: Node, raw_request: Request = None):
         return 'Failed to add, please check the input url.'
 
 
-@app.post('/nodes/remove')
+@app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
 def remove_node(node_url: str):
     """Show available models."""
     try:
@@ -360,7 +364,7 @@ def remove_node(node_url: str):
         return 'Failed to delete, please check the input url.'
 
 
-@app.post('/v1/chat/completions')
+@app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest,
                               raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -416,7 +420,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         return JSONResponse(json.loads(response))
 
 
-@app.post('/v1/completions')
+@app.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest,
                          raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -476,10 +480,39 @@ async def completions_v1(request: CompletionRequest,
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 10086,
-          strategy: str = 'min_expected_latency',
+          strategy: Literal['random', 'min_expected_latency',
+                            'min_observed_latency'] = 'min_expected_latency',
+          api_keys: Optional[Union[List[str], str]] = None,
+          ssl: bool = False,
           **kwargs):
+    """To launch the proxy server.
+
+    Args:
+        server_name (str): the server name of the proxy. Default to '0.0.0.0'.
+        server_port (str): the server port. Default to 10086.
+        strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
+            the strategy to dispatch requests to nodes. Default to
+            'min_expected_latency'
+        api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
+            a single api_key. Default to None, which means no api key applied.
+        ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
+    """  # noqa
     node_manager.strategy = Strategy.from_str(strategy)
-    uvicorn.run(app=app, host=server_name, port=server_port, log_level='info')
+    if api_keys is not None:
+        if isinstance(api_keys, str):
+            api_keys = api_keys.split(',')
+        from lmdeploy.serve.openai.api_server import VariableInterface
+        VariableInterface.api_keys = api_keys
+    ssl_keyfile, ssl_certfile = None, None
+    if ssl:
+        ssl_keyfile = os.environ['SSL_KEYFILE']
+        ssl_certfile = os.environ['SSL_CERTFILE']
+    uvicorn.run(app=app,
+                host=server_name,
+                port=server_port,
+                log_level='info',
+                ssl_keyfile=ssl_keyfile,
+                ssl_certfile=ssl_certfile)
 
 
 if __name__ == '__main__':

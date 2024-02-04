@@ -241,6 +241,72 @@ MODEL_MAP.update({
 
 这样就可以利用多卡的优势，让更大的模型部署成为可能
 
+## 模块调试
+
+当模型的输出不符合预期时，我们会希望调试某个特定模块以确定添加的重写是否正确。`lmdeploy.pytorch` 提供了一些工具以帮助进行精度对齐。还是以上面提到的 `LlamaAttention` 模块为例。
+
+首先，我们通过 transformers 的 API 得到想要调试的子模块的一个实例：
+
+```python
+import torch
+from transformers import AutoModelForCausalLM
+
+# get module
+model_path = 'meta-llama/Llama-2-7b-chat-hf'
+dtype = torch.float16
+model = AutoModelForCausalLM.from_pretrained(model_path).to(torch.float16).cuda()
+self_attn = model.model.layers[0].self_attn
+```
+
+然后，使用 `ModuleIOExtractor` 工具可以生成该模块的一组输入输出
+
+```python
+from lmdeploy.pytorch.tools.make_inputs import ModuleIOExtractor
+
+# extract module input/output
+input_ids = torch.tensor([[1, 2, 3, 4, 5]]).cuda()
+extractor = ModuleIOExtractor(model, self_attn)
+attn_args, attn_kwargs, attn_output = extractor.extract(input_ids)
+```
+
+重写模块的输入与原模块略有不同，主要体现在三方面：
+
+1. 模型需要一些特殊输入输出，他们以 `StepContext` 的形式传入，可以使用 `make_step_context` 生成。
+2. `input_ids`，`hidden_states` 等数据都被 continuous 化，可以使用 `continuous_tensor` 进行处理。
+3. 由于 paged caching 的需要， `past_key_value` 需要被 page 化处理。
+
+基于以上原因，我们要对提取的输入进行加工：
+
+```python
+from lmdeploy.pytorch.tools.make_inputs import make_step_context
+from lmdeploy.pytorch.tools.layout_convert import continuous_tensor
+
+# create patched input/output
+context = make_step_context(input_ids,
+                            kv_cache_dtype=dtype)
+seq_length = context.seq_length
+attn_kwargs['hidden_states'] = continuous_tensor(
+    attn_kwargs['hidden_states'],
+    seq_length)
+attn_kwargs['past_key_value'] = context.kv_caches[0]
+```
+
+然后就可以启动重写，并比较结果正确性了。（注意输出也要 continuous 化后进行比较）
+
+```python
+from lmdeploy.pytorch.models import patch
+
+# patch and test
+patched_self_attn = patch(self_attn, extra_args=['context'])
+patched_output = patched_self_attn.patched_forward(*attn_args,
+                                                    **attn_kwargs,
+                                                    context=context)
+torch.testing.assert_close(patched_output[0],
+                            continuous_tensor(attn_output[0], seq_length))
+```
+
+可以通过上述方法调试重写模块，直到精度满足预期。
+
 ## 附录
 
 ### context 结构

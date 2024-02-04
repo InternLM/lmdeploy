@@ -18,7 +18,7 @@ from tritonclient.grpc.service_pb2 import ModelInferResponse
 from lmdeploy.model import MODELS
 from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
                                             prepare_tensor)
-from lmdeploy.utils import filter_suffix
+from lmdeploy.utils import filter_suffix, get_logger
 
 
 @dataclass
@@ -49,13 +49,6 @@ def stream_callback(que, result, error):
         que.put(dict(errcode=StatusCode.TRITON_SERVER_ERR, errmsg=f'{error}'))
     else:
         que.put(result.get_response(as_json=True))
-
-
-def get_logger(log_file=None, log_level=logging.INFO):
-    """Return the logger."""
-    from lmdeploy.utils import get_logger
-    logger = get_logger('service.ft', log_file=log_file, log_level=log_level)
-    return logger
 
 
 class Chatbot:
@@ -130,7 +123,7 @@ class Chatbot:
         assert isinstance(session_id, int), \
             f'INT session id is required, but got {type(session_id)}'
 
-        logger = get_logger(log_level=self.log_level)
+        logger = get_logger('service.ft', log_level=self.log_level)
         logger.info(f'session {session_id}, request_id {request_id}, '
                     f'request_output_len {request_output_len}')
 
@@ -180,7 +173,7 @@ class Chatbot:
         assert isinstance(session_id, int), \
             f'INT session id is required, but got {type(session_id)}'
 
-        logger = get_logger(log_level=self.log_level)
+        logger = get_logger('service.ft', log_level=self.log_level)
         logger.info(f'end session: {session_id}')
 
         if self._session is None:
@@ -218,7 +211,7 @@ class Chatbot:
         """
         assert isinstance(session_id, int), \
             f'INT session id is required, but got {type(session_id)}'
-        logger = get_logger(log_level=self.log_level)
+        logger = get_logger('service.ft', log_level=self.log_level)
         logger.info(f'cancel session: {session_id}')
 
         if self._session is None:
@@ -267,7 +260,7 @@ class Chatbot:
         assert isinstance(session_id, int), \
             f'INT session id is required, but got {type(session_id)}'
 
-        logger = get_logger(log_level=self.log_level)
+        logger = get_logger('service.ft', log_level=self.log_level)
         logger.info(f'resume session: {session_id}')
 
         if self._session is None:
@@ -320,7 +313,7 @@ class Chatbot:
         assert isinstance(session_id, int), \
             f'INT session id is required, but got {type(session_id)}'
 
-        logger = get_logger(log_level=self.log_level)
+        logger = get_logger('service.ft', log_level=self.log_level)
         logger.info(f'session {session_id}, request_id {request_id}, '
                     f'request_output_len {request_output_len}')
 
@@ -434,7 +427,7 @@ class Chatbot:
         Yields:
             tuple: status, text, generated token number
         """
-        logger = get_logger(log_level=self.log_level)
+        logger = get_logger('service.ft', log_level=self.log_level)
         logger.info(f'session {session.session_id}, '
                     f'request id {session.request_id}, '
                     f'request_output_len {request_output_len}, '

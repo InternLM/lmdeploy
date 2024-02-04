@@ -1,35 +1,45 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import os.path as osp
 import shutil
 
 import fire
 import torch
 from torch import nn
 
+import lmdeploy
+from lmdeploy.lite.apis.calibrate import calibrate
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
-from .calibrate import calibrate
-
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
+    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'BaiChuanForCausalLM': 'DecoderLayer',
     'LlamaForCausalLM': 'LlamaDecoderLayer',
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
+    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',
     'LlamaForCausalLM': 'LlamaRMSNorm',
 }
 
+LMDEPLOY_ROOT = lmdeploy.__path__[0]
+
 MODEL_PATH_MAP = {
-    'InternLMForCausalLM': './lmdeploy/pytorch/modeling/modeling_internlm.py',
-    'LlamaForCausalLM': './lmdeploy/pytorch/modeling/modeling_llama.py',
-    'BaiChuanForCausalLM': './lmdeploy/pytorch/modeling/modeling_baichuan.py'
+    'InternLMForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm.py'),
+    'InternLM2ForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm2.py'),
+    'LlamaForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_llama.py'),
+    'BaiChuanForCausalLM':
+    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_baichuan.py')
 }
 
 AUTO_MAP = {
@@ -37,6 +47,11 @@ AUTO_MAP = {
         'AutoConfig': 'configuration_internlm.InternLMConfig',
         'AutoModel': 'modeling_internlm.InternLMForCausalLM',
         'AutoModelForCausalLM': 'modeling_internlm.InternLMForCausalLM'
+    },
+    'InternLM2ForCausalLM': {
+        'AutoConfig': 'configuration_internlm.InternLMConfig',
+        'AutoModelForCausalLM': 'modeling_internlm2.InternLM2ForCausalLM',
+        'AutoModel': 'modeling_internlm2.InternLM2ForCausalLM'
     },
     'LlamaForCausalLM': {
         'AutoModel': 'modeling_llama.LlamaForCausalLM',
@@ -58,6 +73,7 @@ def smooth_quant(model: str,
 
     model, tokenizer, work_dir = calibrate(model, calib_dataset, calib_samples,
                                            calib_seqlen, work_dir, device)
+
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
     inp_stats = torch.load(work_dir / 'inputs_stats.pth')

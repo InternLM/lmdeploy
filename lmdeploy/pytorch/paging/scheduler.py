@@ -102,9 +102,6 @@ class Scheduler:
 
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
-        if seq.remain_output_len <= 0:
-            seq.remain_output_len = \
-                self.scheduler_config.max_request_output_len
         self.waiting.append(seq)
 
     def add_adapter(self, adapter_path: str, adapter_name: str):

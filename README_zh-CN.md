@@ -23,6 +23,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](./docs/zh_cn/serving/restful_api.md)
 - \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](./docs/zh_cn/serving/proxy_server.md)
 - \[2024/01\] 增加 [PyTorch 推理引擎](./docs/zh_cn/inference/pytorch.md)，作为 TurboMind 引擎的补充。帮助降低开发门槛，和快速实验新特性、新技术
 
@@ -84,6 +85,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |       Llama        | 7B - 65B  |
 |       Llama2       | 7B - 70B  |
 |      InternLM      | 7B - 20B  |
+|     InternLM2      | 7B - 20B  |
 | InternLM-XComposer |    7B     |
 |        QWen        | 7B - 72B  |
 |      QWen-VL       |    7B     |
@@ -92,6 +94,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 |     Code Llama     | 7B - 34B  |
 |      ChatGLM2      |    6B     |
 |       Falcon       | 7B - 180B |
+|         YI         | 6B - 34B  |
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
@@ -107,9 +110,17 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 pip install lmdeploy
 ```
 
-## 离线批处理
+LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
+export LMDEPLOY_VERSION=0.2.0
+export PYTHON_VERSION=38
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+```
+
+## 离线批处理
+
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
@@ -134,7 +145,7 @@ print(response)
   - 增加对话模板
   - 支持新模型
   - gemm tuning
-  - 长文本推理
+  - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](./docs/zh_cn/serving/proxy_server.md)
 
 ## 贡献指南

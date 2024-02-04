@@ -367,6 +367,7 @@ template void invokeApplyRepetitionPenalty(half*                       logits,
 template<typename T, RepetitionPenaltyType penalty_type>
 __global__ void batchApplyRepetitionPenalty(T*           logits,
                                             const float* penalties,
+                                            int*         penalty_workspace,
                                             const int*   output_ids,
                                             const int    batch_size,
                                             const int    vocab_size,
@@ -374,11 +375,13 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
                                             const int    max_input_length,
                                             const int    step)
 {
-    extern __shared__ float penalty_logits[];
-    int*                    penalty_indices = (int*)(penalty_logits + step);
-    const int               batch_idx       = blockIdx.x;
-    const float             penalty         = penalties[batch_idx];
-    const int               input_length    = input_lengths != nullptr ? input_lengths[batch_idx] : max_input_length;
+    const int   batch_idx    = blockIdx.x;
+    const float penalty      = penalties[batch_idx];
+    const int   input_length = input_lengths != nullptr ? input_lengths[batch_idx] : max_input_length;
+
+    penalty_workspace += batch_idx * step * 2;
+    float* penalty_logits  = (float*)penalty_workspace;
+    int*   penalty_indices = (int*)(penalty_workspace + step);
 
     logits += batch_idx * vocab_size;
 
@@ -409,10 +412,6 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
         }
     }
 
-    if (blockDim.x > 32) {
-        __syncthreads();
-    }
-
     // Phase 2. Replace a logit value by the penalized one.
     for (int index = threadIdx.x; index < step; index += blockDim.x) {
         // Skip the padding tokens in input sequences.
@@ -426,6 +425,7 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
 template<typename T>
 void invokeBatchApplyRepetitionPenalty(T*                    logits,
                                        const float*          penalties,
+                                       int*                  penalty_workspace,
                                        const int*            output_ids,
                                        const int             batch_size,
                                        const int             local_batch_size,
@@ -442,22 +442,30 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
     //   output_ids [step, batch_size] : output token ids (with offset ite * local_batch_size).
     //   input_lengths [local_batch_size], input lengths (optional).
     //      Padding tokens at [input_length, max_input_length) of input will not be penalized.
-    dim3   block(min(step, 1024));
-    dim3   grid(local_batch_size);
-    size_t smem_size = step * (sizeof(float) + sizeof(int));
+    dim3 block(min(step, 1024));
+    dim3 grid(local_batch_size);
     if (penalty_type == RepetitionPenaltyType::Additive) {
-        check_cuda_error(cudaFuncSetAttribute(batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive>,
-                                              cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                              smem_size));
-        batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive><<<grid, block, smem_size, stream>>>(
-            logits, penalties, output_ids, batch_size, vocab_size, input_lengths, max_input_length, step);
+        batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Additive><<<grid, block, 0, stream>>>(logits,
+                                                                                                    penalties,
+                                                                                                    penalty_workspace,
+                                                                                                    output_ids,
+                                                                                                    batch_size,
+                                                                                                    vocab_size,
+                                                                                                    input_lengths,
+                                                                                                    max_input_length,
+                                                                                                    step);
     }
     else if (penalty_type == RepetitionPenaltyType::Multiplicative) {
-        check_cuda_error(cudaFuncSetAttribute(batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Multiplicative>,
-                                              cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                              smem_size));
-        batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Multiplicative><<<grid, block, smem_size, stream>>>(
-            logits, penalties, output_ids, batch_size, vocab_size, input_lengths, max_input_length, step);
+        batchApplyRepetitionPenalty<T, RepetitionPenaltyType::Multiplicative>
+            <<<grid, block, 0, stream>>>(logits,
+                                         penalties,
+                                         penalty_workspace,
+                                         output_ids,
+                                         batch_size,
+                                         vocab_size,
+                                         input_lengths,
+                                         max_input_length,
+                                         step);
     }
     else if (penalty_type == RepetitionPenaltyType::None) {
         // do nothing
@@ -466,6 +474,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
 
 template void invokeBatchApplyRepetitionPenalty(float*                logits,
                                                 const float*          penalties,
+                                                int*                  penalty_workspace,
                                                 const int*            output_ids,
                                                 const int             batch_size,
                                                 const int             local_batch_size,
@@ -478,6 +487,7 @@ template void invokeBatchApplyRepetitionPenalty(float*                logits,
 
 template void invokeBatchApplyRepetitionPenalty(half*                 logits,
                                                 const float*          penalties,
+                                                int*                  penalty_workspace,
                                                 const int*            output_ids,
                                                 const int             batch_size,
                                                 const int             local_batch_size,
@@ -497,9 +507,8 @@ __global__ void batchApplyMinLengthPenalty(T*         logits,
                                            const int  vocab_size_padded)
 {
     int bid = threadIdx.x + blockIdx.x * blockDim.x;  // batch index
-    // We need +1 because sequence_lengths = max_input_length + num_gen_tokens - 1,
-    // which is equal to the length of k/v caches.
-    if (sequence_lengths[bid] + 1 - max_input_length < min_lengths[bid]) {
+    // In decoder, sequence_lengths means length of sequence that has kv cache already computed
+    if (sequence_lengths[bid] + 1 < min_lengths[bid]) {
         T mask_val                                     = (std::is_same<T, half>::value) ? -65504.0f : -FLT_MAX;
         logits[bid * vocab_size_padded + end_ids[bid]] = mask_val;
     }

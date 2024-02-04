@@ -6,10 +6,9 @@ import requests
 
 from lmdeploy.utils import get_logger
 
-logger = get_logger('lmdeploy')
-
 
 def get_model_list(api_url: str):
+    """Get model list from api server."""
     response = requests.get(api_url)
     if hasattr(response, 'text'):
         model_list = json.loads(response.text)
@@ -24,6 +23,7 @@ def json_loads(content):
         content = json.loads(content)
         return content
     except:  # noqa
+        logger = get_logger('lmdeploy')
         logger.warning(f'weird json content {content}')
         return ''
 
@@ -34,9 +34,14 @@ class APIClient:
     Args:
         api_server_url (str): communicating address 'http://<ip>:<port>' of
             api_server
+        api_key (str | None): api key. Default to None, which means no
+            api key will be used.
     """
 
-    def __init__(self, api_server_url: str, **kwargs):
+    def __init__(self,
+                 api_server_url: str,
+                 api_key: Optional[str] = None,
+                 **kwargs):
         self.api_server_url = api_server_url
         self.chat_intractive_v1_url = f'{api_server_url}/v1/chat/interactive'
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
@@ -44,6 +49,10 @@ class APIClient:
         self.models_v1_url = f'{api_server_url}/v1/models'
         self.encode_v1_url = f'{api_server_url}/v1/encode'
         self._available_models = None
+        self.api_key = api_key
+        self.headers = {'content-type': 'application/json'}
+        if api_key is not None:
+            self.headers['Authorization'] = f'Bearer {api_key}'
 
     @property
     def available_models(self):
@@ -71,9 +80,8 @@ class APIClient:
                 when it is not. Default to True.
         Return: (input_ids, length)
         """
-        headers = {'content-type': 'application/json'}
         response = requests.post(self.encode_v1_url,
-                                 headers=headers,
+                                 headers=self.headers,
                                  json=dict(input=input,
                                            do_preprocess=do_preprocess,
                                            add_bos=add_bos),
@@ -128,9 +136,8 @@ class APIClient:
             for k, v in locals().copy().items()
             if k[:2] != '__' and k not in ['self']
         }
-        headers = {'content-type': 'application/json'}
         response = requests.post(self.chat_completions_v1_url,
-                                 headers=headers,
+                                 headers=self.headers,
                                  json=pload,
                                  stream=stream)
         for chunk in response.iter_lines(chunk_size=8192,
@@ -200,9 +207,8 @@ class APIClient:
             for k, v in locals().copy().items()
             if k[:2] != '__' and k not in ['self']
         }
-        headers = {'content-type': 'application/json'}
         response = requests.post(self.chat_intractive_v1_url,
-                                 headers=headers,
+                                 headers=self.headers,
                                  json=pload,
                                  stream=stream)
         for chunk in response.iter_lines(chunk_size=8192,
@@ -264,9 +270,8 @@ class APIClient:
             for k, v in locals().copy().items()
             if k[:2] != '__' and k not in ['self']
         }
-        headers = {'content-type': 'application/json'}
         response = requests.post(self.completions_v1_url,
-                                 headers=headers,
+                                 headers=self.headers,
                                  json=pload,
                                  stream=stream)
         for chunk in response.iter_lines(chunk_size=8192,
@@ -358,17 +363,21 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int = 512,
-                           stream: bool = True,
-                           interactive_mode: bool = False,
-                           ignore_eos: bool = False,
-                           cancel: bool = False,
-                           top_p: float = 0.8,
-                           temperature: float = 0.7) -> Iterable[List[str]]:
+def get_streaming_response(
+        prompt: str,
+        api_url: str,
+        session_id: int,
+        request_output_len: int = 512,
+        stream: bool = True,
+        interactive_mode: bool = False,
+        ignore_eos: bool = False,
+        cancel: bool = False,
+        top_p: float = 0.8,
+        temperature: float = 0.7,
+        api_key: Optional[str] = None) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
+    if api_key is not None:
+        headers['Authorization'] = f'Bearer {api_key}'
     pload = {
         'prompt': prompt,
         'stream': stream,
@@ -395,8 +404,11 @@ def get_streaming_response(prompt: str,
             yield output, tokens, finish_reason
 
 
-def main(api_server_url: str, session_id: int = 0):
-    api_client = APIClient(api_server_url)
+def main(api_server_url: str,
+         session_id: int = 0,
+         api_key: Optional[str] = None):
+    """Main function to chat in terminal."""
+    api_client = APIClient(api_server_url, api_key=api_key)
     while True:
         prompt = input_prompt()
         if prompt in ['exit', 'end']:

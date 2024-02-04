@@ -3,7 +3,6 @@
 # https://huggingface.co/tiiuae/falcon-7b-instruct
 # https://github.com/huggingface/transformers/blob/v4.33-release/src/transformers/models/falcon/modeling_falcon.py  # noqa
 
-import logging
 from typing import Optional, Tuple, Union
 
 import torch
@@ -19,8 +18,6 @@ from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import (alibi_paged_attention_fwd, fill_kv_cache,
                        paged_attention_fwd)
-
-logger = logging.getLogger()
 
 
 # rotary pos emb helpers
@@ -276,7 +273,6 @@ class PatchedFalconAttention(nn.Module):
 
         attn_output = torch.empty_like(query_layer)
         block_offsets = context.block_offsets
-        block_size = past_key.size(1)
 
         if alibi is None:
             paged_attention_fwd(q=query_layer,
@@ -299,8 +295,7 @@ class PatchedFalconAttention(nn.Module):
                                       b_seq_len=q_seq_length,
                                       b_kv_seq_len=kv_seq_length,
                                       max_input_len=max_seq_len,
-                                      alibi_scale=self.inv_norm_factor,
-                                      BLOCK=block_size)
+                                      alibi_scale=self.inv_norm_factor)
 
         attn_output = attn_output.reshape(batch_size, query_length, -1)
 

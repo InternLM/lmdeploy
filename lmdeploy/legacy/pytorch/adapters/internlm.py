@@ -1,14 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 import re
 
 import torch
 from transformers import (PreTrainedTokenizerFast, StoppingCriteria,
                           StoppingCriteriaList)
 
+from lmdeploy.utils import get_logger
+
 from .base import BaseAdapter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class InternLMStoppingCriteria(StoppingCriteria):

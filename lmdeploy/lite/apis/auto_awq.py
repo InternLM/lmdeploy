@@ -13,6 +13,7 @@ from .calibrate import calibrate
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
+    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
@@ -20,6 +21,7 @@ LAYER_TYPE_MAP = {
 }
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
+    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B

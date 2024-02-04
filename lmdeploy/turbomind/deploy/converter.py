@@ -19,7 +19,8 @@ supported_formats = ['llama', 'hf', 'awq', None]
 special_input_model_map = {
     'qwen': 'qwen',
     'baichuan': 'baichuan',
-    'baichuan2': 'baichuan2'
+    'baichuan2': 'baichuan2',
+    'internlm2': 'internlm2'
 }
 
 

@@ -6,7 +6,8 @@ from lmdeploy.model import MODELS, SamplingParam, best_match_model
 @pytest.mark.parametrize(
     'model_path_and_name',
     [('internlm/internlm-chat-7b', ['internlm-chat-7b']),
-     ('Qwen/Qwen-7B-Chat', ['qwen-7b']),
+     ('models--internlm--internlm-chat-7b/snapshots/1234567',
+      ['internlm-chat-7b']), ('Qwen/Qwen-7B-Chat', ['qwen-7b']),
      ('baichuan-inc/Baichuan-7B', ['baichuan-7b']),
      ('codellama/CodeLlama-7b-hf', ['codellama']),
      ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
@@ -16,7 +17,7 @@ from lmdeploy.model import MODELS, SamplingParam, best_match_model
      ('01-ai/Yi-34B-Chat', ['yi-chat', 'yi-34b', 'yi-200k']),
      ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
-     ('CodeLlama-34b-Instruct-hf', ['codellama']),
+     ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):

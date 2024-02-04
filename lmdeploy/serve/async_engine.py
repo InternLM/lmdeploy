@@ -4,15 +4,16 @@ import dataclasses
 import random
 from argparse import ArgumentError
 from contextlib import contextmanager
+from queue import Empty, Queue
+from threading import Thread
 from typing import Dict, List, Literal, Optional, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig, best_match_model
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
+from lmdeploy.tokenizer import DetokenizeState
+from lmdeploy.utils import _stop_words, get_logger
 
 
 @dataclasses.dataclass
@@ -139,6 +140,7 @@ class AsyncEngine:
                 raise ArgumentError('Please set model_name or backend_config.')
             else:
                 self.model_name = potential_names
+                logger = get_logger('lmdeploy')
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
@@ -167,9 +169,13 @@ class AsyncEngine:
         else:
             self.session_len = self.engine.session_len
         self.backend_config = backend_config
+        self.stop_words = _stop_words(self.chat_template.stop_words,
+                                      self.engine.tokenizer)
+        if self.stop_words is not None:
+            self.stop_words = self.stop_words[0][0].tolist()
 
     def __call__(self,
-                 prompts: List[str],
+                 prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,
                  request_output_len=512,
                  top_k: int = 40,
@@ -182,7 +188,9 @@ class AsyncEngine:
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str]): a batch of prompts
+            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+                prompts. It accepts: string prompt, a list of string prompts,
+                a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
             chat_template_config (ChatTemplateConfig | None):a instance of
@@ -243,7 +251,7 @@ class AsyncEngine:
             return self.engine.create_instance()
         while self.gens_set == set():
             await asyncio.sleep(0)
-        if str(session_id) in self.id2generator:
+        if str(session_id) in self.id2generator and self.backend == 'pytorch':
             # pytorch engine instance is bind to session
             generator = self.id2generator[str(session_id)]
             if generator in self.gens_set:
@@ -254,7 +262,8 @@ class AsyncEngine:
         return generator
 
     def batch_infer(self,
-                    prompts: Union[List[str], str],
+                    prompts: Union[List[str], str, List[Dict],
+                                   List[List[Dict]]],
                     gen_config: Optional[Union[GenerationConfig,
                                                EngineGenerationConfig]] = None,
                     do_preprocess: bool = True,
@@ -262,11 +271,11 @@ class AsyncEngine:
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str] | str): a batch of prompts
+            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+                prompts. It accepts: string prompt, a list of string prompts,
+                a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
-            chat_template_config (ChatTemplateConfig | None):a instance of
-                ChatTemplateConfig. Default to None.
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
@@ -283,7 +292,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [Response('', 0) for i in range(prompt_num)]
+        outputs = [Response('', 0, i) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -313,6 +322,81 @@ class AsyncEngine:
             self.loop.run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
+
+    def stream_infer(
+            self,
+            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+            gen_config: Optional[Union[GenerationConfig,
+                                       EngineGenerationConfig]] = None,
+            do_preprocess: bool = True,
+            **kwargs):
+        """Inference a batch of prompts with stream mode.
+
+        Args:
+            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+                prompts. It accepts: string prompt, a list of string prompts,
+                a chat history in OpenAI format or a list of chat history.
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            do_preprocess (bool): whether pre-process the messages. Default to
+                True, which means chat_template will be applied.
+        """
+        need_list_wrap = isinstance(prompts, str) or isinstance(
+            prompts[0], Dict)
+        prompts = [prompts] if need_list_wrap else prompts
+        assert isinstance(prompts, List), 'prompts should be a list'
+        if gen_config is None:
+            gen_config = GenerationConfig()
+        if type(gen_config) is GenerationConfig:
+            gen_config = EngineGenerationConfig.From(gen_config,
+                                                     self.tokenizer)
+        # set random if it is not set
+        if gen_config.random_seed is None:
+            gen_config.random_seed = random.getrandbits(64)
+        prompt_num = len(prompts)
+        outputs = Queue()
+        generators = []
+        for j in range(0, prompt_num, self.instance_num):
+            batch_prompts = prompts[j:j + self.instance_num]
+            generators = []
+            for i, prompt in enumerate(batch_prompts):
+                generators.append(
+                    self.generate(prompt,
+                                  i,
+                                  gen_config=gen_config,
+                                  stream_response=True,
+                                  sequence_start=True,
+                                  sequence_end=True,
+                                  do_preprocess=do_preprocess,
+                                  **kwargs))
+
+            async def _inner_call(i, generator):
+                async for out in generator:
+                    outputs.put(
+                        Response(out.response, out.generate_token_len, i + j,
+                                 out.finish_reason))
+
+            async def gather():
+                await asyncio.gather(*[
+                    _inner_call(i, generators[i])
+                    for i in range(len(batch_prompts))
+                ])
+                outputs.put(None)
+
+            proc = Thread(
+                target=lambda: self.loop.run_until_complete(gather()))
+            proc.start()
+
+            while True:
+                try:
+                    out = outputs.get(timeout=0.001)
+                    if out is None:
+                        break
+                    yield out
+                except Empty:
+                    pass
+
+            proc.join()
 
     async def generate(
             self,
@@ -349,6 +433,8 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
+        if self.backend == 'pytorch' and gen_config.stop_words is None:
+            gen_config.stop_words = self.stop_words
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
@@ -367,7 +453,7 @@ class AsyncEngine:
         else:
             generator = await self.get_generator(False, session_id)
             with self.safe_run(session_id):
-                response_size = 0
+                state = DetokenizeState()
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         input_ids=input_ids,
@@ -376,25 +462,20 @@ class AsyncEngine:
                         sequence_start=(sequence_start),
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
-                    status, res, tokens = outputs
+                    _, res, tokens = outputs
                     # decode res
-                    response = self.tokenizer.decode(res, offset=response_size)
-                    # utf-8 char at the end means it's a potential unfinished
-                    # byte sequence, continue to concate it with the next
-                    # sequence and decode them together
-                    if response.endswith('�'):
-                        continue
+                    response, state = self.tokenizer.detokenize_incrementally(
+                        res, state)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason)
-                    response_size = tokens
 
                 finish_reason = 'length' \
                     if tokens >= gen_config.max_new_tokens else 'stop'
-                # `response_size` might be note updated since
-                # ` if response.endswith('�')`
-                if response_size == tokens:
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence
+                if not response.endswith('�'):
                     response = ''  # avaid returning the last response twice
                 yield GenOut(response, self.id2step[str(session_id)],
                              len(input_ids), tokens, finish_reason)

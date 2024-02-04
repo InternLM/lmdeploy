@@ -23,6 +23,7 @@ class CLI(object):
 
     @staticmethod
     def add_parser_convert():
+        """Add parser for convert command."""
         parser = CLI.subparsers.add_parser(
             'convert',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -65,6 +66,7 @@ class CLI(object):
 
     @staticmethod
     def add_parser_list():
+        """Add parser for list command."""
         parser = CLI.subparsers.add_parser(
             'list',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -76,6 +78,7 @@ class CLI(object):
 
     @staticmethod
     def add_parser_checkenv():
+        """Add parser for check_env command."""
         parser = CLI.subparsers.add_parser(
             'check_env',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -103,8 +106,8 @@ class CLI(object):
         assert engine in ['turbomind', 'pytorch']
         if engine == 'pytorch':
             model_names = [
-                'llama', 'llama2', 'internlm', 'baichuan2', 'chatglm2',
-                'falcon'
+                'llama', 'llama2', 'internlm', 'internlm2', 'baichuan2',
+                'chatglm2', 'falcon', 'yi'
             ]
         elif engine == 'turbomind':
             from lmdeploy.model import MODELS

@@ -3,12 +3,11 @@ import argparse
 import os
 import random
 
+from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
 from lmdeploy.model import MODELS
 from lmdeploy.tokenizer import Tokenizer
 
 from . import engine as tm
-from .config import SchedulerConfig
-from .messages import SamplingParam
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -21,20 +20,21 @@ class LLM(object):
                  model_name: str,
                  tp: int = 1,
                  max_session_len=40000) -> None:
-        self.tokenizer = Tokenizer(model_path, trust_remote_code=True)
+        self.tokenizer = Tokenizer(model_path)
 
-        self.scheduler_config = SchedulerConfig(
-            max_batches=64,
-            max_session_len=max_session_len,
-            max_request_output_len=512)
         self.tm_model = tm.Engine(model_path,
-                                  tp=tp,
-                                  trust_remote_code=True,
-                                  scheduler_config=self.scheduler_config)
+                                  engine_config=PytorchEngineConfig(
+                                      tp=tp,
+                                      session_len=max_session_len,
+                                      max_batch_size=64,
+                                      max_prefill_token_num=8192,
+                                  ),
+                                  trust_remote_code=True)
         self.generator = self.tm_model.create_instance()
         self.model = MODELS.get(model_name)()
         seed = random.getrandbits(64)
-        self.sampling_param = SamplingParam(
+        self.gen_config = EngineGenerationConfig(
+            max_new_tokens=32,
             top_k=40,
             top_p=0.8,
             temperature=0.8,
@@ -48,12 +48,9 @@ class LLM(object):
         """say."""
         prompt = self.model.get_prompt(question, True)
         input_ids = self.tokenizer.encode(prompt)
-        input_ids = self.model.update_input_ids(input_ids)
-        _, token_ids, __ = self.generator.infer(
-            session_id=self.session_id,
-            prompt_token_ids=input_ids,
-            request_output_len=32,
-            sampling_param=self.sampling_param)
+        _, token_ids, __ = self.generator.infer(session_id=self.session_id,
+                                                prompt_token_ids=input_ids,
+                                                gen_config=self.gen_config)
         response = self.tokenizer.decode(token_ids)
         self.generator.end(self.session_id)
         self.session_id += 1
@@ -114,7 +111,8 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
 
     task_description = 'There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there.'  # noqa: E501
     garbage = 'The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.'  # noqa: E501
-    garbage_inf = ' '.join([garbage] * 5000)
+    garbage_num = n_garbage // (len(garbage) + 1) + 1
+    garbage_inf = ' '.join([garbage] * garbage_num)
     assert len(garbage_inf) >= n_garbage
     garbage_prefix = garbage_inf[:n_garbage_prefix]
     garbage_suffix = garbage_inf[:n_garbage_suffix]
@@ -136,7 +134,9 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
 def main(args):
     """main."""
     # Load model and tokenizer
-    llm = LLM(model_path=args.model_path, model_name=args.model_name)
+    llm = LLM(model_path=args.model_path,
+              model_name=args.model_name,
+              max_session_len=args.max_tokens)
 
     all_accuries = {}
     # This is a rough ratio to control the number of texts and tokens
@@ -151,7 +151,6 @@ def main(args):
                                                           seed=(val + j))
             response = llm.say(question)
 
-            print(response)
             if pass_key in response:
                 passed_tests += 1
             total_tokens += len(llm.tokenize(question=question))

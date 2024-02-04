@@ -30,6 +30,8 @@ class GenerationConfig:
         random_seed (int): Seed used when sampling a token
         stop_words (List[str]): Words that stop generating further tokens
         bad_words (List[str]): Words that the engine will never generate
+        min_new_tokens (int): The minimum numbers of tokens to generate,
+            ignoring the number of tokens in the prompt.
     """
 
     n: int = 1
@@ -42,6 +44,7 @@ class GenerationConfig:
     random_seed: int = None
     stop_words: List[str] = None
     bad_words: List[str] = None
+    min_new_tokens: int = None
 
 
 @dataclass
@@ -65,7 +68,7 @@ class EngineGenerationConfig(GenerationConfig):
             >>> tokenizer = Tokenizer('internlm/internlm-chat-7b')
             >>> gen_config = GenerationConfig(stop_words=['<eoa>'])
             >>> gen_config = EngineGenerationConfig.From(gen_config, tokenizer)
-        """ # noqa E501
+        """  # noqa E501
 
         def special_word_token_ids(words):
             if words is not None:
@@ -96,12 +99,14 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        model_name (str): the name of the deployed model
+        model_name (str): the name of the deployed model, deprecated and has no effect when version > 0.2.1
         model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq], `hf` meaning `hf_llama`, `llama` meaning `meta_llama`, `awq` meaning the quantized model by AWQ.
         tp (int): the number of GPU cards used in tensor parallelism, default to 1
         session_len (int): the max session length of a sequence, default to None
         max_batch_size (int): the max batch size during inference, default to 128
-        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache, default to 0.5
+        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
+            For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
+            For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
         quant_policy (int): , default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
@@ -112,7 +117,7 @@ class TurbomindEngineConfig:
     tp: int = 1
     session_len: Optional[int] = None
     max_batch_size: int = 128
-    cache_max_entry_count: float = 0.5
+    cache_max_entry_count: float = 0.8
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -137,6 +142,7 @@ class PytorchEngineConfig:
         num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
+        max_prefill_token_num (int): tokens per iteration.
     """
     model_name: str = ''
     tp: int = 1
@@ -148,6 +154,7 @@ class PytorchEngineConfig:
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
+    max_prefill_token_num: int = 16384
 
 
 class ResponseType(enum.Enum):
@@ -166,4 +173,5 @@ class Response:
     """Pack all response information together."""
     text: str
     generate_token_len: int
+    session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None

@@ -17,6 +17,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_gradio():
+        """Add parser for gradio command."""
         parser = SubCliServe.subparsers.add_parser(
             'gradio',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -67,6 +68,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_api_server():
+        """Add parser for api_server command."""
         parser = SubCliServe.subparsers.add_parser(
             'api_server',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -119,6 +121,8 @@ class SubCliServe:
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
+        ArgumentHelper.api_keys(parser)
+        ArgumentHelper.ssl(parser)
 
         # chat template args
         ArgumentHelper.meta_instruction(parser)
@@ -146,6 +150,7 @@ class SubCliServe:
 
     @staticmethod
     def add_parser_api_client():
+        """Add parser for api_client command."""
         parser = SubCliServe.subparsers.add_parser(
             'api_client',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -155,10 +160,16 @@ class SubCliServe:
         parser.add_argument('api_server_url',
                             type=str,
                             help='The URL of api server')
+        parser.add_argument('--api-key',
+                            type=str,
+                            default=None,
+                            help='api key. Default to None, which means no '
+                            'api key will be used')
         ArgumentHelper.session_id(parser)
 
     @staticmethod
     def add_parser_triton_client():
+        """Add parser for triton_client command."""
         parser = SubCliServe.subparsers.add_parser(
             'triton_client',
             formatter_class=DefaultsAndTypesHelpFormatter,
@@ -245,6 +256,8 @@ class SubCliServe:
                        allow_methods=args.allow_methods,
                        allow_headers=args.allow_headers,
                        log_level=args.log_level.upper(),
+                       api_keys=args.api_keys,
+                       ssl=args.ssl,
                        qos_config_path=args.qos_config_path)
 
     @staticmethod

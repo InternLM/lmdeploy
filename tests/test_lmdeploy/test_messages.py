@@ -13,7 +13,3 @@ def test_engine_generation_config():
         _config.temperature == config.temperature
     assert isinstance(_config.stop_words, List) and \
         isinstance(_config.stop_words[0], int)
-
-    config = GenerationConfig(stop_words=['你好', 'hello, world'])
-    _config = EngineGenerationConfig.From(config, tokenizer)
-    assert _config.stop_words is None

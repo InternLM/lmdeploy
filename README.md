@@ -23,6 +23,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/restful_api.md).
 - \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](./docs/en/serving/proxy_server.md)
 - \[2024/01\] Support [PyTorch inference engine](./docs/en/inference/pytorch.md), developed entirely in Python, helping to lower the barriers for developers and enable  rapid experimentation with new features and technologies.
 
@@ -83,6 +84,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |       Llama        | 7B - 65B  |
 |       Llama2       | 7B - 70B  |
 |      InternLM      | 7B - 20B  |
+|     InternLM2      | 7B - 20B  |
 | InternLM-XComposer |    7B     |
 |        QWen        | 7B - 72B  |
 |      QWen-VL       |    7B     |
@@ -91,6 +93,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |     Code Llama     | 7B - 34B  |
 |      ChatGLM2      |    6B     |
 |       Falcon       | 7B - 180B |
+|         YI         | 6B - 34B  |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
@@ -106,9 +109,17 @@ Install lmdeploy with pip ( python 3.8+) or [from source](./docs/en/build.md)
 pip install lmdeploy
 ```
 
-## Offline Batch Inference
+The default prebuilt package is compiled on CUDA 11.8. However, if CUDA 12+ is required, you can install lmdeploy by:
 
 ```shell
+export LMDEPLOY_VERSION=0.2.0
+export PYTHON_VERSION=38
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl
+```
+
+## Offline Batch Inference
+
+```python
 import lmdeploy
 pipe = lmdeploy.pipeline("internlm/internlm-chat-7b")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
@@ -133,7 +144,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - Add chat template
   - Add a new model
   - gemm tuning
-  - Long context inference
+  - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
 
 ## Contributing

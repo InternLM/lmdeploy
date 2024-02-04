@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
 
 LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 
@@ -52,9 +51,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'modeling_baichuan.Model':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
-    (f'{TRANSFORMERS_DYNAMIC_MODULE_NAME}.Baichuan2-7B-Chat'
-     '.modeling_baichuan.BaichuanModel'):
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',  # noqa
     'modeling_baichuan.BaichuanModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanModel',  # noqa
     'modeling_baichuan.Attention':
@@ -83,6 +79,18 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'modeling_internlm.InternLMMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+})
+
+# internlm2
+MODULE_MAP.update({
+    'modeling_internlm2.InternLM2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Attention',
+    'modeling_internlm2.InternLM2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2Model',
+    'modeling_internlm2.InternLM2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2MLP',
+    'modeling_internlm2.InternLM2RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
 # peft
