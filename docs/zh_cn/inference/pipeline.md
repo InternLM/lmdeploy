@@ -233,6 +233,74 @@ print(response)
 | stop_words         | List\[str\] | 停止进一步生成令牌的词。                              | None    |
 | bad_words          | List\[str\] | 引擎永远不会生成的词。                                | None    |
 
+## 自定义对话模板
+
+LMDeploy 支持两种添加对话模板的形式：
+
+- 一种是以 LMDeploy 现有对话模板，自定义一个python对话模板类，注册成功后直接用即可。优点是自定义程度高，可控性强。
+  下面是一个注册 LMDeploy 对话模板的例子：
+
+  ```python
+  from typing import Dict, Union
+
+  from lmdeploy import ChatTemplateConfig, pipeline
+  from lmdeploy.model import MODELS, BaseModel
+
+
+  @MODELS.register_module(name='customized_model')
+  class CustomizedModel(BaseModel):
+      """A customized chat template."""
+
+      def messages2prompt(self,
+                          messages: Union[str, Dict],
+                          sequence_start: bool = True) -> str:
+          """This func apply chat template for input messages
+              Args:
+                    messages (str | Dict): input messages. Could be a str prompt or
+                    OpenAI format chat history. The former is for interactive chat.
+                    sequence_start (bool): Only for interactive chatting. Begin of the
+                    prompt token will be removed in interactive chatting when
+                    the sequence_start is False.
+              Returns:
+                    string. The return value will be sent to tokenizer.encode directly.
+              """
+          print(f'Any modification can be done for {messages}')
+          return str(messages)  # just a dummpy conversion.
+
+
+  pipe = pipeline('internlm/internlm2-chat-7b',
+                  chat_template_config=ChatTemplateConfig('customized_model'))
+
+  response = pipe('hi')
+  print(response)  # text completion in this case because of customized_model
+  ```
+
+  在这个例子中，我们注册了一个 LMDeploy 的对话模板，该模板只是将输入的 prompt 直接返回，或者
+  将对话历史直接转成了一个字符串。用户真正需要的对话模板逻辑，需要用户自己做填充，最好对两种输入情况都考虑到。
+  这样 pipeline 初始化后既能处理 string 输入又能处理 OpenAI 格式的对话历史输入。
+
+- 另一种是传入 [Huggingface 的对话模板](https://huggingface.co/docs/transformers/main/en/chat_templating)，即 Jinja 模板。
+  通过 python 脚本启动为：
+
+  ```python
+  from lmdeploy import ChatTemplateConfig, pipeline
+
+  pipe = pipeline('internlm/internlm2-chat-7b',
+                  chat_template_config=ChatTemplateConfig(
+                      jinja_template='jinja_template_str_or_file'))
+
+  response = pipe([[{
+      'role': 'user',
+      'content': 'Hi, pls intro yourself'
+  }], [{
+      'role': 'user',
+      'content': 'Shanghai is'
+  }]])
+  print(response)  # Jinja template can only handle OpenAI format chat history
+  ```
+
+  需要注意的时，传入的 Jinja 模板后，pipeline 只能处理 OpenAI 格式的对话历史作为输入。
+
 ## FAQs
 
 - *RuntimeError: context has already been set*. 如果你在使用 tp>1 和 pytorch 后端的时候，遇到了这个错误。请确保 python 脚本中有下面内容作为入口

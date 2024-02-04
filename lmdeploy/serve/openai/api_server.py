@@ -72,7 +72,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.engine.model_name]
+    return [VariableInterface.async_engine.model_name]
 
 
 @app.get('/v1/models', dependencies=[Depends(check_api_key)])
@@ -928,7 +928,7 @@ def serve(model_path: str,
           allow_credentials: bool = True,
           allow_methods: List[str] = ['*'],
           allow_headers: List[str] = ['*'],
-          log_level: str = 'ERROR',
+          log_level: str = 'WARNING',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           qos_config_path: str = '',

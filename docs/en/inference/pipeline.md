@@ -233,6 +233,66 @@ This class contains the generation parameters used by inference engines.
 | stop_words         | List\[str\] | Words that stop generating further tokens.                                                                            | None    |
 | bad_words          | List\[str\] | Words that the engine will never generate.                                                                            | None    |
 
+## Customize chat template
+
+LMDeploy supports two methods for adding dialogue templates:
+
+- One method involves customizing a Python dialogue template class based on LMDeploy's existing dialogue templates, which can be used directly after successful registration. The advantages are a high degree of customization and strong controllability. Below is an example of registering an LMDeploy dialogue template:
+  ```python
+  from typing import Dict, Union
+
+  from lmdeploy import ChatTemplateConfig, pipeline
+  from lmdeploy.model import MODELS, BaseModel
+
+
+  @MODELS.register_module(name='customized_model')
+  class CustomizedModel(BaseModel):
+      """A customized chat template."""
+
+      def messages2prompt(self,
+                          messages: Union[str, Dict],
+                          sequence_start: bool = True) -> str:
+          """This func apply chat template for input messages
+              Args:
+                    messages (str | Dict): input messages. Could be a str prompt or
+                    OpenAI format chat history. The former is for interactive chat.
+                    sequence_start (bool): Only for interactive chatting. Begin of the
+                    prompt token will be removed in interactive chatting when
+                    the sequence_start is False.
+              Returns:
+                    string. The return value will be sent to tokenizer.encode directly.
+              """
+          print(f'Any modification can be done for {messages}')
+          return str(messages)  # just a dummpy conversion.
+
+
+  pipe = pipeline('internlm/internlm2-chat-7b',
+                  chat_template_config=ChatTemplateConfig('customized_model'))
+
+  response = pipe('hi')
+  print(response)  # text completion in this case because of customized_model
+  ```
+  In this example, we registered an LMDeploy dialogue template that simply returns the input prompt as is, or converts the dialogue history into a string directly. The user needs to implement the actual dialogue template logic themselves, ideally considering both input scenarios. This allows the pipeline to handle both string inputs and OpenAI format dialogue history inputs after initialization.
+- The other method involves passing in [Huggingface's dialogue templates](https://huggingface.co/docs/transformers/main/en/chat_templating), which are Jinja templates.
+  Starting with a Python script is as follows:
+  ```python
+  from lmdeploy import ChatTemplateConfig, pipeline
+
+  pipe = pipeline('internlm/internlm2-chat-7b',
+                  chat_template_config=ChatTemplateConfig(
+                      jinja_template='jinja_template_str_or_file'))
+
+  response = pipe([[{
+      'role': 'user',
+      'content': 'Hi, pls intro yourself'
+  }], [{
+      'role': 'user',
+      'content': 'Shanghai is'
+  }]])
+  print(response)  # Jinja template can only handle OpenAI format chat history
+  ```
+  It's important to note that after passing in the Jinja template, the pipeline can only process dialogue history inputs in the OpenAI format.
+
 ## FAQs
 
 - *RuntimeError: context has already been set*. If you got this for tp>1 in pytorch backend. Please make sure the python script has following

@@ -105,6 +105,7 @@ class AsyncEngine:
         # if model_name is given, lmdeploy template will be applied
         # no matter what Jinja template
         if chat_template_config and chat_template_config.model_name:
+            self.model_name = chat_template_config.model_name
             return
         # if no model_name passed in, will choose tokenizer's template
         # it could be a Jinja if it exists in tokenizer_config.json
@@ -488,6 +489,10 @@ class AsyncEngine:
         finish_reason = None
         if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens >= self.session_len:
+            logger.warning(f'The maximum session len is reached. Step: '
+                           f'{self.id2step[str(session_id)]}, input len: '
+                           f'{len(input_ids)}, request out len: '
+                           f'{gen_config.max_new_tokens}.')
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
