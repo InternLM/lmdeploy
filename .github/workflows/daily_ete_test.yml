@@ -77,11 +77,6 @@ jobs:
         continue-on-error: true
         run: |
           pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results
-      - name: Test lmdeploy - rerun quantization and convert
-        continue-on-error: true
-        timeout-minutes: 30
-        run: |
-          pytest autotest -m  '(quantization or quantization_w8a8 or convert) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results --lf
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         timeout-minutes: 60
