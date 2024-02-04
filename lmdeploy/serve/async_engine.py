@@ -486,7 +486,9 @@ class AsyncEngine:
                     _, res, tokens = outputs
                     # decode res
                     response, state = self.tokenizer.detokenize_incrementally(
-                        res, state)
+                        res,
+                        state,
+                        skip_special_tokens=gen_config.skip_special_tokens)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
