@@ -94,6 +94,7 @@ class ChatCompletionRequest(BaseModel):
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
+    skip_special_tokens: Optional[bool] = True
 
 
 class ChatMessage(BaseModel):
@@ -162,6 +163,7 @@ class CompletionRequest(BaseModel):
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
+    skip_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
 
 
@@ -266,6 +268,7 @@ class GenerateRequest(BaseModel):
     temperature: float = 0.8
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
+    skip_special_tokens: Optional[bool] = True
     cancel: Optional[bool] = False  # cancel a responding request
 
 

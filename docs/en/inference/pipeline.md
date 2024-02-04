@@ -224,18 +224,20 @@ This class contains the generation parameters used by inference engines.
 
 ### Arguments
 
-| Parameter          | Type        | Description                                                                                                           | Default |
-| ------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
-| n                  | int         | Number of chat completion choices to generate for each input message. Currently, only 1 is supported                  | 1       |
-| max_new_tokens     | int         | Maximum number of tokens that can be generated in chat completion.                                                    | 512     |
-| top_p              | float       | Nucleus sampling, where the model considers the tokens with top_p probability mass.                                   | 1.0     |
-| top_k              | int         | The model considers the top_k tokens with the highest probability.                                                    | 1       |
-| temperature        | float       | Sampling temperature.                                                                                                 | 0.8     |
-| repetition_penalty | float       | Penalty to prevent the model from generating repeated words or phrases. A value larger than 1 discourages repetition. | 1.0     |
-| ignore_eos         | bool        | Indicator to ignore the eos_token_id or not.                                                                          | False   |
-| random_seed        | int         | Seed used when sampling a token.                                                                                      | None    |
-| stop_words         | List\[str\] | Words that stop generating further tokens.                                                                            | None    |
-| bad_words          | List\[str\] | Words that the engine will never generate.                                                                            | None    |
+| Parameter           | Type        | Description                                                                                                           | Default |
+| ------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
+| n                   | int         | Number of chat completion choices to generate for each input message. Currently, only 1 is supported                  | 1       |
+| max_new_tokens      | int         | Maximum number of tokens that can be generated in chat completion.                                                    | 512     |
+| top_p               | float       | Nucleus sampling, where the model considers the tokens with top_p probability mass.                                   | 1.0     |
+| top_k               | int         | The model considers the top_k tokens with the highest probability.                                                    | 1       |
+| temperature         | float       | Sampling temperature.                                                                                                 | 0.8     |
+| repetition_penalty  | float       | Penalty to prevent the model from generating repeated words or phrases. A value larger than 1 discourages repetition. | 1.0     |
+| ignore_eos          | bool        | Indicator to ignore the eos_token_id or not.                                                                          | False   |
+| random_seed         | int         | Seed used when sampling a token.                                                                                      | None    |
+| stop_words          | List\[str\] | Words that stop generating further tokens.                                                                            | None    |
+| bad_words           | List\[str\] | Words that the engine will never generate.                                                                            | None    |
+| min_new_tokens      | int         | The minimum numbers of tokens to generate, ignoring the number of tokens in the prompt.                               | None    |
+| skip_special_tokens | bool        | Whether or not to remove special tokens in the decoding.                                                              | True    |
 
 ## FAQs
 
