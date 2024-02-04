@@ -13,7 +13,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -79,8 +79,9 @@ jobs:
           pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results
       - name: Test lmdeploy - rerun quantization and convert
         continue-on-error: true
+        timeout-minutes: 30
         run: |
-          pytest autotest --alluredir=allure-results --lf
+          pytest autotest -m  '(quantization or quantization_w8a8 or convert) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results --lf
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         timeout-minutes: 60
@@ -93,9 +94,6 @@ jobs:
         timeout-minutes: 60
         run: |
           pytest autotest -m '(command_chat or command_chat_hf or command_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 4 --alluredir=allure-results
-      - name: Test lmdeploy - rerun fail cases
-        run:
-          pytest autotest --alluredir=allure-results --lf
       - name: Downgrade transformers
         run: python3 -m pip install transformers==4.33.0
       - name: Test lmdeploy - run Baichuan
@@ -105,7 +103,7 @@ jobs:
           pytest autotest -m '(Baichuan2_7B_Chat or Baichuan2_13B_Chat) and not pipeline_chat_pytorch' --alluredir=allure-results
       - name: Test lmdeploy - rerun fail cases
         run: |
-          pytest autotest -m '(Baichuan2_7B_Chat or Baichuan2_13B_Chat) and not pipeline_chat_pytorch' --alluredir=allure-results --lf
+          pytest autotest --alluredir=allure-results --lf
       - name: Generate reports
         if: always()
         run: |
