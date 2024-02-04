@@ -54,15 +54,13 @@ set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
 
 FetchContent_MakeAvailable(repo-cutlass)
 
-if (NOT WIN32)
-  FetchContent_Declare(
-        spdlog
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.13.0
-  )
-  FetchContent_MakeAvailable(spdlog)
-  include_directories(${CMAKE_BINARY_DIR}/_deps/spdlog-src/include)
-endif ()
+FetchContent_Declare(
+      spdlog
+      GIT_REPOSITORY https://github.com/gabime/spdlog.git
+      GIT_TAG v1.13.0
+)
+FetchContent_MakeAvailable(spdlog)
+include_directories(${CMAKE_BINARY_DIR}/_deps/spdlog-src/include)
 
 set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
 set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)

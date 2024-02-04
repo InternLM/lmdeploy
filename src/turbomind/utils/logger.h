@@ -18,11 +18,8 @@
 
 #include <cstdlib>
 #include <map>
-#include <string>
-
-#ifndef _MSC_VER
 #include <spdlog/spdlog.h>
-#endif
+#include <string>
 
 #include "src/turbomind/utils/string_utils.h"
 
@@ -34,7 +31,6 @@ namespace turbomind {
 #undef ERROR
 #endif
 
-#ifndef _MSC_VER
 class SpdLogger {
 public:
     static SpdLogger& get_instance()
@@ -63,7 +59,6 @@ private:
     bool                            inited_ = false;
     std::shared_ptr<spdlog::logger> logger_;
 };
-#endif
 
 class Logger {
 
@@ -91,11 +86,7 @@ public:
         if (level_ <= level) {
             std::string fmt    = getPrefix(level) + format + "\n";
             std::string logstr = fmtstr(fmt, args...);
-#ifdef _MSC_VER
-            fprintf(stderr, "%s", logstr.c_str());
-#else
             SpdLogger::get_instance().get_logger()->log(spdlog::level::trace, logstr);
-#endif
         }
     }
 
@@ -105,11 +96,7 @@ public:
         if (level_ <= level) {
             std::string fmt    = getPrefix(level, rank) + format + "\n";
             std::string logstr = fmtstr(fmt, args...);
-#ifdef _MSC_VER
-            fprintf(stderr, "%s", logstr.c_str());
-#else
             SpdLogger::get_instance().get_logger()->log(spdlog::level::trace, logstr);
-#endif
         }
     }
 

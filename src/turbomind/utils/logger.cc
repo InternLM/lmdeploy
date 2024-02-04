@@ -16,27 +16,27 @@
 
 #include "src/turbomind/utils/logger.h"
 #include <cuda_runtime.h>
-
-#ifndef _MSC_VER
 #include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/hourly_file_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
-#endif
 
 namespace turbomind {
 
 Logger::Logger()
 {
-#ifndef _MSC_VER
     char* log_path = std::getenv("TM_LOG_PATH");
     if (log_path != nullptr) {
         SpdLogger::get_instance().set_log_path(std::string(log_path));
-    } else {
+    }
+    else {
+#ifndef _MSC_VER
         SpdLogger::get_instance().set_log_path("/var/log/lmdeploy.log");
+#else
+        SpdLogger::get_instance().set_log_path("C:\Users\lmdeploy.log");
+#endif
     }
     SpdLogger::get_instance().init();
-#endif
     char* is_first_rank_only_char = std::getenv("TM_LOG_FIRST_RANK_ONLY");
     bool  is_first_rank_only =
         (is_first_rank_only_char != nullptr && std::string(is_first_rank_only_char) == "ON") ? true : false;
@@ -72,7 +72,6 @@ Logger::Logger()
     }
 }
 
-#ifndef _MSC_VER
 void SpdLogger::init()
 {
     if (inited_) {
@@ -99,6 +98,5 @@ void SpdLogger::init()
 
     inited_ = true;
 }
-#endif
 
 }  // namespace turbomind
