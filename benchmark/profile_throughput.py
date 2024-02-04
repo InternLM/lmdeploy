@@ -294,9 +294,11 @@ def main():
     random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(session_len=args.session_len,
-                                              max_batch_size=args.concurrency,
-                                              tp=args.tp)
+        engine_config = TurbomindEngineConfig(
+            session_len=args.session_len,
+            max_batch_size=args.concurrency,
+            tp=args.tp,
+            cache_max_entry_count=args.cache_max_entry_count)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(session_len=args.session_len,
                                             max_batch_size=args.concurrency,
