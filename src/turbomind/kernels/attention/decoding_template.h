@@ -14,12 +14,14 @@ void invokeDecoding(const typename Kernel::ParamType& params)
 {
     static const size_t kDynamicSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    [[maybe_unused]] static const int _ = [&] {
-        std::cout << "GmemMap:\n";
-        Print(typename Kernel::Impl::ThreadMapKV{});
-        std::cout << "\nDynamic smem size: " << kDynamicSmemSize << "\n";
-        return 0;
-    }();
+    if constexpr (0) {
+        [[maybe_unused]] static const int _ = [&] {
+            std::cout << "GmemMap:\n";
+            Print(typename Kernel::Impl::ThreadMapKV{});
+            std::cout << "\nDynamic smem size: " << kDynamicSmemSize << "\n";
+            return 0;
+        }();
+    }
 
     const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
     const int max_split_count = std::min(params.max_split_k, tile_count);

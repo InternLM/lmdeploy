@@ -19,30 +19,20 @@ struct AttentionParams {
     T* k_bias;
     T* v_bias;
 
-    const void* kv;
+    const void* kv;  // tmp kv cache buffer
 
     // sequence-level buffers
     const int*   cu_q_len;
     const int*   cu_k_len;
-    const int*   context_length;
-    const int*   input_length;
     const bool*  finished;
     const float* rope_theta;
-
-    // kv cache
-    // int layer_offset;
 
     int key_offset;
     int val_offset;
 
-    /// cache layout M,[N,H,x,D]
-    /// S: [s0/x, s1/x, s2/x, ..., sn-1/x], si <- block
-    /// 1. [L,sum(S),H,x,D]
-    void** k_cache_block_ptrs;  // S,[L,H,s,D]
+    void** k_cache_block_ptrs;  // S/s,[L,2,H,s,D]
     int*   cu_block_cnts;       // [B+1]
     int    kv_cache_block_size;
-
-    T* kv_cache_quant_data;  // [B,H,2,S,2]
 
     // batch-level params
     int token_num;

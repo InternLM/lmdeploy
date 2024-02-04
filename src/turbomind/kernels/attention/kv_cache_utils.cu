@@ -9,23 +9,24 @@
 namespace turbomind {
 
 template<int CTA_S, int HeadDim, int WarpCnt, class T, class Tkv, class Offset, class TransformK, class TransformV>
-__global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
-                                                 const T*   k,
-                                                 const T*   v,
-                                                 const T*   k_bias,
-                                                 const T*   v_bias,
-                                                 const int* cu_seq_lens,
-                                                 const int* cu_blk_nums,
-                                                 const int* context_length,
-                                                 int        stride_b,
-                                                 int        stride_c,
-                                                 int        stride_h,
-                                                 int        stride_s,
-                                                 int        block_seq_len,
-                                                 Offset     k_offset,
-                                                 Offset     v_offset,
-                                                 TransformK transform_k,
-                                                 TransformV transform_v)
+__global__ void __launch_bounds__(128) ProcessKV(Tkv**        blocks,
+                                                 const T*     k,
+                                                 const T*     v,
+                                                 const T*     k_bias,
+                                                 const T*     v_bias,
+                                                 const int*   cu_q_len,
+                                                 const int*   cu_k_len,
+                                                 const int*   cu_block_num,
+                                                 const float* rope_base,
+                                                 int          stride_b,
+                                                 int          stride_c,
+                                                 int          stride_h,
+                                                 int          stride_s,
+                                                 int          block_seq_len,
+                                                 Offset       k_offset,
+                                                 Offset       v_offset,
+                                                 TransformK   transform_k,
+                                                 TransformV   transform_v)
 {
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
 
@@ -39,11 +40,12 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
     const int head_idx  = blockIdx.y;
     const int batch_idx = blockIdx.z;
 
-    const int qi_beg = cu_seq_lens[batch_idx];
-    const int qi_end = cu_seq_lens[batch_idx + 1];
+    const int qi_beg = cu_q_len[batch_idx];
+    const int qi_end = cu_q_len[batch_idx + 1];
+    const int q_len  = qi_end - qi_beg;
 
-    const int input_len   = qi_end - qi_beg;
-    const int history_len = context_length[batch_idx] - input_len;
+    const int k_len       = cu_k_len[batch_idx + 1] - cu_k_len[batch_idx];
+    const int history_len = k_len - q_len;
 
     if (qi_beg + token_idx >= qi_end) {  // empty tile
         return;
@@ -83,7 +85,7 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
             const int di = offset.x + c * Map::kDeltaC;
             const int index =
                 (batch_idx * stride_b + qi_beg * stride_c + qi * stride_s + head_idx * stride_h) * HeadDim + di;
-            if (qi < input_len) {
+            if (qi < q_len) {
                 Ldg(vec_K[s][c], &k[index]);
                 Ldg(vec_V[s][c], &v[index]);
             }
@@ -111,6 +113,20 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
         }
     }
 
+    if (rope_base) {
+        float base = rope_base[batch_idx];
+        PRAGMA_UNROLL
+        for (int c = 0; c < ITER_C; ++c) {
+            const int di = offset.x + c * Map::kDeltaC;
+            FastRoPE  rope(di, std::integral_constant<int, HeadDim>{}, base, std::integral_constant<int, kVecSize>{});
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
+                rope.apply(vec_K[s][c], ti);
+            }
+        }
+    }
+
     Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
     Array<Tkv, kVecSize> out_V[ITER_S][ITER_C];
 
@@ -123,13 +139,13 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
         }
     }
 
-    Tkv** k_cache_block_ptrs = blocks + cu_blk_nums[batch_idx];
+    Tkv** k_cache_block_ptrs = blocks + cu_block_num[batch_idx];
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
 
-        if (qi < input_len) {
+        if (qi < q_len) {
             const int ti = history_len + qi;  // timestep
 
             const int block_seqlen = block_seq_len;
@@ -157,9 +173,10 @@ void invokeProcessKV(void**       blocks,
                      const T*     v,
                      const T*     k_bias,
                      const T*     v_bias,
-                     const int*   cu_seq_lens,
-                     const int*   cu_blk_nums,
-                     const int*   context_length,
+                     const int*   cu_q_len,
+                     const int*   cu_k_len,
+                     const int*   cu_block_num,
+                     const float* rope_base,
                      int          stride_b,
                      int          stride_c,
                      int          stride_h,
@@ -167,7 +184,7 @@ void invokeProcessKV(void**       blocks,
                      int          block_seq_len,
                      int          k_offset,
                      int          v_offset,
-                     int          max_seq_len,
+                     int          max_q_len,
                      int          kv_head_num,
                      int          batch_size,
                      int          quant_policy,
@@ -179,7 +196,7 @@ void invokeProcessKV(void**       blocks,
     constexpr int CTA_S = 64;
 
     int  block = WARPS * WARP_SIZE;
-    dim3 grid((max_seq_len + CTA_S - 1) / CTA_S, kv_head_num, batch_size);
+    dim3 grid((max_q_len + CTA_S - 1) / CTA_S, kv_head_num, batch_size);
 
     auto invoke = [&](auto tkv) {
         using Tkv = decltype(tkv);
@@ -190,9 +207,10 @@ void invokeProcessKV(void**       blocks,
                                                                   v,
                                                                   k_bias,
                                                                   v_bias,
-                                                                  cu_seq_lens,
-                                                                  cu_blk_nums,
-                                                                  context_length,
+                                                                  cu_q_len,
+                                                                  cu_k_len,
+                                                                  cu_block_num,
+                                                                  rope_base,
                                                                   stride_b,
                                                                   stride_c,
                                                                   stride_h,
@@ -212,9 +230,10 @@ template void invokeProcessKV(void**       blocks,
                               const half*  v,
                               const half*  k_bias,
                               const half*  v_bias,
-                              const int*   cu_seq_lens,
-                              const int*   cu_block_nums,
-                              const int*   context_length,
+                              const int*   cu_q_len,
+                              const int*   cu_k_len,
+                              const int*   cu_block_num,
+                              const float* rope_base,
                               int          stride_b,
                               int          stride_c,
                               int          stride_h,
@@ -222,7 +241,7 @@ template void invokeProcessKV(void**       blocks,
                               int          block_seq_len,
                               int          block_k_offset,
                               int          block_v_offset,
-                              int          max_seq_len,
+                              int          max_q_len,
                               int          kv_head_num,
                               int          batch_size,
                               int          quant_policy,
@@ -233,10 +252,9 @@ template<int CTA_S, int HeadDim, int WarpCnt, class T, class Tkv, class Offset, 
 __global__ void __launch_bounds__(128) flattenKV(T*           k,
                                                  T*           v,
                                                  const Tkv**  blocks,
-                                                 const int*   cu_seq_lens,
-                                                 const int*   cu_block_nums,
-                                                 const int*   context_lens,
-                                                 const float* rope_theta,
+                                                 const int*   cu_k_len,
+                                                 const int*   cu_block_num,
+                                                 const float* rope_base,
                                                  int          stride_b,
                                                  int          stride_c,
                                                  int          stride_h,
@@ -258,8 +276,9 @@ __global__ void __launch_bounds__(128) flattenKV(T*           k,
     const int head_idx  = blockIdx.y;
     const int batch_idx = blockIdx.z;
 
-    const int ti_beg = cu_seq_lens[batch_idx];
-    const int ti_end = cu_seq_lens[batch_idx + 1];
+    const int ti_0   = cu_k_len[0];
+    const int ti_beg = cu_k_len[batch_idx] - ti_0;
+    const int ti_end = cu_k_len[batch_idx + 1] - ti_0;
 
     const int seq_len = ti_end - ti_beg;
 
@@ -278,7 +297,7 @@ __global__ void __launch_bounds__(128) flattenKV(T*           k,
     Array<T, kVecSize> __align__(16) out_K[ITER_S][ITER_C];
     Array<T, kVecSize> __align__(16) out_V[ITER_S][ITER_C];
 
-    blocks += cu_block_nums[batch_idx];
+    blocks += cu_block_num[batch_idx];
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
@@ -310,13 +329,12 @@ __global__ void __launch_bounds__(128) flattenKV(T*           k,
         }
     }
 
-    if (rope_theta) {
-        float rope_base = rope_theta[batch_idx];
+    if (rope_base) {
+        float base = rope_base[batch_idx];
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(
-                di, std::integral_constant<int, HeadDim>{}, rope_base, std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di, std::integral_constant<int, HeadDim>{}, base, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -345,10 +363,9 @@ template<class T>
 void invokeFlattenKV(T*           k,
                      T*           v,
                      const void** blocks,
-                     const int*   cu_seq_lens,
-                     const int*   cu_block_nums,
-                     const int*   context_lens,
-                     const float* rope_theta,
+                     const int*   cu_k_len,
+                     const int*   cu_block_num,
+                     const float* rope_base,
                      int          stride_b,
                      int          stride_c,
                      int          stride_h,
@@ -378,10 +395,9 @@ void invokeFlattenKV(T*           k,
         flattenKV<CTA_S, kHeadDim, kWarpCnt><<<grid, block, 0, stream>>>(k,
                                                                          v,
                                                                          (const Tkv**)blocks,
-                                                                         cu_seq_lens,
-                                                                         cu_block_nums,
-                                                                         context_lens,
-                                                                         rope_theta,
+                                                                         cu_k_len,
+                                                                         cu_block_num,
+                                                                         rope_base,
                                                                          stride_b,
                                                                          stride_c,
                                                                          stride_h,
@@ -399,10 +415,9 @@ void invokeFlattenKV(T*           k,
 template void invokeFlattenKV(half*        k,
                               half*        v,
                               const void** blocks,
-                              const int*   cu_seq_lens,
-                              const int*   cu_block_nums,
-                              const int*   context_lens,
-                              const float* rope_theta,
+                              const int*   cu_k_len,
+                              const int*   cu_block_num,
+                              const float* rope_base,
                               int          stride_b,
                               int          stride_c,
                               int          stride_h,

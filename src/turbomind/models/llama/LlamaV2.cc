@@ -98,6 +98,8 @@ LlamaV2<T>::LlamaV2(size_t                       head_num,
 
     initialize(attn_params, kv_head_num, use_context_fmha, cache_block_seq_len, quant_policy);
 
+    unified_decoder_->allocateBuffer(engine_params.max_batch_size);
+
     /// TODO: decouple Llama model and batch inference
     batch_->Start();
 }
@@ -196,26 +198,16 @@ template<typename T>
 void LlamaV2<T>::forwardUnified(T*               out,
                                 T*               decoder_output,
                                 T*               decoder_input,
-                                void**           k_block_ptrs,
-                                void**           v_block_ptrs,
-                                const int*       input_ids,
+                                void**           block_ptrs,
                                 const int*       cu_block_cnts,
+                                const int*       input_ids,
+                                const int*       h_input_length,
+                                const int*       h_context_length,
                                 const float*     rope_theta,
-                                const bool*      dc_finished,
-                                const int*       pf_input_length,
-                                const int*       pf_context_length,
-                                T**              pf_tmp_k_ptrs,
-                                T**              pf_tmp_v_ptrs,
+                                const bool*      finished,
                                 size_t           token_num,
                                 int              dc_batch_size,
-                                int              dc_step,
-                                int              dc_sum_seq_len,
-                                int              dc_max_seq_len,
                                 int              pf_batch_size,
-                                int              pf_max_input_len,
-                                int              pf_max_context_len,
-                                int              pf_session_len,
-                                const int*       h_input_length,
                                 const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -242,24 +234,16 @@ void LlamaV2<T>::forwardUnified(T*               out,
 
     TensorMap inputs{{"decoder_input", {MEMORY_GPU, dtype, {token_num, hidden_units_}, decoder_input}},
                      {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
-                     {"input_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, pf_input_length}},
-                     {"context_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, pf_context_length}},
+                     {"h_q_len", {MEMORY_CPU, TYPE_INT32, {bsz}, h_input_length}},
+                     {"h_k_len", {MEMORY_CPU, TYPE_INT32, {bsz}, h_context_length}},
+                     {"finished", {MEMORY_GPU, TYPE_BOOL, {bsz}, finished}},
                      {"dc_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &dc_batch_size}},
-                     {"dc_sum_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &dc_sum_seq_len}},
-                     {"dc_max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &dc_max_seq_len}},
-                     {"finished", {MEMORY_GPU, TYPE_BOOL, {bsz}, dc_finished}},
                      {"pf_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &pf_batch_size}},
-                     {"pf_max_q_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_max_input_len}},
-                     {"pf_max_k_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_max_context_len}},
-                     {"session_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_session_len}},
                      {"rope_theta", {MEMORY_GPU, TYPE_FP32, {hidden_units_}, rope_theta}},
                      {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {bsz}, cu_block_cnts}}};
 
     TensorMap outputs{{"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, decoder_output}},
-                      {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_block_ptrs}},
-                      {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_block_ptrs}},
-                      {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_k_ptrs}},
-                      {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_v_ptrs}},
+                      {"block_ptrs", {MEMORY_GPU, TYPE_UINT64, {bsz}, block_ptrs}},
                       {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, out}}};
 
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);

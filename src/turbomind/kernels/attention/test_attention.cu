@@ -98,8 +98,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                         (T*)nullptr,
                         (T*)nullptr,
                         cu_seq_lens.data().get(),
+                        cu_seq_lens.data().get(),
                         cu_block_cnts.data().get(),
-                        seq_lens.data().get(),
+                        nullptr,
                         2 * head_num * seq_len,
                         0,
                         seq_len,
@@ -124,7 +125,6 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                         (const void**)k_ptrs.data().get(),
                         cu_seq_lens.data().get(),
                         cu_block_cnts.data().get(),
-                        seq_lens.data().get(),
                         nullptr,
                         2 * head_num * seq_len,
                         0,
@@ -266,9 +266,7 @@ int main(int argc, char* argv[])
                           kBatchSize * KvHeadNum);
     }
 
-#if DECODING
     invokeApplyRotaryEmbedding(k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kBatchSize);
-#endif
 
     thrust::universal_vector<half> k_cache_ref = k_cache;
     thrust::universal_vector<half> v_cache_ref = v_cache;
@@ -331,28 +329,24 @@ int main(int argc, char* argv[])
 
     params.kv = kv_cache.data().get();
 
-    params.token_num     = kTokenNum;
-    params.batch_size    = kBatchSize;
-    params.max_q_len     = kInputLen;
-    params.max_k_len     = kContextLen;
-    params.cu_block_cnts = cu_block_cnts.data().get();
+    params.token_num  = kTokenNum;
+    params.batch_size = kBatchSize;
+    params.max_q_len  = kInputLen;
+    params.max_k_len  = kContextLen;
 
     params.k_cache_block_ptrs  = (void**)k_ptrs.data().get();
+    params.cu_block_cnts       = cu_block_cnts.data().get();
     params.kv_cache_block_size = kBlockSz;
-
-    params.kv_cache_quant_data = kv_cache_quant_data.data().get();
 
     params.quant_policy = kQuantPolicy;
 
     std::copy_n(quant_params_kv.data(), 4, &params.kv_quant_params[0]);
 
-    params.finished       = finished.data().get();
-    params.input_length   = input_length.data().get();
-    params.context_length = context_length.data().get();
-    params.rope_theta     = rope_base.data().get();
-    params.cu_q_len       = cu_seqlens.data().get();
-    params.cu_k_len       = cu_kv_lens.data().get();
-    // params.layer_offset   = 0;
+    params.finished   = finished.data().get();
+    params.rope_theta = rope_base.data().get();
+    params.cu_q_len   = cu_seqlens.data().get();
+    params.cu_k_len   = cu_kv_lens.data().get();
+
     // [L, 2, H, s, D]
     params.key_offset = 0;
     params.val_offset = params.key_offset + KvHeadNum * kBlockSz * kHeadDim;
@@ -379,11 +373,6 @@ int main(int argc, char* argv[])
 
     Reference<half> reference(kDump ? Reference<half>::kUNFUSED : Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
-
-#if !DECODING
-    invokeApplyRotaryEmbedding(
-        k_cache_ref.data().get(), kContextLen, KvHeadNum, kHeadDim, params.rotary_embedding_base, kBatchSize);
-#endif
 
     for (int i = 0; i < 1; ++i) {
         reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
@@ -424,28 +413,11 @@ int main(int argc, char* argv[])
         dispatchDecoding<half>(params);
 #else
         // input -> blocked
-        invokeProcessKV_<half>(params);
+        invokeProcessKV_(params);
         // blocked -> linear
-        invokeFlattenKV(kv_cache.data().get(),  // [H, 2, cuS, D]
-                        kv_cache.data().get() + cu_kv_lens[kBatchSize] * kHeadDim,
-                        (const void**)k_ptrs.data().get(),
-                        cu_kv_lens.data().get(),
-                        cu_block_cnts.data().get(),
-                        context_length.data().get(),
-                        params.rope_theta,
-                        0,
-                        1,
-                        2 * cu_kv_lens[kBatchSize],
-                        1,
-                        kBlockSz,
-                        0,
-                        KvHeadNum * kBlockSz * kHeadDim,
-                        kContextLen,
-                        KvHeadNum,
-                        kBatchSize,
-                        kQuantPolicy,
-                        quant_params_kv.data());
-        dispatchAttention<half>(params);
+        invokeFlattenKV_(params, cu_kv_lens[kBatchSize]);
+
+        dispatchAttention(params);
 #endif
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
@@ -483,8 +455,7 @@ int main(int argc, char* argv[])
                     (const void**)k_ptrs.data().get(),
                     cu_kv_lens.data().get(),
                     cu_block_cnts.data().get(),
-                    context_length.data().get(),
-                    DECODING ? nullptr : params.rope_theta,
+                    nullptr,  // DECODING ? nullptr : params.rope_theta,
                     KvHeadNum * kContextLen,
                     0,
                     kContextLen,

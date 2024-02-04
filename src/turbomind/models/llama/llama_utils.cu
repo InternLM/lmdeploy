@@ -28,6 +28,12 @@ struct abs_diff_t<half> {
     using type = float;
 };
 
+template<>
+struct abs_diff_t<__nv_bfloat16> {
+    using type = float;
+};
+
+
 template<typename T>
 struct abs_diff: public thrust::unary_function<thrust::tuple<T, T>, typename abs_diff_t<T>::type> {
     __host__ __device__ float operator()(thrust::tuple<T, T> x) const
@@ -123,6 +129,7 @@ void Compare(T* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t st
 template void Compare(int* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 template void Compare(float* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 template void Compare(half* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
+template void Compare(__nv_bfloat16* ptr, size_t size, std::string key, CmpMode mode, cudaStream_t stream);
 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
 template void CheckNan(const half* ptr, size_t size, std::string key, cudaStream_t stream);

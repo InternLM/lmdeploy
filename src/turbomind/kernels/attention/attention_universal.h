@@ -227,9 +227,14 @@ struct AttentionUniversal {
             return;
         }
 
-        if (query_idx >= params.input_length[batch_idx]) {
+        const int qi_begin = params.cu_q_len[batch_idx] + query_idx;  // global offset into `cu_seqlens`
+        const int qi_end   = params.cu_q_len[batch_idx + 1];
+
+        if (qi_begin >= qi_end) {
             return;
         }
+
+        const int input_len = qi_end - (qi_begin - query_idx);
 
         const BlockSeqLen block_seq_len = [&]() -> BlockSeqLen {
             if constexpr (std::is_integral_v<BlockSeqLen>) {
@@ -245,9 +250,6 @@ struct AttentionUniversal {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int qi_begin = params.cu_q_len[batch_idx] + query_idx;  // global offset into `cu_seqlens`
-        const int qi_end   = params.cu_q_len[batch_idx + 1];
-
         const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
 
         // [L, 2, H, s, D]
@@ -256,8 +258,7 @@ struct AttentionUniversal {
 
         const auto k_cache_ptrs = (Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
 
-        const int input_len   = params.input_length[batch_idx];
-        const int context_len = params.context_length[batch_idx];
+        const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
 
         const int tile_count = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S;
@@ -308,11 +309,12 @@ struct AttentionUniversal {
             }
             else {
                 // [H, 2, cuS, D]
-                const int total_k  = params.cu_k_len[params.batch_size];
-                const int offset_k = params.cu_k_len[batch_idx];
-                const int stride_h = 2 * total_k * kHeadDim;
+                const int skip_k   = params.cu_k_len[0];
+                const int sum_k    = params.cu_k_len[params.batch_size] - skip_k;
+                const int begin    = params.cu_k_len[batch_idx] - skip_k;
+                const int stride_h = 2 * sum_k * kHeadDim;
                 return LinearTileIter2<Tkv, CTA_S, kHeadDim>{
-                    (const Tkv*)params.kv + stride_h * kv_head_idx + offset_k * kHeadDim, total_k * kHeadDim};
+                    (const Tkv*)params.kv + stride_h * kv_head_idx + begin * kHeadDim, sum_k * kHeadDim};
             }
         }();
 

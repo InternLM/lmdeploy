@@ -12,12 +12,12 @@ void invokeAttention(const typename Kernel::ParamType& params)
 {
     static const size_t kDynamicSmemSize = sizeof(typename Kernel::SharedStorage);
 
-    [[maybe_unused]] static const int _ = [&] {
-        std::cout << "GmemMap:\n";
-        Print(typename Kernel::Impl::ThreadMapKV{});
-        std::cout << "\nDynamic smem size: " << kDynamicSmemSize << "\n";
-        return 0;
-    }();
+    // [[maybe_unused]] static const int _ = [&] {
+    //     std::cout << "GmemMap:\n";
+    //     Print(typename Kernel::Impl::ThreadMapKV{});
+    //     std::cout << "\nDynamic smem size: " << kDynamicSmemSize << "\n";
+    //     return 0;
+    // }();
 
     // const int slice_count = (params.max_seq_len + Attn::kSliceLen - 1) / Attn::kSliceLen;
     // const int max_split_k = std::min(params.max_split_k, std::max(1, slice_count));
