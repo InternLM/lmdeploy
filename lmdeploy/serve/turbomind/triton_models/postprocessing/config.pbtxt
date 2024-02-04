@@ -11,6 +11,11 @@ input [
     name: "sequence_length"
     data_type: TYPE_UINT32
     dims: [ -1 ]
+  },
+  {
+    name: "skip_special_tokens"
+    data_type: TYPE_INT32
+    dims: [ -1 ]
   }
 ]
 output [
