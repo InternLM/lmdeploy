@@ -351,7 +351,7 @@ class HuggingFaceTokenizer:
                                        skip_special_tokens=skip_special_tokens)
         if offset:
             logger = get_logger('lmdeploy')
-            logger.warning('For incrementally detokenization, please try'
+            logger.warning('For incrementally detokenization, please try '
                            'detokenize_incrementally function instead.')
             out_string = self._maybe_add_prefix_space(t, out_string)
         return out_string
