@@ -130,7 +130,7 @@ class TritonPythonModel:
             for tokens, _len, skip_special in zip(beam_tokens, beam_len,
                                                   beam_skip_special):
                 output = self.tokenizer.decode(
-                    tokens, _len, skip_special_tokens=skip_special)
+                    tokens, _len, skip_special_tokens=bool(skip_special))
                 output = output.encode('utf8')
                 outputs.append(output)
         return outputs
