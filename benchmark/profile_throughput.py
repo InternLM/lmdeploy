@@ -79,7 +79,8 @@ class Engine:
         self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
-                   stream_output: bool, gen_config: EngineGenerationConfig):
+                   temperature: float, top_p: float, top_k: int,
+                   stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
         # get each generated token's latency
@@ -92,11 +93,16 @@ class Engine:
             n_prev_token = 0
 
             input_ids = self.tokenizer(prompt).input_ids
-            gen_config.max_new_tokens = output_seqlen
+
             for outputs in model_inst.stream_infer(
                     session_id,
                     input_ids=input_ids,
-                    gen_config=gen_config,
+                    gen_config=EngineGenerationConfig(
+                        max_new_tokens=output_seqlen,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        ignore_eos=True),
                     sequence_start=True,
                     sequence_end=True,
                     stream_output=stream_output):
@@ -128,11 +134,8 @@ class Engine:
             self.pbar.update(1)
         res_queue.put((session_id, stats, per_token_latency_stats))
 
-    def process_request(self,
-                        requests,
-                        gen_config: EngineGenerationConfig,
-                        concurrency: int = 1,
-                        stream_output: bool = True):
+    def process_request(self, requests, concurrency, temperature, top_p, top_k,
+                        stream_output):
         res_queue = Queue()
         req_queue = Queue()
         threads = []
@@ -150,8 +153,8 @@ class Engine:
         # start threads
         for i in range(concurrency):
             t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, stream_output,
-                             gen_config),
+                       args=(req_queue, res_queue, i, temperature, top_p,
+                             top_k, stream_output),
                        daemon=True)
             t.start()
             threads.append(t)
@@ -291,27 +294,23 @@ def main():
     random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(model_name='llama',
-                                              session_len=args.session_len,
+        engine_config = TurbomindEngineConfig(session_len=args.session_len,
                                               max_batch_size=args.concurrency,
                                               tp=args.tp)
     elif args.backend == 'pytorch':
-        engine_config = PytorchEngineConfig(model_name='llama',
-                                            session_len=args.session_len,
+        engine_config = PytorchEngineConfig(session_len=args.session_len,
                                             max_batch_size=args.concurrency,
                                             tp=args.tp)
 
-    gen_config = EngineGenerationConfig(top_k=args.top_k,
-                                        top_p=args.top_p,
-                                        temperature=args.temperature,
-                                        ignore_eos=True)
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 
     requests = sample_requests(args.dataset, args.num_prompts,
                                engine.tokenizer)
 
     engine.process_request(requests,
-                           gen_config,
+                           temperature=args.temperature,
+                           top_p=args.top_p,
+                           top_k=args.top_k,
                            concurrency=args.concurrency,
                            stream_output=True)
 
