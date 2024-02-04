@@ -220,18 +220,20 @@ print(response)
 
 ### 参数
 
-| Parameter          | Type        | Description                                           | Default |
-| ------------------ | ----------- | ----------------------------------------------------- | ------- |
-| n                  | int         | 对每个输入消息生成聊天补全选择的数量。目前仅支持 1    | 1       |
-| max_new_tokens     | int         | 聊天补全中可以生成的最大令牌数。                      | 512     |
-| top_p              | float       | 核心采样，其中模型考虑具有top_p概率质量的令牌。       | 1.0     |
-| top_k              | int         | 模型考虑具有最高概率的前K个令牌。                     | 1       |
-| temperature        | float       | 采样温度。                                            | 0.8     |
-| repetition_penalty | float       | 防止模型生成重复词或短语的惩罚。大于1的值会抑制重复。 | 1.0     |
-| ignore_eos         | bool        | 是否忽略eos_token_id。                                | False   |
-| random_seed        | int         | 采样令牌时使用的种子。                                | None    |
-| stop_words         | List\[str\] | 停止进一步生成令牌的词。                              | None    |
-| bad_words          | List\[str\] | 引擎永远不会生成的词。                                | None    |
+| Parameter           | Type        | Description                                           | Default |
+| ------------------- | ----------- | ----------------------------------------------------- | ------- |
+| n                   | int         | 对每个输入消息生成聊天补全选择的数量。目前仅支持 1    | 1       |
+| max_new_tokens      | int         | 聊天补全中可以生成的最大令牌数。                      | 512     |
+| top_p               | float       | 核心采样，其中模型考虑具有top_p概率质量的令牌。       | 1.0     |
+| top_k               | int         | 模型考虑具有最高概率的前K个令牌。                     | 1       |
+| temperature         | float       | 采样温度。                                            | 0.8     |
+| repetition_penalty  | float       | 防止模型生成重复词或短语的惩罚。大于1的值会抑制重复。 | 1.0     |
+| ignore_eos          | bool        | 是否忽略eos_token_id。                                | False   |
+| random_seed         | int         | 采样令牌时使用的种子。                                | None    |
+| stop_words          | List\[str\] | 停止进一步生成令牌的词。                              | None    |
+| bad_words           | List\[str\] | 引擎永远不会生成的词。                                | None    |
+| min_new_tokens      | int         | 最小令牌生成数。                                      | None    |
+| skip_special_tokens | bool        | 是否跳过 special token。                              | True    |
 
 ## FAQs
 
