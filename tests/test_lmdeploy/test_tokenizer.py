@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer
@@ -23,8 +25,13 @@ def test_tokenizer(model_path, input, interval, skip_special_tokens):
     output = ''
     state = DetokenizeState()
     for i in range(0, len(encoded), interval):
+        offset = i + interval
+        if offset < len(encoded):
+            # lmdeploy may decode nothing when concurrency is high
+            if random.randint(1, 10) < 4:
+                offset -= interval
         decoded, state = tokenizer.detokenize_incrementally(
-            encoded, state, skip_special_tokens)
+            encoded[:offset], state, skip_special_tokens)
         output += decoded
     assert input == output, 'input string should equal to output after enc-dec'
 

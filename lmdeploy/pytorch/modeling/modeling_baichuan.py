@@ -33,7 +33,7 @@ from lmdeploy.utils import get_logger
 
 from .configuration_baichuan import BaiChuanConfig
 
-logger = get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
