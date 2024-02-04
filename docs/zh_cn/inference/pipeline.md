@@ -171,6 +171,16 @@ print(response)
 | repetition_penalty | float                      | 1.0    | 重复惩罚的参数。1.0表示没有惩罚。后期会弃用，请改用 gen_config 参数                                                                       |
 | ignore_eos         | bool                       | False  | 是否忽略结束符的指示器。后期会弃用，请改用 gen_config 参数                                                                                |
 
+### Response
+
+| 参数名             | 类型                                    | 描述                                                                                                                                         |
+| ------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| text               | str                                     | 服务器响应的文本。如果输出文本为空字符串，且finish_reason为length，则表示已达最大会话长度。                                                  |
+| generate_token_len | int                                     | 响应的 token 数。                                                                                                                            |
+| input_token_len    | int                                     | 输入提示 token 数。注意，这可能包含聊天模板部分。                                                                                            |
+| session_id         | int                                     | 运行会话的ID。基本上，它指的是输入请求批次的索引位置。                                                                                       |
+| finish_reason      | Optional\[Literal\['stop', 'length'\]\] | 模型停止生成 token 的原因。如果模型遇到 stop word，这将设置为'stop'；如果达到了请求中指定的最大 token 数或者 session_len，则设置为'length'。 |
+
 ## TurbomindEngineConfig
 
 ### 描述
