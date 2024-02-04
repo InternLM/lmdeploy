@@ -124,7 +124,7 @@ class SentencePieceTokenizer:
     def decode(self,
                t: Sequence[int],
                offset: Optional[int] = None,
-               *args,
+               skip_special_tokens: bool = True,
                **kwargs):
         """De-tokenize.
 
@@ -132,6 +132,7 @@ class SentencePieceTokenizer:
             t (List[int]): a list of token ids
             offset (int): for incrementally decoding. Default to None, which
                 means not applied.
+            skip_special_tokens (boo): not used in SentencePieceTokenizer.
         Returns:
             str: text of decoding tokens
         """
