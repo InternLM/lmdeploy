@@ -94,7 +94,7 @@ cd /workdir/lmdeploy
 cd lmdeploy && ln -s ../build/lib . && cd .. && ln -s build/compile_commands.json .
 ```
 
-## Start debugging
+## 开始调试
 
 ````bash
 # 使用 gdb 启动 API Server，例如
