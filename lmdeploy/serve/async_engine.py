@@ -454,7 +454,7 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
-        if self.backend == 'pytorch' and gen_config.stop_words is None:
+        if gen_config.stop_words is None:
             gen_config.stop_words = self.stop_words
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
