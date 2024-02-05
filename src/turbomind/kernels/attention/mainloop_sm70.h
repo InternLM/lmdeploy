@@ -22,10 +22,15 @@ struct Mainloop<arch::Sm70, Impl_> {
     using SmemIterV = typename Impl::SmemIterV;
 
     using ThreadMapKV = typename Impl::ThreadMapKV;
-    using GmemIterK   = Sm70GmemIterator<T, ThreadMapKV, typename Impl::SmemLayoutK>;
-    using GmemIterV   = Sm70GmemIterator<T, ThreadMapKV, typename Impl::SmemLayoutV>;
+    using GmemIterK   = Sm70GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK, 0>;
+    using GmemIterV   = Sm70GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV, 1>;
+
+    using TransformK = typename Impl::TransformK;
+    using TransformV = typename Impl::TransformV;
 
     using FragQ = typename Impl::FragQ;
+    using FragK = typename Impl::FragK;
+    using FragV = typename Impl::FragV;
     using FragS = typename Impl::FragS;
     using FragO = typename Impl::FragO;
     using FragP = typename Impl::FragP;
@@ -40,6 +45,8 @@ struct Mainloop<arch::Sm70, Impl_> {
     __device__ void operator()(FragQ&         frag_Q,
                                GmemIterK&     gmem_K,
                                GmemIterV&     gmem_V,
+                               TransformK&    transform_K,
+                               TransformV&    transform_V,
                                BlockIter&     block_iter,
                                FragO&         frag_O,
                                FragM&         frag_M,
@@ -52,41 +59,47 @@ struct Mainloop<arch::Sm70, Impl_> {
                                SharedStorage& storage,
                                const StoreS&  store_S)
     {
-        gmem_K.SetSmem(storage.KV);
-        gmem_V.SetSmem(storage.KV);
+        gmem_K.SetSmem(Impl::GetSmemK(storage));
+        gmem_V.SetSmem(Impl::GetSmemV(storage));
 
         SmemIterQ smem_Q{storage.Q};
         SmemIterP smem_P{storage.P};
-        SmemIterK smem_K{storage.KV};
-        SmemIterV smem_V{storage.KV};
+        SmemIterK smem_K{Impl::GetSmemK(storage)};
+        SmemIterV smem_V{Impl::GetSmemV(storage)};
 
-        typename GmemIterK::Fragment frag_K;
+        typename GmemIterK::Fragment tmp_K;
 
         block_iter.SetTile(tile_iter);
 
-        gmem_K.Load<true>(block_iter, frag_K, max_step - tile_iter * CTA_S);
-        gmem_K.Save(frag_K);
+        FragK frag_K;
+        FragV frag_V;
+
+        Impl::Sync();
+
+        gmem_K.Load<true>(block_iter, tmp_K, max_step - tile_iter * CTA_S);
+        gmem_K.Save(tmp_K);
+
+        constexpr auto nop = [](int) {};
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
 
-            Impl::Sync();
+            typename GmemIterV::Fragment tmp_V;
 
-            typename GmemIterV::Fragment frag_V;
-            gmem_V.Load<is_residue>(block_iter, frag_V, is_residue ? max_step - offset_K : CTA_S);
-
+            gmem_V.Load<is_residue>(block_iter, tmp_V, is_residue ? max_step - offset_K : CTA_S);
             block_iter.Advance();
 
             FragS frag_S{};
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_S, 0);
-
-            gmem_V.Save(frag_V);
-
             Impl::Sync();
+            smem_K.Load(frag_K[0], 0, 0);
+
+            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, nop, [&] {});
+
+            gmem_V.Save(tmp_V);
 
             if (tile_iter > 0) {
-                gmem_K.Load<false>(block_iter, frag_K, CTA_S);
+                gmem_K.Load<false>(block_iter, tmp_K, CTA_S);
             }
 
             if constexpr (is_mask) {
@@ -95,13 +108,15 @@ struct Mainloop<arch::Sm70, Impl_> {
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            __align__(16) FragP frag_P;
-
+            FragP frag_P;
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_O, 0);
+            Impl::Sync();
+            smem_V.Load(frag_V[0], 0, 0);
 
-            gmem_K.Save(frag_K);
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, 0, nop, [&] {});
+
+            gmem_K.Save(tmp_K);
         };
 
         PRAGMA_UNROLL

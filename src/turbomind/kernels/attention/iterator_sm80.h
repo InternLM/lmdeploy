@@ -55,10 +55,9 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 
     __device__ void CpAsync(int dst, const T* __restrict__ src, bool mask)
     {
-        constexpr int cp_size = sizeof(AccessType);
-
-        uint32_t ptr = dst;
 #if TURBOMIND_ARCH_SM80
+        constexpr int cp_size = sizeof(AccessType);
+        uint32_t      ptr     = dst;
         // clang-format off
         asm volatile("{\n"
                      "  .reg .pred p;\n"
@@ -76,10 +75,9 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 
     __device__ void CpAsync(int dst, const T* __restrict__ src)
     {
-        constexpr int cp_size = sizeof(AccessType);
-
-        uint32_t ptr = dst;
 #if TURBOMIND_ARCH_SM80
+        constexpr int cp_size = sizeof(AccessType);
+        uint32_t      ptr     = dst;
         asm volatile(
             "cp.async.cg.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(cp_size));
 #else

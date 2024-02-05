@@ -94,7 +94,7 @@ struct Identity {
     }
 };
 
-template<class T, int Stride, class Swizzle_>
+template<int Stride, class Swizzle_>
 struct SmemLayout {
     static constexpr int kStride = Stride;
 
@@ -102,7 +102,7 @@ struct SmemLayout {
 
     __forceinline__ __device__ static int apply(int s, int c, int offset = 0)
     {
-        return Swizzle::apply(sizeof(T) * (s * kStride + c + offset));
+        return Swizzle::apply(s * kStride + c + offset);
     }
 
     __forceinline__ __device__ int operator()(int s, int c, int offset = 0)

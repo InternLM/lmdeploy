@@ -160,12 +160,12 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     static_assert(sizeof(FragS) / 2 == sizeof(FragP));
 
-    using Swizzle = Swizzle<3, 4, 4>;
+    using Swizzle = Swizzle<3, 4, 4>; // head dim 128 only
 
-    using SmemLayoutQ = SmemLayout<T, HeadDim, Swizzle>;
-    using SmemLayoutP = SmemLayout<T, CTA_S, Identity>;
-    using SmemLayoutK = SmemLayout<Tkv, HeadDim, Swizzle>;
-    using SmemLayoutV = SmemLayout<Tkv, HeadDim, Swizzle>;
+    using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
+    using SmemLayoutP = SmemLayout<CTA_S, Identity>;
+    using SmemLayoutK = SmemLayout<HeadDim, Swizzle>;
+    using SmemLayoutV = SmemLayout<HeadDim, Swizzle>;
 
     union SharedStorage {
         __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];

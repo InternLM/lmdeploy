@@ -5,6 +5,7 @@ add_library(attention STATIC
             decoding.cu 
             kv_cache_utils.cu
             attention_128_f16_sm80.cu
+            attention_128_f16_sm70.cu
             decoding_128_f16_sm70.cu
             decoding_128_f16_sm80.cu)
 # target_compile_options(attention PRIVATE

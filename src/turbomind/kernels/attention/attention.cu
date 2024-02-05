@@ -2,6 +2,7 @@
 
 #include "attention.h"
 #include "attention_config.h"
+#include "src/turbomind/kernels/attention/arch.h"
 
 namespace turbomind {
 
@@ -16,7 +17,11 @@ void dispatchAttention(const AttentionParams<T>& params)
         if (0) {}
         else if (params.arch >= 80) {
             // using Config = AttentionConfig<arch::Sm80, T, T, std::integral_constant<int, 128>, 128>;
-            using Config = AttentionConfig<arch::Sm80, T, T, int, 128>;
+            // using Config = AttentionConfig<arch::Sm80, T, T, 128>;
+            // invokeAttention<typename Config::Kernel>(params);
+        }
+        else if (params.arch == 70) {
+            using Config = AttentionConfig<arch::Sm70, T, T, 128>;
             invokeAttention<typename Config::Kernel>(params);
         }
     }

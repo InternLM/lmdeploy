@@ -5,9 +5,24 @@
 
 namespace turbomind {
 
-// using Kernel = typename attention::DecodingConfig<half, half, std::integral_constant<int, 128>, 128>::Kernel;
-// using Kernel = typename attention::DecodingConfig<arch::Sm70, half, half, int, 128>::Kernel;
+using namespace attention;
 
-// template void invokeDecoding<Kernel>(const typename Kernel::ParamType& params);
+using sm70_f16_f16_g1_d128 = Decoding<arch::Sm70, half, half, 1, 128>;
+template void invokeDecoding<sm70_f16_f16_g1_d128>(const typename sm70_f16_f16_g1_d128::ParamType& params);
+
+using sm70_f16_f16_g2_d128 = Decoding<arch::Sm70, half, half, 2, 128>;
+template void invokeDecoding<sm70_f16_f16_g2_d128>(const typename sm70_f16_f16_g2_d128::ParamType& params);
+
+using sm70_f16_f16_g4_d128 = Decoding<arch::Sm70, half, half, 4, 128>;
+template void invokeDecoding<sm70_f16_f16_g4_d128>(const typename sm70_f16_f16_g2_d128::ParamType& params);
+
+using sm70_f16_s8_g1_d128 = Decoding<arch::Sm70, half, int8_t, 1, 128>;
+template void invokeDecoding<sm70_f16_s8_g1_d128>(const typename sm70_f16_s8_g1_d128::ParamType& params);
+
+using sm70_f16_s8_g2_d128 = Decoding<arch::Sm70, half, int8_t, 2, 128>;
+template void invokeDecoding<sm70_f16_s8_g2_d128>(const typename sm70_f16_s8_g2_d128::ParamType& params);
+
+using sm70_f16_s8_g4_d128 = Decoding<arch::Sm70, half, int8_t, 4, 128>;
+template void invokeDecoding<sm70_f16_s8_g4_d128>(const typename sm70_f16_s8_g4_d128::ParamType& params);
 
 }  // namespace turbomind

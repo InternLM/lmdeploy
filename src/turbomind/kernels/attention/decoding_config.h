@@ -34,6 +34,20 @@ struct DecodingConfig<arch::Sm80, T, int8_t, Qh, HeadDim> {
     using Kernel    = AttentionUniversal<Mainloop, int, DecodingCtaMap>;
 };
 
+template<class T, class Tkv, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm70, T, Tkv, Qh, HeadDim> {
+    using Attention = Impl<Sm70_Simt, T, Tkv, Qh, 1, 64, Qh, 1, 16, HeadDim, 2>;
+    using Mainloop  = Mainloop<arch::Sm70, Attention>;
+    using Kernel    = AttentionUniversal<Mainloop, int, DecodingCtaMap>;
+};
+
+template<class T, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm70, T, int8_t, Qh, HeadDim> {
+    using Attention = Impl<Sm70_Simt, T, int8_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 2>;
+    using Mainloop  = Mainloop<arch::Sm70, Attention>;
+    using Kernel    = AttentionUniversal<Mainloop, int, DecodingCtaMap>;
+};
+
 // template<class T, class Tkv, class BlockSeqLen, int HeadDim>
 // struct DecodingConfig<arch::Sm80, T, Tkv, BlockSeqLen, HeadDim> {
 //     using Attention = Impl<Sm70_Simt, T, Tkv, 1, 64, 1, 8, HeadDim>;

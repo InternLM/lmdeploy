@@ -5,6 +5,7 @@
 #include "kv_cache_utils.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "test_utils.h"
 #include <algorithm>
 #include <cmath>
@@ -152,7 +153,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 0
+#define DECODING 1
 
 int main(int argc, char* argv[])
 {
@@ -162,7 +163,7 @@ int main(int argc, char* argv[])
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
     constexpr size_t kHeadNum     = 32;
-    constexpr size_t kBatchSize   = 4;
+    constexpr size_t kBatchSize   = 16;
     constexpr size_t kInputLen    = 1;
     constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 16383;
@@ -196,7 +197,7 @@ int main(int argc, char* argv[])
 #endif
 
     constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum;
+    constexpr int KvHeadNum = kHeadNum / 4;
 
     static_assert(KvHeadNum > 0);
 
@@ -366,12 +367,13 @@ int main(int argc, char* argv[])
     params.locks     = semaphores.data().get();
 
     params.max_split_k = kMaxSplitK;
-    params.arch        = 80;
+    params.arch        = getSMVersion();
 
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
     Reference<half> reference(kDump ? Reference<half>::kUNFUSED : Reference<half>::kFLASH_ATTENTION, {});
+    // Reference<half> reference(Reference<half>::kUNFUSED, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
     for (int i = 0; i < 1; ++i) {

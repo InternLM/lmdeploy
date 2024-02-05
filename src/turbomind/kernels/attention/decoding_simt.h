@@ -46,7 +46,8 @@ struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
         for (int n = 0; n < N; ++n) {
             const int si = n * 4 + offset_s;
             const int di = k * 64 + offset_c;
-            LdShared(frag_K[n], offset + Layout::apply(si, di));
+            // LdShared(frag_K[n], offset + sizeof(T) * Layout::apply(si, di));
+            Lds(frag_K[n], &smem_[offset + Layout::apply(si, di)]);
         }
     }
 };
@@ -67,7 +68,8 @@ struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
         for (int n = 0; n < N; ++n) {
             const int si = k * 4 + offset_s;
             const int di = n * 64 + offset_c;
-            LdShared(frag_V[n], offset + Layout::apply(si, di));
+            Lds(frag_V[n], &smem_[offset + Layout::apply(si, di)]);
+            // LdShared(frag_V[n], offset + sizeof(T) * Layout::apply(si, di));
         }
     }
 };
@@ -142,10 +144,10 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using FragSp = Array<T, 1>[K_M][K_N];
     using FragL  = FragM;
 
-    using SmemLayoutQ = SmemLayout<T, HeadDim, Identity>;
-    using SmemLayoutP = SmemLayout<T, CTA_S, Identity>;
-    using SmemLayoutK = SmemLayout<Tkv, HeadDim, Identity>;
-    using SmemLayoutV = SmemLayout<Tkv, HeadDim, Identity>;
+    using SmemLayoutQ = SmemLayout<HeadDim, Identity>;
+    using SmemLayoutP = SmemLayout<CTA_S, Identity>;
+    using SmemLayoutK = SmemLayout<HeadDim, Identity>;
+    using SmemLayoutV = SmemLayout<HeadDim, Identity>;
 
     using SmemM = float[K_M][kWarpCntH][kWarpCntS];
     using SmemL = float[K_M][kWarpCntH][kWarpCntS];
@@ -185,6 +187,16 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using TransformV = ConvertKvCache<Tkv, Tpv>;
 
     __device__ static void Sync() {}
+
+    __device__ static Tkv* GetSmemK(SharedStorage& storage)
+    {
+        return storage.K;
+    }
+
+    __device__ static Tkv* GetSmemV(SharedStorage& storage)
+    {
+        return storage.V;
+    }
 
     template<class Func>
     __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)

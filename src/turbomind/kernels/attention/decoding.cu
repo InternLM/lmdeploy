@@ -36,13 +36,29 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     using namespace attention;
 
+    // TODO: we need better Qh dispatching, when #waves < 1, smaller Qh may outperform larger Qh due to better
+    // concurrency
+
     if (is_kv_int8) {
         if (params.arch >= 80) {
-            if (0 && query_group_sz % 2 == 0) {
+            if (0) {}
+            else if (query_group_sz % 2 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, int8_t, 2, kHeadDim>::Kernel>(params);
             }
             else {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, int8_t, 1, kHeadDim>::Kernel>(params);
+            }
+        }
+        else if (params.arch == 70) {
+            if (0) {}
+            else if (query_group_sz % 4 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 4, kHeadDim>::Kernel>(params);
+            }
+            else if (query_group_sz % 2 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 2, kHeadDim>::Kernel>(params);
+            }
+            else {
+                return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 1, kHeadDim>::Kernel>(params);
             }
         }
     }
@@ -59,7 +75,21 @@ void dispatchDecoding(const AttentionParams<T>& params)
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 1, kHeadDim>::Kernel>(params);
             }
         }
+        else if (params.arch == 70) {
+            if (0) {}
+            else if (query_group_sz % 4 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 4, kHeadDim>::Kernel>(params);
+            }
+            else if (query_group_sz % 2 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 2, kHeadDim>::Kernel>(params);
+            }
+            else {
+                return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 1, kHeadDim>::Kernel>(params);
+            }
+        }
     }
+
+    FT_CHECK(0);
 }
 
 template void dispatchDecoding(const AttentionParams<half>& params);
