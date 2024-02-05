@@ -12,7 +12,6 @@ from typing import Iterable, List, Optional, Union
 
 import numpy as np
 import torch
-from huggingface_hub import snapshot_download
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
@@ -21,14 +20,13 @@ from lmdeploy.messages import (EngineGenerationConfig, ResponseType,
 from lmdeploy.model import (MODELS, BaseModel, ChatTemplateConfig,
                             best_match_model)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import _stop_words, get_logger
+from lmdeploy.utils import _stop_words, get_logger, get_model
 
 from .deploy.converter import (get_model_format, supported_formats,
                                update_config_weight_type, update_output_format)
 from .deploy.source_model.base import INPUT_MODELS
 from .deploy.target_model.base import OUTPUT_MODELS, TurbomindModelConfig
-from .utils import (ModelSource, create_hf_download_args,
-                    get_model_from_config, get_model_source)
+from .utils import ModelSource, get_model_from_config, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -190,6 +188,9 @@ class TurboMind:
             self.model_comm = self._from_workspace(model_path=model_path,
                                                    engine_config=engine_config)
         else:
+            if not osp.exists(model_path):
+                model_path = get_model(model_path, engine_config.download_dir,
+                                       engine_config.revision)
             self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
@@ -421,18 +422,8 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         model_source = get_model_source(pretrained_model_name_or_path)
-        if model_source == ModelSource.WORKSPACE:
-            local_path = pretrained_model_name_or_path
-        else:
-            if not osp.exists(pretrained_model_name_or_path):
-                download_kwargs = create_hf_download_args(**kwargs)
-                local_path = snapshot_download(pretrained_model_name_or_path,
-                                               **download_kwargs)
-            else:
-                local_path = pretrained_model_name_or_path
-
         logger.warning(f'model_source: {model_source}')
-        return cls(model_path=local_path,
+        return cls(model_path=pretrained_model_name_or_path,
                    engine_config=engine_config,
                    model_source=model_source,
                    model_format=model_format,

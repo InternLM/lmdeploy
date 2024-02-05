@@ -171,6 +171,16 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 | repetition_penalty | float                    | 1.0           | The parameter for repetition penalty. 1.0 means no penalty. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                      |
 | ignore_eos         | bool                     | False         | Indicator for ignoring end-of-string (eos). This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                      |
 
+### Response
+
+| Parameter Name     | Type                                    | Description                                                                                                                                                                                                                                       |
+| ------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| text               | str                                     | The text response from the server. If the output text is an empty string and the finish_reason is 'length', it means the maximum session length has been reached.                                                                                 |
+| generate_token_len | int                                     | The number of tokens in the response.                                                                                                                                                                                                             |
+| input_token_len    | int                                     | The number of tokens in the input prompt. Note that this may include the chat template part.                                                                                                                                                      |
+| session_id         | int                                     | The ID for running a session. Basically, it refers to the index position of the input request batch.                                                                                                                                              |
+| finish_reason      | Optional\[Literal\['stop', 'length'\]\] | The reason the model stopped generating tokens. This will be set to 'stop' if the model encounters a stop word; if the maximum number of tokens specified in the request is reached or the session length is reached, it will be set to 'length'. |
+
 ## TurbomindEngineConfig
 
 ### Description
@@ -179,17 +189,19 @@ This class provides the configuration parameters for TurboMind backend.
 
 ### Arguments
 
-| Parameter             | Type          | Description                                                                                              | Default |
-| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------- | ------- |
-| model_name            | str, Optional | The chat template name of the deployed model, deprecated and has no effect when version > 0.2.1          | None    |
-| model_format          | str, Optional | The layout of the deployed model. Can be one of the following values: hf, llama, awq.                    | None    |
-| tp                    | int           | The number of GPU cards used in tensor parallelism.                                                      | 1       |
-| session_len           | int, Optional | The maximum session length of a sequence.                                                                | None    |
-| max_batch_size        | int           | The maximum batch size during inference.                                                                 | 128     |
-| cache_max_entry_count | float         | The percentage of GPU memory occupied by the k/v cache.                                                  | 0.5     |
-| quant_policy          | int           | Set it to 4 when k/v is quantized into 8 bits.                                                           | 0       |
-| rope_scaling_factor   | float         | Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention. | 0.0     |
-| use_logn_attn         | bool          | Whether or not to use logarithmic attention.                                                             | False   |
+| Parameter             | Type          | Description                                                                                                                           | Default |
+| --------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| model_name            | str, Optional | The chat template name of the deployed model, deprecated and has no effect when version > 0.2.1                                       | None    |
+| model_format          | str, Optional | The layout of the deployed model. Can be one of the following values: hf, llama, awq.                                                 | None    |
+| tp                    | int           | The number of GPU cards used in tensor parallelism.                                                                                   | 1       |
+| session_len           | int, Optional | The maximum session length of a sequence.                                                                                             | None    |
+| max_batch_size        | int           | The maximum batch size during inference.                                                                                              | 128     |
+| cache_max_entry_count | float         | The percentage of GPU memory occupied by the k/v cache.                                                                               | 0.5     |
+| quant_policy          | int           | Set it to 4 when k/v is quantized into 8 bits.                                                                                        | 0       |
+| rope_scaling_factor   | float         | Scaling factor used for dynamic ntk. TurboMind follows the implementation of transformer LlamaAttention.                              | 0.0     |
+| use_logn_attn         | bool          | Whether or not to use logarithmic attention.                                                                                          | False   |
+| download_dir          | str, optional | Directory to download and load the weights, default to the default cache directory of huggingface.                                    | None    |
+| revision              | str, optional | The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version. | None    |
 
 ## PytorchEngineConfig
 
@@ -199,18 +211,20 @@ This class provides the configuration parameters for Pytorch backend.
 
 ### Arguments
 
-| Parameter        | Type | Description                                                                                              | Default     |
-| ---------------- | ---- | -------------------------------------------------------------------------------------------------------- | ----------- |
-| model_name       | str  | The chat template name of the deployed model                                                             | ''          |
-| tp               | int  | Tensor Parallelism.                                                                                      | 1           |
-| session_len      | int  | Maximum session length.                                                                                  | None        |
-| max_batch_size   | int  | Maximum batch size.                                                                                      | 128         |
-| eviction_type    | str  | Action to perform when kv cache is full. Options are \['recompute', 'copy'\].                            | 'recompute' |
-| prefill_interval | int  | Interval to perform prefill.                                                                             | 16          |
-| block_size       | int  | Paging cache block size.                                                                                 | 64          |
-| num_cpu_blocks   | int  | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
-| num_gpu_blocks   | int  | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment. | 0           |
-| adapters         | dict | The path configs to lora adapters.                                                                       | None        |
+| Parameter        | Type | Description                                                                                                                           | Default     |
+| ---------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| model_name       | str  | The chat template name of the deployed model                                                                                          | ''          |
+| tp               | int  | Tensor Parallelism.                                                                                                                   | 1           |
+| session_len      | int  | Maximum session length.                                                                                                               | None        |
+| max_batch_size   | int  | Maximum batch size.                                                                                                                   | 128         |
+| eviction_type    | str  | Action to perform when kv cache is full. Options are \['recompute', 'copy'\].                                                         | 'recompute' |
+| prefill_interval | int  | Interval to perform prefill.                                                                                                          | 16          |
+| block_size       | int  | Paging cache block size.                                                                                                              | 64          |
+| num_cpu_blocks   | int  | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment.                              | 0           |
+| num_gpu_blocks   | int  | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment.                              | 0           |
+| adapters         | dict | The path configs to lora adapters.                                                                                                    | None        |
+| download_dir     | str  | Directory to download and load the weights, default to the default cache directory of huggingface.                                    | None        |
+| revision         | str  | The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version. | None        |
 
 ## GenerationConfig
 
