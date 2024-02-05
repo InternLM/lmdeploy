@@ -278,6 +278,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
+    - skip_special_tokens (bool): Whether or not to remove special tokens
+        in the decoding. Default to be True.
     - session_id (int): if not specified, will set random value
 
     Currently we do not support the following features:
@@ -305,7 +307,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
-        stop_words=request.stop)
+        stop_words=request.stop,
+        skip_special_tokens=request.skip_special_tokens)
 
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
@@ -582,6 +585,8 @@ async def completions_v1(request: CompletionRequest,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
+    - skip_special_tokens (bool): Whether or not to remove special tokens
+        in the decoding. Default to be True.
     - session_id (int): if not specified, will set random value
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
@@ -611,7 +616,8 @@ async def completions_v1(request: CompletionRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
-        stop_words=request.stop)
+        stop_words=request.stop,
+        skip_special_tokens=request.skip_special_tokens)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -856,6 +862,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - ignore_eos (bool): indicator for ignoring eos
+    - skip_special_tokens (bool): Whether or not to remove special tokens
+        in the decoding. Default to be True.
     """
     if request.cancel and request.session_id != -1:
         VariableInterface.async_engine.stop_session(request.session_id)
@@ -876,7 +884,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
-        stop_words=request.stop)
+        stop_words=request.stop,
+        skip_special_tokens=request.skip_special_tokens)
     generation = async_engine.generate(
         request.prompt,
         request.session_id,
@@ -971,7 +980,8 @@ def serve(model_path: str,
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
     """ # noqa E501
-    os.environ['TM_LOG_LEVEL'] = log_level
+    if os.getenv('TM_LOG_LEVEL') is None:
+        os.environ['TM_LOG_LEVEL'] = log_level
 
     if allow_origins:
         app.add_middleware(

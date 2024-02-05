@@ -121,13 +121,18 @@ class SentencePieceTokenizer:
         """
         return self.model.Encode(s, add_bos=add_bos, **kwargs)
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None):
+    def decode(self,
+               t: Sequence[int],
+               offset: Optional[int] = None,
+               skip_special_tokens: bool = True,
+               **kwargs):
         """De-tokenize.
 
         Args:
             t (List[int]): a list of token ids
             offset (int): for incrementally decoding. Default to None, which
                 means not applied.
+            skip_special_tokens (boo): not used in SentencePieceTokenizer.
         Returns:
             str: text of decoding tokens
         """
@@ -328,7 +333,10 @@ class HuggingFaceTokenizer:
                 encoded = encoded[1:]
         return encoded
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None):
+    def decode(self,
+               t: Sequence[int],
+               offset: Optional[int] = None,
+               skip_special_tokens: bool = True):
         """De-tokenize.
 
         Args:
@@ -338,13 +346,12 @@ class HuggingFaceTokenizer:
         Returns:
             str: text of decoding tokens
         """
-        skip_special_tokens = True
         t = t[offset:]
         out_string = self.model.decode(t,
                                        skip_special_tokens=skip_special_tokens)
         if offset:
             logger = get_logger('lmdeploy')
-            logger.warning('For incrementally detokenization, please try'
+            logger.warning('For incrementally detokenization, please try '
                            'detokenize_incrementally function instead.')
             out_string = self._maybe_add_prefix_space(t, out_string)
         return out_string
@@ -416,7 +423,7 @@ class HuggingFaceTokenizer:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
-            if skip_special_tokens and new_tokens[
+            if skip_special_tokens and new_tokens and new_tokens[
                     0] in tokenizer.all_special_ids:
                 read_offset = 1  # skip special token
             output_tokens = new_tokens
@@ -515,7 +522,12 @@ class Tokenizer:
         """
         return self.model.encode(s, add_bos, **kwargs)
 
-    def decode(self, t: Sequence[int], offset: Optional[int] = None):
+    def decode(
+        self,
+        t: Sequence[int],
+        offset: Optional[int] = None,
+        skip_special_tokens: bool = True,
+    ):
         """De-tokenize.
 
         Args:
@@ -525,7 +537,7 @@ class Tokenizer:
         Returns:
             str: text of decoding tokens
         """
-        return self.model.decode(t, offset)
+        return self.model.decode(t, offset, skip_special_tokens)
 
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],

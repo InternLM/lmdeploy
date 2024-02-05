@@ -210,7 +210,7 @@ The config for a pre-commit hook is stored in [.pre-commit-config](../.pre-commi
 
 #### C++ and CUDA
 
-The clang-format config is stored in [.clang-format](../.clang-format).
+The clang-format config is stored in [.clang-format](../.clang-format). And it's recommended to use clang-format version **11**. Please do not use older or newer versions as they will result in differences after formatting, which can cause the [lint](https://github.com/InternLM/lmdeploy/blob/main/.github/workflows/lint.yml#L25) to fail.
 
 ### PR Specs
 

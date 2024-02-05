@@ -41,20 +41,25 @@ class SamplingParam:
         """hash."""
         return hash(
             (self.top_k, self.top_p, self.temperature, self.repetition_penalty,
-             self.ignore_eos, self.random_seed, self.bad_words))
+             self.ignore_eos, self.random_seed, tuple(self.bad_words)))
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
         """from gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
+
+        stop_words = gen_config.stop_words or []
+        bad_words = gen_config.bad_words or []
+        if gen_config.ignore_eos:
+            bad_words += stop_words
         return SamplingParam(top_p=gen_config.top_p,
                              top_k=gen_config.top_k,
                              temperature=gen_config.temperature,
                              repetition_penalty=gen_config.repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,
                              random_seed=gen_config.random_seed,
-                             stop_words=gen_config.stop_words,
-                             bad_words=gen_config.bad_words,
+                             stop_words=stop_words,
+                             bad_words=bad_words,
                              max_new_tokens=gen_config.max_new_tokens,
                              min_new_tokens=min_new_tokens)
 

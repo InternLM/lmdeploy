@@ -1,9 +1,39 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
-from logging import Logger
+import sys
+from logging import Logger, LogRecord
 from typing import List, Optional
 
 logger_initialized = {}
+
+
+class FilterDuplicateWarning(logging.Filter):
+    """Filter the repeated warning message.
+
+    Args:
+        name (str): name of the filter.
+    """
+
+    def __init__(self, name: str = 'lmdeploy'):
+        super().__init__(name)
+        self.seen: set = set()
+
+    def filter(self, record: LogRecord) -> bool:
+        """Filter the repeated warning message.
+
+        Args:
+            record (LogRecord): The log record.
+
+        Returns:
+            bool: Whether to output the log record.
+        """
+        if record.levelno != logging.WARNING:
+            return True
+
+        if record.msg not in self.seen:
+            self.seen.add(record.msg)
+            return True
+        return False
 
 
 def get_logger(
@@ -45,7 +75,7 @@ def get_logger(
         if type(handler) is logging.StreamHandler:
             handler.setLevel(logging.ERROR)
 
-    stream_handler = logging.StreamHandler()
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
     if log_file is not None:
@@ -59,9 +89,11 @@ def get_logger(
     for handler in handlers:
         handler.setFormatter(formatter)
         handler.setLevel(log_level)
+        handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
     logger.setLevel(log_level)
+    logger.propagate = False
     logger_initialized[name] = True
 
     return logger
@@ -105,3 +137,24 @@ def _stop_words(stop_words: List[str], tokenizer: object):
     stop_word_offsets = range(1, len(stop_indexes) + 1)
     stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
     return stop_words
+
+
+def get_model(pretrained_model_name_or_path: str,
+              download_dir: str = None,
+              revision: str = None):
+    """Get model from huggingface or modelscope."""
+    import os
+    if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
+        from modelscope import snapshot_download
+    else:
+        from huggingface_hub import snapshot_download
+
+    download_kwargs = {}
+    if download_dir is not None:
+        download_kwargs['cache_dir'] = download_dir
+    if revision is not None:
+        download_kwargs['revision'] = revision
+
+    model_path = snapshot_download(pretrained_model_name_or_path,
+                                   **download_kwargs)
+    return model_path

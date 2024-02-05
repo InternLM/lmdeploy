@@ -99,25 +99,60 @@ class AsyncEngine:
             tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
-        if backend_config is None:
-            backend_config = TurbomindEngineConfig(model_name=model_name,
+        self.model_name = model_name
+        # model mayebe from workspace
+        from lmdeploy.turbomind.utils import \
+            get_model_name_from_workspace_model
+        if self.model_name is None:
+            self.model_name = get_model_name_from_workspace_model(model_path)
+        # try fuzzy matching to get a model_name
+        if self.model_name is None and (backend_config is None
+                                        or backend_config.model_name == ''
+                                        or backend_config.model_name is None):
+            potential_names = best_match_model(model_path)
+            if potential_names is None:
+                raise ArgumentError('Please set model_name or backend_config.')
+            else:
+                self.model_name = potential_names
+                logger = get_logger('lmdeploy')
+                logger.warning(
+                    f'Best matched chat template name: {self.model_name}')
+        elif self.model_name is not None and backend_config is not None:
+            if backend_config.model_name is not None \
+                    and self.model_name != backend_config.model_name:
+                raise ArgumentError(
+                    f'Got different model names from model_name = '
+                    f'{self.model_name}, backend_config = {backend_config}')
+        if self.model_name is not None and backend_config is None:
+            backend_config = TurbomindEngineConfig(model_name=self.model_name,
                                                    tp=tp)
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
+        if chat_template_config is None:
+            chat_template_config = ChatTemplateConfig(self.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.model_name
+        # prevent bc
+        for k in list(kwargs.keys()):
+            if hasattr(chat_template_config, k):
+                v = kwargs.pop(k)
+                setattr(chat_template_config, k, v)
+        self.chat_template = chat_template_config.chat_template
+        if backend_config.session_len is None:
+            backend_config.session_len = self.chat_template.session_len
         from lmdeploy import turbomind as tm
         self.engine = tm.TurboMind.from_pretrained(
             model_path,
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
-        if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.engine.model_name)
-        elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.engine.model_name
-        self.chat_template = chat_template_config.chat_template
-        self.session_len = self.engine.session_len
+        self.session_len = backend_config.session_len
         self.backend_config = backend_config
+        self.stop_words = _stop_words(self.chat_template.stop_words,
+                                      self.engine.tokenizer)
+        if self.stop_words is not None:
+            self.stop_words = self.stop_words[0][0].tolist()
 
     def _build_pytorch(
             self,
@@ -149,25 +184,23 @@ class AsyncEngine:
                     f'Got different model names from model_name = '
                     f'{self.model_name}, backend_config = {backend_config}')
         if self.model_name is not None and backend_config is None:
-            backend_config = PytorchEngineConfig(self.model_name,
-                                                 session_len=2048)
+            backend_config = PytorchEngineConfig(self.model_name)
         if backend_config.model_name is None \
                 or backend_config.model_name == '':  # cli may pass None
             backend_config.model_name = self.model_name
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
-        self.engine = Engine(model_path=model_path,
-                             engine_config=backend_config)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
         self.chat_template = chat_template_config.chat_template
-        if self.engine.session_len is None:
-            self.session_len = self.chat_template.session_len
-        else:
-            self.session_len = self.engine.session_len
+        if backend_config.session_len is None:
+            backend_config.session_len = self.chat_template.session_len
+        self.engine = Engine(model_path=model_path,
+                             engine_config=backend_config)
+        self.session_len = backend_config.session_len
         self.backend_config = backend_config
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
@@ -251,14 +284,8 @@ class AsyncEngine:
             return self.engine.create_instance()
         while self.gens_set == set():
             await asyncio.sleep(0)
-        if str(session_id) in self.id2generator:
-            # pytorch engine instance is bind to session
-            generator = self.id2generator[str(session_id)]
-            if generator in self.gens_set:
-                self.gens_set.remove(generator)
-        else:
-            generator = self.gens_set.pop()
-            self.id2generator[str(session_id)] = generator
+        generator = self.gens_set.pop()
+        self.id2generator[str(session_id)] = generator
         return generator
 
     def batch_infer(self,
@@ -292,7 +319,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [Response('', 0, i) for i in range(prompt_num)]
+        outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -311,6 +338,7 @@ class AsyncEngine:
                 async for out in generator:
                     outputs[i + j].text += out.response
                     outputs[i + j].generate_token_len = out.generate_token_len
+                    outputs[i + j].input_token_len = out.input_token_len
                     outputs[i + j].finish_reason = out.finish_reason
 
             async def gather():
@@ -373,7 +401,8 @@ class AsyncEngine:
             async def _inner_call(i, generator):
                 async for out in generator:
                     outputs.put(
-                        Response(out.response, out.generate_token_len, i + j,
+                        Response(out.response, out.generate_token_len,
+                                 out.input_token_len, i + j,
                                  out.finish_reason))
 
             async def gather():
@@ -433,7 +462,7 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
-        if self.backend == 'pytorch' and gen_config.stop_words is None:
+        if gen_config.stop_words is None:
             gen_config.stop_words = self.stop_words
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:
@@ -465,7 +494,9 @@ class AsyncEngine:
                     _, res, tokens = outputs
                     # decode res
                     response, state = self.tokenizer.detokenize_incrementally(
-                        res, state)
+                        res,
+                        state,
+                        skip_special_tokens=gen_config.skip_special_tokens)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
