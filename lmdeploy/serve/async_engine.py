@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import copy
 import dataclasses
 import random
 from argparse import ArgumentError
@@ -70,7 +71,7 @@ class AsyncEngine:
                 model_path=model_path,
                 model_name=model_name,
                 backend_config=backend_config,
-                chat_template_config=chat_template_config.copy(),
+                chat_template_config=copy.deepcopy(chat_template_config),
                 tp=tp,
                 **kwargs)
         elif backend == 'pytorch':
@@ -78,7 +79,7 @@ class AsyncEngine:
                 model_path=model_path,
                 model_name=model_name,
                 backend_config=backend_config,
-                chat_template_config=chat_template_config.copy(),
+                chat_template_config=copy.deepcopy(chat_template_config),
                 **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')

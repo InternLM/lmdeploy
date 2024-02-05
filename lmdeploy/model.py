@@ -3,7 +3,6 @@ import codecs
 import dataclasses
 import os
 from abc import abstractmethod
-from copy import deepcopy
 from typing import List, Literal, Optional
 
 from fuzzywuzzy import fuzz, process
@@ -70,10 +69,6 @@ class ChatTemplateConfig:
                 template = codecs.decode(self.jinja_template, 'unicode_escape')
             return template
         return None
-
-    def copy(self):
-        """Get a copy of the class."""
-        return deepcopy(self)
 
 
 @MODELS.register_module(name='internlm')
