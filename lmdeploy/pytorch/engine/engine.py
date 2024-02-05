@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -10,7 +11,7 @@ import torch
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
@@ -112,6 +113,10 @@ class Engine:
         cache_config = CacheConfig(block_size=engine_config.block_size,
                                    num_cpu_blocks=engine_config.num_cpu_blocks,
                                    num_gpu_blocks=engine_config.num_gpu_blocks)
+
+        if not os.path.exists(model_path):
+            model_path = get_model(model_path, engine_config.download_dir,
+                                   engine_config.revision)
 
         self.model_agent = AutoModelAgent.from_pretrained(
             model_path,

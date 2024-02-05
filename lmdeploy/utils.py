@@ -137,3 +137,24 @@ def _stop_words(stop_words: List[str], tokenizer: object):
     stop_word_offsets = range(1, len(stop_indexes) + 1)
     stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
     return stop_words
+
+
+def get_model(pretrained_model_name_or_path: str,
+              download_dir: str = None,
+              revision: str = None):
+    """Get model from huggingface or modelscope."""
+    import os
+    if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
+        from modelscope import snapshot_download
+    else:
+        from huggingface_hub import snapshot_download
+
+    download_kwargs = {}
+    if download_dir is not None:
+        download_kwargs['cache_dir'] = download_dir
+    if revision is not None:
+        download_kwargs['revision'] = revision
+
+    model_path = snapshot_download(pretrained_model_name_or_path,
+                                   **download_kwargs)
+    return model_path
