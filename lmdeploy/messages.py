@@ -176,14 +176,14 @@ class Response:
         text (str): the response text from the server. If the output text is
             an empty str and the finish_reason is length, it means the session
             length is reached.
-        generate_token_len (str): the response token length.
-        input_token_len (str): the input prompt token length. Note that it may
+        generate_token_len (int): the response token length.
+        input_token_len (int): the input prompt token length. Note that it may
             contains chat template part.
-        session_id (str): the id for running the session. Basically, it refers
+        session_id (int): the id for running the session. Basically, it refers
             to the position index of the input request batch.
-        finish_reason (stop | length | None): the reason the model stopped
-            generating tokens. This will be stop if the model hit a natural
-            stop point or a provided stop sequence, length if the maximum
+        finish_reason ('stop' | 'length' | None): the reason the model stopped
+            generating tokens. This will be 'stop' if the model hit a natural
+            stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
     """
     text: str
