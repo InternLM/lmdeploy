@@ -283,7 +283,8 @@ from lmdeploy.pytorch.tools.layout_convert import continuous_tensor
 
 # create patched input/output
 context = make_step_context(input_ids,
-                            kv_cache_dtype=dtype)
+                            kv_cache_dtype=dtype,
+                            num_key_value_heads=32)
 seq_length = context.q_seq_length
 attn_kwargs['hidden_states'] = continuous_tensor(
     attn_kwargs['hidden_states'],
