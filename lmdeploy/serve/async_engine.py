@@ -100,6 +100,11 @@ class AsyncEngine:
             **kwargs):
         """Innter build method for turbomind backend."""
         self.model_name = model_name
+        # model mayebe from workspace
+        from lmdeploy.turbomind.utils import \
+            get_model_name_from_workspace_model
+        if self.model_name is None:
+            self.model_name = get_model_name_from_workspace_model(model_path)
         # try fuzzy matching to get a model_name
         if self.model_name is None and (backend_config is None
                                         or backend_config.model_name == ''
@@ -113,7 +118,8 @@ class AsyncEngine:
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
-            if self.model_name != backend_config.model_name:
+            if backend_config.model_name is not None \
+                    and self.model_name != backend_config.model_name:
                 raise ArgumentError(
                     f'Got different model names from model_name = '
                     f'{self.model_name}, backend_config = {backend_config}')
