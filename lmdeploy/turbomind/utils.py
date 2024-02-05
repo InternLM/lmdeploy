@@ -124,10 +124,10 @@ def get_gen_param(cap,
 def get_model_name_from_workspace_model(model_dir: str):
     """Get model name from workspace model."""
     from configparser import ConfigParser
-    triton_model_path = os.path.join(model_dir, 'triton_models')
+    triton_model_path = os.path.join(model_dir, 'triton_models', 'weights')
     if not os.path.exists(triton_model_path):
         return None
-    ini_path = os.path.join(triton_model_path, 'weights', 'config.ini')
+    ini_path = os.path.join(triton_model_path, 'config.ini')
     # load cfg
     with open(ini_path, 'r') as f:
         parser = ConfigParser()
