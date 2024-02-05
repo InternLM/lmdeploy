@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 import time
 from dataclasses import dataclass
 from queue import Queue
@@ -43,7 +42,9 @@ class InferOutput:
 
 def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
     """check if response has state."""
-    ret = resp.type == state
+    if isinstance(state, ResponseType):
+        state = [state]
+    ret = resp.type in state
     if not ret and warning_msg is not None:
         logger.warning(warning_msg)
     return ret
@@ -132,7 +133,6 @@ class Engine:
         self.stream = torch.cuda.Stream()
 
         self.req_manager = self._bind_request_manager()
-        self.owned_sessions = []
 
         # create main thread
         self.loop_threads = self._start_loop()
@@ -297,18 +297,14 @@ class Engine:
 
     def add_session(self, session_id: int):
         """Add new session."""
-        if session_id not in self.owned_sessions:
-            resp = self.req_sender.send(RequestType.ADD_SESSION,
-                                        dict(session_id=session_id))
-            if _check_resp_success(resp, (f'Can not add session {session_id} '
-                                          f'with error: {resp.type}')):
-                self.owned_sessions.append(session_id)
+        resp = self.req_sender.send(RequestType.ADD_SESSION,
+                                    dict(session_id=session_id))
+        _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
+                    (f'Can not add session {session_id} '
+                     f'with error: {resp.type}'))
 
     def stop_session(self, session_id: int):
         """Stop the given session."""
-        if session_id not in self.owned_sessions:
-            logger.warning(f'session {session_id} is not owned '
-                           'by this instance')
         resp = self.req_sender.send(RequestType.STOP_SESSION,
                                     dict(session_id=session_id))
         _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
@@ -316,14 +312,10 @@ class Engine:
 
     def end_session(self, session_id: int):
         """End the given session."""
-        if session_id not in self.owned_sessions:
-            logger.warning(f'session {session_id} is not owned '
-                           'by this instance')
         resp = self.req_sender.send(RequestType.END_SESSION,
                                     dict(session_id=session_id))
-        if _check_resp_success(resp, (f'Failed to end session: {session_id}. '
-                                      f'Error: {resp.type}.')):
-            self.owned_sessions.remove(session_id)
+        _check_resp_success(resp, (f'Failed to end session: {session_id}. '
+                                   f'Error: {resp.type}.'))
 
     @torch.inference_mode()
     def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
@@ -701,10 +693,9 @@ class Engine:
         else:
             adapter_names = [None for _ in range(batch_size)]
 
-        def _add_sessions(session_ids, owned_sessions):
+        def _add_sessions(session_ids):
             for session_id in session_ids:
-                if session_id not in owned_sessions:
-                    self.add_session(session_id)
+                self.add_session(session_id)
 
         def _add_messages(session_ids, token_ids):
             add_msgs = []
@@ -723,7 +714,7 @@ class Engine:
                                                          data=add_msgs)
             return req_ids
 
-        _add_sessions(session_ids, self.owned_sessions)
+        _add_sessions(session_ids)
         req_ids = _add_messages(session_ids, token_ids)
 
         # receive messages
@@ -864,13 +855,9 @@ class EngineInstance:
     def __init__(self, engine: Engine):
         self.engine = engine
         self.req_sender = engine.req_manager.build_sender(engine.loop_threads)
-        self.owned_sessions: List[int] = list()
 
     def __del__(self):
         """Destructor."""
-        if self.req_sender.is_thread_alive():
-            for session_id in self.owned_sessions:
-                self.end(session_id)
         self.engine.req_manager.senders.pop(self.req_sender.sender_id)
 
     def _try_add_session(self, session_id: int):
@@ -879,17 +866,17 @@ class EngineInstance:
         Args:
             session_id (int): The session id to add.
         """
-        if session_id not in self.owned_sessions:
-            resp = self.req_sender.send(RequestType.ADD_SESSION,
-                                        dict(session_id=session_id))
-            if _check_resp_success(resp, (f'Can not add session {session_id} '
-                                          f'with error: {resp.type}')):
-                self.owned_sessions.append(session_id)
+        resp = self.req_sender.send(RequestType.ADD_SESSION,
+                                    dict(session_id=session_id))
+        _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
+                    (f'Can not add session {session_id} '
+                     f'with error: {resp.type}'))
 
     async def async_stream_infer(self,
                                  session_id: int,
                                  input_ids: List[int],
                                  gen_config: EngineGenerationConfig = None,
+                                 adapter_name: str = None,
                                  **kwargs):
         """Send stream inference request.
 
@@ -904,12 +891,38 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
-        for item in self.stream_infer(session_id=session_id,
-                                      input_ids=input_ids,
-                                      gen_config=gen_config,
-                                      **kwargs):
-            await asyncio.sleep(0)
-            yield item
+        gen_config = gen_config or EngineGenerationConfig()
+        request_output_len = gen_config.max_new_tokens
+        sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
+        self._try_add_session(session_id)
+        msg = dict(
+            token_ids=input_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            sampling_param=sampling_param,
+            adapter_name=adapter_name,
+        )
+        req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+
+        token_ids = []
+        while True:
+            if not self.engine.loop_threads.is_alive():
+                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
+                break
+            resp = await self.req_sender.async_recv(req_id)
+            # avoid token decoding and scheduling simultaneously
+            if resp.req_id != req_id:
+                continue
+            if resp.type == ResponseType.SUCCESS:
+                token_ids += resp.data['token_ids']
+                yield (resp.type, token_ids, len(token_ids))
+            elif resp.type == ResponseType.FINISH:
+                token_ids += resp.data['token_ids']
+                yield (resp.type, token_ids, len(token_ids))
+                break
+            else:
+                yield (resp.type, [], 0)
+                break
 
     def stream_infer(self,
                      session_id: int,
@@ -950,7 +963,6 @@ class EngineInstance:
             if not self.engine.loop_threads.is_alive():
                 yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
                 break
-
             resp = self.req_sender.recv(req_id)
             # avoid token decoding and scheduling simultaneously
             if resp.req_id != req_id:
@@ -999,20 +1011,13 @@ class EngineInstance:
 
     def end(self, session_id: int):
         """End the given session."""
-        if session_id not in self.owned_sessions:
-            logger.warning(f'session {session_id} is not owned '
-                           'by this instance')
         resp = self.req_sender.send(RequestType.END_SESSION,
                                     dict(session_id=session_id))
-        if _check_resp_success(resp, (f'Failed to end session: {session_id}. '
-                                      f'Error: {resp.type}.')):
-            self.owned_sessions.remove(session_id)
+        _check_resp_success(resp, (f'Failed to end session: {session_id}. '
+                                   f'Error: {resp.type}.'))
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
-        if session_id not in self.owned_sessions:
-            logger.warning(f'session {session_id} is not owned '
-                           'by this instance')
         resp = self.req_sender.send(RequestType.STOP_SESSION,
                                     dict(session_id=session_id))
         _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '

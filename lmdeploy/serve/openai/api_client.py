@@ -106,6 +106,7 @@ class APIClient:
                             repetition_penalty: Optional[float] = 1.0,
                             session_id: Optional[int] = -1,
                             ignore_eos: Optional[bool] = False,
+                            skip_special_tokens: Optional[bool] = True,
                             **kwargs):
         """Chat completion v1.
 
@@ -126,6 +127,8 @@ class APIClient:
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
             session_id (int): if not specified, will set random value
 
         Yields:
@@ -169,6 +172,7 @@ class APIClient:
                             temperature: float = 0.8,
                             repetition_penalty: float = 1.0,
                             ignore_eos: bool = False,
+                            skip_special_tokens: Optional[bool] = True,
                             **kwargs):
         """Interactive completions.
 
@@ -198,6 +202,8 @@ class APIClient:
             repetition_penalty (float): The parameter for repetition penalty.
                 1.0 means no penalty
             ignore_eos (bool): indicator for ignoring eos
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
 
         Yields:
             json objects consist of text, tokens, finish_reason
@@ -236,6 +242,7 @@ class APIClient:
             repetition_penalty: Optional[float] = 1.0,
             session_id: Optional[int] = -1,
             ignore_eos: Optional[bool] = False,
+            skip_special_tokens: Optional[bool] = True,
             **kwargs):
         """Chat completion v1.
 
@@ -260,6 +267,8 @@ class APIClient:
                 1.0 means no penalty
             user (str): A unique identifier representing your end-user.
             ignore_eos (bool): indicator for ignoring eos
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
             session_id (int): if not specified, will set random value
 
         Yields:
