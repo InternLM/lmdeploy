@@ -3,8 +3,6 @@
 import os.path as osp
 import subprocess
 
-from lmdeploy.turbomind.deploy.target_model.base import TurbomindModelConfig
-
 
 def get_llama_gemm():
     """get the executable binary llama_gemm."""
@@ -24,51 +22,18 @@ def read_config(ini_path: str):
         ini_path (str): the path of `config.ini` file in turbomind model
     """
     from configparser import ConfigParser
+
+    from lmdeploy.turbomind.deploy.target_model.base import \
+        TurbomindModelConfig
+
     with open(ini_path, 'r') as f:
         parser = ConfigParser()
         parser.read_file(f)
     section_name = 'llama'
     _cfg = parser._sections[section_name]
     cfg = TurbomindModelConfig.from_dict(_cfg)
-    return cfg['head_num'], cfg['size_per_head'], cfg['inter_size'], cfg[
-        'vocab_size'], cfg['tensor_para_size']
-
-
-def get_config(model_path: str, tp: int):
-    """get turbomind config from transformers model.
-
-    Args:
-        model_path (str): the path or repo name of the transformers model
-        tp (int): the number of GPUs in tensor parallelism
-    """
-    from huggingface_hub import snapshot_download
-
-    from lmdeploy.model import best_match_model
-
-    model_name = best_match_model(model_path)
-    if model_name is None:
-        print(f'failed to get chat template name from the path {model_path}')
-        exit(-1)
-    if not osp.exists(model_path):
-        print(f'can\'t find model from local_path {model_path}, '
-              'try to download from huggingface')
-        model_path = snapshot_download(model_path)
-        print(f'load model from {model_path}')
-
-    from lmdeploy.turbomind.deploy.converter import get_model_format
-    from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
-    from lmdeploy.turbomind.deploy.target_model.base import OUTPUT_MODELS
-    inferred_model_format = get_model_format(model_name, 'hf')
-    input_model = INPUT_MODELS.get(inferred_model_format)(
-        model_path=model_path, tokenizer_path=model_path, ckpt_path=None)
-
-    cfg = TurbomindModelConfig(model_name=model_name, tensor_para_size=tp)
-    output_model = OUTPUT_MODELS.get('fp16')(input_model=input_model,
-                                             cfg=cfg,
-                                             to_file=False,
-                                             out_dir='')
-    cfg = output_model.get_config(cfg)
-    return cfg.head_num, cfg.size_per_head, cfg.inter_size, cfg.vocab_size
+    return cfg.head_num, cfg.size_per_head, cfg.inter_size, \
+        cfg.vocab_size, cfg.tensor_para_size
 
 
 def main(head_num: int = 32,
@@ -89,8 +54,13 @@ def main(head_num: int = 32,
                     osp.join(model_path,
                              'triton_models', 'weights', 'config.ini'))
         else:
-            head_num, size_per_head, inter_size, vocab_size \
-                = get_config(model_path, tensor_para_size)
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(model_path,
+                                                trust_remote_code=True)
+            head_num = config.num_attention_heads
+            size_per_head = 128
+            inter_size = config.intermediate_size
+            vocab_size = config.vocab_size
     for bsz in range(1, max_batch_size + 1):
         subprocess.call(
             f'{get_llama_gemm()} {bsz} 1 1 {head_num} {size_per_head}'
