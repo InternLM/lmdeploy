@@ -90,8 +90,10 @@ Reading symbols from python3...
 cd /workdir/lmdeploy
 
 # 因为编译文件在 build 文件夹中
-# 设置 lib 和 compile_commands.json 的软链接
-cd lmdeploy && ln -s ../build/lib . && cd .. && ln -s build/compile_commands.json .
+# 设置 lib 的软链接
+cd lmdeploy && ln -s ../build/lib . && cd ..
+# （可选）创建 compile_commands.json 软链接，用于 clangd 构建 index
+ln -s build/compile_commands.json .
 ```
 
 ## 开始调试
@@ -124,4 +126,4 @@ python3 profile_restful_api.py --server_addr 127.0.0.1:23333 --tokenizer_path /w
 
 ## 使用 GDB
 
-参考 [Debugging with GDB](https://ftp.gnu.org/old-gnu/Manuals/gdb/html_chapter/gdb_4.html) 进行调试。
+参考 [GDB Execution Commands](https://lldb.llvm.org/use/map.html) 进行调试。

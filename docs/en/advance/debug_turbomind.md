@@ -90,8 +90,10 @@ After setting up symbolic links, there is no need to install it locally with `pi
 cd /workdir/lmdeploy
 
 # Since it has been built in the build directory
-# Link the lib directory and compile_commands.json
-cd lmdeploy && ln -s ../build/lib . && cd .. && ln -s build/compile_commands.json .
+# Link the lib directory
+cd lmdeploy && ln -s ../build/lib . && cd ..
+# (Optional) Link compile_commands.json for clangd index
+ln -s build/compile_commands.json .
 ```
 
 ## Start debugging
@@ -124,4 +126,4 @@ python3 profile_restful_api.py --server_addr 127.0.0.1:23333 --tokenizer_path /w
 
 ## Using GDB
 
-Refer to [Debugging with GDB](https://ftp.gnu.org/old-gnu/Manuals/gdb/html_chapter/gdb_4.html) and happy debugging.
+Refer to [GDB Execution Commands](https://lldb.llvm.org/use/map.html) and happy debugging.
