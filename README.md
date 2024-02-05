@@ -126,6 +126,11 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
+> \[!NOTE\]
+> By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please install ModelScope by `pip install modelscope` and set the environment variable:
+>
+> `export LMDEPLOY_USE_MODELSCOPE=True`
+
 For more information about inference pipeline, please refer to [here](./docs/en/inference/pipeline.md).
 
 # Tutorials

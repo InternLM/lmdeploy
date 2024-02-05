@@ -100,6 +100,11 @@ class AsyncEngine:
             **kwargs):
         """Innter build method for turbomind backend."""
         self.model_name = model_name
+        # model mayebe from workspace
+        from lmdeploy.turbomind.utils import \
+            get_model_name_from_workspace_model
+        if self.model_name is None:
+            self.model_name = get_model_name_from_workspace_model(model_path)
         # try fuzzy matching to get a model_name
         if self.model_name is None and (backend_config is None
                                         or backend_config.model_name == ''
@@ -113,7 +118,8 @@ class AsyncEngine:
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
-            if self.model_name != backend_config.model_name:
+            if backend_config.model_name is not None \
+                    and self.model_name != backend_config.model_name:
                 raise ArgumentError(
                     f'Got different model names from model_name = '
                     f'{self.model_name}, backend_config = {backend_config}')
@@ -313,7 +319,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [Response('', 0, i) for i in range(prompt_num)]
+        outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -332,6 +338,7 @@ class AsyncEngine:
                 async for out in generator:
                     outputs[i + j].text += out.response
                     outputs[i + j].generate_token_len = out.generate_token_len
+                    outputs[i + j].input_token_len = out.input_token_len
                     outputs[i + j].finish_reason = out.finish_reason
 
             async def gather():
@@ -394,7 +401,8 @@ class AsyncEngine:
             async def _inner_call(i, generator):
                 async for out in generator:
                     outputs.put(
-                        Response(out.response, out.generate_token_len, i + j,
+                        Response(out.response, out.generate_token_len,
+                                 out.input_token_len, i + j,
                                  out.finish_reason))
 
             async def gather():
@@ -454,7 +462,7 @@ class AsyncEngine:
         if type(gen_config) is GenerationConfig:
             gen_config = EngineGenerationConfig.From(gen_config,
                                                      self.tokenizer)
-        if self.backend == 'pytorch' and gen_config.stop_words is None:
+        if gen_config.stop_words is None:
             gen_config.stop_words = self.stop_words
         # set random if it is not set and sequence_start is True
         if gen_config.random_seed is None and sequence_start:

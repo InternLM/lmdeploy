@@ -7,10 +7,9 @@ from pathlib import Path
 
 import fire
 import torch
-from huggingface_hub import snapshot_download
 
 from lmdeploy.model import MODELS
-from lmdeploy.turbomind.utils import create_hf_download_args
+from lmdeploy.utils import get_model
 
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
@@ -242,8 +241,7 @@ def main(model_name: str,
     if not os.path.exists(model_path):
         print(f'can\'t find model from local_path {model_path}, '
               'try to download from huggingface')
-        download_kwargs = create_hf_download_args(**kwargs)
-        model_path = snapshot_download(model_path, **download_kwargs)
+        model_path = get_model(model_path)
         print(f'load model from {model_path}')
 
     # get tokenizer path
