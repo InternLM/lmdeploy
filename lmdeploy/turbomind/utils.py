@@ -15,7 +15,6 @@ class ModelSource(ExplicitEnum):
     """Turbomind model source."""
     WORKSPACE = 'workspace'
     HF_MODEL = 'hf_model'
-    HF_LMDEPLOY = 'hf_lmdeploy'
 
 
 def create_hf_download_args(**kwargs) -> dict:
@@ -61,10 +60,7 @@ def get_model_source(pretrained_model_name_or_path: str,
                                      'triton_models')
     if os.path.exists(triton_model_path):
         return ModelSource.WORKSPACE
-    config = get_hf_config_content(pretrained_model_name_or_path, **kwargs)
-    model_source = ModelSource.HF_LMDEPLOY if 'turbomind' in config \
-        else ModelSource.HF_MODEL
-    return model_source
+    return ModelSource.HF_MODEL
 
 
 def check_tm_model_input(pretrained_model_name_or_path, **kwargs):
@@ -119,6 +115,20 @@ def get_gen_param(cap,
         gen_param.sequence_end = True
         gen_param.step = 0
     return gen_param
+
+
+def get_model_name_from_workspace_model(model_dir: str):
+    """Get model name from workspace model."""
+    from configparser import ConfigParser
+    triton_model_path = os.path.join(model_dir, 'triton_models', 'weights')
+    if not os.path.exists(triton_model_path):
+        return None
+    ini_path = os.path.join(triton_model_path, 'config.ini')
+    # load cfg
+    with open(ini_path, 'r') as f:
+        parser = ConfigParser()
+        parser.read_file(f)
+    return parser['llama']['model_name']
 
 
 def get_model_from_config(model_dir: str):

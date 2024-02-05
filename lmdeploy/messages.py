@@ -114,6 +114,8 @@ class TurbomindEngineConfig:
         quant_policy (int): , default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
+        download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
+        revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -125,6 +127,8 @@ class TurbomindEngineConfig:
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
+    download_dir: Optional[str] = None
+    revision: Optional[str] = None
 
 
 @dataclass
@@ -147,6 +151,11 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
+        download_dir (str): Directory to download and load the weights,
+            default to the default cache directory of huggingface.
+        revision (str): The specific model version to use.
+            It can be a branch name, a tag name, or a commit id.
+            If unspecified, will use the default version.
     """
     model_name: str = ''
     tp: int = 1
@@ -159,6 +168,8 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 16384
+    download_dir: str = None
+    revision: str = None
 
 
 class ResponseType(enum.Enum):
@@ -174,8 +185,24 @@ class ResponseType(enum.Enum):
 
 @dataclass
 class Response:
-    """Pack all response information together."""
+    """Pack all response information together.
+
+    Args:
+        text (str): the response text from the server. If the output text is
+            an empty str and the finish_reason is length, it means the session
+            length is reached.
+        generate_token_len (int): the response token length.
+        input_token_len (int): the input prompt token length. Note that it may
+            contains chat template part.
+        session_id (int): the id for running the session. Basically, it refers
+            to the position index of the input request batch.
+        finish_reason ('stop' | 'length' | None): the reason the model stopped
+            generating tokens. This will be 'stop' if the model hit a natural
+            stop point or a provided stop sequence, 'length' if the maximum
+            number of tokens specified in the request was reached.
+    """
     text: str
     generate_token_len: int
+    input_token_len: int
     session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None

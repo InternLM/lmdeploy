@@ -35,14 +35,18 @@ class SamplingParam:
     def from_gen_config(self, gen_config: EngineGenerationConfig):
         """from gen config."""
 
+        stop_words = gen_config.stop_words or []
+        bad_words = gen_config.bad_words or []
+        if gen_config.ignore_eos:
+            bad_words += stop_words
         return SamplingParam(top_p=gen_config.top_p,
                              top_k=gen_config.top_k,
                              temperature=gen_config.temperature,
                              repetition_penalty=gen_config.repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,
                              random_seed=gen_config.random_seed,
-                             stop_words=gen_config.stop_words,
-                             bad_words=gen_config.bad_words)
+                             stop_words=stop_words,
+                             bad_words=bad_words)
 
 
 class MessageStatus(enum.Enum):
