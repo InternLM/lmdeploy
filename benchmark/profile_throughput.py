@@ -298,7 +298,8 @@ def main():
             session_len=args.session_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            cache_max_entry_count=args.cache_max_entry_count)
+            cache_max_entry_count=args.cache_max_entry_count,
+            model_format=args.model_format)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(session_len=args.session_len,
                                             max_batch_size=args.concurrency,
