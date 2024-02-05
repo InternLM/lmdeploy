@@ -15,7 +15,7 @@ from tqdm import tqdm
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
-from lmdeploy.pytorch.engine import Engine as PyTorchEngine
+from lmdeploy.pytorch.engine import EngineInstance as PyTorchEngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 
 
@@ -116,7 +116,7 @@ class Engine:
                     n_prev_token = n_token
                 prev = now
             # for pytorch engine to restart a session
-            if isinstance(model_inst, PyTorchEngine):
+            if isinstance(model_inst, PyTorchEngineInstance):
                 model_inst.end(session_id)
             assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \
