@@ -15,6 +15,7 @@ from tqdm import tqdm
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
+from lmdeploy.pytorch.engine import Engine as PyTorchEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 
 
@@ -115,7 +116,7 @@ class Engine:
                     n_prev_token = n_token
                 prev = now
             # for pytorch engine to restart a session
-            if hasattr(model_inst, 'end'):
+            if isinstance(model_inst, PyTorchEngine):
                 model_inst.end(session_id)
             assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \
@@ -276,14 +277,13 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     tp_act = ArgumentHelper.tp(pt_group)
-    model_format_act = ArgumentHelper.model_format(pt_group, default='hf')
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
-    tb_group._group_actions.append(model_format_act)
     tb_group._group_actions.append(session_len_act)
+    ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.cache_max_entry_count(tb_group)
     args = parser.parse_args()
     return args

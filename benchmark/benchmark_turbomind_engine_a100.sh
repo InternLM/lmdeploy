@@ -4,7 +4,7 @@ dataset_path="benchmark/ShareGPT_V3_unfiltered_cleaned_split.json"
 ########################################## TurboMind engine: fp16 or bf16 ##########################################
 ## 7B. gemm_tune -> profile_throughput
 tp=1
-max_batch_size=32
+max_batch_size=256
 cache_max_entry_count=0.95
 model_path="/workspace/models-140/llama2/huggingface/llama-2-7b-chat"
 python3 -m lmdeploy.turbomind.generate_gemm_config --tensor-para-size ${tp} --max-batch-size ${max_batch_size} --model-path ${model_path}
