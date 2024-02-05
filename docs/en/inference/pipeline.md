@@ -171,6 +171,16 @@ The `pipeline` function is a higher-level API designed for users to easily insta
 | repetition_penalty | float                    | 1.0           | The parameter for repetition penalty. 1.0 means no penalty. This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                      |
 | ignore_eos         | bool                     | False         | Indicator for ignoring end-of-string (eos). This parameter will be deprecated. Please use the gen_config parameter instead.                                                                                                      |
 
+### Response
+
+| Parameter Name     | Type                                    | Description                                                                                                                                                                                                                                       |
+| ------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| text               | str                                     | The text response from the server. If the output text is an empty string and the finish_reason is 'length', it means the maximum session length has been reached.                                                                                 |
+| generate_token_len | int                                     | The number of tokens in the response.                                                                                                                                                                                                             |
+| input_token_len    | int                                     | The number of tokens in the input prompt. Note that this may include the chat template part.                                                                                                                                                      |
+| session_id         | int                                     | The ID for running a session. Basically, it refers to the index position of the input request batch.                                                                                                                                              |
+| finish_reason      | Optional\[Literal\['stop', 'length'\]\] | The reason the model stopped generating tokens. This will be set to 'stop' if the model encounters a stop word; if the maximum number of tokens specified in the request is reached or the session length is reached, it will be set to 'length'. |
+
 ## TurbomindEngineConfig
 
 ### Description

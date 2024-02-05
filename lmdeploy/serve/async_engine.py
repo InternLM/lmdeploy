@@ -313,7 +313,7 @@ class AsyncEngine:
         if gen_config.random_seed is None:
             gen_config.random_seed = random.getrandbits(64)
         prompt_num = len(prompts)
-        outputs = [Response('', 0, i) for i in range(prompt_num)]
+        outputs = [Response('', 0, 0, i) for i in range(prompt_num)]
         for j in range(0, prompt_num, self.instance_num):
             batch_prompts = prompts[j:j + self.instance_num]
             generators = []
@@ -332,6 +332,7 @@ class AsyncEngine:
                 async for out in generator:
                     outputs[i + j].text += out.response
                     outputs[i + j].generate_token_len = out.generate_token_len
+                    outputs[i + j].input_token_len = out.input_token_len
                     outputs[i + j].finish_reason = out.finish_reason
 
             async def gather():
@@ -394,7 +395,8 @@ class AsyncEngine:
             async def _inner_call(i, generator):
                 async for out in generator:
                     outputs.put(
-                        Response(out.response, out.generate_token_len, i + j,
+                        Response(out.response, out.generate_token_len,
+                                 out.input_token_len, i + j,
                                  out.finish_reason))
 
             async def gather():
