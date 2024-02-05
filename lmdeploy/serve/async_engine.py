@@ -106,7 +106,8 @@ class AsyncEngine:
                                         or backend_config.model_name is None):
             potential_names = best_match_model(model_path)
             if potential_names is None:
-                raise ArgumentError('Please set model_name or backend_config.')
+                logger = get_logger('lmdeploy')
+                logger.warning('Please set model_name or backend_config.')
             else:
                 self.model_name = potential_names
                 logger = get_logger('lmdeploy')
@@ -123,6 +124,12 @@ class AsyncEngine:
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
+        from lmdeploy import turbomind as tm
+        self.engine = tm.TurboMind.from_pretrained(
+            model_path,
+            engine_config=backend_config,
+            chat_template_config=chat_template_config,
+            **kwargs)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
@@ -135,12 +142,6 @@ class AsyncEngine:
         self.chat_template = chat_template_config.chat_template
         if backend_config.session_len is None:
             backend_config.session_len = self.chat_template.session_len
-        from lmdeploy import turbomind as tm
-        self.engine = tm.TurboMind.from_pretrained(
-            model_path,
-            engine_config=backend_config,
-            chat_template_config=chat_template_config,
-            **kwargs)
         self.session_len = backend_config.session_len
         self.backend_config = backend_config
         self.stop_words = _stop_words(self.chat_template.stop_words,
