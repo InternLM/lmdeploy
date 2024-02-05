@@ -18,6 +18,7 @@ rpm -qa | grep python3
 ```
 
 The result should be similar to this:
+
 ```
 [username@hostname workdir]# rpm -qa | grep glibc
 glibc-2.17-325.el7_9.x86_64
@@ -54,6 +55,7 @@ gdb python3
 ```
 
 The output should be similar to this:
+
 ```
 [username@hostname workdir]# gdb python3
 GNU gdb (GDB) Red Hat Enterprise Linux 9.2-10.el7
@@ -94,7 +96,7 @@ cd lmdeploy && ln -s ../build/lib . && cd .. && ln -s build/compile_commands.jso
 
 ## Start debugging
 
-```bash
+````bash
 # Use gdb to start the API server with Llama-2-13b-chat-hf, e.g.
 gdb --args python3 -m lmdeploy serve api_server /workdir/Llama-2-13b-chat-hf
 
@@ -118,7 +120,7 @@ Reading symbols from python3...
 # (Optional) Use https://github.com/InternLM/lmdeploy/blob/main/benchmark/profile_restful_api.py to send a request
 
 python3 profile_restful_api.py --server_addr 127.0.0.1:23333 --tokenizer_path /workdir/Llama-2-13b-chat-hf --dataset /workdir/ShareGPT_V3_unfiltered_cleaned_split.json --concurrency 1 --num_prompts 1
-```
+````
 
 ## Using GDB
 
