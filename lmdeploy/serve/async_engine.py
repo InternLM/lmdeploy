@@ -4,7 +4,6 @@ import copy
 import dataclasses
 import random
 from argparse import ArgumentError
-from asyncio.log import logger
 from contextlib import contextmanager
 from queue import Empty, Queue
 from threading import Thread
@@ -16,6 +15,8 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
 from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words, get_logger
+
+logger = get_logger('lmdeploy')
 
 
 @dataclasses.dataclass
@@ -140,7 +141,6 @@ class AsyncEngine:
                 raise ArgumentError('Please set model_name or backend_config.')
             else:
                 self.model_name = potential_names
-                logger = get_logger('lmdeploy')
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
@@ -200,7 +200,6 @@ class AsyncEngine:
                 raise ArgumentError('Please set model_name or backend_config.')
             else:
                 self.model_name = potential_names
-                logger = get_logger('lmdeploy')
                 logger.warning(
                     f'Best matched chat template name: {self.model_name}')
         elif self.model_name is not None and backend_config is not None:
@@ -497,7 +496,6 @@ class AsyncEngine:
                     prompt = self.chat_template.messages2prompt(
                         prompt, sequence_start)
                 else:
-                    # TODO better logger
                     logger.warning(f'{self.chat_template} Jinja chat template'
                                    f' Can not be used for interactive chat. '
                                    'Please use lmdeploy defined chat template '
