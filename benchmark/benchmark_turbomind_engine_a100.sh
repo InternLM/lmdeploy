@@ -36,28 +36,28 @@ python3 benchmark/profile_throughput.py ${dataset_path} ${model_path} --tp ${tp}
 # ########################################## TurboMind engine: w4a16 ##########################################
 ## 7B
 tp=1
-max_batch_size=128
+max_batch_size=256
 cache_max_entry_count=0.95
 model_path="/workspace/models/quantization/llama-2-7b-chat-4bit"
 python3 benchmark/profile_throughput.py ${dataset_path} ${model_path} --tp ${tp} --concurrency ${max_batch_size} --cache-max-entry-count ${cache_max_entry_count} --model-format awq --num-prompts 10000
 
 ## 13B
 tp=1
-max_batch_size=128
+max_batch_size=256
 cache_max_entry_count=0.9
 model_path="/workspace/models-140/llama2/huggingface/llama-2-13b-chat"
 python3 benchmark/profile_throughput.py ${dataset_path} ${model_path} --tp ${tp} --concurrency ${max_batch_size} --cache-max-entry-count ${cache_max_entry_count} --model-format awq --num-prompts 10000
 
 ## 20B
 tp=2
-max_batch_size=128
+max_batch_size=256
 cache_max_entry_count=0.9
 model_path="/workspace/models-140/InternLM/internlm-chat-20b"
 python3 benchmark/profile_throughput.py ${dataset_path} ${model_path} --tp ${tp} --concurrency ${max_batch_size} --cache-max-entry-count ${cache_max_entry_count} --model-format awq --num-prompts 10000
 
 ## 70B
 tp=4
-max_batch_size=128
+max_batch_size=256
 cache_max_entry_count=0.9
 model_path="/workspace/models-140/llama2/huggingface/llama-2-70b-chat-hf"
 python3 benchmark/profile_throughput.py ${dataset_path} ${model_path} --tp ${tp} --concurrency ${max_batch_size} --cache-max-entry-count ${cache_max_entry_count} --model-format awq --num-prompts 10000
