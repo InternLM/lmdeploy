@@ -495,10 +495,10 @@ class TurboMindInstance:
                 device_id, rank, self.cuda_stream_id, self.nccl_params)
             model_insts[device_id] = model_inst
 
-    def _forward_callback(self, result, ctx):
-        self.que.put((False, result))
+    def _forward_callback(self, result, ctx, que):
+        que.put((False, result))
 
-    def _forward_thread(self, inputs):
+    def _forward_thread(self, inputs, que):
         instance_comm = self.tm_model.model_comm.create_instance_comm(
             self.gpu_count)
 
@@ -507,7 +507,7 @@ class TurboMindInstance:
                 output = self.model_insts[device_id].forward(
                     inputs, instance_comm)
                 if enque_output:
-                    self.que.put((True, output))
+                    que.put((True, output))
 
         for device_id in range(self.gpu_count):
             t = Thread(target=_func,
@@ -708,8 +708,13 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
+        # start forward thread
+        que = Queue()
+        from functools import partial
+        _forward_callback = partial(self._forward_callback, que=que)
+        _forward_thread = partial(self._forward_thread, que=que)
         if stream_output and not stop:
-            self.model_insts[0].register_callback(self._forward_callback)
+            self.model_insts[0].register_callback(_forward_callback)
 
         gen_config = self._update_generation_config(gen_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
@@ -724,9 +729,7 @@ class TurboMindInstance:
             gen_config=gen_config)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
-        # start forward thread
-        self.que = Queue()
-        self._forward_thread(tm_inputs)
+        _forward_thread(tm_inputs)
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
 
@@ -734,13 +737,13 @@ class TurboMindInstance:
         while True:
             # Thanks for https://github.com/frankxyy and his issue
             # https://github.com/InternLM/lmdeploy/issues/832
-            while self.que.qsize() == 0:
+            while que.qsize() == 0:
                 await asyncio.sleep(0.002)  # sleep(0) makes server unstable
 
-            while self.que.qsize() > 1:
-                self.que.get()
+            while que.qsize() > 1:
+                que.get()
 
-            finish, tm_outputs = self.que.get()
+            finish, tm_outputs = que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -770,8 +773,8 @@ class TurboMindInstance:
             if finish:
                 for t in self.threads:
                     t.join()
-                while self.que.qsize() > 0:
-                    self.que.get()
+                while que.qsize() > 0:
+                    que.get()
                 break
 
         if stream_output and not stop:
