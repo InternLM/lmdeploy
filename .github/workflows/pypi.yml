@@ -80,6 +80,10 @@ jobs:
           pip install -U setuptools
           ..\builder\windows\generate.ps1
           cmake --build . --config Release -- /m /v:q
+          if (-Not $?) {
+            echo "build failed"
+            exit 1
+          }
           cmake --install . --config Release
           cd ..
           rm build -Force -Recurse
