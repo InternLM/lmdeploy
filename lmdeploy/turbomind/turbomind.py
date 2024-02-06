@@ -495,10 +495,10 @@ class TurboMindInstance:
                 device_id, rank, self.cuda_stream_id, self.nccl_params)
             model_insts[device_id] = model_inst
 
-    def _forward_callback(self, result, ctx, que):
-        que.put((False, result))
+    def _forward_callback(self, result, ctx):
+        self.que.put((False, result))
 
-    def _forward_thread(self, inputs, que):
+    def _forward_thread(self, inputs):
         instance_comm = self.tm_model.model_comm.create_instance_comm(
             self.gpu_count)
 
@@ -507,7 +507,28 @@ class TurboMindInstance:
                 output = self.model_insts[device_id].forward(
                     inputs, instance_comm)
                 if enque_output:
-                    que.put((True, output))
+                    self.que.put((True, output))
+
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_func,
+                       args=(device_id, device_id == 0),
+                       daemon=True)
+            t.start()
+            self.threads[device_id] = t
+
+    def _async_forward_callback(self, result, ctx, que: asyncio.Queue):
+        que.put_nowait((False, result))
+
+    def _async_forward_thread(self, inputs, que: asyncio.Queue):
+        instance_comm = self.tm_model.model_comm.create_instance_comm(
+            self.gpu_count)
+
+        def _func(device_id, enque_output):
+            with cuda_ctx(device_id):
+                output = self.model_insts[device_id].forward(
+                    inputs, instance_comm)
+                if enque_output:
+                    que.put_nowait((True, output))
 
         for device_id in range(self.gpu_count):
             t = Thread(target=_func,
@@ -709,10 +730,10 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         # start forward thread
-        que = Queue()
+        que = asyncio.Queue()
         from functools import partial
-        _forward_callback = partial(self._forward_callback, que=que)
-        _forward_thread = partial(self._forward_thread, que=que)
+        _forward_callback = partial(self._async_forward_callback, que=que)
+        _forward_thread = partial(self._async_forward_thread, que=que)
         if stream_output and not stop:
             self.model_insts[0].register_callback(_forward_callback)
 
@@ -735,15 +756,7 @@ class TurboMindInstance:
 
         # generator
         while True:
-            # Thanks for https://github.com/frankxyy and his issue
-            # https://github.com/InternLM/lmdeploy/issues/832
-            while que.qsize() == 0:
-                await asyncio.sleep(0.002)  # sleep(0) makes server unstable
-
-            while que.qsize() > 1:
-                que.get()
-
-            finish, tm_outputs = que.get()
+            finish, tm_outputs = await que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -774,7 +787,7 @@ class TurboMindInstance:
                 for t in self.threads:
                     t.join()
                 while que.qsize() > 0:
-                    que.get()
+                    que.get_nowait()
                 break
 
         if stream_output and not stop:
