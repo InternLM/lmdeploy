@@ -73,12 +73,13 @@ jobs:
           use-github-cache: false
       - name: Build wheel
         run: |
+          ((Get-Content -path CMakeLists.txt -Raw) -replace '-Wall','/W0') | Set-Content CMakeLists.txt
           mkdir build
           cd build
           # https://github.com/pypa/setuptools/issues/1631
           pip install -U setuptools
           ..\builder\windows\generate.ps1
-          cmake --build . --config Release -- /m > build.log.txt
+          cmake --build . --config Release -- /m /v:q
           cmake --install . --config Release
           cd ..
           rm build -Force -Recurse
