@@ -53,9 +53,9 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     __device__ int SmemKVStep(int& offset)
     {
         auto ret = offset;
-        offset += sizeof(Tkv) * kTileSizeKV;
-        if (offset == sizeof(Tkv) * kSmemSizeKV) {
-            offset -= sizeof(Tkv) * kSmemSizeKV;
+        offset += kTileSizeKV;
+        if (offset == kSmemSizeKV) {
+            offset -= kSmemSizeKV;
         }
         return ret;
     }
@@ -249,13 +249,13 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             __align__(16) FragS frag_S{};
 
-            gmem_V.Prefetch<is_residue>(block_iter, max_step - offset_K, sizeof(Tkv) * kTileSizeKV);
+            gmem_V.Prefetch<is_residue>(block_iter, max_step - offset_K, kTileSizeKV);
             block_iter.Advance();
             __pipeline_commit();
 
             Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, nop, [&] {
                 Wait();
-                smem_V.Load(frag_V[0], 0, sizeof(Tkv) * kTileSizeKV);
+                smem_V.Load(frag_V[0], 0, kTileSizeKV);
             });
 
             gmem_K.Prefetch<false>(block_iter, CTA_S, 0);
@@ -271,7 +271,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, sizeof(Tkv) * kTileSizeKV, nop, [&] {
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, kTileSizeKV, nop, [&] {
                 Wait();
                 smem_K.Load(frag_K[0], 0, 0);
             });

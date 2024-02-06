@@ -96,7 +96,7 @@ void invokeFlattenKV_(const AttentionParams<T>& params, int sum_k_len)
                     params.key_offset,
                     params.val_offset,
                     params.max_k_len,
-                    params.num_heads,
+                    params.num_kv_heads,
                     params.batch_size,
                     params.quant_policy,
                     params.kv_quant_params,

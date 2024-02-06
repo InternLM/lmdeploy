@@ -57,7 +57,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     {
 #if TURBOMIND_ARCH_SM80
         constexpr int cp_size = sizeof(AccessType);
-        uint32_t      ptr     = dst;
+        uint32_t      ptr     = sizeof(T) * dst;
         // clang-format off
         asm volatile("{\n"
                      "  .reg .pred p;\n"
@@ -77,7 +77,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     {
 #if TURBOMIND_ARCH_SM80
         constexpr int cp_size = sizeof(AccessType);
-        uint32_t      ptr     = dst;
+        uint32_t      ptr     = sizeof(T) * dst;
         asm volatile(
             "cp.async.cg.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(cp_size));
 #else

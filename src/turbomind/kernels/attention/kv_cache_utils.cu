@@ -121,7 +121,7 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**        blocks,
             FastRoPE  rope(di, std::integral_constant<int, HeadDim>{}, base, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
-                const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
+                const int ti = history_len + offset.y + s * Map::kDeltaS + token_idx;  // sequence local
                 rope.apply(vec_K[s][c], ti);
             }
         }

@@ -51,7 +51,7 @@ struct Sm80SmemIterK: BaseSmemIterator<T, Layout> {
         for (int n = 0; n < N; n += 2) {  // Load (s16,d16) tiles
             const int s = n * 8 + offset_s;
             const int c = k * 16 + offset_c;
-            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], offset + Layout::apply(s, c, offset_thr));
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], sizeof(T) * (offset + Layout::apply(s, c, offset_thr)));
         }
     }
 };
@@ -100,7 +100,7 @@ struct Sm80SmemIterV: BaseSmemIterator<T, Layout> {
             for (int n = 0; n < N; n += 2) {  // Load (d16,s16) tiles
                 const int s = k * 16 + offset_s;
                 const int c = n * 8 + offset_c;
-                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], base + Layout::apply(s, c, offset_thr));
+                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], sizeof(T) * (base + Layout::apply(s, c, offset_thr)));
             }
         }
     }
@@ -160,7 +160,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     static_assert(sizeof(FragS) / 2 == sizeof(FragP));
 
-    using Swizzle = Swizzle<3, 4, 4>; // head dim 128 only
+    using Swizzle = Swizzle<3, 3, 4>;  // head dim 128 only
 
     using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
     using SmemLayoutP = SmemLayout<CTA_S, Identity>;

@@ -16,9 +16,8 @@ void dispatchAttention(const AttentionParams<T>& params)
     if (params.size_per_head == 128) {
         if (0) {}
         else if (params.arch >= 80) {
-            // using Config = AttentionConfig<arch::Sm80, T, T, std::integral_constant<int, 128>, 128>;
-            // using Config = AttentionConfig<arch::Sm80, T, T, 128>;
-            // invokeAttention<typename Config::Kernel>(params);
+            using Config = AttentionConfig<arch::Sm80, T, T, 128>;
+            invokeAttention<typename Config::Kernel>(params);
         }
         else if (params.arch == 70) {
             using Config = AttentionConfig<arch::Sm70, T, T, 128>;
