@@ -183,7 +183,7 @@ class BaseOutputModel(ABC):
         def _tofile(tensor, path):
             """to file."""
             if tensor.dtype == torch.bfloat16:
-                tensor = tensor.view(torch.half)
+                tensor = tensor.to(torch.half)
             tensor.contiguous().cpu().numpy().tofile(path)
 
         if self.to_file:
