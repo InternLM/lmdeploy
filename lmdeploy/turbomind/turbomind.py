@@ -786,8 +786,6 @@ class TurboMindInstance:
             if finish:
                 for t in self.threads:
                     t.join()
-                while que.qsize() > 0:
-                    que.get_nowait()
                 break
 
         if stream_output and not stop:
@@ -838,7 +836,7 @@ class TurboMindInstance:
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
-        self.que = LifoQueue()
+        self.que = Queue()
         self._forward_thread(tm_inputs)
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
