@@ -6,7 +6,7 @@ import os.path as osp
 import sys
 from configparser import ConfigParser
 from contextlib import contextmanager
-from queue import Queue
+from queue import LifoQueue, Queue
 from threading import Thread
 from typing import Iterable, List, Optional, Union
 
@@ -485,7 +485,7 @@ class TurboMindInstance:
             t.join()
 
         self.model_insts = model_insts
-        self.que = Queue()
+        self.que = LifoQueue()
         self.threads = [None] * self.gpu_count
 
     def _create_model_instance(self, device_id, model_insts):
@@ -838,16 +838,13 @@ class TurboMindInstance:
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
         # start forward thread
-        self.que = Queue()
+        self.que = LifoQueue()
         self._forward_thread(tm_inputs)
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
 
         # generator
         while True:
-            while self.que.qsize() > 1:
-                self.que.get()
-
             finish, tm_outputs = self.que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
