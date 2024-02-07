@@ -730,7 +730,7 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         # start forward thread
-        que = asyncio.Queue()
+        que = asyncio.LifoQueue()
         from functools import partial
         _forward_callback = partial(self._async_forward_callback, que=que)
         _forward_thread = partial(self._async_forward_thread, que=que)
