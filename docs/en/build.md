@@ -28,6 +28,7 @@ All the wheel files for lmdeploy under py3.8 - py3.11 will be found in the `buil
 builder/manywheel/cuda11.8_dist/
 ├── lmdeploy-0.0.12-cp310-cp310-manylinux2014_x86_64.whl
 ├── lmdeploy-0.0.12-cp311-cp311-manylinux2014_x86_64.whl
+├── lmdeploy-0.0.12-cp312-cp312-manylinux2014_x86_64.whl
 ├── lmdeploy-0.0.12-cp38-cp38-manylinux2014_x86_64.whl
 └── lmdeploy-0.0.12-cp39-cp39-manylinux2014_x86_64.whl
 ```
