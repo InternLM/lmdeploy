@@ -28,17 +28,17 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                 thrust::universal_vector<Tkv*>&    k_ptrs,   // block ptrs
                 thrust::universal_vector<Tkv*>&    v_ptrs,
                 thrust::universal_vector<int>&     cu_block_cnts,  // cumulative block counts
-                const int                          head_num,
-                const int                          head_dim,
-                const int                          block_seq_len,
-                const int                          batch_size,
+                const size_t                       head_num,
+                const size_t                       head_dim,
+                const size_t                       block_seq_len,
+                const size_t                       batch_size,
                 int                                quant_policy,
                 const float*                       quant_params_kv)
 {
-    const int seq_len  = k_cache.size() / (head_dim * head_num * batch_size);
-    const int n_blocks = (seq_len + block_seq_len - 1) / block_seq_len;
+    const size_t seq_len  = k_cache.size() / (head_dim * head_num * batch_size);
+    const size_t n_blocks = (seq_len + block_seq_len - 1) / block_seq_len;
 
-    const int kHSD = head_num * seq_len * head_dim;
+    const size_t kHSD = head_num * seq_len * head_dim;
 
     std::cout << "batch_size = " << batch_size << ", seq_len = " << seq_len << ", block_size = " << block_seq_len
               << ", block_num = " << n_blocks << "\n";
@@ -49,7 +49,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
         auto k_src = k_cache.begin();
         auto v_src = v_cache.begin();
         auto dst   = kv_cache.begin();
-        for (int i = 0; i < batch_size; ++i) {
+        for (size_t i = 0; i < batch_size; ++i) {
             dst = thrust::copy_n(k_src, kHSD, dst);
             dst = thrust::copy_n(v_src, kHSD, dst);
             k_src += kHSD;
@@ -162,8 +162,8 @@ int main(int argc, char* argv[])
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum     = 64;
-    constexpr size_t kBatchSize   = 32;
+    constexpr size_t kHeadNum     = 32;
+    constexpr size_t kBatchSize   = 16;
     constexpr size_t kInputLen    = 1;
     constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 16383;
@@ -196,8 +196,8 @@ int main(int argc, char* argv[])
     constexpr int kQuantPolicy = 0;
 #endif
 
-    constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum / 8;
+    constexpr size_t kHeadDim  = 128;
+    constexpr size_t KvHeadNum = kHeadNum / 8;
 
     static_assert(KvHeadNum > 0);
 
@@ -208,9 +208,9 @@ int main(int argc, char* argv[])
     // constexpr int kSequenceLen = 72;
     // constexpr int kInputLen    = 98;
 
-    constexpr int kContextLen = kSequenceLen + kInputLen;
-    constexpr int kTokenNum   = kBatchSize * kInputLen;
-    constexpr int kTestIter   = 100;
+    constexpr size_t kContextLen = kSequenceLen + kInputLen;
+    constexpr size_t kTokenNum   = kBatchSize * kInputLen;
+    constexpr int    kTestIter   = 100;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;

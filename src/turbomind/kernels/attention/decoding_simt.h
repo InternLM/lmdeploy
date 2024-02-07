@@ -181,6 +181,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 16 / sizeof(Tkv), kWarpCount>;
 
+    static constexpr int kBatchK = ThreadMapKV::kIterS;
+    static constexpr int kBatchV = ThreadMapKV::kIterS;
+
     using TransformK = ConvertKvCache<Tkv, Tqk>;
     using TransformV = ConvertKvCache<Tkv, Tpv>;
 

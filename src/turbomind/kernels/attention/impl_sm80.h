@@ -188,7 +188,8 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     using TransformK = float2;
     using TransformV = float2;
 
-    static constexpr int kBatchKV = std::min(4, ThreadMapKV::kIterS);
+    static constexpr int kBatchK = std::min(4, ThreadMapKV::kIterS);
+    static constexpr int kBatchV = kBatchK;
 
     __device__ static void Sync()
     {

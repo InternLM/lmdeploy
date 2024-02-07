@@ -30,6 +30,7 @@ struct SmemIterK: BaseSmemIterator<T, Layout> {
     }
 };
 
+#if 0
 template<class T, class Layout, int WARP_S, int K, int M>
 struct SmemIterV: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
@@ -48,6 +49,29 @@ struct SmemIterV: BaseSmemIterator<T, Layout> {
             const int c = m * 16 + offset_c;  // D
             static_assert(sizeof(frag_V[m]) == sizeof(Array<uint32_t, 4>));
             ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[m], uint_ptr + sizeof(T) * (offset + Layout::apply(s, c)));
+        }
+    }
+};
+#endif
+
+template<class T, class Layout, int WARP_S, int K, int M>
+struct SmemIterV: BaseSmemIterator<T, Layout> {
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
+    using Base::smem_;
+    __device__ void Load(Array<T, 8> (&frag_V)[K], int m, int offset)
+    {
+        const int warp_id  = threadIdx.x / WARP_SIZE;
+        const int lane_id  = threadIdx.x % WARP_SIZE;
+        const int offset_s = lane_id / 16 * 8 + lane_id % 8 + warp_id * WARP_S;
+        const int offset_c = lane_id % 16 / 8 * 8;
+        auto      uint_ptr = 0;  // cast_smem_ptr_to_uint(smem_);
+        PRAGMA_UNROLL
+        for (int k = 0; k < K; ++k) {
+            const int s = k * 16 + offset_s;  // S
+            const int c = m * 16 + offset_c;  // D
+            static_assert(sizeof(frag_V[k]) == sizeof(Array<uint32_t, 4>));
+            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[k], uint_ptr + sizeof(T) * (offset + Layout::apply(s, c)));
         }
     }
 };
@@ -103,7 +127,7 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
                                               //   1  2    8,16    8  1
     using FragS = Array<float, 4>[K_M][K_N];  // (s8,q4) (Sm,Qn) (s2,q2)
                                               //   1  2   16  8    8  1
-    using FragV = Array<T, 8>[V_K][V_M];      // (d8,s4) (Sk,Dm) (s2,d2,s2)
+    using FragV = Array<T, 8>[V_M][V_K];      // (d8,s4) (Dm,Sk) (s2,d2,s2)
                                               //   1  2   16 16    8  8  1
     using FragP = Array<T, 4>[V_K][V_N];      // (q8,s4) (Sk,Qn) (s2,s2)
                                               //   1  2   16  8    8  1
@@ -153,6 +177,9 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+
+    static constexpr int kBatchK = ThreadMapKV::kIterS;
+    static constexpr int kBatchV = ThreadMapKV::kIterS;
 
     using TransformK = float2;
     using TransformV = float2;
@@ -258,29 +285,26 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
                                      Prefetch&&  prefetch,
                                      Preload&&   preload)
     {
-        if (V_K == 1) {
-            ((Prefetch&&)prefetch)(0);
-        }
         PRAGMA_UNROLL
-        for (int k = 0; k < V_K; ++k) {
-            if (k < V_K - 1) {
-                smem_V.Load(frag_V[k + 1], k + 1, offset);
+        for (int m = 0; m < V_M; ++m) {
+            if (m < V_M - 1) {
+                smem_V.Load(frag_V[m + 1], m + 1, offset);
             }
             else {
                 ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
-            for (int m = 0; m < V_M; ++m) {
+            for (int k = 0; k < V_K; ++k) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < V_N; ++n) {
-                    mma_m16n8k16_row_col(frag_O[m][n], frag_V[k][m], frag_P[k][n], frag_O[m][n]);
+                    mma_m16n8k16_row_col(frag_O[m][n], frag_V[m][k], frag_P[k][n], frag_O[m][n]);
                 }
             }
-            if (k < V_K - 1) {
-                ((Prefetch&&)prefetch)(k);
+            if (m < V_M - 1) {
+                ((Prefetch&&)prefetch)(m);
             }
-            if (k == V_K - 2) {
-                ((Prefetch&&)prefetch)(K_K - 1);
+            if (m == V_M - 2) {
+                ((Prefetch&&)prefetch)(V_M - 1);
             }
         }
     }

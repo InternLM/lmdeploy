@@ -45,8 +45,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
-    static constexpr auto kBatchKV = ThreadMapKV::kIterS;
-
     static constexpr int kTileSizeKV = CTA_S * Impl::SmemLayoutK::kStride;
     static constexpr int kSmemSizeKV = Stages * kTileSizeKV;
 
@@ -139,11 +137,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             auto wk = SmemKVStep(kv_offset_w);
 
             auto prefetch_K = [&](int k) {
-                const int begin = k * kBatchKV;
+                const int begin = k * Impl::kBatchK;
                 if (begin < ThreadMapKV::kIterS) {
-                    gmem_K.Prefetch<false>(block_iter, begin, kBatchKV, CTA_S, wk);
+                    gmem_K.Prefetch<false>(block_iter, begin, Impl::kBatchK, CTA_S, wk);
                 }
-                if (begin + kBatchKV == ThreadMapKV::kIterS) {
+                if (begin + Impl::kBatchK == ThreadMapKV::kIterS) {
                     __pipeline_commit();
                 }
             };
@@ -169,11 +167,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             auto wv = SmemKVStep(kv_offset_w);
 
             auto prefetch_V = [&](int k) {
-                const int begin = k * kBatchKV;
+                const int begin = k * Impl::kBatchV;
                 if (begin < ThreadMapKV::kIterS) {
-                    gmem_V.Prefetch<false>(block_iter, begin, kBatchKV, CTA_S, wv);
+                    gmem_V.Prefetch<false>(block_iter, begin, Impl::kBatchV, CTA_S, wv);
                 }
-                if (begin + kBatchKV == ThreadMapKV::kIterS) {
+                if (begin + Impl::kBatchV == ThreadMapKV::kIterS) {
                     block_iter.Advance();
                     __pipeline_commit();
                 }
