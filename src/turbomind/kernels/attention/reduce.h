@@ -44,11 +44,9 @@ struct Reduce {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int H = (CTA_H + WarpCnt - 1) / WarpCnt;
-
         PRAGMA_UNROLL
-        for (int h = 0; h < H; ++h) {
-            const int hi = warp_id + h * WarpCnt;
+        for (int h = 0; h < CTA_H; h += WarpCnt) {
+            const int hi = h + warp_id;
 
             const int split_idx = offset_k + lane_id * stride_k;
 
@@ -102,8 +100,6 @@ struct Reduce {
 
         Vec accu_O[S][C]{};
         Vec frag_O[S][C];
-
-        // float scale[S][C];
 
         const int2 d = Map::get_offset(warp_id, lane_id);
 

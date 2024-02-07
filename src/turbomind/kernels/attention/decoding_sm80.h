@@ -499,24 +499,22 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
 
         __syncthreads();
 
+        clear(frag_O);
+        clear(frag_L);
+
         PRAGMA_UNROLL
         for (int n = 0; n < V_N; ++n) {
             PRAGMA_UNROLL
-            for (int w = 0; w < kWarpCntS - 1; ++w) {
-                const int src_warp = (warp_id_s + w + 1) % kWarpCntS;
+            for (int w = 0; w < kWarpCntS; ++w) {
+                using namespace ops;
                 PRAGMA_UNROLL
                 for (int m = 0; m < V_M; ++m) {
                     Array<float, 4> tmp_O;
-                    Load(tmp_O, storage.O[m][n][src_warp][lane_id].data());
-                    using namespace ops;
+                    Load(tmp_O, storage.O[m][n][w][lane_id].data());
                     frag_O[m][n] = frag_O[m][n] + tmp_O;
                 }
-                PRAGMA_UNROLL
-                for (int q = 0; q < 2; ++q) {
-                    frag_L[n][q] += storage.L[n][src_warp][lane_id % 4][q];
-                }
+                frag_L[n] = frag_L[n] + storage.L[n][w][lane_id % 4];
             }
-
             // PRAGMA_UNROLL
             // for (int q = 0; q < 2; ++q) {
             //     if (lane_id < 4) {
