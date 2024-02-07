@@ -217,7 +217,7 @@ struct Gemm {
                     // convert to half
                     half2 half_C = __float22half2_rn(frag_C[j * 2 + x]);
                     // transpose 8x8 accum tile
-                    uint trans_C = transpose_m8n8_b16((uint&)half_C, lane_id);
+                    uint trans_C = transpose_m8n8_b16((uint&)half_C);
                     // store to global memory
                     OutputOps::template apply<Index>(trans_C, mm, nn, C, m, n);
                 }

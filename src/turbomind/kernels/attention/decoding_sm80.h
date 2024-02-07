@@ -134,11 +134,7 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
     union SharedStorage {
         __align__(16) T Q[CTA_H * SmemLayoutQ::kStride];
 
-        struct {
-            __align__(16) Tkv KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
-            __align__(16) T P[CTA_H * CTA_S];
-        };
-        // __align__(16) Tkv KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
+        __align__(16) Tkv KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
         struct {
             __align__(16) Tkv K[Stages == 2 ? CTA_S * SmemLayoutK::kStride : 1];
             __align__(16) Tkv V[Stages == 2 ? CTA_S * SmemLayoutV::kStride : 1];
@@ -152,7 +148,7 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
 
         __align__(16) float O1[CTA_H][kHeadDim];
 
-        // T P[1];
+        T P[1];
     };
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
@@ -160,6 +156,8 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
 
     using TransformK = float2;
     using TransformV = float2;
+
+    static constexpr bool kDeferReduceL = true;
 
     __device__ static void Sync() {}
 
@@ -361,67 +359,36 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
                         frag_S[m][n][s * 2 + q] = p;
                     }
                 }
-                tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 4);
-                tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 8);
-                tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 16);
+                if constexpr (!kDeferReduceL) {
+                    tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 4);
+                    tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 8);
+                    tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 16);
+                }
                 frag_L[n][q] += tmp_L;  // update L
             }
         }
     }
 
-    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T* smem_P)
+    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T*)
     {
         static_assert(K_M == V_K);
 
-        // PRAGMA_UNROLL
-        // for (int m = 0; m < K_M; ++m) {
-        //     PRAGMA_UNROLL
-        //     for (int n = 0; n < K_N; ++n) {
-        //         PRAGMA_UNROLL
-        //         for (int s = 0; s < 2; ++s) {
-        //             Array<T, 2> tmp_P;
-        //             PRAGMA_UNROLL
-        //             for (int q = 0; q < 2; ++q) {
-        //                 tmp_P[q] = static_cast<T>(frag_S[m][n][s * 2 + q]);
-        //             }
-        //             // (s8,q4),(q2) -> (q8,s4),(s2)
-        //             //   1  2    1       1  2    1
-        //             transpose_m8n8_b16((uint&)tmp_P, 0);
-        //             (Array<T, 2>&)frag_P[m][n][s * 2] = tmp_P;
-        //         }
-        //     }
-        // }
-
-        // __shared__ T smem_P[CTA_H * CTA_S];
-
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < K_N; ++n) {
                 PRAGMA_UNROLL
                 for (int s = 0; s < 2; ++s) {
+                    Array<T, 2> tmp_P;
                     PRAGMA_UNROLL
                     for (int q = 0; q < 2; ++q) {
-                        const int hi = lane_id % 4 * 2 + n * OP_N + q * 1;
-                        const int si = lane_id / 4 * 1 + m * OP_M + s * 8 + warp_id * WARP_S;
-                        //
-                        smem_P[hi * CTA_S + si] = static_cast<T>(frag_S[m][n][s * 2 + q]);
+                        tmp_P[q] = static_cast<T>(frag_S[m][n][s * 2 + q]);
                     }
-                }
-            }
-        }
+                    // (s8,q4),(s2,q2) -> (q8,s4),(s2,s2)
+                    //   1  2    8  1       1  2    8  1
+                    (uint32_t&)tmp_P = transpose_m8n8_b16((uint32_t&)tmp_P);
 
-        for (int k = 0; k < V_K; ++k) {
-            for (int n = 0; n < V_N; ++n) {
-                for (int s0 = 0; s0 < 2; ++s0) {
-                    for (int s1 = 0; s1 < 2; ++s1) {
-                        const int hi = lane_id / 4 * 1 + n * OP_N;
-                        const int si = lane_id % 4 * 2 + k * OP_K + s0 * 8 + s1 * 1 + warp_id * WARP_S;
-                        //
-                        frag_P[k][n][s0 * 2 + s1] = smem_P[hi * CTA_S + si];
-                    }
+                    (Array<T, 2>&)frag_P[m][n][s * 2] = tmp_P;
                 }
             }
         }
@@ -493,6 +460,11 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
                 frag_L[n][q] *= expdiff_M[n][q];
+                if constexpr (kDeferReduceL) {
+                    frag_L[n][q] += __shfl_xor_sync(uint32_t(-1), frag_L[n][q], 4);
+                    frag_L[n][q] += __shfl_xor_sync(uint32_t(-1), frag_L[n][q], 8);
+                    frag_L[n][q] += __shfl_xor_sync(uint32_t(-1), frag_L[n][q], 16);
+                }
             }
             if (lane_id < 4) {
                 Store((float*)&storage.L[n][warp_id_s][lane_id], frag_L[n]);
