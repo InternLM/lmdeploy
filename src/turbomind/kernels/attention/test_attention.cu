@@ -143,7 +143,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
     cudaDeviceSynchronize();
 
-    if (1) {
+    if (0) {
         std::cout << ">>> Compare\n";
         Compare(
             kv_cache_2.data().get(), kv_cache.data().get(), head_dim, head_dim, batch_size * 2 * head_num * seq_len, 0);
@@ -153,7 +153,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 0
+#define DECODING 1
 
 int main(int argc, char* argv[])
 {
@@ -162,8 +162,8 @@ int main(int argc, char* argv[])
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum     = 32;
-    constexpr size_t kBatchSize   = 16;
+    constexpr size_t kHeadNum     = 64;
+    constexpr size_t kBatchSize   = 32;
     constexpr size_t kInputLen    = 1;
     constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 16383;
@@ -197,7 +197,7 @@ int main(int argc, char* argv[])
 #endif
 
     constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum;
+    constexpr int KvHeadNum = kHeadNum / 8;
 
     static_assert(KvHeadNum > 0);
 
@@ -210,7 +210,7 @@ int main(int argc, char* argv[])
 
     constexpr int kContextLen = kSequenceLen + kInputLen;
     constexpr int kTokenNum   = kBatchSize * kInputLen;
-    constexpr int kTestIter   = 20;
+    constexpr int kTestIter   = 100;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;
@@ -435,7 +435,7 @@ int main(int argc, char* argv[])
         for (size_t b = 0; b < kBatchSize; ++b) {
             for (size_t h = 0; h < kHeadNum; ++h) {
                 for (size_t q = 0; q < kInputLen; ++q) {
-                    auto ref = reference.pr() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
+                    auto ref = reference.qk() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
                                + q * kContextLen;
                     auto data = qk_buf.data().get() + b * kHeadNum * kInputLen * kContextLen
                                 + h * kInputLen * kContextLen + q * kContextLen;
@@ -475,7 +475,7 @@ int main(int argc, char* argv[])
     if (outputs.size() > 1) {
         std::cout << "Evaluating consistency..." << std::endl;
         for (size_t i = 1; i < outputs.size(); ++i) {
-            Compare(outputs[i].data().get(), outputs[0].data().get(), kHeadDim, kHeadDim, kHeadNum);
+            Compare(outputs[i].data().get(), outputs[i - 1].data().get(), kHeadDim, kHeadDim, kHeadNum);
         }
     }
 

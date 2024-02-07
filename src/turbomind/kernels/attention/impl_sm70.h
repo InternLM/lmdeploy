@@ -295,7 +295,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
                         for (int s0 = 0; s0 < 2; ++s0) {
                             const int qi = m * OP_M + (lane_id & 8) + (lane_id & 1) + lane_id / 16 * 4 + q * 2;
                             const int si = n * OP_N + (lane_id & 4) * 2 + (lane_id & 2) + s1 * 4 + s0;
-                            ((Func&&)func)(0, warp_id * WARP_Q + qi, si, S[m][n][s1 * 4 + q * 2 + s0]);
+                            ((Func&&)func)(0, warp_id * WARP_Q + qi, si, /*ri*/ 0, S[m][n][s1 * 4 + q * 2 + s0]);
                         }
                     }
                 }
@@ -484,7 +484,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
 
     __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T* smem_P)
     {
-        ForeachS(frag_S, [&](int, int qi, int si, float p) { smem_P[SmemLayoutP::apply(qi, si)] = half(p); });
+        ForeachS(frag_S, [&](int, int qi, int si, int ri, float p) { smem_P[SmemLayoutP::apply(qi, si)] = half(p); });
 
         if constexpr (!kUseSmemP) {
             const int warp_id = threadIdx.x / WARP_SIZE;
@@ -505,7 +505,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
     __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func){};
 
     template<bool is_norm, class Func>
-    __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Func&& func)
+    __device__ static void StoreO(FragO& frag_O, FragL& frag_L, SharedStorage& storage, Func&& func)
     {
         FragL inv_L;
         PRAGMA_UNROLL

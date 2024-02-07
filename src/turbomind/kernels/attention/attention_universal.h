@@ -211,6 +211,8 @@ struct AttentionUniversal {
             }
         }
 
+        __syncthreads();
+
         Impl::TransformQ(smem_Q, frag_Q);
     }
 
@@ -349,15 +351,15 @@ struct AttentionUniversal {
         }
 
         if constexpr (CTA_Q > 1) {
-            StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params);
+            StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
             return;
         }
 
         if (iter_begin == 0 && iter_end == tile_count) {
-            StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params);
+            StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
         }
         else {
-            StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params);
+            StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
 
             if (iter_end == tile_count) {
                 for (int ti = qi_begin + threadIdx.x; ti < qi_end; ti += kWarpCount * WARP_SIZE) {
@@ -401,10 +403,15 @@ struct AttentionUniversal {
         }
     }
 
-    __device__ void
-    StoreO(FragO& frag_O, FragL& frag_L, int qi_begin, int qi_end, int head_idx, const ParamType& params)
+    __device__ void StoreO(FragO&           frag_O,
+                           FragL&           frag_L,
+                           int              qi_begin,
+                           int              qi_end,
+                           int              head_idx,
+                           const ParamType& params,
+                           SharedStorage&   storage)
     {
-        Impl::StoreO<true>(frag_O, frag_L, [&](int hi, int qi, int di, const auto& vec) {
+        Impl::StoreO<true>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end) {
                 const int offset = (qi_begin + qi) * params.num_heads * kHeadDim + (head_idx + hi) * kHeadDim + di;
                 Store(&params.out[offset], cast<T>(vec));
@@ -419,7 +426,7 @@ struct AttentionUniversal {
                            const int&       max_context_len)
     {
         return [&](auto& frag_S, int offset_K) {
-            Impl::ForeachS(frag_S, [&](int hi, int qi, int si, float score) {
+            Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float score) {
                 qi += query_idx;
                 si += offset_K;
                 if (qi < params.max_q_len && si < max_context_len) {
@@ -438,7 +445,8 @@ struct AttentionUniversal {
                                  int              qi_end,
                                  int              head_idx,
                                  int              split_idx,
-                                 const ParamType& params)
+                                 const ParamType& params,
+                                 SharedStorage&   storage)
     {
         auto get_index = [&](int hi, int qi) {
             // [B, H, k, D]
@@ -446,7 +454,7 @@ struct AttentionUniversal {
                    + split_idx;
         };
 
-        Impl::StoreO<false>(frag_O, frag_L, [&](int hi, int qi, int di, const auto& vec) {
+        Impl::StoreO<false>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end) {
                 Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
             }

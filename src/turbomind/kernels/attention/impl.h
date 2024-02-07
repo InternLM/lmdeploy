@@ -13,6 +13,7 @@ struct Sm80_16816 {};
 struct Sm75_1688 {};
 struct Sm70_884 {};
 struct Sm70_Simt {};
+struct Sm80_16816_Decoding {};
 
 template<class Tag,
          class T,

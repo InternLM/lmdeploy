@@ -63,7 +63,7 @@ struct Impl_m16k8 {
                     for (int s = 0; s < 2; ++s) {
                         const int qi = m * OP_M + lane_id / 4 + q * 8 + (warp_id % kWarpCntQ) * WARP_Q;
                         const int ki = n * OP_N + lane_id % 4 * 2 + s;
-                        ((Func&&)func)(warp_id / kWarpCntQ, qi, ki, S[m][n][q * 2 + s]);
+                        ((Func&&)func)(warp_id / kWarpCntQ, qi, ki, /*ri*/ 0, S[m][n][q * 2 + s]);
                     }
                 }
             }
@@ -221,8 +221,8 @@ struct Impl_m16k8 {
 #endif
     }
 
-    template<bool is_norm, class Func>
-    __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Func&& func)
+    template<bool is_norm, class Func, class Storage>
+    __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Storage& storage, Func&& func)
     {
         FragL inv_L;
         PRAGMA_UNROLL

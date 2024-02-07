@@ -160,7 +160,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     static_assert(sizeof(FragS) / 2 == sizeof(FragP));
 
-    using Swizzle = Swizzle<3, 3, 4>;  // head dim 128 only
+    using Swizzle = Swizzle<3, 3, 4>;  // this is for head dim 128 only
 
     using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
     using SmemLayoutP = SmemLayout<CTA_S, Identity>;
@@ -283,7 +283,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                                      Prefetch&& prefetch,
                                      Preload&&  preload)
     {
-
         PRAGMA_UNROLL
         for (int k = 0; k < V_K; ++k) {
             if (k < V_K - 1) {

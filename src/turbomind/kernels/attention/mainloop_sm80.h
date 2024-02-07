@@ -45,7 +45,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
-    static constexpr auto kBatchKV = ThreadMapKV::kIterS / 2;
+    static constexpr auto kBatchKV = ThreadMapKV::kIterS;
 
     static constexpr int kTileSizeKV = CTA_S * Impl::SmemLayoutK::kStride;
     static constexpr int kSmemSizeKV = Stages * kTileSizeKV;
@@ -299,7 +299,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
     {
-        Impl::ForeachS(frag_S, [&](int hi, int qi, int si, float& score) {
+        Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
             if (offset_Q + qi < offset_K + si) {
                 score -= std::numeric_limits<float>::infinity();
             }

@@ -46,7 +46,6 @@ struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
         for (int n = 0; n < N; ++n) {
             const int si = n * 4 + offset_s;
             const int di = k * 64 + offset_c;
-            // LdShared(frag_K[n], offset + sizeof(T) * Layout::apply(si, di));
             Lds(frag_K[n], &smem_[offset + Layout::apply(si, di)]);
         }
     }
@@ -69,7 +68,6 @@ struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
             const int si = k * 4 + offset_s;
             const int di = n * 64 + offset_c;
             Lds(frag_V[n], &smem_[offset + Layout::apply(si, di)]);
-            // LdShared(frag_V[n], offset + sizeof(T) * Layout::apply(si, di));
         }
     }
 };
@@ -220,7 +218,8 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             for (int n = 0; n < K_N; ++n) {
                 const int hi = m * OP_H + warp_id_h * WARP_H;
                 const int si = n * OP_S + lane_id / 8 + warp_id_s * WARP_S;
-                ((Func&&)func)(hi, 0, si, S[m][n][0]);
+                const int ri = lane_id % 8;
+                ((Func&&)func)(hi, /*qi*/ 0, si, ri, S[m][n][0]);
             }
         }
     }
@@ -437,6 +436,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             for (int w = 0; w < kWarpCntS - 1; ++w) {
                 frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS]);
             }
+            // if (threadIdx.x == 0) {
+            //     printf("M %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_M[m][0]);
+            // }
         }
 
         ///////////////////////////////////////////////////////////////////////////
@@ -500,11 +502,14 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             for (int w = 0; w < kWarpCntS - 1; ++w) {
                 frag_L[m][0] += storage.L[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS];
             }
+            // if (threadIdx.x == 0) {
+            //     printf("L %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_L[m][0]);
+            // }
         }
     }
 
     template<bool is_norm, class Func>
-    __device__ static void StoreO(FragO& frag_O, const FragL& frag_L, Func&& func)
+    __device__ static void StoreO(FragO& frag_O, const FragL& frag_L, SharedStorage& storage, Func&& func)
     {
         FragL inv_L;
 
@@ -537,6 +542,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 if (lane_id < 8) {
                     const int hi = m * OP_H + warp_id_h * WARP_H;
                     const int di = n * OP_D + lane_id % 8 * 8;
+                    // for (int i = 0; i < 8; ++i) {
+                    //     printf("O %4d %4d %f\n", hi + blockIdx.x * CTA_H, di + i, frag_O[m][n][i]);
+                    // }
                     ((Func&&)func)(hi, 0, di, frag_O[m][n]);
                 }
             }

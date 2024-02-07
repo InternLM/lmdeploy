@@ -65,6 +65,9 @@ void dispatchDecoding(const AttentionParams<T>& params)
     else {
         if (params.arch >= 80) {
             if (0) {}
+            else if (query_group_sz % 8 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 8, kHeadDim>::Kernel>(params);
+            }
             else if (query_group_sz % 4 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 4, kHeadDim>::Kernel>(params);
             }
