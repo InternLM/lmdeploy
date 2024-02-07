@@ -345,9 +345,11 @@ class InternLM2Chat7B(InternLMChat7B):
                  system='<|im_start|>system\n',
                  user='<|im_start|>user\n',
                  assistant='<|im_start|>assistant\n',
+                 environment='<|im_start|>environment\n',
                  eosys='<|im_end|>\n',
                  eoh='<|im_end|>\n',
                  eoa='<|im_end|>\n',
+                 eoe='<|im_end|>\n',
                  stop_words=['<|im_end|>', '<|action_end|>'],
                  **kwargs):
         super(InternLM2Chat7B, self).__init__(session_len=session_len,
@@ -359,6 +361,35 @@ class InternLM2Chat7B(InternLMChat7B):
                                               eoa=eoa,
                                               stop_words=stop_words,
                                               **kwargs)
+        self.environment = environment
+        self.eoe = eoe
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa,
+                       system=self.eosys,
+                       environment=self.eoe)
+        ret = ''
+        if self.meta_instruction:
+            ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            ret += f'{eval(f"self.{role}")}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
+        return ret
 
 
 @MODELS.register_module(name='baichuan-7b')
