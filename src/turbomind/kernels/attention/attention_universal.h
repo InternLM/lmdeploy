@@ -86,8 +86,8 @@ struct AttentionUniversal {
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
             const int si = offset.y + s * Map::kDeltaS;
-            const int qi = si % CTA_Q + qi_begin;
-            const int hi = si / CTA_Q + head_idx;
+            const int hi = si % CTA_H + head_idx;
+            const int qi = si / CTA_H + qi_begin;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di    = offset.x + c * Map::kDeltaC;
@@ -152,7 +152,7 @@ struct AttentionUniversal {
                 di, std::integral_constant<int, kHeadDim>{}, rope_base, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
-                const int ti = (offset.y + s * Map::kDeltaS) % CTA_Q + query_idx + history_len;
+                const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
                 rope.apply(vec_Q[s][c], ti);
                 if constexpr (kProcessKV) {
                     static_assert(ITER_S == 1);
@@ -164,7 +164,7 @@ struct AttentionUniversal {
         if (params.use_logn_attn) {
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
-                const int   ti = (offset.y + s * Map::kDeltaS) % CTA_Q + query_idx + history_len;
+                const int   ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
                 LogNScaling logn_scaling(ti, params.max_position_embeddings);
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
@@ -200,13 +200,13 @@ struct AttentionUniversal {
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
             const int si = offset.y + s * Map::kDeltaS;
-            const int qi = si % CTA_Q;
-            const int hi = si / CTA_Q;
+            const int hi = si % CTA_H;
+            const int qi = si / CTA_H;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
                 if (qi < CTA_Q && hi < CTA_H) {
-                    Store(&sQ(hi * CTA_Q + qi, di), vec_Q[s][c]);
+                    Store(&sQ(si, di), vec_Q[s][c]);
                 }
             }
         }

@@ -108,9 +108,9 @@ struct Sm80SmemIterV: BaseSmemIterator<T, Layout> {
 
 template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H, int WARP_Q, int WARP_S, int HeadDim, int Stages>
 struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, HeadDim, Stages>:
-    Impl_m16k8<T_, CTA_Q_, WARP_Q, WARP_S, HeadDim> {
+    Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim> {
 
-    using Base = Impl_m16k8<T_, CTA_Q_, WARP_Q, WARP_S, HeadDim>;
+    using Base = Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim>;
 
     using Base::OP_M;
     using Base::OP_N;
@@ -134,15 +134,15 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     static constexpr int kHeadDim = HeadDim;
 
-    static_assert(CTA_H_ == 1 && WARP_H == 1);
-
     static constexpr int CTA_H = CTA_H_;
     static constexpr int CTA_Q = CTA_Q_;
     static constexpr int CTA_S = CTA_S_;
 
-    static constexpr int kWarpCntQ  = CTA_Q / WARP_Q;
+    static constexpr int kWarpCntQ  = CTA_Q * CTA_H / WARP_Q;
     static constexpr int kWarpCntS  = CTA_S / WARP_S;
     static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
+
+    static_assert(kWarpCntS == 1);
 
     static constexpr int OP_K = 16;
 
@@ -169,8 +169,8 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     union SharedStorage {
         __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
-        __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
-        __align__(16) T P[CTA_Q * SmemLayoutP::kStride * 0 + 1];
+        __align__(16) T Q[CTA_Q * CTA_H * SmemLayoutQ::kStride];
+        __align__(16) T P[1];
     };
 
     static constexpr bool kUseSmemQ = false;
@@ -182,7 +182,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     using SmemIterK = Sm80SmemIterK<T, SmemLayoutK, K_K, K_N>;
     using SmemIterV = Sm80SmemIterV<T, SmemLayoutV, V_K, V_N>;
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 8, kWarpCount>;
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q * CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
 
     using TransformK = float2;
@@ -211,8 +211,8 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
             PRAGMA_UNROLL
             for (int k = 0; k < K_K; ++k) {
                 // const int hi     = warp_id / kWarpCntQ;
-                const int qi = m * 16 + lane_id % 16 + (warp_id % kWarpCntQ) * WARP_Q;
-                const int di = k * 16 + lane_id / 16 * 8;
+                const int qi = lane_id % 16 * 1 + m * 16 + warp_id * WARP_Q;
+                const int di = lane_id / 16 * 8 + k * 16;
                 ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], cast_smem_ptr_to_uint(&sQ(qi, di)));
             }
         }
