@@ -367,7 +367,9 @@ struct AttentionUniversal {
                 }
             }
 
-            return;
+            if (CtaMap::split_count() > 32) {
+                return;
+            }
 
             const auto index = (CtaMap::batch_idx() * params.num_heads + CtaMap::head_idx()) * params.max_split_k;
             const auto locks = params.locks + index;
@@ -376,7 +378,9 @@ struct AttentionUniversal {
                 sem_post(&locks[split_idx], 1, threadIdx.x == 0);
             }
             else {
-                sem_wait_many(&locks[threadIdx.x], split_idx, threadIdx.x < split_idx);
+                const int split_count = split_idx + 1;
+
+                sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);
 
                 using Reduce = attention::Reduce<T, CTA_H, kHeadDim, kWarpCount>;
 
@@ -463,6 +467,7 @@ struct AttentionUniversal {
         Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float M, float L) {
             const int index = get_index(hi, qi);
             if (qi_begin + qi < qi_end && ri == 0) {
+                // printf("ML %2d %2d %f %f\n", split_idx, head_idx + hi, M, L);
                 params.partial_M[index] = M;
                 params.partial_L[index] = L;
             }

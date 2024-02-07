@@ -25,6 +25,10 @@ struct AttentionCtaMap {
     {
         return 0;
     }
+    static __device__ int split_count()
+    {
+        return 1;
+    }
 };
 
 struct DecodingCtaMap {
@@ -47,6 +51,10 @@ struct DecodingCtaMap {
     static __device__ int split_idx()
     {
         return blockIdx.z;
+    }
+    static __device__ int split_count()
+    {
+        return gridDim.z;
     }
 };
 

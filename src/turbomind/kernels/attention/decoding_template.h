@@ -46,7 +46,7 @@ void invokeDecoding(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    if (max_split_count > 1) {
+    if (max_split_count > 32) {
         using Reduce = typename Kernel::SeparateReduce;
         attention::invokeReduce<Reduce>(params.out,
                                         params.partial_M,

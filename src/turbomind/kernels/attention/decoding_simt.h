@@ -204,7 +204,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     {
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {  // Q
-            ((Func&&)func)(m * OP_H, 0, threadIdx.x, frag_M[m][0], frag_L[m][0]);
+            const int hi = m * OP_H;
+            const int ri = threadIdx.x;
+            ((Func&&)func)(hi, 0, ri, frag_M[m][0], frag_L[m][0]);
         }
     }
 

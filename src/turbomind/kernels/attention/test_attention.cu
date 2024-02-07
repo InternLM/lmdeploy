@@ -80,7 +80,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
     thrust::universal_vector<int> seq_lens(batch_size);
     thrust::universal_vector<int> cu_seq_lens(batch_size + 1);
     thrust::fill(seq_lens.begin(), seq_lens.end(), seq_len);
-    for (int i = 0; i <= batch_size; ++i) {
+    for (size_t i = 0; i <= batch_size; ++i) {
         cu_seq_lens[i] = i * seq_len;
     }
 
@@ -162,21 +162,21 @@ int main(int argc, char* argv[])
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum     = 32;
-    constexpr size_t kBatchSize   = 16;
+    constexpr size_t kHeadNum     = 64;
+    constexpr size_t kBatchSize   = 1;
     constexpr size_t kInputLen    = 1;
-    constexpr size_t kSequenceLen = 8191;
+    // constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 16383;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
-    // constexpr size_t kSequenceLen = 262143;
+    constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
     // constexpr int kSequenceLen = 2047;
     constexpr int kBlockSz   = 128;
-    constexpr int kMaxSplitK = 1;
+    constexpr int kMaxSplitK = 32;
 #else
     constexpr size_t kHeadNum     = 16;
     constexpr size_t kBatchSize   = 2;
@@ -475,7 +475,7 @@ int main(int argc, char* argv[])
     if (outputs.size() > 1) {
         std::cout << "Evaluating consistency..." << std::endl;
         for (size_t i = 1; i < outputs.size(); ++i) {
-            Compare(outputs[i].data().get(), outputs[i - 1].data().get(), kHeadDim, kHeadDim, kHeadNum);
+            Compare(outputs[i].data().get(), outputs[i - 1].data().get(), kHeadDim, kHeadDim, kHeadNum, true, 0, 0);
         }
     }
 

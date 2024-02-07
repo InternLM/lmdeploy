@@ -213,12 +213,14 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
     template<class Func>
     __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)
     {
-        const int lane_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int n = 0; n < K_N; ++n) {  // Q
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
-                ((Func&&)func)(n * OP_N + lane_id % 4 * 2 + q, 0, lane_id / 4, frag_M[n][q], frag_L[n][q]);
+                const int hi = lane_id % 4 * 2 + n * OP_N + q * 1;
+                const int ri = lane_id / 4 * 1;
+                ((Func&&)func)(hi, /*qi*/ 0, ri, frag_M[n][q], frag_L[n][q]);
             }
         }
     }

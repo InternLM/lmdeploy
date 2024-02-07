@@ -36,7 +36,7 @@ void Compare(const T* src, const T* ref, size_t stride, int m, int n, bool show,
             // }
             auto abs_diff = std::abs(x - y);
             auto rel_diff = abs_diff / std::abs(y + 1e-6f);
-            if (!(abs_diff < atol + rtol * std::abs(y))) {
+            if (!(abs_diff <= atol + rtol * std::abs(y))) {
                 ++outliers;
                 if (show) {
                     std::cout << nn << "," << mm << "\t" << x << "\t" << y << std::endl;
