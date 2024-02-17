@@ -45,7 +45,7 @@ try:
 except:  # noqa # pylint: disable=bare-except
     BaseStreamer = None
 
-from .configuration_internlm import InternLMConfig as InternLM2Config
+from .configuration_internlm2 import InternLM2Config
 
 logger = get_logger('lmdeploy')
 

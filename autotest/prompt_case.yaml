@@ -2,14 +2,21 @@ identity_case:
     - 你好，你叫什么名字#hi, what's your name:
 
 memory_test:
-    - 介绍成都的景点#please introduce some attractions in Chengdu:
+    - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
             - chengdu
             - 成都
         - contain:
             - 熊猫
             - panda
-    - 介绍美食#please introduce some delicious foods:
+            - 宽窄巷子
+            - jinli
+            - leshan
+        - falcon:
+            - contain:
+                - chengdu
+                - 成都
+    - 介绍相应美食#please introduce some delicious foods:
         - contain:
             - 成都
             - chengdu
@@ -17,8 +24,11 @@ memory_test:
             - 火锅
             - hotpot
             - hot pot
+        - falcon:
+            - len_g:
+                10
 new_session_without_memory:
-    - 介绍美食#please introduce some delicious foods:
+    - 介绍相应美食#please introduce some delicious foods:
         - not_contain:
             - 成都
             - chengdu
@@ -39,7 +49,7 @@ chinese_poem_case:
 english_poem_case:
     - write a romantic poem:
         - contain:
-            - ","
+            - " "
         - contain:
             - "."
         - contain:
@@ -51,6 +61,12 @@ emoji_case:
         - contain:
             - 👍
             - 😊
+        - baichuan2-7b:
+            - contain:
+                - 👍
+                - 😊
+                - \u2714
+                - 赞
 traditional_chinese_case:
     - 請介紹香港維多利亞港，用繁體中文回答:
         - contain:

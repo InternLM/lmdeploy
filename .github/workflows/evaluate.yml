@@ -1,0 +1,119 @@
+name: evaluate
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is InternLM'
+        type: string
+        default: InternLM
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      models:
+        required: true
+        description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
+        type: string
+        default: '[internlm2_chat_7b,internlm2_chat_20b,internlm2_chat_20b_w4a16,llama2_chat_7b,qwen_chat_7b]'
+      devices:
+        required: true
+        description: 'CUDA_VISIBLE_DEVICES.'
+        type: string
+        default: '0,1,2,3,4,5,6,7'
+
+jobs:
+  evaluate:
+    runs-on: [self-hosted, linux-a100-eval]
+    timeout-minutes: 4320 # 72hours
+    environment: 'prod'
+    container:
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      volumes:
+        - /mnt/142/github-actions/pip-cache:/root/.cache/pip
+        - /mnt/142/github-actions/packages:/root/packages
+        - /mnt/142/github-actions/resources:/root/resources
+        - /mnt/142/github-actions/evaluation-reports:/root/evaluation-reports
+        - /mnt/142/github-actions/opencompass-data:/root/opencompass-data
+        - /mnt/140:/root/models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev
+          rm -rf /var/lib/apt/lists
+          export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
+          echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: '${{ github.event.inputs.repo_org}}/lmdeploy'
+          ref: ${{github.event.inputs.repo_ref}}
+      - name: Install pytorch
+        run: |
+          python3 -m pip cache dir
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+      - name: Build lmdeploy
+        run: |
+          python3 -m pip install cmake
+          python3 -m pip install -r requirements/build.txt
+          mkdir build
+          cd build
+          cmake .. \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
+              -DCMAKE_INSTALL_PREFIX=./install \
+              -DBUILD_PY_FFI=ON \
+              -DBUILD_MULTI_GPU=ON \
+              -DCMAKE_CUDA_FLAGS="-lineinfo" \
+              -DUSE_NVTX=ON \
+              -DSM=80 \
+              -DCMAKE_CUDA_ARCHITECTURES=80 \
+              -DBUILD_TEST=OFF
+          make -j$(nproc) && make install
+      - name: Install lmdeploy from source
+        run: |
+          python3 -m pip install pynvml packaging protobuf transformers_stream_generator
+          # manually install flash attn
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install -r requirements.txt
+          python3 -m pip install .
+      - name: Install opencompass
+        run: |
+          git clone --depth=1 https://github.com/open-compass/opencompass.git
+          cd opencompass
+          python3 -m pip install --user -e .
+          echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
+      - name: Setup paths for evaluation
+        run: |
+          ln -s /root/opencompass-data ./data
+          ln -s /root/models/InternLM ./internlm
+          mkdir meta-llama
+          ln -s /root/models/llama2/huggingface/llama-2-7b-chat ./meta-llama/Llama-2-7b-chat-hf
+          ln -s /root/models/llama2/huggingface/llama-2-13b-chat ./meta-llama/Llama-2-13b-chat-hf
+          ln -s /root/models/llama2/huggingface/llama-2-70b-chat ./meta-llama/Llama-2-70b-chat-hf
+          ln -s /root/models/Qwen ./Qwen
+          ln -s /root/models/baichuan2 ./baichuan-inc
+      - name: Evaluate models
+        run: |
+          echo ${{github.event.inputs.models}}
+          echo ${{github.event.inputs.devices}}
+          export LMDEPLOY_DIR=$(pwd)
+          export CUDA_VISIBLE_DEVICES="${{github.event.inputs.devices}}"
+
+          python3 .github/scripts/action_tools.py evaluate \
+            --models "${{github.event.inputs.models}}" \
+            --workspace /root/evaluation-reports/$TIME_STAMP
+      - name: Clear workspace
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
