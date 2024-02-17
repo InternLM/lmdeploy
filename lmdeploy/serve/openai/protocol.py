@@ -95,6 +95,7 @@ class ChatCompletionRequest(BaseModel):
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
     skip_special_tokens: Optional[bool] = True
+    top_k: Optional[int] = 40  # for opencompass
 
 
 class ChatMessage(BaseModel):
