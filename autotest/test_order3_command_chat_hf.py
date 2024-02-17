@@ -45,6 +45,49 @@ class TestCommandChat:
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'internlm2-chat-20b-inner-w4')
 
+    @pytest.mark.internlm2_20b
+    @allure.story('internlm2-20b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm2_20b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm2-20b')
+
+    @pytest.mark.internlm2_chat_1_8b
+    @allure.story('internlm2-chat-1_8b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm2_chat_1_8b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm2-chat-1_8b')
+
+    @pytest.mark.internlm2_1_8b
+    @allure.story('internlm2-1_8b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm2_1_8b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm2-1_8b')
+
+    @pytest.mark.internlm_chat_7b
+    @allure.story('internlm-chat-7b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm_chat_7b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-7b')
+
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm_chat_20b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-20b')
+
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b-inner-w4')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_chat_internlm_chat_20b_inner_w4(self, config, cli_case_config,
+                                             usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-20b-inner-w4')
+
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
     @pytest.mark.parametrize('usercase', getCaseList())
@@ -90,6 +133,23 @@ class TestCommandChat:
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'Baichuan2-7B-Chat-inner-w4')
 
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def future_test_chat_Baichuan2_13B_Chat(self, config, cli_case_config,
+                                            usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Baichuan2-13B-Chat')
+
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat-inner-w4')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def future_test_chat_Baichuan2_13B_Chat_inner_w4(self, config,
+                                                     cli_case_config,
+                                                     usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Baichuan2-13B-Chat-inner-w4')
+
     @pytest.mark.CodeLlama_7b_Instruct_hf
     @allure.story('CodeLlama-7b-Instruct-hf')
     @pytest.mark.parametrize('usercase', getCaseList())
@@ -115,14 +175,8 @@ class TestCommandChat:
 
 
 def run_command_line_test(config, case, case_info, model_case):
-    model_map = config.get('model_map')
-
-    if model_case not in model_map.keys():
-        assert False, 'the model is incorrect'
-    model_name = model_map.get(model_case)
-
     result, chat_log, msg = hf_command_line_test(config, case, case_info,
-                                                 model_case, model_name)
+                                                 model_case)
     allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg
