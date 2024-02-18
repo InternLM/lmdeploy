@@ -1,4 +1,4 @@
-# Triton Inference Server 性能测试方法
+# Triton Inference Server 性能测试
 
 Triton Inference Server(TIS) 是 LMDeploy 支持的除了 api_server 之外的另一种 serving 方式。它的性能测试方式和测试指标和 [api_server](./profile_api_server.md) 的测试方式类似。
 
