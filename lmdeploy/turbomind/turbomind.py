@@ -754,6 +754,7 @@ class TurboMindInstance:
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
 
+        prev_len = 0
         # generator
         while True:
             finish, tm_outputs = await que.get()
@@ -781,6 +782,10 @@ class TurboMindInstance:
                     outputs = (status, output[:-1].tolist(), len_)
                 else:
                     outputs = (status, output.tolist(), len_)
+            if outputs[-1] < prev_len and not finish:
+                continue
+            else:
+                prev_len = outputs[-1]
             yield outputs
 
             if finish:
