@@ -342,6 +342,32 @@ def parse_args():
     return args
 
 
+def __proc_cb(*args, ret_pipe, target):
+    try:
+        ret = target(*args)
+        ret_pipe[1].send(ret)
+    except Exception as e:
+        ret_pipe[1].send(e)
+
+
+def _process_map(target, iterable):
+    from multiprocessing import Pipe, get_context
+
+    pipe = Pipe(False)
+    spawn_context = get_context('spawn')
+    proc = spawn_context.Process(target=__proc_cb,
+                                 args=iterable,
+                                 kwargs=dict(ret_pipe=pipe, target=target))
+    proc.start()
+    proc.join()
+
+    ret = pipe[0].recv()
+    if isinstance(ret, Exception):
+        raise ret
+
+    return ret
+
+
 def main():
     args = parse_args()
     assert len(args.prompt_tokens) == len(args.completion_tokens), \
@@ -356,7 +382,6 @@ def main():
                                                     args.completion_tokens):
             MemoryMonitor.start()
             from functools import partial
-            from multiprocessing import Pool
             if args.backend == 'turbomind':
                 engine_config = TurbomindEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
@@ -379,9 +404,9 @@ def main():
                 test_round=args.test_round,
                 warmup_round=args.warmup_round,
             )
-            output = Pool(1).map(profile_target, (args.model_path, ))
+            output = _process_map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
-                throughput_per_proc, tp = output[0]
+                throughput_per_proc, tp = output
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
             device_count = MemoryMonitor.device_count.value
