@@ -181,12 +181,12 @@ int main(int argc, char* argv[])
     constexpr size_t kHeadNum   = 32;
     constexpr size_t kBatchSize = 1;
     // append
-    constexpr size_t kInputLen    = 128;
-    constexpr size_t kSequenceLen = 65536;
+    // constexpr size_t kInputLen    = 128;
+    // constexpr size_t kSequenceLen = 65536;
 
     // prefill
-    // constexpr size_t kInputLen    = 8192;
-    // constexpr size_t kSequenceLen = 0;
+    constexpr size_t kInputLen    = 8192;
+    constexpr size_t kSequenceLen = 0;
     
     constexpr int    kBlockSz     = 128;
     constexpr int    kMaxSplitK   = 32;

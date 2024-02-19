@@ -37,7 +37,8 @@ void invokeAttention(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    const int max_split_count = params.max_split_k;
+    const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
+    const int max_split_count = std::min(params.max_split_k, tile_count);
 
     typename Kernel::CtaMap cta_map{
         params.max_q_len, params.batch_size, params.num_heads, Kernel::CTA_Q, Kernel::CTA_H, 1};
