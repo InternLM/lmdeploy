@@ -249,7 +249,7 @@ class Engine:
         def __update_bad_words(msg):
             """update bad words."""
             sampling_param = msg.sampling_param
-            if sampling_param.ignore_eos:
+            if sampling_param.ignore_eos or sampling_param.min_new_tokens > 0:
                 sampling_param.bad_words.append(self.model_config.eos_token_id)
 
         for req in reqs:
@@ -451,6 +451,20 @@ class Engine:
                         inputs: ModelInputs):
         """sampling logits."""
 
+        def _update_bad_words(running):
+            eos_token_id = self.model_config.eos_token_id
+            for seq in running:
+                param = seq.sampling_param
+                if param.min_new_tokens == 0:
+                    continue
+                if eos_token_id not in param.bad_words:
+                    continue
+                if seq.num_new_tokens >= param.min_new_tokens:
+                    bad_words = list(param.bad_words)
+                    bad_words.remove(eos_token_id)
+                    param.bad_words = bad_words
+            return running
+
         def _group_params(running):
             sampling_params: List[SamplingParam] = [
                 msg.sampling_param.logical_sampling_param() for msg in running
@@ -472,6 +486,7 @@ class Engine:
                 next_token_ids[idx] = argmax_ids
             return next_token_ids
 
+        running = _update_bad_words(running)
         grouped_params = _group_params(running)
 
         is_decoding = inputs.is_decoding
