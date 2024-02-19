@@ -235,7 +235,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         FT_CHECK(!state.requests[idx]);
 
         if (rank_ == 0) {
-            TM_LOG_WARNING("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
         }
 
         state.requests[idx] = r;
