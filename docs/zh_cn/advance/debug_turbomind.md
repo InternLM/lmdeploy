@@ -48,6 +48,14 @@ rpm -ivh glibc-debuginfo-2.17-325.el7.x86_64.rpm
 rpm -ivh python3-debuginfo-3.6.8-21.el7.x86_64.rpm
 ```
 
+### 升级 GDB
+
+```bash
+sudo yum install devtoolset-10 -y
+echo "source scl_source enable devtoolset-10" >> ~/.bashrc
+source ~/.bashrc
+```
+
 ### 验证
 
 ```bash
