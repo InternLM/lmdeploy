@@ -3,7 +3,7 @@ fire
 fuzzywuzzy
 mmengine-lite
 numpy
-peft==0.7.1
+peft<=0.8.2
 pydantic>2.0.0
 pynvml
 safetensors
