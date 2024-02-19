@@ -99,12 +99,15 @@ class ModelConfig:
 
         def __build_chatglm():
             """build chatglm."""
+            bos_token_id = hf_config.bos_token_id
+            if bos_token_id is None:
+                bos_token_id = hf_config.pad_token_id
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=hf_config.multi_query_group_num,
-                bos_token_id=hf_config.bos_token_id,
+                bos_token_id=bos_token_id,
                 eos_token_id=hf_config.eos_token_id)
 
         def __build_internlm2():

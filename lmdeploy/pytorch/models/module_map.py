@@ -69,6 +69,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMModel',
     'modeling_chatglm.MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.MLP',
+    'modeling_chatglm.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedRMSNorm',
 })
 
 # internlm
