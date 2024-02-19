@@ -76,10 +76,9 @@ def serve(model_path: str,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
-          log_level: str = 'WARNING',
+          log_level: str = 'ERROR',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
-          block: bool = False,
           **kwargs):
     """This will run the api_server in a subprocess.
 
@@ -112,13 +111,9 @@ def serve(model_path: str,
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
-        block (bool): If the block is True, the python process will be blocked.
-            Otherwise, the function will return a client. The service will be
-            running in a subprocess.
 
     Return:
-        APIClient or None: If block is False, return a client chatbot for LLaMA series models.
-            Or else, return None.
+        APIClient: A client chatbot for LLaMA series models.
 
     Examples:
         >>> import lmdeploy
@@ -136,23 +131,19 @@ def serve(model_path: str,
         kwargs.pop('tp')
     else:
         tp = 1 if backend_config is None else backend_config.tp
-    serve_kwargs = dict(model_name=model_name,
-                        backend=backend,
-                        backend_config=backend_config,
-                        chat_template_config=chat_template_config,
-                        server_name=server_name,
-                        server_port=server_port,
-                        tp=tp,
-                        log_level=log_level,
-                        api_keys=api_keys,
-                        ssl=ssl,
-                        **kwargs)
-    if block:
-        serve(model_path, **serve_kwargs)
-        return
     task = Process(target=serve,
                    args=(model_path, ),
-                   kwargs=serve_kwargs,
+                   kwargs=dict(model_name=model_name,
+                               backend=backend,
+                               backend_config=backend_config,
+                               chat_template_config=chat_template_config,
+                               server_name=server_name,
+                               server_port=server_port,
+                               tp=tp,
+                               log_level=log_level,
+                               api_keys=api_keys,
+                               ssl=ssl,
+                               **kwargs),
                    daemon=True)
     task.start()
     client = APIClient(f'http://{server_name}:{server_port}')
