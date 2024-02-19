@@ -38,6 +38,7 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    cache_max_entry_count: float = 0.8
 
 
 @dataclass
