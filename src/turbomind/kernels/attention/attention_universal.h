@@ -46,7 +46,15 @@ struct AttentionUniversal {
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
-    using SeparateReduce = attention::Reduce<T, 1, kHeadDim, 4>;
+    __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
+    {
+        if constexpr (CTA_Q > 1) {
+            return true;
+        }
+        else {
+            return CTA_H * max_split_cnt > 32;
+        }
+    }
 
     __device__ void Prologue(const ParamType& params,
                              T*               smem_Q,
@@ -175,6 +183,7 @@ struct AttentionUniversal {
 
         if constexpr (kProcessKV) {
             static_assert(ITER_S == 1);
+            const int              qi           = offset.y / CTA_H;
             const int              ti           = history_len;
             const int              block_index  = ti >> (31 - __clz(block_seq_len));
             const int              block_offset = ti & (block_seq_len - 1);
@@ -186,8 +195,10 @@ struct AttentionUniversal {
                 const int di    = offset.x + c * Map::kDeltaC;
                 const int idx_k = local_k_offset + block_offset * kHeadDim + di;
                 const int idx_v = local_v_offset + block_offset * kHeadDim + di;
-                Store(&block[idx_k], transform_K(vec_K[0][c]));
-                Store(&block[idx_v], transform_V(vec_V[0][c]));
+                if (qi < CTA_Q) {
+                    Store(&block[idx_k], transform_K(vec_K[0][c]));
+                    Store(&block[idx_v], transform_V(vec_V[0][c]));
+                }
             }
             __syncthreads();
         }
@@ -216,13 +227,14 @@ struct AttentionUniversal {
         Impl::TransformQ(smem_Q, frag_Q);
     }
 
-    __device__ void operator()(const ParamType& params, char* smem_buf)
+    __device__ void operator()(const ParamType& params, const CtaMap& cta_map, char* smem_buf)
     {
         // [q, h, b]
-        const int query_idx = CtaMap::query_idx() * CTA_Q;
-        const int head_idx  = CtaMap::head_idx() * CTA_H;
-        const int batch_idx = CtaMap::batch_idx();
-        const int split_idx = CtaMap::split_idx();
+        const int query_idx = cta_map.query_idx() * CTA_Q;
+        const int head_idx  = cta_map.head_idx() * CTA_H;
+        const int batch_idx = cta_map.batch_idx();
+        const int split_idx = cta_map.split_idx();
+        const int split_cnt = cta_map.split_count();
 
         // early exit if finished flag is set
         if (params.finished[batch_idx]) {
@@ -265,7 +277,7 @@ struct AttentionUniversal {
 
         const int tile_count = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S;
 
-        const int tile_per_split = (tile_count + params.max_split_k - 1) / params.max_split_k;
+        const int tile_per_split = (tile_count + split_cnt - 1) / split_cnt;
         const int iter_begin     = tile_per_split * split_idx;
         const int iter_end       = min(iter_begin + tile_per_split, tile_count);
 
@@ -291,8 +303,6 @@ struct AttentionUniversal {
                  warp_id,
                  lane_id);
 
-        const int offset_Q = history_len + query_idx;
-
         int tile_iter = iter_end - iter_begin - 1;
         int mask_iter = (CTA_Q + CTA_S - 1) / CTA_S + 1;
 
@@ -302,21 +312,23 @@ struct AttentionUniversal {
         TransformK transform_K{params.kv_quant_params[0], params.kv_quant_params[1]};
         TransformV transform_V{params.kv_quant_params[2], params.kv_quant_params[3]};
 
+        /// TODO: move the branching to template parameter
         auto block_iter = [&] {
             if constexpr (CTA_Q == 1) {
                 // [H, s, D]
-                auto block_ptrs = (const Tkv**)k_cache_ptrs + iter_begin * CTA_S / block_seq_len;
+                auto block_ptrs      = (const Tkv**)k_cache_ptrs + iter_begin * CTA_S / block_seq_len;
+                int  local_id_offset = iter_begin % (block_seq_len / CTA_S);
                 return BlockTileIter<Tkv, CTA_S, kHeadDim, BlockSeqLen>{
-                    block_ptrs, block_seq_len, {local_k_offset, local_v_offset}};
+                    block_ptrs, block_seq_len, {local_k_offset, local_v_offset}, local_id_offset};
             }
             else {
                 // [H, 2, cuS, D]
                 const int skip_k   = params.cu_k_len[0];
                 const int sum_k    = params.cu_k_len[params.batch_size] - skip_k;
-                const int begin    = params.cu_k_len[batch_idx] - skip_k;
+                const int begin    = params.cu_k_len[batch_idx] - skip_k + iter_begin * CTA_S;
                 const int stride_h = 2 * sum_k * kHeadDim;
-                return LinearTileIter2<Tkv, CTA_S, kHeadDim>{
-                    (const Tkv*)params.kv + stride_h * kv_head_idx + begin * kHeadDim, sum_k * kHeadDim};
+                return LinearTileIter<Tkv, CTA_S, kHeadDim>{
+                    (const Tkv*)params.kv + kv_head_idx * stride_h + begin * kHeadDim, sum_k * kHeadDim};
             }
         }();
 
@@ -327,6 +339,9 @@ struct AttentionUniversal {
         fill(frag_M, -std::numeric_limits<float>::infinity());
 
         __syncthreads();
+
+        const int offset_Q = history_len + query_idx - iter_begin * CTA_S;
+        const int max_step = context_len - iter_begin * CTA_S;
 
         Mainloop mainloop;
         mainloop(frag_Q,
@@ -339,7 +354,7 @@ struct AttentionUniversal {
                  frag_M,
                  frag_L,
                  offset_Q,
-                 context_len,
+                 max_step,
                  tile_iter,
                  mask_iter,
                  params.inv_sqrt_dh,
@@ -350,59 +365,67 @@ struct AttentionUniversal {
             Impl::Merge(frag_O, frag_M, frag_L, params.inv_sqrt_dh, storage);
         }
 
-        if constexpr (CTA_Q > 1) {
-            StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
-            return;
-        }
-
         if (iter_begin == 0 && iter_end == tile_count) {
             StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
 
-            if (iter_end == tile_count) {
+            if (iter_end == tile_count) {  // store actual split count
                 for (int ti = qi_begin + threadIdx.x; ti < qi_end; ti += kWarpCount * WARP_SIZE) {
                     params.split_cnt[ti] = split_idx + 1;
                 }
             }
 
-            if (CtaMap::split_count() > 32) {
+            if (need_separate_reduce(cta_map.split_count())) {
                 return;
             }
-
-            const auto index = (CtaMap::batch_idx() * params.num_heads + CtaMap::head_idx()) * params.max_split_k;
-            const auto locks = params.locks + index;
-
-            if (iter_end != tile_count) {
-                sem_post(&locks[split_idx], 1, threadIdx.x == 0);
-            }
             else {
-                const int split_count = split_idx + 1;
+                Reduce(qi_begin, head_idx, split_idx, iter_end != tile_count, params, cta_map, smem_buf);
+            }
+        }
+    }
 
-                sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);
+    __device__ void Reduce(int              qi_begin,
+                           int              head_idx,
+                           int              split_idx,
+                           bool             is_last,
+                           const ParamType& params,
+                           const CtaMap&    cta_map,
+                           char*            smem_buf)
+    {
+        // Note: `head_idx` is cta_map.head_idx() * CTA_H
+        const auto index = (cta_map.batch_idx() * params.num_heads + cta_map.head_idx()) * params.max_split_k;
+        const auto locks = params.locks + index;
 
-                using Reduce = attention::Reduce<T, CTA_H, kHeadDim, kWarpCount>;
+        if (is_last) {
+            sem_post(&locks[split_idx], 1, threadIdx.x == 0);
+        }
+        else {
+            const int split_count = split_idx + 1;
 
-                Reduce reduce_op;
-                reduce_op(params.out,
-                          params.partial_M,
-                          params.partial_L,
-                          params.partial_O,
-                          qi_begin,
-                          head_idx,
-                          params.num_heads,
-                          split_idx + 1,
-                          params.max_split_k,
-                          params.inv_sqrt_dh,
-                          1,
-                          0,
-                          *(typename Reduce::SharedStorage*)smem_buf,
-                          std::true_type{});
+            sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);
 
-                if (threadIdx.x < split_idx) {
-                    locks[threadIdx.x] = 0;
-                }
+            using Reduce = attention::Reduce<T, CTA_H, 32, kHeadDim, kWarpCount>;
+
+            Reduce reduce_op;
+            reduce_op(params.out,
+                      params.partial_M,
+                      params.partial_L,
+                      params.partial_O,
+                      qi_begin,
+                      head_idx,
+                      params.num_heads,
+                      split_idx + 1,
+                      params.max_split_k,
+                      params.inv_sqrt_dh,
+                      1,
+                      0,
+                      *(typename Reduce::SharedStorage*)smem_buf,
+                      std::true_type{});
+
+            if (threadIdx.x < split_idx) {
+                locks[threadIdx.x] = 0;
             }
         }
     }
@@ -476,14 +499,13 @@ struct AttentionUniversal {
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 extern __shared__ char dynamic_smem[];
 
-template<class AttentionType, class ParamType = typename AttentionType::ParamType>
-__global__ void attention_kernel(ParamType params)
+template<class AttentionType>
+__global__ void attention_kernel(typename AttentionType::ParamType params, typename AttentionType::CtaMap cta_map)
 {
-    AttentionType{}(params, dynamic_smem);
+    AttentionType{}(params, cta_map, dynamic_smem);
 }
 
 }  // namespace turbomind

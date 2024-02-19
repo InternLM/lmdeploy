@@ -6,19 +6,19 @@
 #include "attention_universal.h"
 #include "reduce_template.h"
 #include "src/turbomind/kernels/attention/thread_map.h"
-
+#include "utils.h"
 namespace turbomind {
 
 template<class Kernel>
 void invokeDecoding(const typename Kernel::ParamType& params)
 {
-    static const size_t kDynamicSmemSize = sizeof(typename Kernel::SharedStorage);
+    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
     if constexpr (0) {
         [[maybe_unused]] static const int _ = [&] {
             std::cout << "GmemMap:\n";
             Print(typename Kernel::Impl::ThreadMapKV{});
-            std::cout << "\nDynamic smem size: " << kDynamicSmemSize << "\n";
+            std::cout << "\nDynamic smem size: " << kSmemSize << "\n";
             return 0;
         }();
     }
@@ -26,40 +26,54 @@ void invokeDecoding(const typename Kernel::ParamType& params)
     const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
-    dim3 block(Kernel::kWarpCount * WARP_SIZE);
-
     using CtaMap = typename Kernel::CtaMap;
 
-    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, max_split_count, Kernel::CTA_H);
+    dim3 block(Kernel::kWarpCount * WARP_SIZE);
 
-    auto err =
-        cudaFuncSetAttribute(attention_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynamicSmemSize);
+    auto kernel_func = &attention_kernel<Kernel>;
+
+    thread_local const int2 caps = [&] {
+        int device_id{};
+        cudaGetDevice(&device_id);
+        int sm_count{};
+        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device_id);
+        int max_active_ctas{};
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active_ctas, kernel_func, block.x, kSmemSize);
+        return int2{sm_count, max_active_ctas};
+    }();
+
+    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, 1, Kernel::CTA_H);
+
+    const int grid_size = grid.x * grid.y * grid.z;
+    const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 4);
+
+    grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, split_cnt, Kernel::CTA_H);
+
+    auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
     if (err) {
         std::cout << cudaGetErrorString(err) << "\n";
         std::abort();
     }
 
-    attention_kernel<Kernel><<<grid, block, kDynamicSmemSize, params.stream>>>(params);
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, CtaMap{});
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";
         std::abort();
     }
 
-    if (max_split_count > 32) {
-        using Reduce = typename Kernel::SeparateReduce;
-        attention::invokeReduce<Reduce>(params.out,
-                                        params.partial_M,
-                                        params.partial_L,
-                                        params.partial_O,
-                                        params.locks,
-                                        params.split_cnt,
-                                        params.max_split_k,
-                                        max_split_count,
-                                        params.token_num,
-                                        params.num_heads,
-                                        params.inv_sqrt_dh,
-                                        params.stream);
+    if (Kernel::need_separate_reduce(split_cnt)) {
+        attention::dispatchReduce<Kernel::kHeadDim>(params.out,
+                                                    params.partial_M,
+                                                    params.partial_L,
+                                                    params.partial_O,
+                                                    params.split_cnt,
+                                                    params.max_split_k,
+                                                    split_cnt,
+                                                    params.token_num,
+                                                    params.num_heads,
+                                                    params.inv_sqrt_dh,
+                                                    params.stream);
     }
 }
 

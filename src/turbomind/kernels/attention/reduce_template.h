@@ -4,15 +4,14 @@
 
 #include "cta_map.h"
 
-#include "../gemm_s_f16/common.h"
+#include "src/turbomind/kernels/attention/reduce.h"
 
-#include <iostream>
 #include <type_traits>
 
 namespace turbomind::attention {
 
-template<class Kernel, bool IsFinal>
-__global__ void reduce_kernel(typename Kernel::T* out,
+template<class Reduce, bool IsFinal>
+__global__ void reduce_kernel(typename Reduce::T* out,
                               float*              partial_M,
                               float*              partial_L,
                               float*              partial_O,
@@ -31,13 +30,13 @@ __global__ void reduce_kernel(typename Kernel::T* out,
 
     const int split_cnt = split_cnt_[query_idx];
 
-    const int chunk_cnt = (split_cnt + 31) / 32;
+    const int chunk_offset = chunk_idx * stride_k * Reduce::CTA_K;
 
-    if (chunk_idx >= chunk_cnt) {
+    if (chunk_offset >= split_cnt) {  // out of bound
         return;
     }
 
-    Kernel reduce{};
+    Reduce reduce{};
     reduce(out,
            partial_M,
            partial_L,
@@ -49,38 +48,55 @@ __global__ void reduce_kernel(typename Kernel::T* out,
            max_split_cnt,
            exp_scale,
            stride_k,
-           chunk_idx * 32,
-           *(typename Kernel::SharedStorage*)smem,
+           chunk_offset,
+           *(typename Reduce::SharedStorage*)smem,
            std::integral_constant<bool, IsFinal>{});
 }
 
-template<class Kernel>
-void invokeReduce(typename Kernel::T* out,
-                  float*              partial_M,
-                  float*              partial_L,
-                  float*              partial_O,
-                  int*                signals,
-                  const int*          split_cnt,
-                  int                 max_split_cnt,
-                  int                 dyn_split_cnt,
-                  int                 query_num,
-                  int                 head_num,
-                  float               exp_scale,
-                  cudaStream_t        stream)
+template<int HeadDim, class T>
+void dispatchReduce(T*           out,
+                    float*       partial_M,
+                    float*       partial_L,
+                    float*       partial_O,
+                    const int*   split_cnt,
+                    int          partial_len,
+                    int          max_split_cnt,
+                    int          query_num,
+                    int          head_num,
+                    float        exp_scale,
+                    cudaStream_t stream)
 {
-    static constexpr size_t kDynamicSmemSize = sizeof(typename Kernel::SharedStorage);
-    static_assert(kDynamicSmemSize < (48 << 10));
+    constexpr int CTA_K = 32;  // warp size
 
-    auto invoke = [&](auto is_final, int d_split_cnt, int stride_k) {
-        const dim3 block = Kernel::kWarpCnt * 32;
-        const dim3 grid  = ReduceCtaMap::get_grid_shape(query_num, head_num, d_split_cnt);
+    using Reduce = attention::Reduce<T, 1, CTA_K, HeadDim, 4>;
 
-        reduce_kernel<Kernel, is_final><<<grid, block, kDynamicSmemSize, stream>>>(
-            out, partial_M, partial_L, partial_O, signals, split_cnt, max_split_cnt, head_num, exp_scale, stride_k);
+    static constexpr size_t kSmemSize = sizeof(typename Reduce::SharedStorage);
+    static_assert(kSmemSize < (48 << 10));
+
+    auto invoke = [&](auto is_final, int stride_k) {
+        const dim3 block = Reduce::kWarpCnt * 32;
+        const dim3 grid  = ReduceCtaMap::get_grid_shape(query_num, head_num, max_split_cnt, CTA_K);
+        reduce_kernel<Reduce, is_final><<<grid, block, kSmemSize, stream>>>(out,  //
+                                                                            partial_M,
+                                                                            partial_L,
+                                                                            partial_O,
+                                                                            nullptr,
+                                                                            split_cnt,
+                                                                            partial_len,
+                                                                            head_num,
+                                                                            exp_scale,
+                                                                            stride_k);
     };
 
-    invoke(std::false_type{}, dyn_split_cnt, 1);
-    invoke(std::true_type{}, 32, 32);
+    int stride_k = 1;
+
+    while (max_split_cnt > CTA_K) {
+        invoke(std::false_type{}, stride_k);
+        max_split_cnt = (max_split_cnt + CTA_K - 1) / CTA_K;
+        stride_k *= CTA_K;
+    }
+
+    invoke(std::true_type{}, stride_k);
 }
 
 }  // namespace turbomind::attention

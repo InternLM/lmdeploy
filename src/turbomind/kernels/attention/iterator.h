@@ -147,13 +147,20 @@ struct BlockTileIter {
 
     Array<int, 2> kv_offset_;
 
-    __device__ BlockTileIter(const T** block_ptrs, BlockSeqLen block_seqlen, Array<int, 2> kv_offset):
-        block_ptrs_{block_ptrs}, tiles_per_block_{block_seqlen / CTA_S}, kv_offset_{kv_offset}
+    int local_id_offset_;
+
+    __device__
+    BlockTileIter(const T** block_ptrs, BlockSeqLen block_seqlen, Array<int, 2> kv_offset, int local_id_offset):
+        block_ptrs_{block_ptrs},
+        tiles_per_block_{block_seqlen / CTA_S},
+        kv_offset_{kv_offset},
+        local_id_offset_{local_id_offset}
     {
     }
 
     __device__ void SetTile(int tile_id)
     {
+        tile_id += local_id_offset_;
         if constexpr (std::is_integral_v<BlockSeqLen>) {
             block_id_ = tile_id >> (31 - __clz(tiles_per_block_));  // this is somehow faster than `__ffs`
             local_id  = tile_id & (tiles_per_block_ - 1);
@@ -185,7 +192,7 @@ struct BlockTileIter {
 };
 
 template<class T, int CTA_S, int HeadDim>
-struct LinearTileIter2 {
+struct LinearTileIter {
 
     const T* key_;
     const T* key_ptr_;
@@ -193,7 +200,7 @@ struct LinearTileIter2 {
     int tile_id_;
     int offset_to_val_;
 
-    __device__ LinearTileIter2(const T* key, int offset_to_val): key_{key}, offset_to_val_{offset_to_val} {}
+    __device__ LinearTileIter(const T* key, int offset_to_val): key_{key}, offset_to_val_{offset_to_val} {}
 
     __device__ void SetTile(int tile_id)
     {

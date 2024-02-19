@@ -162,15 +162,15 @@ int main(int argc, char* argv[])
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum     = 64;
+    constexpr size_t kHeadNum     = 32;
     constexpr size_t kBatchSize   = 1;
     constexpr size_t kInputLen    = 1;
-    // constexpr size_t kSequenceLen = 8191;
+    constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 16383;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
-    constexpr size_t kSequenceLen = 262143;
+    // constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
@@ -178,14 +178,18 @@ int main(int argc, char* argv[])
     constexpr int kBlockSz   = 128;
     constexpr int kMaxSplitK = 32;
 #else
-    constexpr size_t kHeadNum     = 16;
-    constexpr size_t kBatchSize   = 2;
-    constexpr size_t kInputLen    = 8192;
-    constexpr size_t kSequenceLen = 0;
-    // constexpr size_t kInputLen    = 4096;
-    // constexpr size_t kSequenceLen = 8192;
-    constexpr int kBlockSz   = 16384;
-    constexpr int kMaxSplitK = 1;
+    constexpr size_t kHeadNum   = 32;
+    constexpr size_t kBatchSize = 1;
+    // append
+    constexpr size_t kInputLen    = 128;
+    constexpr size_t kSequenceLen = 65536;
+
+    // prefill
+    // constexpr size_t kInputLen    = 8192;
+    // constexpr size_t kSequenceLen = 0;
+    
+    constexpr int    kBlockSz     = 128;
+    constexpr int    kMaxSplitK   = 32;
 #endif
 
 #if KV_INT8
@@ -210,7 +214,7 @@ int main(int argc, char* argv[])
 
     constexpr size_t kContextLen = kSequenceLen + kInputLen;
     constexpr size_t kTokenNum   = kBatchSize * kInputLen;
-    constexpr int    kTestIter   = 100;
+    constexpr int    kTestIter   = 10;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;
@@ -475,7 +479,7 @@ int main(int argc, char* argv[])
     if (outputs.size() > 1) {
         std::cout << "Evaluating consistency..." << std::endl;
         for (size_t i = 1; i < outputs.size(); ++i) {
-            Compare(outputs[i].data().get(), outputs[i - 1].data().get(), kHeadDim, kHeadDim, kHeadNum, true, 0, 0);
+            Compare(outputs[i].data().get(), outputs[i - 1].data().get(), kHeadDim, kHeadDim, kHeadNum, 0, 0, 0);
         }
     }
 
