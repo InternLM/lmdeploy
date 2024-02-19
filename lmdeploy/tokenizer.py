@@ -203,7 +203,7 @@ class HuggingFaceTokenizer:
                                                    trust_remote_code=True)
 
         # get chat template from hf
-        self.chat_template = self.model.chat_template
+        self.chat_template = getattr(self.model, 'chat_template', None)
         deduced_name = best_match_model(model_dir)
         self.lmdeploy_chat_template = None  # for interactive chat
         if deduced_name is not None:
