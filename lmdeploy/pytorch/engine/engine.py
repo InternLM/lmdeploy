@@ -455,9 +455,8 @@ class Engine:
             eos_token_id = self.model_config.eos_token_id
             for seq in running:
                 param = seq.sampling_param
-                if param.min_new_tokens == 0:
-                    continue
-                if eos_token_id not in param.bad_words:
+                if (param.ignore_eos or param.min_new_tokens == 0
+                        or eos_token_id not in param.bad_words):
                     continue
                 if seq.num_new_tokens >= param.min_new_tokens:
                     bad_words = list(param.bad_words)
