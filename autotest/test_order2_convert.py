@@ -12,49 +12,41 @@ from utils.get_run_config import get_command_with_extra
 class TestConvert:
 
     @pytest.mark.llama2_chat_7b_w4
-    @pytest.mark.daily
     @allure.story('llama2-chat-7b-w4')
     def test_model_convert_llama2_chat_7b_w4(self, config):
         convert(config, 'llama2-chat-7b-w4')
 
     @pytest.mark.internlm_chat_7b
-    @pytest.mark.daily
     @allure.story('internlm-chat-7b')
     def test_model_convert_internlm_chat_7b(self, config):
         convert(config, 'internlm-chat-7b')
 
     @pytest.mark.internlm2_chat_7b
-    @pytest.mark.daily
     @allure.story('internlm2-chat-7b')
     def test_model_convert_internlm2_chat_7b(self, config):
         convert(config, 'internlm2-chat-7b')
 
     @pytest.mark.internlm_chat_20b
-    @pytest.mark.daily
     @allure.story('internlm-chat-20b')
     def test_model_convert_internlm_chat_20b(self, config):
         convert(config, 'internlm-chat-20b')
 
     @pytest.mark.internlm_chat_20b
-    @pytest.mark.daily
     @allure.story('internlm-chat-20b')
     def test_model_convert_internlm_chat_20b_inner_w4(self, config):
         convert(config, 'internlm-chat-20b-inner-w4')
 
     @pytest.mark.internlm2_chat_20b
-    @pytest.mark.daily
     @allure.story('internlm2-chat-20b')
     def test_model_convert_internlm2_chat_20b(self, config):
         convert(config, 'internlm2-chat-20b')
 
     @pytest.mark.internlm2_chat_20b
-    @pytest.mark.daily
     @allure.story('internlm2-chat-20b')
     def future_test_model_convert_internlm2_chat_20b_inner_w4(self, config):
         convert(config, 'internlm2-chat-20b-inner-w4')
 
     @pytest.mark.internlm2_chat_20b
-    @pytest.mark.daily
     @allure.story('internlm2-chat-20b')
     def test_model_convert_internlm2_chat_20b_inner_w4(self, config):
         convert(config, 'internlm2-chat-20b-inner-w4')
@@ -65,7 +57,6 @@ class TestConvert:
         convert(config, 'Qwen-7B-Chat')
 
     @pytest.mark.Qwen_14B_Chat
-    @pytest.mark.daily
     @allure.story('Qwen-14B-Chat')
     def test_model_convert_Qwen_14B_Chat(self, config):
         convert(config, 'Qwen-14B-Chat')
@@ -76,22 +67,29 @@ class TestConvert:
         convert(config, 'Qwen-7B-Chat-inner-w4')
 
     @pytest.mark.Qwen_14B_Chat
-    @pytest.mark.daily
     @allure.story('Qwen-14B-Chat-inner-w4')
     def test_model_convert_Qwen_14B_Chat_inner_w4(self, config):
         convert(config, 'Qwen-14B-Chat-inner-w4')
 
     @pytest.mark.Baichuan2_7B_Chat
-    @pytest.mark.daily
     @allure.story('Baichuan2-7B-Chat')
     def test_model_convert_Baichuan2_7B_Chat(self, config):
         convert(config, 'Baichuan2-7B-Chat')
 
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    def future_test_model_convert_Baichuan2_13B_Chat(self, config):
+        convert(config, 'Baichuan2-13B-Chat')
+
     @pytest.mark.Baichuan2_7B_Chat
-    @pytest.mark.daily
     @allure.story('Baichuan2-7B-Chat-inner-w4')
     def test_model_convert_Baichuan2_7B_Chat_inner_w4(self, config):
         convert(config, 'Baichuan2-7B-Chat-inner-w4')
+
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat-inner-w4')
+    def future_test_model_convert_Baichuan2_13B_Chat_inner_w4(self, config):
+        convert(config, 'Baichuan2-13B-Chat-inner-w4')
 
     @pytest.mark.CodeLlama_7b_Instruct_hf
     @allure.story('CodeLlama-7b-Instruct-hf')
@@ -110,7 +108,6 @@ class TestConvert:
         convert(config, 'llama-2-7b-chat')
 
     @pytest.mark.llama_2_7b_chat
-    @pytest.mark.daily
     @allure.story('llama-2-7b-chat-inner-w4')
     def test_model_convert_llama_2_7b_chat_inner_w4(self, config):
         convert(config, 'llama-2-7b-chat-inner-w4')

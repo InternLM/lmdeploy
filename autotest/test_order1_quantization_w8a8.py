@@ -11,10 +11,16 @@ from utils.get_run_config import get_command_with_extra
 @pytest.mark.timeout(600)
 class TestW8a8Quantization:
 
+    @pytest.mark.llama_2_7b_chat
+    @allure.story('llama-2-7b-chat')
+    def test_quantization_llama_2_7b_chat_w8a8(self, config):
+        w8a8_quantization(config, 'llama-2-7b-chat-inner-w8a8',
+                          'llama-2-7b-chat', 'CUDA_VISIBLE_DEVICES=5')
+
     @pytest.mark.timeout(900)
     @pytest.mark.internlm2_chat_20b
     @allure.story('internlm2-chat-20b')
-    def test_quantization_internlm2_chat_20b(self, config):
+    def test_quantization_internlm2_chat_20b_w8a8(self, config):
         w8a8_quantization(config, 'internlm2-chat-20b-inner-w8a8',
                           'internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=7')
 

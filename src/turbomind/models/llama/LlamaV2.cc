@@ -177,11 +177,17 @@ void LlamaV2<T>::updateEmbedding(T* decoder_input, const int bsz, const int* h_i
         for (int j = embeddings.size() - 1; j >= 0; j--) {
             int begin = ranges[j].first;
             int end   = ranges[j].second;
+            if (seq.cache_len + h_input_length[i] - 1 < begin) {
+                continue;
+            }
             if (end <= seq.cache_len) {
                 break;
             }
-            int    off_dst   = std::max(0, begin - seq.cache_len);
-            int    off_src   = std::max(0, seq.cache_len - begin);
+            int off_dst = std::max(0, begin - seq.cache_len);
+            int off_src = std::max(0, seq.cache_len - begin);
+            // calculate intersection of [begin, end) and [seq.cache_len, seq.cache_len + h_input_length[i])
+            begin            = std::max(begin, seq.cache_len);
+            end              = std::min(end, seq.cache_len + h_input_length[i]);
             size_t byte_size = (end - begin) * hidden_units_ * sizeof(T);
             T*     dst_ptr   = decoder_input + off_dst * hidden_units_;
             auto   src_ptr   = embeddings[j].data() + off_src * hidden_units_ * sizeof(T);
