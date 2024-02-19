@@ -1,11 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import dataclasses
 import os
 import random
 
-from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.turbomind.utils import get_gen_param
+from lmdeploy.turbomind.utils import (ModelSource,
+                                      get_model_name_from_workspace_model,
+                                      get_model_source)
+from lmdeploy.utils import _stop_words
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -34,11 +37,14 @@ def valid_str(string, coding='utf-8'):
 def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
+         top_k: float = 40,
+         top_p: float = 0.8,
+         temperature: float = 0.8,
+         repetition_penalty: float = 1.0,
          cap: str = 'chat',
          tp: int = 1,
          stream_output: bool = True,
          request_output_len: int = 1024,
-         chat_template_cfg: ChatTemplateConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -47,81 +53,98 @@ def main(model_path: str,
         model_path (str): the path of the deployed model
         model_name (str): the name of deployed model
         session_id (int): the identical id of a session
+        top_k (int): sampling top k.
+        top_p (int): sampling top p.
+        temperature (float): sampling temperature.
+        repetition_penalty (float): parameter to penalize repetition
         cap (str): the capability of a model. For example, codellama has
             the ability among ['completion', 'infilling', 'chat', 'python']
         tp (int): GPU number used in tensor parallelism
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
-        chat_template_cfg (ChatTemplateConfig): Chat template config
         **kwarg (dict): other arguments for initializing model's chat template
     """
+    # chat template
+    if model_name is None:
+        model_source = get_model_source(model_path)
+        if model_source == ModelSource.WORKSPACE:
+            model_name = get_model_name_from_workspace_model(model_path)
+        else:
+            model_name = best_match_model(model_path)
+            assert model_name is not None, 'Can not find match model template'
+            print(f'match template: <{model_name}>')
+    chat_template_args = {}
+    new_kwargs = {}
+    for k, v in kwargs.items():
+        if hasattr(ChatTemplateConfig, k) and v is not None:
+            chat_template_args[k] = v
+        else:
+            new_kwargs[k] = v
+    if 'capability' not in chat_template_args:
+        chat_template_args['capability'] = cap
+    model = MODELS.get(model_name).from_config(**chat_template_args)
+
+    # engine
     from lmdeploy import turbomind as tm
-    if chat_template_cfg is None:
-        chat_template_cfg = ChatTemplateConfig(model_name=model_name,
-                                               capability=cap)
-        new_kwargs = {}
-        for k, v in kwargs.items():
-            if hasattr(chat_template_cfg, k):
-                setattr(chat_template_cfg, k, v)
-            else:
-                new_kwargs[k] = v
-        kwargs = new_kwargs
-    tm_model = tm.TurboMind.from_pretrained(
-        model_path,
-        model_name=model_name,
-        tp=tp,
-        capability=cap,
-        chat_template_config=chat_template_cfg,
-        **kwargs)
+    kwargs = new_kwargs
+    tm_model = tm.TurboMind.from_pretrained(model_path, tp=tp, **kwargs)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
+
+    # generateion config
+    stop_words = _stop_words(model.stop_words, tokenizer)
+    if stop_words is not None:
+        stop_words = stop_words[0][0].tolist()
+    gen_config = EngineGenerationConfig(max_new_tokens=request_output_len,
+                                        top_k=top_k,
+                                        top_p=top_p,
+                                        temperature=temperature,
+                                        repetition_penalty=repetition_penalty,
+                                        stop_words=stop_words)
 
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
-    model_name = tm_model.model_name
-    model = tm_model.model
 
-    print(f'session {session_id}')
     while True:
         prompt = input_prompt(model_name)
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
-            prompt = model.get_prompt('', nth_round == 1)
-            input_ids = tokenizer.encode(prompt)
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    request_output_len=request_output_len,
-                    sequence_start=False,
-                    sequence_end=True,
-                    stream_output=stream_output):
-                pass
+            generator.end(session_id)
             nth_round = 1
             step = 0
             seed = random.getrandbits(64)
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
             input_ids = tokenizer.encode(prompt, nth_round == 1)
+            print(f'{prompt} ', end='', flush=True)
+            state = DetokenizeState()
+            gen_config.random_seed = seed
+
+            if model.capability == 'chat':
+                sequence_start = (nth_round == 1)
+                sequence_end = False
+                step = step
+            else:
+                sequence_start = True
+                sequence_end = True
+                step = 0
+
             if step + len(
                     input_ids) + request_output_len >= tm_model.session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
 
-            gen_param = get_gen_param(cap, model.sampling_param, nth_round,
-                                      step, request_output_len, **kwargs)
-
-            print(f'{prompt} ', end='', flush=True)
-            state = DetokenizeState()
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
-                    stream_output=stream_output,
-                    **dataclasses.asdict(gen_param),
-                    ignore_eos=False,
-                    random_seed=seed if nth_round == 1 else None):
+                    gen_config=gen_config,
+                    sequence_start=sequence_start,
+                    sequence_end=sequence_end,
+                    step=step,
+                    stream_output=stream_output):
                 _, res, tokens = outputs
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
