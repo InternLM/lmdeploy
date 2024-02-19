@@ -12,7 +12,7 @@ def getCaseList():
 
 
 @pytest.mark.usefixtures('cli_case_config')
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(180)
 @pytest.mark.command_chat_pytorch
 class TestPytorchCommandChat:
 
@@ -39,6 +39,59 @@ class TestPytorchCommandChat:
                                                 usercase):
         run_command_line_test(config, usercase, cli_case_config.get(usercase),
                               'internlm2-chat-20b-inner-w8a8')
+
+    @pytest.mark.internlm_chat_7b
+    @allure.story('internlm-chat-7b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_internlm_chat_7b(self, config, cli_case_config,
+                                           usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-7b')
+
+    @pytest.mark.internlm_chat_20b
+    @allure.story('internlm-chat-20b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_internlm_chat_20b(self, config, cli_case_config,
+                                            usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'internlm-chat-20b')
+
+    @pytest.mark.Baichuan2_7B_Chat
+    @allure.story('Baichuan2-7B-Chat')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_Baichuan2_7B_Chat(self, config, cli_case_config,
+                                            usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Baichuan2-7B-Chat')
+
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_Baichuan2_13B_Chat(self, config, cli_case_config,
+                                             usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Baichuan2-13B-Chat')
+
+    @pytest.mark.Yi_6B_Chat
+    @allure.story('Yi-6B-Chat')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_Yi_6B_Chat(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'Yi-6B-Chat')
+
+    @pytest.mark.chatglm2_6b
+    @allure.story('chatglm2-6b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_chatglm2_6b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'chatglm2-6b')
+
+    @pytest.mark.falcon_7b
+    @allure.story('falcon-7b')
+    @pytest.mark.parametrize('usercase', getCaseList())
+    def test_pytorch_chat_falcon_7b(self, config, cli_case_config, usercase):
+        run_command_line_test(config, usercase, cli_case_config.get(usercase),
+                              'falcon-7b')
 
 
 def run_command_line_test(config, case, case_info, model_case):

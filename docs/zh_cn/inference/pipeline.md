@@ -4,29 +4,53 @@
 
 ## 使用方法
 
-使用默认参数的例子:
+- **使用默认参数的例子:**
 
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('internlm/internlm-chat-7b')
+pipe = pipeline('internlm/internlm2-chat-7b')
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-展示如何设置 tp 数的例子:
+在这个例子中，pipeline 默认申请一定比例显存，用来存储推理过程中产生的 k/v。比例由参数 `TurbomindEngineConfig.cache_max_entry_count` 控制。
+
+LMDeploy 在研发过程中，k/v cache 比例的设定策略有变更，以下为变更记录：
+
+1. `v0.2.0 <= lmdeploy <= v0.2.1`
+
+   默认比例为 0.5，表示 **GPU总显存**的 50% 被分配给 k/v cache。 对于 7B 模型来说，如果显存小于 40G，会出现 OOM。当遇到 OOM 时，请按照下面的方法，酌情降低 k/v cache 占比：
+
+   ```python
+   from lmdeploy import pipeline, TurbomindEngineConfig
+
+   # 调低 k/v cache内存占比调整为总显存的 20%
+   backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+   pipe = pipeline('internlm/internlm2-chat-7b',
+                   backend_config=backend_config)
+   response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+   print(response)
+   ```
+
+2. `lmdeploy > v0.2.1`
+
+   分配策略改为从**空闲显存**中按比例为 k/v cache 开辟空间。默认比例值调整为 0.8。如果遇到 OOM，类似上面的方法，请酌情减少比例值，降低 k/v cache 的内存占用量
+
+- **如何设置 tp:**
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 
 backend_config = TurbomindEngineConfig(tp=2)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-展示如何设置 sampling 参数:
+- **如何设置 sampling 参数:**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -36,14 +60,14 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
 print(response)
 ```
 
-展示如何设置 OpenAI 格式输入的例子:
+- **如何设置 OpenAI 格式输入:**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -53,7 +77,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -67,7 +91,7 @@ response = pipe(prompts,
 print(response)
 ```
 
-展示流式返回处理结果的例子：
+- **流式返回处理结果：**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -77,7 +101,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -90,7 +114,9 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
-展示 pytorch 后端的例子,需要先安装 triton:
+- **使用 pytorch 后端**
+
+需要先安装 triton
 
 ```shell
 pip install triton>=2.1.0
@@ -104,7 +130,7 @@ gen_config = GenerationConfig(top_p=0.8,
                               top_k=40,
                               temperature=0.8,
                               max_new_tokens=1024)
-pipe = pipeline('internlm/internlm-chat-7b',
+pipe = pipeline('internlm/internlm2-chat-7b',
                 backend_config=backend_config)
 prompts = [[{
     'role': 'user',
@@ -145,6 +171,16 @@ print(response)
 | repetition_penalty | float                      | 1.0    | 重复惩罚的参数。1.0表示没有惩罚。后期会弃用，请改用 gen_config 参数                                                                       |
 | ignore_eos         | bool                       | False  | 是否忽略结束符的指示器。后期会弃用，请改用 gen_config 参数                                                                                |
 
+### Response
+
+| 参数名             | 类型                                    | 描述                                                                                                                                         |
+| ------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| text               | str                                     | 服务器响应的文本。如果输出文本为空字符串，且finish_reason为length，则表示已达最大会话长度。                                                  |
+| generate_token_len | int                                     | 响应的 token 数。                                                                                                                            |
+| input_token_len    | int                                     | 输入提示 token 数。注意，这可能包含聊天模板部分。                                                                                            |
+| session_id         | int                                     | 运行会话的ID。基本上，它指的是输入请求批次的索引位置。                                                                                       |
+| finish_reason      | Optional\[Literal\['stop', 'length'\]\] | 模型停止生成 token 的原因。如果模型遇到 stop word，这将设置为'stop'；如果达到了请求中指定的最大 token 数或者 session_len，则设置为'length'。 |
+
 ## TurbomindEngineConfig
 
 ### 描述
@@ -155,7 +191,7 @@ print(response)
 
 | Parameter             | Type          | Description                                                            | Default |
 | --------------------- | ------------- | ---------------------------------------------------------------------- | ------- |
-| model_name            | str, optional | 已部署模型的对话模板名称。                                             | None    |
+| model_name            | str, optional | 已部署模型的对话模板名称。在版本 > 0.2.1 之后已废弃                    | None    |
 | model_format          | str, optional | 已部署模型的布局。可以是以下值之一：`hf`, `llama`, `awq`。             | None    |
 | tp                    | int           | 在张量并行中使用的GPU卡数量。                                          | 1       |
 | session_len           | int, optional | 序列的最大会话长度。                                                   | None    |
@@ -164,6 +200,8 @@ print(response)
 | quant_policy          | int           | 默认为0。当k/v量化为8位时，设置为4。                                   | 0       |
 | rope_scaling_factor   | float         | 用于动态ntk的缩放因子。TurboMind遵循transformer LlamaAttention的实现。 | 0.0     |
 | use_logn_attn         | bool          | 是否使用对数注意力。                                                   | False   |
+| download_dir          | str, optional | 模型缓存路径                                                           | None    |
+| revision              | str, optional | Git revision id, 可以是branch，tag或者commit id                        | None    |
 
 ## PytorchEngineConfig
 
@@ -185,6 +223,8 @@ print(response)
 | num_cpu_blocks   | int  | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 | num_gpu_blocks   | int  | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 | adapters         | dict | lora adapters的配置路径                                      | None        |
+| download_dir     | str  | 模型缓存路径                                                 | None        |
+| revision         | str  | Git revision id, 可以是branch，tag或者commit id              | None        |
 
 ## GenerationConfig
 
@@ -194,18 +234,20 @@ print(response)
 
 ### 参数
 
-| Parameter          | Type        | Description                                           | Default |
-| ------------------ | ----------- | ----------------------------------------------------- | ------- |
-| n                  | int         | 对每个输入消息生成聊天补全选择的数量。目前仅支持 1    | 1       |
-| max_new_tokens     | int         | 聊天补全中可以生成的最大令牌数。                      | 512     |
-| top_p              | float       | 核心采样，其中模型考虑具有top_p概率质量的令牌。       | 1.0     |
-| top_k              | int         | 模型考虑具有最高概率的前K个令牌。                     | 1       |
-| temperature        | float       | 采样温度。                                            | 0.8     |
-| repetition_penalty | float       | 防止模型生成重复词或短语的惩罚。大于1的值会抑制重复。 | 1.0     |
-| ignore_eos         | bool        | 是否忽略eos_token_id。                                | False   |
-| random_seed        | int         | 采样令牌时使用的种子。                                | None    |
-| stop_words         | List\[str\] | 停止进一步生成令牌的词。                              | None    |
-| bad_words          | List\[str\] | 引擎永远不会生成的词。                                | None    |
+| Parameter           | Type        | Description                                           | Default |
+| ------------------- | ----------- | ----------------------------------------------------- | ------- |
+| n                   | int         | 对每个输入消息生成聊天补全选择的数量。目前仅支持 1    | 1       |
+| max_new_tokens      | int         | 聊天补全中可以生成的最大令牌数。                      | 512     |
+| top_p               | float       | 核心采样，其中模型考虑具有top_p概率质量的令牌。       | 1.0     |
+| top_k               | int         | 模型考虑具有最高概率的前K个令牌。                     | 1       |
+| temperature         | float       | 采样温度。                                            | 0.8     |
+| repetition_penalty  | float       | 防止模型生成重复词或短语的惩罚。大于1的值会抑制重复。 | 1.0     |
+| ignore_eos          | bool        | 是否忽略eos_token_id。                                | False   |
+| random_seed         | int         | 采样令牌时使用的种子。                                | None    |
+| stop_words          | List\[str\] | 停止进一步生成令牌的词。                              | None    |
+| bad_words           | List\[str\] | 引擎永远不会生成的词。                                | None    |
+| min_new_tokens      | int         | 最小令牌生成数。                                      | None    |
+| skip_special_tokens | bool        | 是否跳过 special token。                              | True    |
 
 ## FAQs
 

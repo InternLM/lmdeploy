@@ -36,16 +36,18 @@ def _get_named_loralinears(model: torch.nn.Module):
 
 def _get_layer_index(key: str, config: Any):
     """get layer index of the lora linear."""
-    from peft.utils.other import COMMON_LAYERS_PATTERN
-    layer_indexing_pattern = getattr(config, 'layers_pattern', None)
-    layers_pattern = layer_indexing_pattern or COMMON_LAYERS_PATTERN
+    layers_pattern = getattr(config, 'layers_pattern', None)
     if isinstance(layers_pattern, str):
         layers_pattern = [layers_pattern]
-    for pattern in layers_pattern:
-        layer_index = re.match(f'.*.{pattern}\\.(\\d+)\\.*', key)
+    if layers_pattern is None or len(layers_pattern) == 0:
+        layer_index = re.match(r'.*\.[^.]*\.(\d+)\.', key)
+        return int(layer_index[1])
+    else:
+        for pattern in layers_pattern:
+            layer_index = re.match(f'.*.{pattern}\\.(\\d+)\\.*', key)
 
-        if layer_index is not None:
-            return int(layer_index[1])
+            if layer_index is not None:
+                return int(layer_index[1])
 
 
 def get_indexed_lora_linears(model: torch.nn.Module):

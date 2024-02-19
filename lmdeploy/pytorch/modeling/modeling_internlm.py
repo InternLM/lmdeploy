@@ -33,14 +33,15 @@ from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            SequenceClassifierOutputWithPast)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import (add_start_docstrings,
-                                add_start_docstrings_to_model_forward, logging,
+                                add_start_docstrings_to_model_forward,
                                 replace_return_docstrings)
 
 from lmdeploy.pytorch.modeling.convert_to_qmodules import convert_to_qmodules
+from lmdeploy.utils import get_logger
 
 from .configuration_internlm import InternLMConfig
 
-logger = logging.get_logger(__name__)
+logger = get_logger('lmdeploy')
 
 _CONFIG_FOR_DOC = 'InternLMConfig'
 

@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 
 import torch
 from transformers.generation.utils import ModelOutput
 
-logger = logging.getLogger(__name__)
+from lmdeploy.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class BasicSessionManager:

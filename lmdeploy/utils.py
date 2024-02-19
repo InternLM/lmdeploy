@@ -1,14 +1,48 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
+import sys
+from logging import Logger, LogRecord
 from typing import List, Optional
 
 logger_initialized = {}
 
 
-def get_logger(name: str,
-               log_file: Optional[str] = None,
-               log_level: int = logging.INFO,
-               file_mode: str = 'w'):
+class FilterDuplicateWarning(logging.Filter):
+    """Filter the repeated warning message.
+
+    Args:
+        name (str): name of the filter.
+    """
+
+    def __init__(self, name: str = 'lmdeploy'):
+        super().__init__(name)
+        self.seen: set = set()
+
+    def filter(self, record: LogRecord) -> bool:
+        """Filter the repeated warning message.
+
+        Args:
+            record (LogRecord): The log record.
+
+        Returns:
+            bool: Whether to output the log record.
+        """
+        if record.levelno != logging.WARNING:
+            return True
+
+        if record.msg not in self.seen:
+            self.seen.add(record.msg)
+            return True
+        return False
+
+
+def get_logger(
+    name: Optional[str] = None,
+    log_file: Optional[str] = None,
+    log_level: int = logging.INFO,
+    file_mode: str = 'w',
+    log_formatter: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+) -> Logger:
     """Initialize and get a logger by name.
 
     If the logger has not been initialized, this method will initialize the
@@ -22,25 +56,10 @@ def get_logger(name: str,
         log_level (int): The logger level.
         file_mode (str): The file mode used in opening log file.
             Defaults to 'w'.
+        log_formatter (str): The logger output format.
     Returns:
         logging.Logger: The expected logger.
     """
-    # use logger in mmengine if exists.
-    try:
-        from mmengine.logging import MMLogger
-        if MMLogger.check_instance_created(name):
-            logger = MMLogger.get_instance(name)
-        else:
-            logger = MMLogger.get_instance(name,
-                                           logger_name=name,
-                                           log_file=log_file,
-                                           log_level=log_level,
-                                           file_mode=file_mode)
-        return logger
-
-    except Exception:
-        pass
-
     logger = logging.getLogger(name)
     if name in logger_initialized:
         return logger
@@ -56,7 +75,7 @@ def get_logger(name: str,
         if type(handler) is logging.StreamHandler:
             handler.setLevel(logging.ERROR)
 
-    stream_handler = logging.StreamHandler()
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
     if log_file is not None:
@@ -66,14 +85,15 @@ def get_logger(name: str,
         file_handler = logging.FileHandler(log_file, file_mode)
         handlers.append(file_handler)
 
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
         handler.setLevel(log_level)
+        handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
     logger.setLevel(log_level)
+    logger.propagate = False
     logger_initialized[name] = True
 
     return logger
@@ -117,3 +137,24 @@ def _stop_words(stop_words: List[str], tokenizer: object):
     stop_word_offsets = range(1, len(stop_indexes) + 1)
     stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
     return stop_words
+
+
+def get_model(pretrained_model_name_or_path: str,
+              download_dir: str = None,
+              revision: str = None):
+    """Get model from huggingface or modelscope."""
+    import os
+    if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
+        from modelscope import snapshot_download
+    else:
+        from huggingface_hub import snapshot_download
+
+    download_kwargs = {}
+    if download_dir is not None:
+        download_kwargs['cache_dir'] = download_dir
+    if revision is not None:
+        download_kwargs['revision'] = revision
+
+    model_path = snapshot_download(pretrained_model_name_or_path,
+                                   **download_kwargs)
+    return model_path

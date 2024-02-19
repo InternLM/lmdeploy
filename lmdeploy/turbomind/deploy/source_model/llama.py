@@ -2,6 +2,7 @@
 import json
 import os
 import os.path as osp
+from glob import glob
 
 import torch
 from safetensors.torch import load_file
@@ -130,13 +131,11 @@ class LlamaModel(BaseInputModel):
 
     def get_ckpt(self):
         """Get weight files."""
-        suffixes = ['.safetensors', '.bin']
+        patterns = ['*.safetensors', 'pytorch_model*.bin']
         files = []
-        for suffix in suffixes:
-            files = [
-                file for file in os.listdir(self.ckpt_path)
-                if file.endswith(suffix)
-            ]
+        for pattern in patterns:
+            files = glob(os.path.join(self.ckpt_path, pattern))
+            files = [os.path.basename(file) for file in files]
             if len(files) > 0:
                 break
         files = sorted(files)

@@ -12,6 +12,8 @@ The user can open the http url print by the following command in a browser.
 lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
 ```
 
+The parameters supported by api_server can be viewed through the command line `lmdeploy serve api_server -h`.
+
 We provide some RESTful APIs. Three of them are in OpenAI format.
 
 - /v1/chat/completions

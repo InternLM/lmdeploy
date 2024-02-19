@@ -323,7 +323,8 @@ class InternLMBaseModel20B(BaseModel):
                          **kwargs)
 
 
-@MODELS.register_module(name=['internlm2-7b', 'internlm2-20b'])
+@MODELS.register_module(
+    name=['internlm2', 'internlm2-1_8b', 'internlm2-7b', 'internlm2-20b'])
 class InternLM2BaseModel7B(BaseModel):
     """Generation parameters of InternLM2-7B-Base model."""
 
@@ -333,7 +334,10 @@ class InternLM2BaseModel7B(BaseModel):
                          **kwargs)
 
 
-@MODELS.register_module(name=['internlm2-chat-7b', 'internlm2-chat-20b'])
+@MODELS.register_module(name=[
+    'internlm2-chat', 'internlm2-chat-1_8b', 'internlm2-chat-7b',
+    'internlm2-chat-20b'
+])
 class InternLM2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM2-Chat-7B."""
 
@@ -904,7 +908,7 @@ class Yi(BaseModel):
         if sequence_start:
             if self.meta_instruction is None:
                 return f'{self.user}{prompt}{self.eoh}' \
-                   f'{self.assistant}'
+                    f'{self.assistant}'
             return f'{self.system}{self.meta_instruction}{self.eosys}' \
                    f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
@@ -948,7 +952,11 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
         List[str] | None: the possible model names or none.
     """
     model_names = list(MODELS.module_dict.keys())
-    if query.endswith('/'):
+    if ('models--' in query) and ('snapshots' in query):
+        paths = query.split(os.sep)
+        paths = [x for x in paths if 'models--' in x]
+        query = paths[0].split('--')[-1]
+    elif query.endswith('/'):
         query = query[:-1]
     base_name = os.path.basename(query).lower()
     max_ratio, matched_name = float('-inf'), None

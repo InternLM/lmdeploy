@@ -37,6 +37,16 @@ def get_tp_config(config, model, need_tp):
     return tp_info
 
 
+def get_tp_num(config, model):
+    tp_config = config.get('tp_config')
+    tp_num = 1
+    if tp_config is None:
+        return tp_num
+    if model in tp_config.keys():
+        tp_num = tp_config.get(model)
+    return tp_num
+
+
 def get_command_with_extra(cmd,
                            config,
                            model,

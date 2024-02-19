@@ -1,20 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
-import logging
 import os
 
 from huggingface_hub import hf_hub_download
 from transformers.utils import ExplicitEnum
 
-logger = logging.getLogger(__name__)
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 class ModelSource(ExplicitEnum):
     """Turbomind model source."""
     WORKSPACE = 'workspace'
     HF_MODEL = 'hf_model'
-    HF_LMDEPLOY = 'hf_lmdeploy'
 
 
 def create_hf_download_args(**kwargs) -> dict:
@@ -60,10 +60,7 @@ def get_model_source(pretrained_model_name_or_path: str,
                                      'triton_models')
     if os.path.exists(triton_model_path):
         return ModelSource.WORKSPACE
-    config = get_hf_config_content(pretrained_model_name_or_path, **kwargs)
-    model_source = ModelSource.HF_LMDEPLOY if 'turbomind' in config \
-        else ModelSource.HF_MODEL
-    return model_source
+    return ModelSource.HF_MODEL
 
 
 def check_tm_model_input(pretrained_model_name_or_path, **kwargs):
@@ -118,3 +115,45 @@ def get_gen_param(cap,
         gen_param.sequence_end = True
         gen_param.step = 0
     return gen_param
+
+
+def get_model_name_from_workspace_model(model_dir: str):
+    """Get model name from workspace model."""
+    from configparser import ConfigParser
+    triton_model_path = os.path.join(model_dir, 'triton_models', 'weights')
+    if not os.path.exists(triton_model_path):
+        return None
+    ini_path = os.path.join(triton_model_path, 'config.ini')
+    # load cfg
+    with open(ini_path, 'r') as f:
+        parser = ConfigParser()
+        parser.read_file(f)
+    return parser['llama']['model_name']
+
+
+def get_model_from_config(model_dir: str):
+    import json
+    config_file = os.path.join(model_dir, 'config.json')
+    default = 'llama'
+    if not os.path.exists(config_file):
+        return default
+
+    with open(config_file) as f:
+        config = json.load(f)
+
+    ARCH_MAP = {
+        'LlamaForCausalLM': default,
+        'InternLM2ForCausalLM': 'internlm2',
+        'InternLMForCausalLM': default,
+        'BaiChuanForCausalLM': 'baichuan',  # Baichuan-7B
+        'BaichuanForCausalLM': 'baichuan2',  # not right for Baichuan-13B-Chat
+        'QWenLMHeadModel': 'qwen',
+    }
+
+    arch = 'LlamaForCausalLM'
+    if 'auto_map' in config:
+        arch = config['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+    elif 'architectures' in config:
+        arch = config['architectures'][0]
+
+    return ARCH_MAP[arch]

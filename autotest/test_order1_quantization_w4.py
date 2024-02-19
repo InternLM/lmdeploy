@@ -49,11 +49,17 @@ class TestQuantization:
         quantization(config, 'Baichuan2-7B-Chat-inner-w4', 'Baichuan2-7B-Chat',
                      'CUDA_VISIBLE_DEVICES=4')
 
+    @pytest.mark.Baichuan2_13B_Chat
+    @allure.story('Baichuan2-13B-Chat')
+    def future_test_quantization_Baichuan2_13B_Chat(self, config):
+        quantization(config, 'Baichuan2-13B-Chat-inner-w4',
+                     'Baichuan2-13B-Chat', 'CUDA_VISIBLE_DEVICES=5')
+
     @pytest.mark.Qwen_7B_Chat
     @allure.story('Qwen-7B-Chat')
     def test_quantization_Qwen_7B_Chat(self, config):
         quantization(config, 'Qwen-7B-Chat-inner-w4', 'Qwen-7B-Chat',
-                     'CUDA_VISIBLE_DEVICES=5')
+                     'CUDA_VISIBLE_DEVICES=6')
 
 
 def quantization(config, w4_model_name, origin_model_name, cuda_prefix):
