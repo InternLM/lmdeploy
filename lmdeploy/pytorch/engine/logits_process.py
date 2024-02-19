@@ -34,6 +34,15 @@ class FusedLogitsProcessor(LogitsWarper):
     def __init__(self, sampling_param: SamplingParam):
         self.sampling_param = sampling_param
 
+    def _repetition_penalty(self, input_ids: torch.LongTensor,
+                            scores: torch.FloatTensor) -> torch.FloatTensor:
+        """Repetition penalty."""
+        penalty = self.sampling_param.repetition_penalty
+        score = torch.gather(scores, 1, input_ids)
+        score = torch.where(score < 0, score * penalty, score / penalty)
+        scores.scatter_(1, input_ids, score)
+        return scores
+
     def __call__(self, input_ids: torch.LongTensor,
                  scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
@@ -53,6 +62,11 @@ class FusedLogitsProcessor(LogitsWarper):
         new_scores = scores
         filter_value = -float('inf')
 
+        # repetition penalty
+        rep_penalty = self.sampling_param.repetition_penalty
+        if input_ids is not None and abs(rep_penalty - 1.0) > 1e-5:
+            new_scores = self._repetition_penalty(input_ids, new_scores)
+
         # temperature
         temperature = self.sampling_param.temperature
         if temperature is not None and temperature > 0:
@@ -70,8 +84,8 @@ class FusedLogitsProcessor(LogitsWarper):
         top_k_indices = None
         top_k = self.sampling_param.top_k
         if top_k is not None and top_k > 0:
-            top_k = min(top_k, scores.size(-1))
-            new_scores, top_k_indices = torch.topk(scores, top_k)
+            top_k = min(top_k, new_scores.size(-1))
+            new_scores, top_k_indices = torch.topk(new_scores, top_k)
 
         # top_p
         top_p = self.sampling_param.top_p

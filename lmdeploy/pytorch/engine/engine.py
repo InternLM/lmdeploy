@@ -458,12 +458,27 @@ class Engine:
                 grouped_params[key].append(i)
             return grouped_params
 
-        def _sampling(grouped_params, split_logits, inputs):
+        def _gather_history(seqs: SeqList, device: torch.device):
+            batch = len(seqs)
+            max_len = max(seq.history_len for seq in seqs)
+            output = torch.full((batch, max_len),
+                                self.model_config.bos_token_id,
+                                dtype=torch.int64)
+            for idx, seq in enumerate(seqs):
+                h_len = seq.history_len
+                h_ids = output.new_tensor(seq.history_token_ids)
+                output[idx, :h_len] = h_ids
+            return output.to(device)
+
+        def _sampling(grouped_params, split_logits):
             next_token_ids = torch.empty((len(running), ), dtype=torch.long)
             for param, idx in grouped_params.items():
                 logits_processor = FusedLogitsProcessor(param)
-                input_ids = inputs.input_ids.reshape(-1, 1)
                 new_logits = split_logits[idx]
+                input_ids = None
+                if abs(1 - param.repetition_penalty) > 1e-5:
+                    seqs = [running[i] for i in idx]
+                    input_ids = _gather_history(seqs, new_logits.device)
                 new_logits = logits_processor(input_ids, new_logits)
                 argmax_ids = logits_processor.sampling(new_logits).cpu()
                 next_token_ids[idx] = argmax_ids
@@ -482,7 +497,7 @@ class Engine:
             split_logits = logits
         split_logits = split_logits.cuda()
 
-        next_token_ids = _sampling(grouped_params, split_logits, inputs)
+        next_token_ids = _sampling(grouped_params, split_logits)
 
         return next_token_ids, split_logits
 

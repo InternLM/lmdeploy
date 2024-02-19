@@ -840,6 +840,8 @@ def _tp_model_loop(
         if rank == 0:
             resp_output = output
             out_que.put(TPResponse(0, None, resp_output))
+        del output
+        torch.cuda.empty_cache()
 
 
 def _start_tp_process(rank: int,
