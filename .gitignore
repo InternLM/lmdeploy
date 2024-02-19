@@ -74,6 +74,7 @@ work_dir*/
 *.log
 *.out
 *.csv
+!start_ids.csv
 *.pkl
 
 !CMakeLists.txt

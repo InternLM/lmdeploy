@@ -255,7 +255,7 @@ int read_start_ids(size_t            batch_size,
                    std::string       file_name);
 
 std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>>
-prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std::vector<void*>* pointer_record)
+prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std::vector<void*>* pointer_record, const std::string& csv_name)
 {
     INIReader reader = INIReader(ini_name);
     if (reader.ParseError() < 0) {
@@ -279,7 +279,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
                    max_input_len,
                    end_id,
                    1,
-                   "../examples/cpp/llama/start_ids.csv");
+                   csv_name);
     // drop requests > request_batch_size
     if (v_start_lengths.size() > request_batch_size) {
         v_start_lengths.resize(request_batch_size);
@@ -363,6 +363,7 @@ int main(int argc, char* argv[])
     // Note: Only supports that all nodes have same gpu count
     const int   gpu_count  = ft::getDeviceCount();
     const int   world_size = node_num * gpu_count;
+    printf("Recommend to specify the first parameter on the command line as the path to llama_config.ini\n");
     std::string ini_name   = argc >= 2 ? std::string(argv[1]) : "../examples/cpp/llama/llama_config.ini";
 
     // step 1: Create model
@@ -372,7 +373,7 @@ int main(int argc, char* argv[])
     printf(
         "world_size=%d tensor_para_size=%d pipeline_para_size=%d\n", world_size, tensor_para_size, pipeline_para_size);
     FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
-                       "World Size != Tensor Parallel Size * Pipeline Parallel Size !");
+                       "World Size != Tensor Parallel Size * Pipeline Parallel Size ! Maybe you can use CUDA_VISIBLE_DEVICES.");
 
     std::cout << model->toString();
 
@@ -402,10 +403,13 @@ int main(int argc, char* argv[])
     }
 
     // step 4: prepare request
+    // https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/start_ids.csv
+    printf("Recommend to specify the second parameter on the command line as the path to start_ids.csv\n");
+    std::string csv_name = argc >= 3 ? std::string(argv[2]) : "../examples/cpp/llama/start_ids.csv";
     std::vector<void*> pointer_record;  // Used to prevent the pointers are
                                         // release after leaving functions
     std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list =
-        prepareRequest(ini_name, node_id, gpu_count, &pointer_record);
+        prepareRequest(ini_name, node_id, gpu_count, &pointer_record, csv_name);
     printf("[INFO] request is created \n");
 
     // step 5: Forward
