@@ -249,7 +249,7 @@ class Engine:
         def __update_bad_words(msg):
             """update bad words."""
             sampling_param = msg.sampling_param
-            if sampling_param.ignore_eos or sampling_param.min_new_tokens > 0:
+            if sampling_param.ignore_eos:
                 sampling_param.bad_words.append(self.model_config.eos_token_id)
 
         for req in reqs:
@@ -451,18 +451,18 @@ class Engine:
                         inputs: ModelInputs):
         """sampling logits."""
 
-        def _update_bad_words(running):
+        def _check_min_new_tokens(running, logits):
             eos_token_id = self.model_config.eos_token_id
-            for seq in running:
+            ignore_idx = []
+            for idx, seq in enumerate(running):
                 param = seq.sampling_param
-                if (param.ignore_eos or param.min_new_tokens == 0
-                        or eos_token_id not in param.bad_words):
+                if param.ignore_eos:
                     continue
-                if seq.num_new_tokens >= param.min_new_tokens:
-                    bad_words = list(param.bad_words)
-                    bad_words.remove(eos_token_id)
-                    param.bad_words = bad_words
-            return running
+                if seq.num_new_tokens < param.min_new_tokens:
+                    ignore_idx.append(idx)
+            if len(ignore_idx) > 0:
+                logits[ignore_idx, eos_token_id] = -float('inf')
+            return logits
 
         def _group_params(running):
             sampling_params: List[SamplingParam] = [
@@ -485,7 +485,7 @@ class Engine:
                 next_token_ids[idx] = argmax_ids
             return next_token_ids
 
-        running = _update_bad_words(running)
+        logits = _check_min_new_tokens(running, logits)
         grouped_params = _group_params(running)
 
         is_decoding = inputs.is_decoding
