@@ -50,6 +50,7 @@
 
    serving/restful_api.md
    serving/proxy_server.md
+   serving/gradio.md
 
 
 .. _量化:
