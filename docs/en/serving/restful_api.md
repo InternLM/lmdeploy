@@ -37,7 +37,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    internlm/internlm2-chat-7b
+    lmdeploy serve api_server internlm/internlm2-chat-7b
 ```
 
 Just like the previous section, user can try the Swagger UI with a web browser.

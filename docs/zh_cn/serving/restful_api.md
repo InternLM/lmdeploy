@@ -34,7 +34,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    internlm/internlm2-chat-7b
+    lmdeploy serve api_server internlm/internlm2-chat-7b
 ```
 
 然后像上面一样使用浏览器试用 Swagger UI 即可。

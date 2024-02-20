@@ -36,4 +36,3 @@ RUN cd /opt/lmdeploy &&\
     rm -rf build
 
 ENV LD_LIBRARY_PATH=/opt/tritonserver/lib:$LD_LIBRARY_PATH
-ENTRYPOINT ["lmdeploy", "serve", "api_server"]
