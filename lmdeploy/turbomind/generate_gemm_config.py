@@ -58,7 +58,7 @@ def main(head_num: int = 32,
             config = AutoConfig.from_pretrained(model_path,
                                                 trust_remote_code=True)
             head_num = config.num_attention_heads
-            size_per_head = 128
+            size_per_head = config.hidden_size // head_num
             inter_size = config.intermediate_size
             vocab_size = config.vocab_size
     for bsz in range(1, max_batch_size + 1):
