@@ -44,7 +44,6 @@ def _infer_block_size(model: torch.nn.Module,
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
                          gpu_id: int = 0,
-                         gpu_mem_percent: float = 0.7,
                          host_mem_size: int = 4 * (1 << 30),
                          world_size: int = 1):
     """Update the gpu mem and cpu mem according to model info.
@@ -56,7 +55,7 @@ def _update_cache_config(model_config: ModelConfig,
     """
     torch.cuda.empty_cache()
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
-    gpu_mem = gpu_mem_physical_free * gpu_mem_percent
+    gpu_mem = gpu_mem_physical_free * cache_config.cache_max_entry_count
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config) // world_size
