@@ -1013,6 +1013,22 @@ class MistralChat(BaseModel):
         return ret
 
 
+@MODELS.register_module(name=['deepseek-chat'])
+class Deepseek(BaseModel):
+
+    def __init__(self, user='User:', assistant='Assistant:', **kwargs):
+        super().__init__(**kwargs)
+        self._user = user
+        self._assistant = assistant
+        self._bos = '<｜begin▁of▁sentence｜>'
+
+    def get_prompt(self, prompt, sequence_start=True):
+        ret = f'{self._user} {prompt}\n\n{self._assistant}'
+        if sequence_start:
+            ret = f'{self._bos}{ret}'
+        return ret
+
+
 def best_match_model(query: str, similarity_cutoff: float = 0.5):
     """Get the model that matches the query.
 
