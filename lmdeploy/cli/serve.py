@@ -53,6 +53,7 @@ class SubCliServe:
         model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
+        cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -61,10 +62,10 @@ class SubCliServe:
         tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
+        tb_group._group_actions.append(cache_max_entry_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
-        ArgumentHelper.cache_max_entry_count(tb_group)
 
     @staticmethod
     def add_parser_api_server():
@@ -135,6 +136,7 @@ class SubCliServe:
         model_name_act = ArgumentHelper.model_name(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
+        cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -143,10 +145,10 @@ class SubCliServe:
         tb_group._group_actions.append(model_name_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
+        tb_group._group_actions.append(cache_max_entry_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
-        ArgumentHelper.cache_max_entry_count(tb_group)
 
     @staticmethod
     def add_parser_api_client():
@@ -195,6 +197,7 @@ class SubCliServe:
                 tp=args.tp,
                 model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
+                cache_max_entry_count=args.cache_max_entry_count,
                 session_len=args.session_len)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
@@ -229,6 +232,7 @@ class SubCliServe:
                 tp=args.tp,
                 model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
+                cache_max_entry_count=args.cache_max_entry_count,
                 session_len=args.session_len)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
