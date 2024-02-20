@@ -145,7 +145,6 @@ class AsyncEngine:
         self.engine = tm.TurboMind.from_pretrained(
             model_path,
             engine_config=backend_config,
-            chat_template_config=chat_template_config,
             **kwargs)
         self.session_len = backend_config.session_len
         self.backend_config = backend_config
