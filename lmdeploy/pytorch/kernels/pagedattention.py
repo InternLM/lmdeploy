@@ -3,24 +3,45 @@
 import torch
 import triton
 import triton.language as tl
+from packaging import version
 from torch import Tensor
 from triton.runtime.jit import get_cuda_stream
 
-assert triton.__version__ >= '2.1.0'
+TRITON_VERSION = version.parse(triton.__version__)
 
+assert TRITON_VERSION >= version.parse('2.1.0')
 
-@triton.jit
-def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
-                        BLOCK: tl.constexpr):
-    if num_sub_blocks > 1:
-        offs_sub = tl.arange(0, num_sub_blocks)
-        offs_n = tl.arange(0, BLOCK // num_sub_blocks)
-        ret = tl.load(offset_ptr + block_id * num_sub_blocks + offs_sub)[
-            None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
-        return tl.ravel(ret)
-    else:
-        offs_n = tl.arange(0, BLOCK)
-        return tl.load(offset_ptr + block_id) * BLOCK + offs_n
+if TRITON_VERSION >= version.parse('2.2.0'):
+
+    @triton.jit
+    def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
+                            BLOCK: tl.constexpr):
+        """load block offsets."""
+        if num_sub_blocks > 1:
+            offs_sub = tl.arange(0, num_sub_blocks)
+            offs_n = tl.arange(0, BLOCK // num_sub_blocks)
+            ret = tl.load(
+                offset_ptr + block_id * num_sub_blocks +
+                offs_sub)[:, None] * BLOCK // num_sub_blocks + offs_n[None, :]
+            return tl.ravel(ret)
+        else:
+            offs_n = tl.arange(0, BLOCK)
+            return tl.load(offset_ptr + block_id) * BLOCK + offs_n
+else:
+
+    @triton.jit
+    def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
+                            BLOCK: tl.constexpr):
+        """load block offsets triton<2.2.0."""
+        if num_sub_blocks > 1:
+            offs_sub = tl.arange(0, num_sub_blocks)
+            offs_n = tl.arange(0, BLOCK // num_sub_blocks)
+            ret = tl.load(offset_ptr + block_id * num_sub_blocks + offs_sub)[
+                None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
+            return tl.ravel(ret)
+        else:
+            offs_n = tl.arange(0, BLOCK)
+            return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
 @triton.jit
