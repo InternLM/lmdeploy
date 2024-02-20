@@ -330,14 +330,15 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     tp_act = ArgumentHelper.tp(pt_group)
-    session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
+    cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
+    session_len_act = ArgumentHelper.session_len(pt_group, default=2048)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
     tb_group._group_actions.append(session_len_act)
+    tb_group._group_actions.append(cache_count_act)
     ArgumentHelper.model_format(tb_group, default='hf')
-    ArgumentHelper.cache_max_entry_count(tb_group)
     args = parser.parse_args()
     return args
 
@@ -386,9 +387,13 @@ def main():
                 engine_config = TurbomindEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
                     model_format=args.model_format,
+                    session_len=args.session_len,
                     tp=args.tp)
             elif args.backend == 'pytorch':
-                engine_config = PytorchEngineConfig(tp=args.tp)
+                engine_config = PytorchEngineConfig(
+                    cache_max_entry_count=args.cache_max_entry_count,
+                    session_len=args.session_len,
+                    tp=args.tp)
             gen_config = EngineGenerationConfig(
                 top_k=args.top_k,
                 top_p=args.top_p,

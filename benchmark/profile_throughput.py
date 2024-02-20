@@ -278,13 +278,15 @@ def parse_args():
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     tp_act = ArgumentHelper.tp(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
+    cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
     tb_group._group_actions.append(session_len_act)
+    tb_group._group_actions.append(cache_count_act)
     ArgumentHelper.model_format(tb_group, default='hf')
-    ArgumentHelper.cache_max_entry_count(tb_group)
+
     args = parser.parse_args()
     return args
 
