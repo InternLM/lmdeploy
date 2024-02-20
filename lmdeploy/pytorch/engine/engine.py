@@ -14,6 +14,7 @@ from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..check_env import check_env
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
@@ -95,6 +96,8 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig,
                  trust_remote_code: bool = True) -> None:
+        check_env()
+
         self.engine_config = engine_config
         model_name = engine_config.model_name
         tp = engine_config.tp
@@ -105,14 +108,17 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type='recompute',
+            eviction_type=engine_config.eviction_type,
+            prefill_interval=engine_config.prefill_interval,
             max_prefill_token_num=engine_config.max_prefill_token_num)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
-        cache_config = CacheConfig(block_size=engine_config.block_size,
-                                   num_cpu_blocks=engine_config.num_cpu_blocks,
-                                   num_gpu_blocks=engine_config.num_gpu_blocks)
+        cache_config = CacheConfig(
+            block_size=engine_config.block_size,
+            num_cpu_blocks=engine_config.num_cpu_blocks,
+            num_gpu_blocks=engine_config.num_gpu_blocks,
+            cache_max_entry_count=engine_config.cache_max_entry_count)
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
