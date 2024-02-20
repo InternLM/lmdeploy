@@ -710,26 +710,6 @@ class Falcon(BaseModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def decorate_prompt(self, prompt, sequence_start=True):
-        """decorate prompt."""
-        prompt = super().decorate_prompt(prompt, sequence_start)
-        if len(prompt) == 0:
-            return '<|endoftext|>'
-        return prompt
-
-    def messages2prompt(self, messages, sequence_start=True):
-        """message to prompt."""
-        if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        _, users, assistants = self._translate_messages(messages)
-        ret = ''
-        for user, assistant in zip(users, assistants):
-            if assistant:
-                ret += f'{user}{assistant}'
-            else:
-                ret += f'{user}'
-        return ret
-
 
 @MODELS.register_module(name='chatglm2-6b')
 class ChatGLM2(BaseModel):
