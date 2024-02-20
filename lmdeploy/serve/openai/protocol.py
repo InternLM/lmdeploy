@@ -262,7 +262,7 @@ class GenerateRequest(BaseModel):
     stream: bool = False
     stop: Optional[Union[str, List[str]]] = Field(default=None,
                                                   examples=[None])
-    request_output_len: int = 512
+    request_output_len: Optional[int] = None
     top_p: float = 0.8
     top_k: int = 40
     temperature: float = 0.8
@@ -292,4 +292,6 @@ class GenerateResponse(BaseModel):
     """Generate response."""
     text: str
     tokens: int
+    input_tokens: int
+    history_tokens: int
     finish_reason: Optional[Literal['stop', 'length']] = None

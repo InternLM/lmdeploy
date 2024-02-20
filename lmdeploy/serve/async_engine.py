@@ -471,9 +471,14 @@ class AsyncEngine:
         if do_preprocess:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+        if gen_config.max_new_tokens is None:
+            # for interactive endpoint, will try maximum possible token num
+            gen_config.max_new_tokens = max(
+                128, self.session_len - self.id2step[str(session_id)] -
+                len(input_ids))
         finish_reason = None
         if self.id2step[str(session_id)] + len(
-                input_ids) + gen_config.max_new_tokens >= self.session_len:
+                input_ids) + gen_config.max_new_tokens > self.session_len:
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)

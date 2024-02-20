@@ -808,6 +808,8 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
         async for out in generation:
             chunk = GenerateResponse(text=out.response,
                                      tokens=out.generate_token_len,
+                                     input_tokens=out.input_token_len,
+                                     history_tokens=out.history_token_len,
                                      finish_reason=out.finish_reason)
             data = chunk.model_dump_json()
             yield f'{data}\n'
@@ -852,7 +854,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - stream: whether to stream the results or not.
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - request_output_len (int): output token nums
+    - request_output_len (int): output token nums. If not specified, will use
+        maximum possible number for a session.
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
@@ -867,7 +870,13 @@ async def chat_interactive_v1(request: GenerateRequest,
     """
     if request.cancel and request.session_id != -1:
         VariableInterface.async_engine.stop_session(request.session_id)
-        return {'text': '', 'tokens': 0, 'finish_reason': None}
+        return {
+            'text': '',
+            'tokens': 0,
+            'input_tokens': 0,
+            'history_tokens': 0,
+            'finish_reason': None
+        }
     if request.session_id == -1:
         request.session_id = random.randint(10087, 23333)
 
@@ -899,6 +908,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         async for out in generation:
             chunk = GenerateResponse(text=out.response,
                                      tokens=out.generate_token_len,
+                                     input_tokens=out.input_token_len,
+                                     history_tokens=out.history_token_len,
                                      finish_reason=out.finish_reason)
             data = chunk.model_dump_json()
             yield f'{data}\n'
@@ -909,7 +920,7 @@ async def chat_interactive_v1(request: GenerateRequest,
     else:
         ret = {}
         text = ''
-        tokens = 0
+        tokens, input_tokens, history_tokens = 0, 0, 0
         finish_reason = None
         async for out in generation:
             if await raw_request.is_disconnected():
@@ -919,8 +930,16 @@ async def chat_interactive_v1(request: GenerateRequest,
                                              'Client disconnected')
             text += out.response
             tokens = out.generate_token_len
+            input_tokens = out.input_token_len
+            history_tokens = out.history_token_len
             finish_reason = out.finish_reason
-        ret = {'text': text, 'tokens': tokens, 'finish_reason': finish_reason}
+        ret = {
+            'text': text,
+            'tokens': tokens,
+            'input_tokens': input_tokens,
+            'history_tokens': history_tokens,
+            'finish_reason': finish_reason
+        }
         return JSONResponse(ret)
 
 
