@@ -97,10 +97,8 @@ class PatchedQwen2Attention(nn.Module):
         attn_output = query_states
         max_seq_len = position_ids.size(-1)
 
-        use_sliding_windows = (
-            getattr(self.config, "sliding_window", None) is not None
-            and self.config.use_sliding_window
-        )
+        use_sliding_windows = (getattr(self.config, 'sliding_window', None)
+                               is not None and self.config.use_sliding_window)
         window_size = self.config.sliding_window
         if not use_sliding_windows:
             window_size = -1
