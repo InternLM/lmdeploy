@@ -1,6 +1,6 @@
-# Profile Static Inference Performance
+# Profile Token Latency and Throughput
 
-We view the performance of the inference engine under the fixed batch and fixed input/output token as static inference performance.
+We profile the latency and throughput of generated tokens with fixed batch size and fixed input/output token.
 
 The profiling script is `profile_generation.py`. Before running it, please install the lmdeploy precompiled package and download the profiling script:
 

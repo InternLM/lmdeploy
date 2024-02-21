@@ -303,9 +303,11 @@ def main():
             cache_max_entry_count=args.cache_max_entry_count,
             model_format=args.model_format)
     elif args.backend == 'pytorch':
-        engine_config = PytorchEngineConfig(session_len=args.session_len,
-                                            max_batch_size=args.concurrency,
-                                            tp=args.tp)
+        engine_config = PytorchEngineConfig(
+            session_len=args.session_len,
+            cache_max_entry_count=args.cache_max_entry_count,
+            max_batch_size=args.concurrency,
+            tp=args.tp)
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 
