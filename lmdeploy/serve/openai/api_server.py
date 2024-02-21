@@ -270,7 +270,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - n (int): How many chat completion choices to generate for each input
         message. Only support one here.
     - stream: whether to stream the results or not. Default to false.
-    - max_tokens (int): output token nums
+    - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
@@ -302,7 +302,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         request.stop = [request.stop]
 
     gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        max_new_tokens=request.max_tokens,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,
@@ -569,7 +569,7 @@ async def completions_v1(request: CompletionRequest,
     - model (str): model name. Available from /v1/models.
     - prompt (str): the input prompt.
     - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_tokens (int): output token nums
+    - max_tokens (int): output token nums. Default to 16.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher

@@ -97,7 +97,7 @@ class APIClient:
                             temperature: Optional[float] = 0.7,
                             top_p: Optional[float] = 1.0,
                             n: Optional[int] = 1,
-                            max_tokens: Optional[int] = 512,
+                            max_tokens: Optional[int] = None,
                             stop: Optional[Union[str, List[str]]] = None,
                             stream: Optional[bool] = False,
                             presence_penalty: Optional[float] = 0.0,
@@ -121,7 +121,7 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
-            max_tokens (int): output token nums
+            max_tokens (int | None): output token nums. Default to None.
             stop (str | List[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
