@@ -403,7 +403,6 @@ int main(int argc, char* argv[])
     }
 
     // step 4: prepare request
-    // https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/start_ids.csv
     printf("Recommend to specify the second parameter on the command line as the path to start_ids.csv\n");
     std::string csv_name = argc >= 3 ? std::string(argv[2]) : "../examples/cpp/llama/start_ids.csv";
     std::vector<void*> pointer_record;  // Used to prevent the pointers are
