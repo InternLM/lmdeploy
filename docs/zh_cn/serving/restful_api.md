@@ -1,6 +1,6 @@
 # Restful API
 
-### 启动服务
+## 启动服务
 
 用户将下面命令输出的 http url 复制到浏览器打开，详细查看所有的 API 及其使用方法。
 请一定查看`http://{server_ip}:{server_port}`！！！
@@ -23,7 +23,23 @@ api_server 启动时支持的参数可以通过命令行`lmdeploy serve api_serv
 不过，我们建议用户用我们提供的另一个 API: `/v1/chat/interactive`。
 它有更好的性能，提供更多的参数让用户自定义修改。
 
-### python
+## 用 docker 部署 http 服务
+
+LMDeploy 提供了官方[镜像](https://hub.docker.com/r/openmmlab/lmdeploy/tags)。使用这个镜像，可以运行兼容 OpenAI 的服务。下面是使用示例：
+
+```shell
+docker run --runtime nvidia --gpus all \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
+    -p 23333:23333 \
+    --ipc=host \
+    openmmlab/lmdeploy:latest \
+    lmdeploy serve api_server internlm/internlm2-chat-7b
+```
+
+然后像上面一样使用浏览器试用 Swagger UI 即可。
+
+## python
 
 我们将这些服务的客户端功能集成在 `APIClient` 类中。下面是一些例子，展示如何在客户端调用 `api_server` 服务。
 如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
@@ -62,7 +78,7 @@ for item in api_client.chat_interactive_v1(prompt='hi'):
     print(item)
 ```
 
-### Java/Golang/Rust
+## Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
 下面是一个使用示例：
@@ -81,7 +97,7 @@ rust/src:
 apis  lib.rs  models
 ```
 
-### cURL
+## cURL
 
 cURL 也可以用于查看 API 的输出结果
 
@@ -125,7 +141,7 @@ curl http://{server_ip}:{server_port}/v1/completions \
 }'
 ```
 
-### CLI client
+## CLI client
 
 restful api 服务可以通过客户端测试，例如
 
@@ -134,7 +150,7 @@ restful api 服务可以通过客户端测试，例如
 lmdeploy serve api_client api_server_url
 ```
 
-### webui through gradio
+## webui through gradio
 
 也可以直接用 webui 测试使用 restful-api。
 
@@ -145,7 +161,7 @@ lmdeploy serve api_client api_server_url
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
-### webui through OpenAOE
+## webui through OpenAOE
 
 可以使用 [OpenAOE](https://github.com/InternLM/OpenAOE) 无缝接入restful api服务.
 
@@ -156,7 +172,7 @@ openaoe -f /path/to/your/config-template.yaml
 
 具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md).
 
-### FAQ
+## FAQ
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。
 
@@ -170,6 +186,6 @@ openaoe -f /path/to/your/config-template.yaml
 
 6. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
 
-### 多机并行服务
+## 多机并行服务
 
 请参考我们的 [请求分发服务器](./proxy_server.md)

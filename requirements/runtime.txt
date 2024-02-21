@@ -12,5 +12,5 @@ shortuuid
 tiktoken
 torch<=2.1.2,>=2.0.0
 transformers>=4.33.0,<=4.37.1
-triton>=2.1.0,<2.2.0
+triton>=2.1.0,<=2.2.0
 uvicorn

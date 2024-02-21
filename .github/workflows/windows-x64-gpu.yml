@@ -48,7 +48,6 @@ jobs:
           use-github-cache: false
       - name: Build wheel
         run: |
-          ((Get-Content -path CMakeLists.txt -Raw) -replace '-Wall','/W0') | Set-Content CMakeLists.txt
           $env:BUILD_TEST="ON"
           mkdir build
           cd build

@@ -211,20 +211,21 @@ print(response)
 
 ### 参数
 
-| Parameter        | Type | Description                                                  | Default     |
-| ---------------- | ---- | ------------------------------------------------------------ | ----------- |
-| model_name       | str  | 已部署模型的对话模板名称。                                   | ''          |
-| tp               | int  | 张量并行度。                                                 | 1           |
-| session_len      | int  | 最大会话长度。                                               | None        |
-| max_batch_size   | int  | 最大批处理大小。                                             | 128         |
-| eviction_type    | str  | 当kv缓存满时需要执行的操作，可选值为\['recompute', 'copy'\]. | 'recompute' |
-| prefill_interval | int  | 执行预填充的间隔。                                           | 16          |
-| block_size       | int  | 分页缓存块大小。                                             | 64          |
-| num_cpu_blocks   | int  | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
-| num_gpu_blocks   | int  | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
-| adapters         | dict | lora adapters的配置路径                                      | None        |
-| download_dir     | str  | 模型缓存路径                                                 | None        |
-| revision         | str  | Git revision id, 可以是branch，tag或者commit id              | None        |
+| Parameter             | Type  | Description                                                  | Default     |
+| --------------------- | ----- | ------------------------------------------------------------ | ----------- |
+| model_name            | str   | 已部署模型的对话模板名称。                                   | ''          |
+| tp                    | int   | 张量并行度。                                                 | 1           |
+| session_len           | int   | 最大会话长度。                                               | None        |
+| max_batch_size        | int   | 最大批处理大小。                                             | 128         |
+| cache_max_entry_count | float | 由k/v缓存占用的空闲GPU内存百分比。                           | 0.8         |
+| eviction_type         | str   | 当kv缓存满时需要执行的操作，可选值为\['recompute', 'copy'\]. | 'recompute' |
+| prefill_interval      | int   | 执行预填充的间隔。                                           | 16          |
+| block_size            | int   | 分页缓存块大小。                                             | 64          |
+| num_cpu_blocks        | int   | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
+| num_gpu_blocks        | int   | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
+| adapters              | dict  | lora adapters的配置路径                                      | None        |
+| download_dir          | str   | 模型缓存路径                                                 | None        |
+| revision              | str   | Git revision id, 可以是branch，tag或者commit id              | None        |
 
 ## GenerationConfig
 
