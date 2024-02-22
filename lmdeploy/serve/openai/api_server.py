@@ -26,6 +26,7 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
     GenerateRequest, GenerateRequestQos, GenerateResponse, ModelCard,
     ModelList, ModelPermission, UsageInfo)
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
+from lmdeploy.utils import get_logger
 
 
 class VariableInterface:
@@ -985,6 +986,8 @@ def serve(model_path: str,
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
+    logger = get_logger('lmdeploy')
+    logger.setLevel(log_level)
 
     if allow_origins:
         app.add_middleware(

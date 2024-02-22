@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
+import json
 import os
 from abc import abstractmethod
 from typing import List, Literal, Optional
@@ -54,6 +55,35 @@ class ChatTemplateConfig:
         }
         model: BaseModel = MODELS.get(self.model_name).from_config(**attrs)
         return model
+
+    def to_json(self, file_path=None):
+        """Convert the dataclass instance to a JSON formatted string and
+        optionally save to a file."""
+        json_str = json.dumps(dataclasses.asdict(self),
+                              ensure_ascii=False,
+                              indent=4)
+        if file_path:
+            with open(file_path, 'w', encoding='utf-8') as file:
+                file.write(json_str)
+        return json_str
+
+    @classmethod
+    def from_json(cls, file_or_string=None):
+        """Construct a dataclass instance from a JSON file or JSON string."""
+        if file_or_string is None:
+            return cls
+        try:
+            # Try to open the input_data as a file path
+            with open(file_or_string, 'r', encoding='utf-8') as file:
+                json_data = file.read()
+        except FileNotFoundError:
+            # If it's not a file path, assume it's a JSON string
+            json_data = file_or_string
+        except IOError:
+            # If it's not a file path and not a valid JSON string, raise error
+            raise ValueError(
+                'Invalid input. Must be a file path or a valid JSON string.')
+        return cls(**json.loads(json_data))
 
 
 @MODELS.register_module(name='internlm')

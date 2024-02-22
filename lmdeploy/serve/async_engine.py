@@ -15,6 +15,8 @@ from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words, get_logger
 
+logger = get_logger('lmdeploy')
+
 
 @dataclasses.dataclass
 class GenOut:
@@ -472,6 +474,7 @@ class AsyncEngine:
         prompt = messages
         if do_preprocess:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+        logger.warning(f'Prompt with applied chat template:\n{prompt}')
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         finish_reason = None
         if self.id2step[str(session_id)] + len(
