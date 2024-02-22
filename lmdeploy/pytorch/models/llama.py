@@ -12,8 +12,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
 from ..kernels import apply_rotary_pos_emb as apply_rotary_pos_emb_old
-from ..kernels.fill_kv_cache import fill_kv_cache
-from ..kernels.pagedattention import paged_attention_fwd
+from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
 from .functional import attention_forward_with_rerope, repeat_kv
 
 TRANSFORMERS_VERSION = version.parse(transformers.__version__)
@@ -225,15 +224,39 @@ class LlamaAttention(nn.Module):
                 k_embed=key_states)
             return query_states, key_states, value_states
 
-        def __rotary_emb_fn_438(query_states, key_states, value_states):
+        def __rotary_emb_fn_438_naive(query_states, key_states, value_states):
             """rotary embedding transformers>4.38."""
-            cos, sin = self.rotary_emb(value_states.transpose(0, 1),
+            cos, sin = self.rotary_emb(value_states,
                                        context.position_ids_1d[None])
             cos = cos[0]
             sin = sin[0]
             query_states, key_states = apply_rotary_pos_emb(
                 query_states, key_states, cos, sin)
             return query_states, key_states, value_states
+
+        def __rotary_emb_fn_438_fused(query_states, key_states, value_states):
+            scaling_factor = getattr(self.rotary_emb, 'scaling_factor', 1.0)
+            inv_freq = self.rotary_emb.inv_freq
+            query_states, key_states = fused_rotary_emb(
+                query_states[None],
+                key_states[None],
+                context.position_ids_1d[None],
+                inv_freq=inv_freq,
+                scaling_factor=scaling_factor,
+                out_q=query_states[None],
+                out_k=key_states[None])
+            return query_states, key_states, value_states
+
+        def __rotary_emb_fn_438(query_states, key_states, value_states):
+            rotary_name = type(self.rotary_emb).__name__
+            if rotary_name in [
+                    'LlamaRotaryEmbedding', 'LlamaLinearScalingRotaryEmbedding'
+            ]:
+                return __rotary_emb_fn_438_fused(query_states, key_states,
+                                                 value_states)
+            else:
+                return __rotary_emb_fn_438_naive(query_states, key_states,
+                                                 value_states)
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding."""
