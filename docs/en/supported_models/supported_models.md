@@ -29,3 +29,4 @@
 |  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
 |    YI     | 6B - 34B  |    Yes    |   No    |  No  |
 |  Mistral  |    7B     |    Yes    |   No    |  No  |
+|   Gemma   |   2B-7B   |    Yes    |   No    |  No  |

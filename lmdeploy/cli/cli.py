@@ -107,7 +107,7 @@ class CLI(object):
         if engine == 'pytorch':
             model_names = [
                 'llama', 'llama2', 'internlm', 'internlm2', 'baichuan2',
-                'chatglm2', 'falcon', 'yi', 'mistral'
+                'chatglm2', 'falcon', 'yi', 'mistral', 'gemma'
             ]
         elif engine == 'turbomind':
             from lmdeploy.model import MODELS
