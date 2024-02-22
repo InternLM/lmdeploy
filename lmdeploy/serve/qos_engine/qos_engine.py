@@ -126,6 +126,7 @@ class QosEngine:
                 if request.max_tokens else 512,
                 stop=request.stop,
                 top_p=request.top_p,
+                top_k=request.top_k,
                 temperature=request.temperature,
                 repetition_penalty=request.repetition_penalty,
                 ignore_eos=request.ignore_eos)

@@ -38,7 +38,8 @@ class Tokenizer:
 
 def main(model_file: str = '/data/llama/model/tokenizer.model',
          encode_file: str = None,
-         decode_file: str = None):
+         decode_file: str = None,
+         encode_line: str = None):
     tokenizer = Tokenizer(model_file)
     if encode_file:
         with open(encode_file, 'r') as f:
@@ -59,6 +60,13 @@ def main(model_file: str = '/data/llama/model/tokenizer.model',
                 _token_ids = [int(token_id) for token_id in _token_ids]
                 ys = tokenizer.decode(_token_ids)
                 print(ys)
+    elif encode_line:
+        xs = tokenizer.encode(encode_line)
+        xs = ','.join(map(str, xs))
+        print(xs)
+        output_dir = osp.dirname(osp.abspath(__file__))
+        with open(osp.join(output_dir, 'start_ids.csv'), 'w') as f:
+            f.write(xs)
     else:
         first = True
         while True:
