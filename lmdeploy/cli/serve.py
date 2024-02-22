@@ -209,8 +209,10 @@ class SubCliServe:
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
                 cache_max_entry_count=args.cache_max_entry_count)
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name).from_json(args.chat_template)
+        chat_template_config = ChatTemplateConfig(model_name=args.model_name)
+        if args.chat_template:
+            chat_template_config = ChatTemplateConfig.from_json(
+                args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
@@ -242,8 +244,7 @@ class SubCliServe:
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
                 cache_max_entry_count=args.cache_max_entry_count)
-        chat_template_config = ChatTemplateConfig(
-            model_name=args.model_name).from_json(args.chat_template)
+        chat_template_config = ChatTemplateConfig(model_name=args.model_name)
         run_api_server(args.model_path,
                        backend=args.backend,
                        backend_config=backend_config,

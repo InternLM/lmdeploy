@@ -68,10 +68,8 @@ class ChatTemplateConfig:
         return json_str
 
     @classmethod
-    def from_json(cls, file_or_string=None):
+    def from_json(cls, file_or_string):
         """Construct a dataclass instance from a JSON file or JSON string."""
-        if file_or_string is None:
-            return cls
         try:
             # Try to open the input_data as a file path
             with open(file_or_string, 'r', encoding='utf-8') as file:
