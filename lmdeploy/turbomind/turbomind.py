@@ -6,7 +6,7 @@ import os.path as osp
 import sys
 from configparser import ConfigParser
 from contextlib import contextmanager
-from queue import Queue
+from queue import LifoQueue, Queue
 from threading import Thread
 from typing import Iterable, List, Optional, Union
 
@@ -507,10 +507,10 @@ class TurboMindInstance:
             t.start()
             self.threads[device_id] = t
 
-    def _async_forward_callback(self, result, ctx, que: asyncio.Queue):
-        que.put_nowait((False, result))
+    def _async_forward_callback(self, result, ctx, que: LifoQueue):
+        que.put((False, result))
 
-    def _async_forward_thread(self, inputs, que: asyncio.Queue):
+    def _async_forward_thread(self, inputs, que: LifoQueue):
         instance_comm = self.tm_model.model_comm.create_instance_comm(
             self.gpu_count)
 
@@ -519,7 +519,7 @@ class TurboMindInstance:
                 output = self.model_insts[device_id].forward(
                     inputs, instance_comm)
                 if enque_output:
-                    que.put_nowait((True, output))
+                    que.put((True, output))
 
         for device_id in range(self.gpu_count):
             t = Thread(target=_func,
@@ -721,7 +721,7 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         # start forward thread
-        que = asyncio.LifoQueue()
+        que = LifoQueue()
         from functools import partial
         _forward_callback = partial(self._async_forward_callback, que=que)
         _forward_thread = partial(self._async_forward_thread, que=que)
@@ -748,7 +748,7 @@ class TurboMindInstance:
         prev_len = 0
         # generator
         while True:
-            finish, tm_outputs = await que.get()
+            finish, tm_outputs = que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -778,6 +778,7 @@ class TurboMindInstance:
             else:
                 prev_len = outputs[-1]
             yield outputs
+            await asyncio.sleep(0.002)
 
             if finish:
                 for t in self.threads:
