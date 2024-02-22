@@ -49,7 +49,7 @@ class LLM(object):
         prompt = self.model.get_prompt(question, True)
         input_ids = self.tokenizer.encode(prompt)
         _, token_ids, __ = self.generator.infer(session_id=self.session_id,
-                                                prompt_token_ids=input_ids,
+                                                input_ids=input_ids,
                                                 gen_config=self.gen_config)
         response = self.tokenizer.decode(token_ids)
         self.generator.end(self.session_id)

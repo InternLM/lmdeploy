@@ -627,7 +627,7 @@ class Engine:
         """one step inference. Used to perform streaming chat.
 
         Args:
-            return_logits (bool): Weither to return the output logits.
+            return_logits (bool): Whether to return the output logits.
 
         Returns:
             Dict[int, InferOutput]: The output of each session.
@@ -690,11 +690,8 @@ class Engine:
         """Send inference request.
 
         Args:
-            session_id (int): The session id.
-            prompt_token_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
-            step (int): No use for now.
-            sampling_param (SamplingParam): The sampling param of the output.
+            session_ids (List[int]): The session id.
+            token_ids (List[int]): The input token ids.
             adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
@@ -900,7 +897,6 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
             gen_config (EngineGenerationConfig): The sampling parameters.
 
         Yields:
@@ -952,8 +948,8 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
             gen_config (EngineGenerationConfig): The sampling parameters.
+            adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
@@ -997,16 +993,14 @@ class EngineInstance:
 
     def infer(self,
               session_id: int,
-              prompt_token_ids: List[int] = None,
+              input_ids: List[int] = None,
               gen_config: EngineGenerationConfig = None,
               **kwargs):
         """Send inference request.
 
         Args:
             session_id (int): The session id.
-            prompt_token_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
-            step (int): No use for now.
+            input_ids (List[int]): The input token ids.
             gen_config (EngineGenerationConfig): The sampling parameters.
 
         Returns:
@@ -1016,13 +1010,13 @@ class EngineInstance:
         """
         token_ids = []
         for outputs in self.stream_infer(session_id,
-                                         prompt_token_ids,
+                                         input_ids,
                                          gen_config=gen_config,
                                          **kwargs):
             status, tmp_ids, _ = outputs
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return (status, token_ids, len(token_ids))
-            token_ids += tmp_ids
+            token_ids = tmp_ids
 
         return (0, token_ids, len(token_ids))
 
