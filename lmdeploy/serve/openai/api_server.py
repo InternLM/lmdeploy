@@ -875,7 +875,7 @@ async def chat_interactive_v1(request: GenerateRequest,
             'tokens': 0,
             'input_tokens': 0,
             'history_tokens': 0,
-            'finish_reason': None
+            'finish_reason': 'stop'
         }
     if request.session_id == -1:
         request.session_id = random.randint(10087, 23333)
