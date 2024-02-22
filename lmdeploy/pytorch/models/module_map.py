@@ -109,6 +109,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
+# gemma
+MODULE_MAP.update({
+    'transformers.models.gemma.modeling_gemma.GemmaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma.modeling_gemma.GemmaFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma.modeling_gemma.GemmaSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma.modeling_gemma.GemmaModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaModel',
+    'transformers.models.gemma.modeling_gemma.modeling_mistral.GemmaMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.gemma.modeling_gemma.GemmaRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
+})
+
 # peft
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':

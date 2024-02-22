@@ -52,6 +52,7 @@ class ModelConfig:
     num_key_value_heads: int
     bos_token_id: int
     eos_token_id: int
+    head_dim: int
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
@@ -60,7 +61,7 @@ class ModelConfig:
 
     def get_head_size(self):
         """get head size."""
-        return self.hidden_size // self.num_attention_heads
+        return self.head_dim
 
     @classmethod
     def from_pretrained(cls,
@@ -90,6 +91,7 @@ class ModelConfig:
             else:
                 # rw-1b, MHA
                 kv_head = num_attention_heads
+            head_dim = hf_config.hidden_size // num_attention_heads
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
@@ -97,20 +99,34 @@ class ModelConfig:
                 num_key_value_heads=kv_head,
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
+                head_dim=head_dim,
                 multi_query_attention=hf_config.multi_query,
             )
 
         def __build_chatglm():
             """build chatglm."""
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=hf_config.multi_query_group_num,
                 bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id)
+                eos_token_id=hf_config.eos_token_id,
+                head_dim=head_dim)
+
+        def __build_gemma():
+            return ModelConfig(
+                hidden_size=hf_config.hidden_size,
+                num_layers=hf_config.num_hidden_layers,
+                num_attention_heads=hf_config.num_attention_heads,
+                num_key_value_heads=hf_config.num_key_value_heads,
+                bos_token_id=hf_config.bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                head_dim=hf_config.head_dim)
 
         def __build_default():
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
             num_attention_heads = hf_config.num_attention_heads
             num_key_value_heads = getattr(hf_config, 'num_key_value_heads',
                                           num_attention_heads)
@@ -122,12 +138,15 @@ class ModelConfig:
                 num_key_value_heads=num_key_value_heads,
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
-                sliding_window=sliding_window)
+                sliding_window=sliding_window,
+                head_dim=head_dim)
 
         if 'falcon' in model_path:
             model_config = __build_falcon()
         elif 'chatglm' in model_path:
             model_config = __build_chatglm()
+        elif hf_config.model_type == 'gemma':
+            model_config = __build_gemma()
         else:
             model_config = __build_default()
 
