@@ -320,6 +320,4 @@ class TestPagedAttention:
                             kv_seqlens=kv_seq_lens,
                             max_seqlen=max_seq_len,
                             window_size=win_size)
-        print(out[:, 0])
-        print(window_gt[:, 0])
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
