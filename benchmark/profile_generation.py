@@ -383,16 +383,18 @@ def main():
                                                     args.completion_tokens):
             MemoryMonitor.start()
             from functools import partial
+            # make sure session_len >= prompt_tokens + completion_tokens
+            session_len = max(args.session_len, prompt_tokens + completion_tokens)
             if args.backend == 'turbomind':
                 engine_config = TurbomindEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
                     model_format=args.model_format,
-                    session_len=args.session_len,
+                    session_len=session_len,
                     tp=args.tp)
             elif args.backend == 'pytorch':
                 engine_config = PytorchEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
-                    session_len=args.session_len,
+                    session_len=session_len,
                     tp=args.tp)
             gen_config = EngineGenerationConfig(
                 top_k=args.top_k,
