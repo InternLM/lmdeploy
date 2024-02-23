@@ -1,5 +1,6 @@
 from mmengine.config import read_base
-from opencompass.models import TurboMindModel
+from opencompass.models import (HuggingFaceCausalLM, LmdeployPytorchModel,
+                                TurboMindModel)
 
 with read_base():
     # choose a list of datasets
@@ -59,6 +60,41 @@ baichuan2_meta_template = dict(round=[
     dict(role='BOT', begin='<reserved_107>', generate=True),
 ], )
 
+mistral_meta_template = dict(begin='<s>',
+                             round=[
+                                 dict(role='HUMAN',
+                                      begin='[INST]',
+                                      end='[/INST]'),
+                                 dict(role='BOT',
+                                      begin='',
+                                      end='</s>',
+                                      generate=True),
+                             ],
+                             eos_token_id=2)
+# config for internlm-chat-7b
+hf_internlm_chat_7b = dict(
+    type=HuggingFaceCausalLM,
+    abbr='internlm-chat-7b-hf',
+    path='internlm/internlm-chat-7b',
+    tokenizer_path='internlm/internlm-chat-7b',
+    model_kwargs=dict(
+        trust_remote_code=True,
+        device_map='auto',
+    ),
+    tokenizer_kwargs=dict(
+        padding_side='left',
+        truncation_side='left',
+        use_fast=False,
+        trust_remote_code=True,
+    ),
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=8,
+    meta_template=internlm_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='<eoa>',
+)
+
 # config for internlm-chat-7b
 tb_internlm_chat_7b = dict(type=TurboMindModel,
                            abbr='internlm-chat-7b-turbomind',
@@ -77,6 +113,22 @@ tb_internlm_chat_7b = dict(type=TurboMindModel,
                            meta_template=internlm_meta_template,
                            run_cfg=dict(num_gpus=1, num_procs=1),
                            end_str='<eoa>')
+
+# config for pt internlm-chat-7b
+pt_internlm_chat_7b = dict(
+    type=LmdeployPytorchModel,
+    abbr='internlm-chat-7b-pytorch',
+    path='internlm/internlm-chat-7b',
+    engine_config=dict(session_len=2048, max_batch_size=16),
+    gen_config=dict(top_k=1, top_p=0.8, temperature=1.0, max_new_tokens=100),
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=16,
+    concurrency=16,
+    meta_template=internlm_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='<eoa>',
+)
 
 tb_internlm_chat_7b_w4a16 = dict(type=TurboMindModel,
                                  abbr='internlm-chat-7b-4bits-turbomind',
@@ -116,6 +168,24 @@ tb_internlm_chat_20b = dict(type=TurboMindModel,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str='<eoa>')
 
+# config for internlm-chat-20b
+hf_internlm_chat_20b = dict(type=HuggingFaceCausalLM,
+                            abbr='internlm-20b-hf',
+                            path='internlm/internlm-20b',
+                            tokenizer_path='internlm/internlm-20b',
+                            tokenizer_kwargs=dict(
+                                padding_side='left',
+                                truncation_side='left',
+                                use_fast=False,
+                                trust_remote_code=True,
+                            ),
+                            max_out_len=100,
+                            max_seq_len=2048,
+                            batch_size=8,
+                            model_kwargs=dict(trust_remote_code=True,
+                                              device_map='auto'),
+                            run_cfg=dict(num_gpus=2, num_procs=1),
+                            end_str='<eoa>')
 # config for internlm-chat-20b-w4 model
 tb_internlm_chat_20b_w4a16 = dict(type=TurboMindModel,
                                   abbr='internlm-chat-20b-4bits-turbomind',
@@ -136,6 +206,22 @@ tb_internlm_chat_20b_w4a16 = dict(type=TurboMindModel,
                                   run_cfg=dict(num_gpus=1, num_procs=1),
                                   end_str='<eoa>')
 
+# config for internlm-chat-20b
+pt_internlm_chat_20b = dict(
+    type=LmdeployPytorchModel,
+    abbr='internlm-chat-20b-pytorch',
+    path='internlm/internlm-chat-20b',
+    engine_config=dict(session_len=2048, max_batch_size=8),
+    gen_config=dict(top_k=1, top_p=0.8, temperature=1.0, max_new_tokens=100),
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=8,
+    concurrency=8,
+    meta_template=internlm_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='<eoa>',
+)
+
 # config for internlm2-chat-7b
 tb_internlm2_chat_7b = dict(type=TurboMindModel,
                             abbr='internlm2-chat-7b-turbomind',
@@ -154,6 +240,30 @@ tb_internlm2_chat_7b = dict(type=TurboMindModel,
                             meta_template=internlm2_meta_template,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str='<|im_end|>')
+
+# config for internlm2-chat-7b
+hf_internlm2_chat_7b = dict(
+    type=HuggingFaceCausalLM,
+    abbr='internlm2-chat-7b-hf',
+    path='internlm/internlm2-chat-7b',
+    tokenizer_path='internlm/internlm2-chat-7b',
+    model_kwargs=dict(
+        trust_remote_code=True,
+        device_map='auto',
+    ),
+    tokenizer_kwargs=dict(
+        padding_side='left',
+        truncation_side='left',
+        use_fast=False,
+        trust_remote_code=True,
+    ),
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=8,
+    meta_template=internlm2_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='<|im_end|>',
+)
 
 # config for internlm2-chat-7b-w4
 tb_internlm2_chat_7b_w4a16 = dict(type=TurboMindModel,
@@ -175,6 +285,22 @@ tb_internlm2_chat_7b_w4a16 = dict(type=TurboMindModel,
                                   run_cfg=dict(num_gpus=1, num_procs=1),
                                   end_str='<|im_end|>')
 
+# config for pt internlm-chat-7b
+pt_internlm2_chat_7b = dict(
+    type=LmdeployPytorchModel,
+    abbr='internlm2-chat-7b-pytorch',
+    path='internlm/internlm2-chat-7b',
+    engine_config=dict(session_len=2048, max_batch_size=16),
+    gen_config=dict(top_k=1, top_p=0.8, temperature=1.0, max_new_tokens=512),
+    max_out_len=512,
+    max_seq_len=2048,
+    batch_size=16,
+    concurrency=16,
+    meta_template=internlm2_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='<|im_end|>',
+)
+
 # config for internlm2-chat-20b
 tb_internlm2_chat_20b = dict(type=TurboMindModel,
                              abbr='internlm2-chat-20b-turbomind',
@@ -193,6 +319,30 @@ tb_internlm2_chat_20b = dict(type=TurboMindModel,
                              meta_template=internlm2_meta_template,
                              run_cfg=dict(num_gpus=1, num_procs=1),
                              end_str='<|im_end|>')
+
+# config for internlm2-chat-20b
+hf_internlm2_chat_20b = dict(
+    type=HuggingFaceCausalLM,
+    abbr='internlm2-chat-20b-hf',
+    path='internlm/internlm2-chat-20b',
+    tokenizer_path='internlm/internlm2-chat-20b',
+    model_kwargs=dict(
+        trust_remote_code=True,
+        device_map='auto',
+    ),
+    tokenizer_kwargs=dict(
+        padding_side='left',
+        truncation_side='left',
+        use_fast=False,
+        trust_remote_code=True,
+    ),
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=8,
+    meta_template=internlm2_meta_template,
+    run_cfg=dict(num_gpus=2, num_procs=1),
+    end_str='<|im_end|>',
+)
 
 # config for internlm2-chat-20b-w4 model
 tb_internlm2_chat_20b_w4a16 = dict(type=TurboMindModel,
@@ -214,24 +364,21 @@ tb_internlm2_chat_20b_w4a16 = dict(type=TurboMindModel,
                                    run_cfg=dict(num_gpus=1, num_procs=1),
                                    end_str='<|im_end|>')
 
-# config for llama2-chat-7b
-tb_llama2_chat_7b = dict(type=TurboMindModel,
-                         abbr='Llama-2-7b-chat-hf',
-                         path='meta-llama/Llama-2-7b-chat-hf',
-                         engine_config=dict(session_len=2048,
-                                            max_batch_size=16,
-                                            rope_scaling_factor=1.0),
-                         gen_config=dict(top_k=1,
-                                         top_p=0.8,
-                                         temperature=1.0,
-                                         max_new_tokens=100),
-                         max_out_len=100,
-                         max_seq_len=2048,
-                         batch_size=16,
-                         concurrency=16,
-                         meta_template=llama2_meta_template,
-                         run_cfg=dict(num_gpus=1, num_procs=1),
-                         end_str='[INST]')
+# config for pt internlm-chat-20b
+pt_internlm2_chat_20b = dict(
+    type=LmdeployPytorchModel,
+    abbr='internlm2-chat-20b-pytorch',
+    path='internlm/internlm2-chat-20b',
+    engine_config=dict(session_len=2048, max_batch_size=8),
+    gen_config=dict(top_k=1, top_p=0.8, temperature=1.0, max_new_tokens=512),
+    max_out_len=512,
+    max_seq_len=2048,
+    batch_size=8,
+    concurrency=8,
+    meta_template=internlm2_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='<|im_end|>',
+)
 
 # config for qwen-chat-7b
 tb_qwen_chat_7b = dict(type=TurboMindModel,
@@ -252,6 +399,62 @@ tb_qwen_chat_7b = dict(type=TurboMindModel,
                        run_cfg=dict(num_gpus=1, num_procs=1),
                        end_str='<|im_end|>')
 
+# config for llama2-chat-7b
+tb_llama2_chat_7b = dict(type=TurboMindModel,
+                         abbr='Llama-2-7b-chat-hf',
+                         path='meta-llama/Llama-2-7b-chat-hf',
+                         engine_config=dict(session_len=2048,
+                                            max_batch_size=16,
+                                            rope_scaling_factor=1.0),
+                         gen_config=dict(top_k=1,
+                                         top_p=0.8,
+                                         temperature=1.0,
+                                         max_new_tokens=100),
+                         max_out_len=100,
+                         max_seq_len=2048,
+                         batch_size=16,
+                         concurrency=16,
+                         meta_template=llama2_meta_template,
+                         run_cfg=dict(num_gpus=1, num_procs=1),
+                         end_str='[INST]')
+
+# config for llama2-chat-7b
+pt_llama2_chat_7b = dict(type=LmdeployPytorchModel,
+                         abbr='Llama-2-7b-chat-hf',
+                         path='meta-llama/Llama-2-7b-chat-hf',
+                         engine_config=dict(session_len=2048,
+                                            max_batch_size=16),
+                         gen_config=dict(top_k=1,
+                                         top_p=0.8,
+                                         temperature=1.0,
+                                         max_new_tokens=512),
+                         max_out_len=512,
+                         max_seq_len=2048,
+                         batch_size=16,
+                         concurrency=16,
+                         meta_template=llama2_meta_template,
+                         run_cfg=dict(num_gpus=1, num_procs=1),
+                         end_str='[INST]')
+
+# config for llama2-chat-7b
+hf_llama2_chat_7b = dict(
+    type=HuggingFaceCausalLM,
+    abbr='llama-2-7b-chat-hf',
+    path='meta-llama/Llama-2-7b-chat-hf',
+    tokenizer_path='meta-llama/Llama-2-7b-chat-hf',
+    model_kwargs=dict(device_map='auto'),
+    tokenizer_kwargs=dict(
+        padding_side='left',
+        truncation_side='left',
+        use_fast=False,
+    ),
+    meta_template=llama2_meta_template,
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=8,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='[INST]',
+)
 # config for baichuan2-chat-7b
 tb_baichuan2_chat_7b = dict(
     type=TurboMindModel,
@@ -266,5 +469,40 @@ tb_baichuan2_chat_7b = dict(
     batch_size=16,
     concurrency=16,
     meta_template=baichuan2_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+)
+
+# config for pt Mistral-7B-Instruct-v0.1
+pt_mistral_chat_7b = dict(
+    type=LmdeployPytorchModel,
+    abbr='Mistral-7B-Instruct-v0.1',
+    path='mistralai/Mistral-7B-Instruct-v0.1',
+    engine_config=dict(session_len=2048, max_batch_size=16),
+    gen_config=dict(top_k=1, top_p=0.8, temperature=1.0, max_new_tokens=512),
+    max_out_len=512,
+    max_seq_len=2048,
+    batch_size=16,
+    concurrency=16,
+    meta_template=mistral_meta_template,
+    run_cfg=dict(num_gpus=1, num_procs=1),
+    end_str='</s>',
+)
+
+# config for hf Mistral-7B-Instruct-v0.1
+hf_mistral_chat_7b = dict(
+    abbr='mistral-7b-instruct-v0.1-hf',
+    type=HuggingFaceCausalLM,
+    path='./Mistral-7B-Instruct-v0.1',
+    tokenizer_path='./Mistral-7B-Instruct-v0.1',
+    model_kwargs=dict(device_map='auto', trust_remote_code=True),
+    tokenizer_kwargs=dict(
+        padding_side='left',
+        truncation_side='left',
+        trust_remote_code=True,
+    ),
+    meta_template=mistral_meta_template,
+    max_out_len=100,
+    max_seq_len=2048,
+    batch_size=16,
     run_cfg=dict(num_gpus=1, num_procs=1),
 )

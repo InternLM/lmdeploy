@@ -98,7 +98,6 @@ def evaluate(models: List[str], workspace: str):
             engine_type = 'tb'
         else:
             model = model_
-        assert engine_type == 'tb', 'current only support turbomind'
 
         opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
