@@ -1013,7 +1013,8 @@ class MistralChat(BaseModel):
         return ret
 
 
-def best_match_model(query: str, similarity_cutoff: float = 0.5):
+def best_match_model(query: str,
+                     similarity_cutoff: float = 0.5) -> Optional[str]:
     """Get the model that matches the query.
 
     Args:
@@ -1021,7 +1022,7 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
         similarity_cutoff (float): similarities below the limit are ignored.
 
     Return:
-        List[str] | None: the possible model names or none.
+        str | None: the possible model name or none.
     """
     model_names = list(MODELS.module_dict.keys())
     if ('models--' in query) and ('snapshots' in query):

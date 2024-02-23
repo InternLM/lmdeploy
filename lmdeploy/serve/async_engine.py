@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import dataclasses
+import os
 import random
 from argparse import ArgumentError
 from contextlib import contextmanager
@@ -14,6 +15,51 @@ from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
 from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words, get_logger
+
+logger = get_logger('lmdeploy')
+
+
+def get_model_name_from_workspace_model(model_dir: str):
+    """Get model name from workspace model."""
+    from configparser import ConfigParser
+    triton_model_path = os.path.join(model_dir, 'triton_models', 'weights')
+    if not os.path.exists(triton_model_path):
+        return None
+    ini_path = os.path.join(triton_model_path, 'config.ini')
+    # load cfg
+    with open(ini_path, 'r') as f:
+        parser = ConfigParser()
+        parser.read_file(f)
+    return parser['llama']['model_name']
+
+
+def deduce_a_name(
+        model_path: str,
+        model_name: Optional[str] = None,
+        backend_config: Optional[Union[TurbomindEngineConfig,
+                                       PytorchEngineConfig]] = None,
+        chat_template_config: Optional[ChatTemplateConfig] = None) -> str:
+    """Deduce a model name from all the possible arguments."""
+
+    def _config_model_name(config):
+        if config and config.model_name:
+            return config.model_name
+        return None
+
+    backend_config_model_name = _config_model_name(backend_config)
+    chat_template_config_model_name = _config_model_name(chat_template_config)
+    model_name = model_name or chat_template_config_model_name or backend_config_model_name  # noqa
+    if model_name is None:
+        # model mayebe from workspace for turbomind
+        model_name = get_model_name_from_workspace_model(model_path)
+    # try fuzzy matching to get a model_name
+    if model_name is None:
+        model_name = best_match_model(model_path)
+        if model_name is None:
+            raise ArgumentError(f'Please set model_name for {model_path}')
+        else:
+            logger.warning(f'Best matched chat template name: {model_name}')
+    return model_name
 
 
 @dataclasses.dataclass
@@ -64,21 +110,41 @@ class AsyncEngine:
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  tp: int = 1,
                  **kwargs) -> None:
+        self.model_name = deduce_a_name(model_path, model_name, backend_config,
+                                        chat_template_config)
+        # build chat template config
+        if chat_template_config is None:
+            chat_template_config = ChatTemplateConfig(self.model_name)
+        elif chat_template_config.model_name is None:
+            chat_template_config.model_name = self.model_name
+        # prevent bc
+        for k in list(kwargs.keys()):
+            if hasattr(chat_template_config, k):
+                v = kwargs.pop(k)
+                setattr(chat_template_config, k, v)
+
+        # build backend engine
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path,
-                                  model_name=model_name,
                                   backend_config=backend_config,
                                   chat_template_config=chat_template_config,
                                   tp=tp,
                                   **kwargs)
         elif backend == 'pytorch':
             self._build_pytorch(model_path=model_path,
-                                model_name=model_name,
                                 backend_config=backend_config,
-                                chat_template_config=chat_template_config,
                                 **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')
+
+        # parameters for member functions
+        self.session_len = backend_config.session_len
+        self.backend_config = backend_config
+        self.chat_template = chat_template_config.chat_template
+        self.stop_words = _stop_words(self.chat_template.stop_words,
+                                      self.engine.tokenizer)
+        if self.stop_words is not None:
+            self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
         self.instance_num = self.backend_config.max_batch_size
         self.tokenizer = self.engine.tokenizer
@@ -92,53 +158,18 @@ class AsyncEngine:
     def _build_turbomind(
             self,
             model_path: str,
-            model_name: Optional[str] = None,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
             chat_template_config: Optional[ChatTemplateConfig] = None,
             tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
-        self.model_name = model_name
-        # model mayebe from workspace
-        from lmdeploy.turbomind.utils import \
-            get_model_name_from_workspace_model
-        if self.model_name is None:
-            self.model_name = get_model_name_from_workspace_model(model_path)
-        # try fuzzy matching to get a model_name
-        if self.model_name is None and (backend_config is None
-                                        or backend_config.model_name == ''
-                                        or backend_config.model_name is None):
-            potential_names = best_match_model(model_path)
-            if potential_names is None:
-                raise ArgumentError('Please set model_name or backend_config.')
-            else:
-                self.model_name = potential_names
-                logger = get_logger('lmdeploy')
-                logger.warning(
-                    f'Best matched chat template name: {self.model_name}')
-        elif self.model_name is not None and backend_config is not None:
-            if backend_config.model_name is not None \
-                    and self.model_name != backend_config.model_name:
-                raise ArgumentError(
-                    f'Got different model names from model_name = '
-                    f'{self.model_name}, backend_config = {backend_config}')
-        if self.model_name is not None and backend_config is None:
+        if backend_config is None:
             backend_config = TurbomindEngineConfig(model_name=self.model_name,
                                                    tp=tp)
         assert isinstance(backend_config, TurbomindEngineConfig), 'Please'\
             ' use TurbomindEngineConfig imported from lmdeploy.messages for ' \
             'turbomind backend'
-        if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.model_name)
-        elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.model_name
-        # prevent bc
-        for k in list(kwargs.keys()):
-            if hasattr(chat_template_config, k):
-                v = kwargs.pop(k)
-                setattr(chat_template_config, k, v)
-        self.chat_template = chat_template_config.chat_template
         if backend_config.session_len is None:
             backend_config.session_len = self.chat_template.session_len
         from lmdeploy import turbomind as tm
@@ -147,65 +178,24 @@ class AsyncEngine:
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
-        self.session_len = backend_config.session_len
-        self.backend_config = backend_config
-        self.stop_words = _stop_words(self.chat_template.stop_words,
-                                      self.engine.tokenizer)
-        if self.stop_words is not None:
-            self.stop_words = self.stop_words[0][0].tolist()
 
     def _build_pytorch(
             self,
             model_path: str,
-            model_name: Optional[str] = None,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
-            chat_template_config: Optional[ChatTemplateConfig] = None,
             **kwargs):
         """Innter build method for pytorch backend."""
-        self.model_name = model_name
         from lmdeploy.pytorch.engine import Engine
-
-        # try fuzzy matching to get a model_name
-        if self.model_name is None and (backend_config is None
-                                        or backend_config.model_name == ''
-                                        or backend_config.model_name is None):
-            potential_names = best_match_model(model_path)
-            if potential_names is None:
-                raise ArgumentError('Please set model_name or backend_config.')
-            else:
-                self.model_name = potential_names
-                logger = get_logger('lmdeploy')
-                logger.warning(
-                    f'Best matched chat template name: {self.model_name}')
-        elif self.model_name is not None and backend_config is not None:
-            if self.model_name != backend_config.model_name:
-                raise ArgumentError(
-                    f'Got different model names from model_name = '
-                    f'{self.model_name}, backend_config = {backend_config}')
-        if self.model_name is not None and backend_config is None:
+        if backend_config is None:
             backend_config = PytorchEngineConfig(self.model_name)
-        if backend_config.model_name is None \
-                or backend_config.model_name == '':  # cli may pass None
-            backend_config.model_name = self.model_name
         assert isinstance(backend_config, PytorchEngineConfig), 'Please '\
             'use PytorchEngineConfig imported from lmdeploy.messages for ' \
             'pytorch backend'
-        if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(self.model_name)
-        elif chat_template_config.model_name is None:
-            chat_template_config.model_name = self.model_name
-        self.chat_template = chat_template_config.chat_template
         if backend_config.session_len is None:
             backend_config.session_len = self.chat_template.session_len
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
-        self.session_len = backend_config.session_len
-        self.backend_config = backend_config
-        self.stop_words = _stop_words(self.chat_template.stop_words,
-                                      self.engine.tokenizer)
-        if self.stop_words is not None:
-            self.stop_words = self.stop_words[0][0].tolist()
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
