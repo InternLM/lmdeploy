@@ -90,6 +90,7 @@ class Engine:
     Args:
         model_path (str): The hugging face model path.
         engine_config (PytorchEngineConfig): The config of the Engine.
+        trust_remote_code (bool): Trust remote code.
     """
 
     def __init__(self,
@@ -174,11 +175,8 @@ class Engine:
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
-            scheduler_config (SchedulerConfig): The config of the scheduler.
-            cache_config (CacheConfig): The config of the cache info.
-            tp (int): Number of tensor parallel.
-            model_name (str): needed when pretrained_model_name_or_path is c)
-            adapters (dict): named lora adapters.
+            engine_config (PytorchEngineConfig): Pytorch engine config.
+            trust_remote_code (bool): Trust remote code
         """
         logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -419,7 +417,7 @@ class Engine:
             next_token_id (int): The next token id from inference result.
 
         Returns:
-            bool: Weither the message should be stopped.
+            bool: Whether the message should be stopped.
         """
 
         # check eof
@@ -692,6 +690,7 @@ class Engine:
         Args:
             session_ids (List[int]): The session id.
             token_ids (List[int]): The input token ids.
+            gen_config (EngineGenerationConfig): The sampling parameters.
             adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
@@ -898,6 +897,7 @@ class EngineInstance:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
             gen_config (EngineGenerationConfig): The sampling parameters.
+            adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
