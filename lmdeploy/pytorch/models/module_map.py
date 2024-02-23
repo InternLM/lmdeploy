@@ -127,6 +127,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
 })
 
+# qwen1.5
+MODULE_MAP.update({
+    'transformers.models.qwen2.modeling_qwen2.Qwen2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2SdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
 # peft
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':
