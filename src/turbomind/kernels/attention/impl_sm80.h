@@ -112,7 +112,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     static constexpr int kWarpCntS  = CTA_S / WARP_S;
     static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
 
-    static_assert(kWarpCntS == 1);
+    // static_assert(kWarpCntS == 1);
 
     static constexpr int OP_K = 16;
 
@@ -131,8 +131,13 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     static_assert(sizeof(FragS) / 2 == sizeof(FragP));
 
     using SmemLayoutQ = SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>;
+#if 0
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
+#else
     using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;
     using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;
+#endif
 
     union SharedStorage {
         __align__(16) T KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];

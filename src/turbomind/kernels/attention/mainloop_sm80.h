@@ -46,6 +46,13 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
+    // static constexpr int kSmemStepSize = sizeof(T) * Impl::SmemLayoutK::kSize;
+    static constexpr int kSmemStepSize = Impl::SmemLayoutK::kSize;
+    // static constexpr int kSmemStepSize = 1;
+
+    static constexpr std::false_type false_c{};
+    static constexpr std::true_type  true_c{};
+
     template<class... Args>
     __device__ void operator()(Args&&... args)
     {
@@ -68,7 +75,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     {
         const int begin = k * Batch;
         if (begin < ThreadMapKV::kIterS) {
-            gmem_iter.Prefetch(std::false_type{}, block_iter, begin, Batch, CTA_S, smem_offset);
+            gmem_iter.Prefetch(false_c, block_iter, begin, Batch, CTA_S, smem_offset);
         }
         if (begin + Batch == ThreadMapKV::kIterS) {
             if constexpr (Advnace) {
@@ -77,10 +84,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             __pipeline_commit();
         }
     }
-
-    // static constexpr int kSmemStepSize = sizeof(T) * Impl::SmemLayoutK::kSize;
-    static constexpr int kSmemStepSize = Impl::SmemLayoutK::kSize;
-    // static constexpr int kSmemStepSize = 1;
 
     template<class GmemIterK, class GmemIterV, class BlockIter, class StoreS, int Stages_>
     __device__ void Run(Sm80_CpAsync<Stages_>,
@@ -119,11 +122,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         }
 
         // 0
-        gmem_K.Prefetch(std::true_type{}, block_iter, max_step - tile_iter * CTA_S, (++pipe_iter).w);
+        gmem_K.Prefetch(true_c, block_iter, max_step - tile_iter * CTA_S, (++pipe_iter).w);
         __pipeline_commit();
 
         // 1
-        gmem_V.Prefetch(std::true_type{}, block_iter, max_step - tile_iter * CTA_S, (++pipe_iter).w);
+        gmem_V.Prefetch(true_c, block_iter, max_step - tile_iter * CTA_S, (++pipe_iter).w);
         __pipeline_commit();
 
         block_iter.Advance();
@@ -131,10 +134,10 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         PRAGMA_UNROLL
         for (int stages = 2; stages < Stages - 2; stages += 2) {
             // 2 + 2X
-            gmem_K.Prefetch(std::true_type{}, block_iter, CTA_S, (++pipe_iter).w);
+            gmem_K.Prefetch(false_c, block_iter, CTA_S, (++pipe_iter).w);
             __pipeline_commit();
             // 3 + 2X
-            gmem_V.Prefetch(std::true_type{}, block_iter, CTA_S, (++pipe_iter).w);
+            gmem_V.Prefetch(false_c, block_iter, CTA_S, (++pipe_iter).w);
             __pipeline_commit();
 
             block_iter.Advance();
@@ -142,7 +145,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         if constexpr (Stages % 2 == 0) {
             // 2 + 2Y
-            gmem_K.Prefetch(std::true_type{}, block_iter, CTA_S, (++pipe_iter).w);
+            gmem_K.Prefetch(false_c, block_iter, CTA_S, (++pipe_iter).w);
             __pipeline_commit();
         }
 
@@ -194,19 +197,19 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         PRAGMA_UNROLL
         for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
-            loop(std::true_type{});
+            loop(true_c);
         }
 
         PRAGMA_NO_UNROLL
         for (; tile_iter >= 0; --tile_iter) {
-            loop(std::false_type{});
+            loop(false_c);
         }
 
         __pipeline_commit();
         __pipeline_wait_prior(0);
     }
 
-#if 0
+#if 1
     template<class GmemIterK, class GmemIterV, class BlockIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         FragQ&         frag_Q,
@@ -241,7 +244,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         block_iter.SetTile(tile_iter);
 
-        gmem_K.Prefetch<true>(block_iter, max_step - tile_iter * CTA_S, 0);
+        gmem_K.Prefetch(true_c, block_iter, max_step - tile_iter * CTA_S, 0);
         __pipeline_commit();
 
         FragK frag_K;
@@ -250,24 +253,35 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Wait();
         smem_K.Load(frag_K[0], 0, 0);
 
-        constexpr auto nop = [](int){};
+        constexpr auto _ = [](int){};
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
 
             __align__(16) FragS frag_S{};
 
-            gmem_V.Prefetch<is_residue>(block_iter, max_step - offset_K, kSmemStepSize);
-            __pipeline_commit();
+            auto prefetch_V = [&](int k) {
+                if (k == 0) {
+                    gmem_V.Prefetch(is_residue, block_iter, max_step - offset_K, kSmemStepSize);
+                    __pipeline_commit();
+                }
+            };
+            prefetch_V(0);
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, nop, [&] {
+            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, _, [&] {
                 Wait();
                 smem_V.Load(frag_V[0], 0, kSmemStepSize);
             });
 
             block_iter.Advance();
-            gmem_K.Prefetch<false>(block_iter, CTA_S, 0);
-            __pipeline_commit();
+
+            auto prefetch_K = [&](int k) {
+                if (k == 0) {
+                    gmem_K.Prefetch(false_c, block_iter, CTA_S, 0);
+                    __pipeline_commit();
+                }
+            };
+            prefetch_K(0);
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
@@ -279,7 +293,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, kSmemStepSize, nop, [&] {
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, kSmemStepSize, _, [&] {
                 Wait();
                 smem_K.Load(frag_K[0], 0, 0);
             });
@@ -287,12 +301,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         PRAGMA_UNROLL
         for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
-            loop(std::true_type{}, std::true_type{});
+            loop(true_c, true_c);
         }
 
         PRAGMA_NO_UNROLL
         for (; tile_iter >= 0; --tile_iter) {
-            loop(std::false_type{}, std::false_type{});
+            loop(false_c, false_c);
         }
 
         __pipeline_commit();
@@ -341,7 +355,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         auto block_iter_K = block_iter_;
         auto block_iter_V = block_iter_;
 
-        gmem_K.Prefetch(std::true_type{}, block_iter_K, max_step - tile_iter * CTA_S, 0);
+        gmem_K.Prefetch(true_c, block_iter_K, max_step - tile_iter * CTA_S, 0);
         __pipeline_commit();
         block_iter_K.Advance();
 
@@ -354,7 +368,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         FragS frag_S{};
         auto  _ = [&](int k) {
             if (k == 0) {
-                gmem_K.Prefetch(std::false_type{}, block_iter_K, CTA_S, kSmemStepSize);
+                gmem_K.Prefetch(false_c, block_iter_K, CTA_S, kSmemStepSize);
                 __pipeline_commit();
             }
         };
@@ -397,7 +411,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             auto prefetch_K = [&](int k) {
                 if (k == 0) {
-                    gmem_K.Prefetch(std::false_type{}, block_iter_K, CTA_S, kSmemStepSize);
+                    gmem_K.Prefetch(false_c, block_iter_K, CTA_S, kSmemStepSize);
                     __pipeline_commit();
                 }
             };
@@ -410,16 +424,16 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         PRAGMA_UNROLL
         for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
-            loop(std::true_type{}, std::true_type{}, std::false_type{});
+            loop(true_c, true_c, false_c);
         }
 
         PRAGMA_NO_UNROLL
         for (; tile_iter >= 1; --tile_iter) {
-            loop(std::false_type{}, std::false_type{}, std::false_type{});
+            loop(false_c, false_c, false_c);
         }
 
         if (tile_iter >= 0) {
-            loop(std::false_type{}, std::false_type{}, std::true_type{});
+            loop(false_c, false_c, true_c);
         }
 
         __pipeline_commit();

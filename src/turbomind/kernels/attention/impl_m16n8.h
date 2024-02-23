@@ -219,6 +219,9 @@ struct Impl_m16k8 {
 #endif
     }
 
+    template<class Storage>
+    __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, Storage& storage) {}
+
     template<bool is_norm, class Func, class Storage>
     __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Storage& storage, Func&& func)
     {

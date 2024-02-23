@@ -153,7 +153,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 1
+#define DECODING 0
 
 int main(int argc, char* argv[])
 {
