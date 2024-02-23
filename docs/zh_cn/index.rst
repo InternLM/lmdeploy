@@ -13,6 +13,7 @@
 .. toctree::
    :maxdepth: 1
    :caption: 编译和安装
+
    build.md
 
 .. _测试基准:

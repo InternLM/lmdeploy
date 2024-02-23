@@ -1022,7 +1022,17 @@ class Deepseek(BaseModel):
         self._assistant = assistant
         self._bos = '<｜begin▁of▁sentence｜>'
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): the input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
         ret = f'{self._user} {prompt}\n\n{self._assistant}'
         if sequence_start:
             ret = f'{self._bos}{ret}'
