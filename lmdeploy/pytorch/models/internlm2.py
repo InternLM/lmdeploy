@@ -84,7 +84,7 @@ class PatchedInternLM2Attention(nn.Module):
             query_states, key_states, value_states)
 
         q_start_loc = context.q_start_loc
-        q_seq_length = context.seq_length
+        q_seq_length = context.q_seq_length
         fill_kv_cache(key_states,
                       value_states,
                       past_key_value[0],
@@ -104,10 +104,10 @@ class PatchedInternLM2Attention(nn.Module):
             past_key_value[1],
             attn_output,
             block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_len,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 

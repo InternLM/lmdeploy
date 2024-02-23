@@ -14,6 +14,7 @@ from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
+from ..check_env import check_env
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
@@ -26,6 +27,11 @@ logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
+
+
+def _div_up(x, n):
+    """perform div up."""
+    return (x + n - 1) // n
 
 
 @dataclass
@@ -89,12 +95,15 @@ class Engine:
     Args:
         model_path (str): The hugging face model path.
         engine_config (PytorchEngineConfig): The config of the Engine.
+        trust_remote_code (bool): Trust remote code.
     """
 
     def __init__(self,
                  model_path: str,
                  engine_config: PytorchEngineConfig,
                  trust_remote_code: bool = True) -> None:
+        check_env()
+
         self.engine_config = engine_config
         model_name = engine_config.model_name
         tp = engine_config.tp
@@ -105,14 +114,17 @@ class Engine:
         scheduler_config = SchedulerConfig(
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
-            eviction_type='recompute',
+            eviction_type=engine_config.eviction_type,
+            prefill_interval=engine_config.prefill_interval,
             max_prefill_token_num=engine_config.max_prefill_token_num)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
-        cache_config = CacheConfig(block_size=engine_config.block_size,
-                                   num_cpu_blocks=engine_config.num_cpu_blocks,
-                                   num_gpu_blocks=engine_config.num_gpu_blocks)
+        cache_config = CacheConfig(
+            block_size=engine_config.block_size,
+            num_cpu_blocks=engine_config.num_cpu_blocks,
+            num_gpu_blocks=engine_config.num_gpu_blocks,
+            cache_max_entry_count=engine_config.cache_max_entry_count)
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
@@ -168,11 +180,8 @@ class Engine:
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
-            scheduler_config (SchedulerConfig): The config of the scheduler.
-            cache_config (CacheConfig): The config of the cache info.
-            tp (int): Number of tensor parallel.
-            model_name (str): needed when pretrained_model_name_or_path is c)
-            adapters (dict): named lora adapters.
+            engine_config (PytorchEngineConfig): Pytorch engine config.
+            trust_remote_code (bool): Trust remote code
         """
         logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -339,7 +348,23 @@ class Engine:
             messages (SeqList): The input messages.
             adapters (AdapterList): Adapters.
         """
-        history_lengths = [msg.history_len for msg in messages]
+
+        def __get_history_length():
+            """get history length."""
+            if self.model_config.sliding_window > 0:
+                history_lengths = []
+                for msg in messages:
+                    num_real_blocks = len(msg.logical_blocks)
+                    num_all_blocks = _div_up(msg.num_all_tokens(),
+                                             msg.block_size)
+                    num_drop_blocks = num_all_blocks - num_real_blocks
+                    num_drop_tokens = num_drop_blocks * msg.block_size
+                    history_lengths.append(msg.history_len - num_drop_tokens)
+                return history_lengths
+            else:
+                return [msg.history_len for msg in messages]
+
+        history_lengths = __get_history_length()
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -413,7 +438,7 @@ class Engine:
             next_token_id (int): The next token id from inference result.
 
         Returns:
-            bool: Weither the message should be stopped.
+            bool: Whether the message should be stopped.
         """
 
         # check eof
@@ -430,7 +455,7 @@ class Engine:
         def _check_session_len(msg, max_session_len):
             if max_session_len is None:
                 return False
-            session_len = msg.logical_blocks.num_tokens()
+            session_len = msg.num_all_tokens() + 1
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
@@ -621,7 +646,7 @@ class Engine:
         """one step inference. Used to perform streaming chat.
 
         Args:
-            return_logits (bool): Weither to return the output logits.
+            return_logits (bool): Whether to return the output logits.
 
         Returns:
             Dict[int, InferOutput]: The output of each session.
@@ -684,11 +709,9 @@ class Engine:
         """Send inference request.
 
         Args:
-            session_id (int): The session id.
-            prompt_token_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
-            step (int): No use for now.
-            sampling_param (SamplingParam): The sampling param of the output.
+            session_ids (List[int]): The session id.
+            token_ids (List[int]): The input token ids.
+            gen_config (EngineGenerationConfig): The sampling parameters.
             adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
@@ -894,8 +917,8 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
             gen_config (EngineGenerationConfig): The sampling parameters.
+            adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
@@ -946,8 +969,8 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
             gen_config (EngineGenerationConfig): The sampling parameters.
+            adapter_name (str): The lora adapter name.
 
         Yields:
             int: Error flags. 0 if success.
@@ -991,16 +1014,14 @@ class EngineInstance:
 
     def infer(self,
               session_id: int,
-              prompt_token_ids: List[int] = None,
+              input_ids: List[int] = None,
               gen_config: EngineGenerationConfig = None,
               **kwargs):
         """Send inference request.
 
         Args:
             session_id (int): The session id.
-            prompt_token_ids (List[int]): The input token ids.
-            request_output_len (int): The max output length of this request.
-            step (int): No use for now.
+            input_ids (List[int]): The input token ids.
             gen_config (EngineGenerationConfig): The sampling parameters.
 
         Returns:
@@ -1010,13 +1031,13 @@ class EngineInstance:
         """
         token_ids = []
         for outputs in self.stream_infer(session_id,
-                                         prompt_token_ids,
+                                         input_ids,
                                          gen_config=gen_config,
                                          **kwargs):
             status, tmp_ids, _ = outputs
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return (status, token_ids, len(token_ids))
-            token_ids += tmp_ids
+            token_ids = tmp_ids
 
         return (0, token_ids, len(token_ids))
 

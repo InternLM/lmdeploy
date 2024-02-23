@@ -106,7 +106,7 @@ class TestMBGMV:
 
         xa = mbgmv_a(input,
                      paged_lora_a,
-                     b_adapter_ids=adapter_ids,
+                     adapter_ids=adapter_ids,
                      rank_page_table=page_table,
                      rank_page_start=page_start,
                      ranks=ranks,
@@ -114,8 +114,8 @@ class TestMBGMV:
 
         output = mbgmv_b(xa,
                          paged_lora_b[..., :out_head_size],
-                         b_adapter_ids=adapter_ids,
-                         b_scaling=scaling,
+                         adapter_ids=adapter_ids,
+                         scaling=scaling,
                          rank_page_table=page_table,
                          rank_page_start=page_start,
                          ranks=ranks,

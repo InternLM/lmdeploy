@@ -152,19 +152,9 @@ def attention_forward_with_paged_attention(
         query_states, key_states, value_states = rotary_emb_fn(
             query_states, key_states, value_states)
 
-    kv_seq_length = getattr(context, 'kv_seq_length', None)
-    if kv_seq_length is None:
-        kv_seq_length = position_ids[..., -1] + 1
-
-    q_seq_length = getattr(context, 'seq_length', None)
-    if q_seq_length is None:
-        q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
-            history_lengths)
-
-    q_start_loc = getattr(context, 'q_start_loc', None)
-    if q_start_loc is None:
-        q_start_loc = q_seq_length.cumsum(0)
-        q_start_loc = torch.cat([q_start_loc.new_zeros(1), q_start_loc[:-1]])
+    kv_seq_length = context.kv_seq_length
+    q_seq_length = context.q_seq_length
+    q_start_loc = context.q_start_loc
 
     fill_kv_cache(key_states,
                   value_states,
@@ -186,10 +176,10 @@ def attention_forward_with_paged_attention(
             past_key_value[1],
             attn_output,
             block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_len,
         )
     else:
         if bias_type == 'alibi':
@@ -368,7 +358,7 @@ def attention_forward_with_rerope(
 
     kv_seq_length = (position_ids[..., -1] + 1).item()
 
-    q_seq_length = getattr(context, 'seq_length', None)
+    q_seq_length = getattr(context, 'q_seq_length', None)
     if q_seq_length is None:
         q_seq_length = kv_seq_length - kv_seq_length.new_tensor(
             history_lengths)

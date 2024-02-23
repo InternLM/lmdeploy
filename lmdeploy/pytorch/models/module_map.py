@@ -95,6 +95,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
+# mistral
+MODULE_MAP.update({
+    'transformers.models.mistral.modeling_mistral.MistralAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.mistral.modeling_mistral.MistralMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.mistral.modeling_mistral.MistralRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
 # peft
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':

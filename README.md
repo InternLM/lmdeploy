@@ -94,6 +94,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |      ChatGLM2      |    6B     |
 |       Falcon       | 7B - 180B |
 |         YI         | 6B - 34B  |
+|      Mistral       |    7B     |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
