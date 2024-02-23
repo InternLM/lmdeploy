@@ -117,7 +117,11 @@ class ModelConfig:
             num_attention_heads = hf_config.num_attention_heads
             num_key_value_heads = getattr(hf_config, 'num_key_value_heads',
                                           num_attention_heads)
-            sliding_window = getattr(hf_config, 'sliding_window', -1)
+            use_sliding_window = getattr(hf_config, 'use_sliding_window', True)
+            sliding_window = -1
+            if use_sliding_window:
+                sliding_window = getattr(hf_config, 'sliding_window',
+                                         sliding_window)
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
