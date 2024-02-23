@@ -117,6 +117,7 @@ class AsyncEngine:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
+        self.chat_template = chat_template_config.chat_template
         # prevent bc
         for k in list(kwargs.keys()):
             if hasattr(chat_template_config, k):
@@ -140,7 +141,6 @@ class AsyncEngine:
         # parameters for member functions
         self.session_len = backend_config.session_len
         self.backend_config = backend_config
-        self.chat_template = chat_template_config.chat_template
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
         if self.stop_words is not None:
