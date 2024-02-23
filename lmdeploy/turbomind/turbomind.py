@@ -748,6 +748,9 @@ class TurboMindInstance:
         prev_len = 0
         # generator
         while True:
+            while que.qsize() == 0:  # let other requests in
+                await asyncio.sleep(0.002)
+
             finish, tm_outputs = que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
@@ -778,7 +781,6 @@ class TurboMindInstance:
             else:
                 prev_len = outputs[-1]
             yield outputs
-            await asyncio.sleep(0.002)
 
             if finish:
                 for t in self.threads:
