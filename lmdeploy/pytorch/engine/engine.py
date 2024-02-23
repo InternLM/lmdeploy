@@ -29,6 +29,11 @@ SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 
 
+def _div_up(x, n):
+    """perform div up."""
+    return (x + n - 1) // n
+
+
 @dataclass
 class InferOutput:
     """The output of the model inference."""
@@ -343,7 +348,23 @@ class Engine:
             messages (SeqList): The input messages.
             adapters (AdapterList): Adapters.
         """
-        history_lengths = [msg.history_len for msg in messages]
+
+        def __get_history_length():
+            """get history length."""
+            if self.model_config.sliding_window > 0:
+                history_lengths = []
+                for msg in messages:
+                    num_real_blocks = len(msg.logical_blocks)
+                    num_all_blocks = _div_up(msg.num_all_tokens(),
+                                             msg.block_size)
+                    num_drop_blocks = num_all_blocks - num_real_blocks
+                    num_drop_tokens = num_drop_blocks * msg.block_size
+                    history_lengths.append(msg.history_len - num_drop_tokens)
+                return history_lengths
+            else:
+                return [msg.history_len for msg in messages]
+
+        history_lengths = __get_history_length()
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -434,7 +455,7 @@ class Engine:
         def _check_session_len(msg, max_session_len):
             if max_session_len is None:
                 return False
-            session_len = msg.logical_blocks.num_tokens()
+            session_len = msg.num_all_tokens() + 1
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
