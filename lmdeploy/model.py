@@ -732,21 +732,6 @@ class ChatGLM2(BaseModel):
         return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
 
 
-@MODELS.register_module(name='chatglm3-6b')
-class ChatGLM3(BaseModel):
-
-    def __init__(self, user='<|user|>', assistant='<|assistant|>', **kwargs):
-        super().__init__()
-        self._user = user
-        self._assistant = assistant
-
-    def get_prompt(self, prompt, sequence_start=True):
-        ret = f'{self._user} \n {prompt}{self._assistant}'
-        if sequence_start:
-            ret = f'[gMASK]sop{ret}'
-        return ret
-
-
 @MODELS.register_module(name=['solar', 'solar-70b'])
 class SOLAR(BaseModel):
     """Chat template of SOLAR model.
