@@ -126,7 +126,7 @@ struct Impl_m16k8 {
                 for (int n = 0; n < K_N; ++n) {
                     PRAGMA_UNROLL
                     for (int s = 0; s < 2; ++s) {
-                        // unnormalized prob, optimized to FFMA
+                        // unnormalized prob
                         float p = exp2f(frag_S[m][n][q * 2 + s] * qk_scale - frag_M[m][q] * qk_scale);
                         if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
                             p = 0.f;

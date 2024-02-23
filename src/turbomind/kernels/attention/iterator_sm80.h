@@ -21,43 +21,46 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     using Base::Base;
     using Base::kElementSize;
     using Base::src_offset_;
-    using Base::dst_offset_;
     using Base::offset_c_;
     using Base::offset_s_;
     using Base::smem_;
 
-    template<bool is_residue, class TileIter>
-    __device__ void Prefetch(const TileIter& tile_iter, int s_begin, int s_count, int max_s, int offset)
+    template<class Partial, class TileIter>
+    __device__ void
+    Prefetch(Partial partial, const TileIter& tile_iter, int s_begin, int s_count, int max_s, int offset)
     {
         auto src_data = tile_iter.OffsetData<Idx>(src_offset_);
+
+        SmemAccessor<T, SmemLayout> dst_data{smem_};
 
         PRAGMA_UNROLL
         for (int s = s_begin; s < s_begin + s_count; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                auto dst = SmemLayout::apply(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+                auto dst = cast_smem_ptr_to_uint(
+                    &dst_data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC, offset));
+                // auto dst =
+                //     offset + sizeof(T) * SmemLayout::apply(offset_s_ + s * Map::kDeltaS, offset_c_ + c *
+                //     Map::kDeltaC);
                 auto src = &src_data[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC];
-                if constexpr (is_residue) {
-                    CpAsync(dst + offset, (const T*)src, offset_s_ + s * Map::kDeltaS < max_s);
-                }
-                else {
-                    CpAsync(dst + offset, (const T*)src);
-                }
+                CpAsync(partial, dst, (const T*)src, offset_s_ + s * Map::kDeltaS < max_s);
             }
         }
     }
 
-    template<bool is_residue, class TileIter>
-    __device__ void Prefetch(const TileIter& tile_iter, int max_s, int offset)
+    template<class Partial, class TileIter>
+    __device__ void Prefetch(Partial partial, const TileIter& tile_iter, int max_s, int offset)
     {
-        Prefetch<is_residue>(tile_iter, 0, Map::kIterS, max_s, offset);
+        Prefetch(partial, tile_iter, 0, Map::kIterS, max_s, offset);
     }
 
-    __device__ void CpAsync(int dst, const T* __restrict__ src, bool mask)
+    __device__ void CpAsync(std::true_type, int ptr, const T* __restrict__ src, bool mask)
     {
 #if TURBOMIND_ARCH_SM80
         constexpr int cp_size = sizeof(AccessType);
-        uint32_t      ptr     = sizeof(T) * dst;
+        // uint32_t      ptr     = sizeof(T) * dst;
+        // uint32_t ptr = cast_smem_ptr_to_uint(dst);
+
         // clang-format off
         asm volatile("{\n"
                      "  .reg .pred p;\n"
@@ -73,11 +76,12 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 #endif
     }
 
-    __device__ void CpAsync(int dst, const T* __restrict__ src)
+    __device__ void CpAsync(std::false_type, int ptr, const T* __restrict__ src, bool)
     {
 #if TURBOMIND_ARCH_SM80
         constexpr int cp_size = sizeof(AccessType);
-        uint32_t      ptr     = sizeof(T) * dst;
+        // uint32_t      ptr     = sizeof(T) * dst;
+        // uint32_t ptr = cast_smem_ptr_to_uint(dst);
         asm volatile(
             "cp.async.cg.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(cp_size));
 #else

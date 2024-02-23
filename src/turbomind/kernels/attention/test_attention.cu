@@ -153,24 +153,27 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 0
+#define DECODING 1
 
 int main(int argc, char* argv[])
 {
     AttentionParams<half> params{};
 
+    constexpr size_t kHeadDim = 128;
+
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum     = 32;
-    constexpr size_t kBatchSize   = 1;
-    constexpr size_t kInputLen    = 1;
-    constexpr size_t kSequenceLen = 8191;
+    constexpr size_t kHeadNum   = 32;
+    constexpr size_t KvHeadNum  = kHeadNum / 1;
+    constexpr size_t kBatchSize = 1;
+    constexpr size_t kInputLen  = 1;
+    // constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 16383;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
-    // constexpr size_t kSequenceLen = 262143;
+    constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
@@ -178,18 +181,32 @@ int main(int argc, char* argv[])
     constexpr int kBlockSz   = 128;
     constexpr int kMaxSplitK = 32;
 #else
-    constexpr size_t kHeadNum   = 32;
-    constexpr size_t kBatchSize = 1;
+
     // append
+    // constexpr size_t kHeadNum     = 32;
+    // constexpr size_t KvHeadNum    = kHeadNum;
+    // constexpr size_t kBatchSize   = 1;
     // constexpr size_t kInputLen    = 128;
     // constexpr size_t kSequenceLen = 65536;
+    // constexpr int    kMaxSplitK   = 128;
+
+    // constexpr size_t kHeadNum     = 1;
+    // constexpr size_t KvHeadNum    = kHeadNum;
+    // constexpr size_t kBatchSize   = 1;
+    // constexpr size_t kInputLen    = 64;
+    // constexpr size_t kSequenceLen = 65536;
+    // constexpr int    kMaxSplitK   = 1;
 
     // prefill
-    constexpr size_t kInputLen    = 8192;
+    constexpr size_t kHeadNum     = 32;
+    constexpr size_t KvHeadNum    = kHeadNum;
+    constexpr size_t kBatchSize   = 1;
+    constexpr size_t kInputLen    = 16384;
     constexpr size_t kSequenceLen = 0;
-    
-    constexpr int    kBlockSz     = 128;
-    constexpr int    kMaxSplitK   = 32;
+    constexpr int    kMaxSplitK   = 1;
+
+    constexpr int kBlockSz = 128;
+
 #endif
 
 #if KV_INT8
@@ -200,21 +217,11 @@ int main(int argc, char* argv[])
     constexpr int kQuantPolicy = 0;
 #endif
 
-    constexpr size_t kHeadDim  = 128;
-    constexpr size_t KvHeadNum = kHeadNum;
-
     static_assert(KvHeadNum > 0);
-
-    // constexpr int kInputLen    = 4096 - 20;
-    // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
-    // constexpr int kSequenceLen = 983;
-    // constexpr int kInputLen    = 2387;
-    // constexpr int kSequenceLen = 72;
-    // constexpr int kInputLen    = 98;
 
     constexpr size_t kContextLen = kSequenceLen + kInputLen;
     constexpr size_t kTokenNum   = kBatchSize * kInputLen;
-    constexpr int    kTestIter   = 10;
+    constexpr int    kTestIter   = 20;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;

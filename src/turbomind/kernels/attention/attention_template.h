@@ -28,6 +28,11 @@ void invokeAttention(const typename Kernel::ParamType& params)
     static const auto kernel_func = &attention_kernel<Kernel>;
 
     thread_local const int2 caps = [&] {
+        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
+        if (err) {
+            std::cout << cudaGetErrorString(err) << "\n";
+            std::abort();
+        }
         int device_id{};
         cudaGetDevice(&device_id);
         int sm_count{};
@@ -53,12 +58,6 @@ void invokeAttention(const typename Kernel::ParamType& params)
     cta_map.set_split_cnt(split_cnt);
     grid = cta_map.get_grid_shape();
 
-    auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
-    if (err) {
-        std::cout << cudaGetErrorString(err) << "\n";
-        std::abort();
-    }
-
     kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cta_map);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
@@ -66,7 +65,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    if (Kernel::need_separate_reduce(split_cnt)) {
+    if (split_cnt > 1 && Kernel::need_separate_reduce(split_cnt)) {
         attention::dispatchReduce<Kernel::kHeadDim>(params.out,
                                                     params.partial_M,
                                                     params.partial_L,

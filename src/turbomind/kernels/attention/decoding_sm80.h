@@ -140,15 +140,12 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
 
     using SmemO = Array<float, 4>[V_M][V_N][kWarpCntS][WARP_SIZE];
 
-    //                   bits base shift
-    using Swizzle = Swizzle<3, 3, 4>;  // this is for head dim 128 only
-
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutK = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutV = SmemLayout<HeadDim, Swizzle>;
+    using SmemLayoutQ = SmemLayoutV2<CTA_H, HeadDim, CTA_H, HeadDim, Swizzle<3, 3, 4>>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
 
     using SmemIterQ = T*;
     using SmemIterP = T*;
@@ -156,12 +153,12 @@ struct Impl<Sm80_16816_Decoding, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP
     using SmemIterV = sm80_decoding::SmemIterV<Tkv, SmemLayoutV, WARP_S, V_K, V_M>;
 
     union SharedStorage {
-        __align__(16) T Q[CTA_H * SmemLayoutQ::kStride];
+        __align__(16) T Q[SmemLayoutQ::kSize];
 
-        __align__(16) Tkv KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
+        __align__(16) Tkv KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];
         struct {
-            __align__(16) Tkv K[Stages == 2 ? CTA_S * SmemLayoutK::kStride : 1];
-            __align__(16) Tkv V[Stages == 2 ? CTA_S * SmemLayoutV::kStride : 1];
+            __align__(16) Tkv K[Stages == 2 ? SmemLayoutK::kSize : 1];
+            __align__(16) Tkv V[Stages == 2 ? SmemLayoutV::kSize : 1];
         };
 
         struct {

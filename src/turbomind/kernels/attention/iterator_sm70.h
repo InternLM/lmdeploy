@@ -15,7 +15,8 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     using typename Base::Fragment;
 
     using Base::src_offset_;
-    using Base::dst_offset_;
+    using Base::offset_c_;
+    using Base::offset_s_;
     using Base::smem_;
 
     using Base::Base;
@@ -41,33 +42,15 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     {
         typename SmemLayout::Swizzle swizzle{};
 
-        // Array<int, Map::kIterC> idxs;
-        // PRAGMA_UNROLL
-        // for (int c = 0; c < Map::kIterC; ++c) {
-        //     const int idx0 = swizzle(dst_offset_ + c * Map::kDeltaC);
-        //     idxs[c]        = idx0;
-        // }
-        // const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
-        // PRAGMA_UNROLL
-        // for (int s = 0; s < Map::kIterS; ++s) {
-        //     PRAGMA_UNROLL
-        //     for (int c = 0; c < Map::kIterC; ++c) {
-        //         Store(&smem_[idxs[c]], rmem[s][c]);
-        //     }
-        //     PRAGMA_UNROLL
-        //     for (int c = 0; c < Map::kIterC; ++c) {
-        //         const int s0 = offset_s + s * Map::kDeltaS;
-        //         const int s1 = s0 + Map::kDeltaS;
-        //         idxs[c]      = swizzle.AdvanceS<Map::kDeltaS>(idxs[c], s0, s1) + Map::kDeltaS * SmemLayout::kStride;
-        //     }
-        // }
+        SmemAccessor<T, SmemLayout> data{smem_};
 
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&smem_[swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC)],
-                      rmem[s][c]);
+                // Store(&smem_[swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC)],
+                //       rmem[s][c]);
+                Store(&data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC), rmem[s][c]);
             }
         }
     }

@@ -30,78 +30,48 @@ struct Sm80SmemIterQ: BaseSmemIterator<T, Layout> {
 
 template<class T, class Layout, int K, int N>
 struct Sm80SmemIterK: BaseSmemIterator<T, Layout> {
-
     using Base = BaseSmemIterator<T, Layout>;
-
     using Base::Base;
     using Base::smem_;
-    using typename Base::Accessor;
-
     static_assert(N % 2 == 0);
 
     __device__ void Load(Array<T, 4> (&frag_K)[N], int k, int offset)
     {
-        const int lane_id       = threadIdx.x % WARP_SIZE;
-        const int group_id      = lane_id / 16;
-        const int group_lane_id = lane_id % 16;
-        const int offset_s      = group_lane_id % 8 + group_id * 8;
-        const int offset_c      = group_lane_id / 8 * 8;
-        const int offset_thr    = 0;  // sizeof(char) * (offset_s * Layout::kStride + offset_c);
+
+        const int               lane_id       = threadIdx.x % WARP_SIZE;
+        const int               group_id      = lane_id / 16;
+        const int               group_lane_id = lane_id % 16;
+        const int               offset_s      = group_lane_id % 8 + group_id * 8;
+        const int               offset_c      = group_lane_id / 8 * 8;
+        SmemAccessor<T, Layout> sK{smem_};
         PRAGMA_UNROLL
         for (int n = 0; n < N; n += 2) {  // Load (s16,d16) tiles
             const int s = n * 8 + offset_s;
             const int c = k * 16 + offset_c;
-            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], sizeof(T) * (offset + Layout::apply(s, c, offset_thr)));
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], cast_smem_ptr_to_uint(&sK(s, c, offset)));
+            // ldsm_x4((Array<uint32_t, 4>&)frag_K[n], offset + sizeof(T) * Layout::apply(s, c));
         }
     }
 };
 
 template<class T, class Layout, int K, int N>
 struct Sm80SmemIterV: BaseSmemIterator<T, Layout> {
-
     using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
     using Base::smem_;
-    using typename Base::Accessor;
-
     static_assert(N % 2 == 0);
-
-    Array<int, N / 2> offsets_;
-
-    static constexpr bool kFlag = false;
-
-    __device__ Sm80SmemIterV(T* smem): Base{smem}
+    __device__ void Load(Array<T, 4> (&frag_V)[N], int k, int offset)
     {
-        if constexpr (kFlag) {
-            const int lane_id = threadIdx.x % WARP_SIZE;
-            PRAGMA_UNROLL
-            for (int n = 0; n < N; n += 2) {  //  (d16,s16) tiles
-                const int si    = 0 * 16 + lane_id % 16;
-                const int di    = n * +8 + lane_id / 16 * 8;
-                offsets_[n / 2] = 0 + Layout::swizzle_x(sizeof(T) * (si * Layout::kStride + di));
-            }
-        }
-    }
-
-    __device__ void Load(Array<T, 4> (&frag_V)[N], int k, int base)
-    {
-        if constexpr (kFlag) {
-            PRAGMA_UNROLL
-            for (int n = 0; n < N; n += 2) {  //  (d16,s16) tiles
-                const int offset = offsets_[n / 2] + sizeof(T) * k * 16 * Layout::kStride;
-                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], base + offset);
-            }
-        }
-        else {
-            const int lane_id    = threadIdx.x % WARP_SIZE;
-            const int offset_s   = lane_id % 16;
-            const int offset_c   = lane_id / 16 * 8;
-            const int offset_thr = 0;  // sizeof(char) * (offset_s * Layout::kStride + offset_c);
-            PRAGMA_UNROLL
-            for (int n = 0; n < N; n += 2) {  // Load (d16,s16) tiles
-                const int s = k * 16 + offset_s;
-                const int c = n * 8 + offset_c;
-                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], sizeof(T) * (base + Layout::apply(s, c, offset_thr)));
-            }
+        const int               lane_id  = threadIdx.x % WARP_SIZE;
+        const int               offset_s = lane_id % 16;
+        const int               offset_c = lane_id / 16 * 8;
+        SmemAccessor<T, Layout> sV{smem_};
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 2) {  // Load (d16,s16) tiles
+            const int s = k * 16 + offset_s;
+            const int c = n * 8 + offset_c;
+            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], cast_smem_ptr_to_uint(&sV(s, c, offset)));
+            // ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], offset + sizeof(T) * Layout::apply(s, c));
         }
     }
 };
@@ -160,16 +130,13 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     static_assert(sizeof(FragS) / 2 == sizeof(FragP));
 
-    using Swizzle = Swizzle<3, 3, 4>;  // this is for head dim 128 only
-
-    using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutP = SmemLayout<CTA_S, Identity>;
-    using SmemLayoutK = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutV = SmemLayout<HeadDim, Swizzle>;
+    using SmemLayoutQ = SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;
 
     union SharedStorage {
-        __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
-        __align__(16) T Q[CTA_Q * CTA_H * SmemLayoutQ::kStride];
+        __align__(16) T KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];
+        __align__(16) T Q[SmemLayoutQ::kSize];
         __align__(16) T P[1];
     };
 
@@ -210,7 +177,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int k = 0; k < K_K; ++k) {
-                // const int hi     = warp_id / kWarpCntQ;
                 const int qi = lane_id % 16 * 1 + m * 16 + warp_id * WARP_Q;
                 const int di = lane_id / 16 * 8 + k * 16;
                 ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], cast_smem_ptr_to_uint(&sQ(qi, di)));
@@ -249,9 +215,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
-                // if constexpr (kUseSmemQ) {
-                //     smem_Q.Load(frag_Q[k + 1], k + 1);
-                // }
             }
             else {
                 ((Preload&&)preload)();
@@ -260,7 +223,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
             for (int m = 0; m < K_M; ++m) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < K_N; ++n) {
-                    const int nn = n ^ 1;
+                    const int nn = (Stages == 2) ? (n ^ 1) : (n ^ 2);
                     mma_m16n8k16_row_col(frag_S[m][nn], frag_Q[k][m], frag_K[k][nn], frag_S[m][nn]);
                 }
             }

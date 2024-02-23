@@ -142,10 +142,10 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using FragSp = Array<T, 1>[K_M][K_N];
     using FragL  = FragM;
 
-    using SmemLayoutQ = SmemLayout<HeadDim, Identity>;
-    using SmemLayoutP = SmemLayout<CTA_S, Identity>;
-    using SmemLayoutK = SmemLayout<HeadDim, Identity>;
-    using SmemLayoutV = SmemLayout<HeadDim, Identity>;
+    using SmemLayoutQ = SmemLayoutV2<CTA_S, HeadDim, 1, 1, Identity>;
+    using SmemLayoutP = SmemLayoutV2<CTA_H, CTA_S, 1, 1, Identity>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, CTA_S, HeadDim, Identity>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, CTA_S, HeadDim, Identity>;
 
     using SmemM = float[K_M][kWarpCntH][kWarpCntS];
     using SmemL = float[K_M][kWarpCntH][kWarpCntS];
@@ -153,12 +153,12 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                                                                           //   1  64   4  WH  WS   8     1
 
     union SharedStorage {
-        __align__(16) T Q[CTA_H * SmemLayoutQ::kStride];
+        __align__(16) T Q[SmemLayoutQ::kSize];
 
-        __align__(16) Tkv KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
+        __align__(16) Tkv KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];
         struct {
-            __align__(16) Tkv K[Stages == 2 ? CTA_S * SmemLayoutK::kStride : 1];
-            __align__(16) Tkv V[Stages == 2 ? CTA_S * SmemLayoutV::kStride : 1];
+            __align__(16) Tkv K[Stages == 2 ? SmemLayoutK::kSize : 1];
+            __align__(16) Tkv V[Stages == 2 ? SmemLayoutV::kSize : 1];
         };
 
         struct {

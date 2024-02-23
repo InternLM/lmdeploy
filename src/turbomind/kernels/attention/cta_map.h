@@ -68,9 +68,14 @@ struct AttentionCtaMap {
     {
     }
 
+    __host__ __device__ void set_split_cnt(int value)
+    {
+        split_cnt_ = value;
+    }
+
     __host__ dim3 get_grid_shape() const
     {
-        return dim3(q_cta_cnt_, h_cta_cnt_, batch_size_ * split_cnt_);
+        return dim3(q_cta_cnt_, h_cta_cnt_, split_cnt_ * batch_size_);
     }
     __device__ int query_idx() const
     {
@@ -82,11 +87,11 @@ struct AttentionCtaMap {
     }
     __device__ int batch_idx() const
     {
-        return blockIdx.z / split_cnt_;
+        return blockIdx.z % batch_size_;
     }
     __device__ int split_idx() const
     {
-        return blockIdx.z % split_cnt_;
+        return blockIdx.z / batch_size_;
     }
     __device__ int split_count() const
     {

@@ -4,6 +4,7 @@
 
 #include "../gemm_s_f16/common.h"
 #include "array_ops.h"
+#include "smem_layout.h"
 #include <type_traits>
 
 namespace turbomind {
@@ -22,7 +23,6 @@ struct BaseGmemIterator {
     T* smem_;
 
     int src_offset_;
-    int dst_offset_;
     int offset_c_;
     int offset_s_;
 
@@ -30,7 +30,6 @@ struct BaseGmemIterator {
     {
         int2 offsets = Map::get_offset(warp_id, lane_id);
         src_offset_  = offsets.x + offsets.y * Map::kDimC;
-        dst_offset_  = offsets.x + offsets.y * SmemLayout::kStride;
         offset_c_    = offsets.x;
         offset_s_    = offsets.y;
     }
@@ -40,87 +39,18 @@ struct BaseGmemIterator {
         smem_ = smem;
     }
 
-    __device__ void ClearSmem(int offset)
+    template<class Offset>
+    __device__ void ClearSmem(Offset offset)
     {
+        SmemAccessor<T, SmemLayout> data{smem_};
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                constexpr Array<T, Map::kAccessC> kZeros{};
-                Store(&smem_[dst_offset_ + offset + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC], kZeros);
+                Store(&data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC, offset),
+                      Array<T, Map::kAccessC>{});
             }
         }
-    }
-};
-
-template<int Bits, int Base, int Shift>
-struct Swizzle {
-
-    using bit_mask = std::integral_constant<int, (1 << Bits) - 1>;
-    using yyy_mask = std::integral_constant<int, bit_mask{} << (Base + Shift)>;
-    using shift    = std::integral_constant<int, Shift>;
-
-    template<class Offset>
-    __host__ __device__ constexpr static auto apply(Offset offset)
-    {
-        return offset ^ ((offset & yyy_mask{}) >> shift{});
-    }
-
-    template<class Offset>
-    __host__ __device__ constexpr auto operator()(Offset offset)
-    {
-        return apply(offset);
-    }
-};
-
-struct Identity {
-
-    template<class Offset>
-    __device__ constexpr static auto apply(Offset offset)
-    {
-        return offset;
-    }
-
-    template<class Offset>
-    __device__ Offset operator()(Offset offset)
-    {
-        return apply(offset);
-    }
-
-    template<int D>
-    __device__ int AdvanceS(int offset, int s0, int s1)
-    {
-        return offset;
-    }
-};
-
-template<int Stride, class Swizzle_>
-struct SmemLayout {
-    static constexpr int kStride = Stride;
-
-    using Swizzle = Swizzle_;
-
-    __forceinline__ __device__ static int apply(int s, int c, int offset = 0)
-    {
-        return Swizzle::apply(s * kStride + c + offset);
-    }
-
-    __forceinline__ __device__ int operator()(int s, int c, int offset = 0)
-    {
-        return apply(s, c, offset);
-    }
-};
-
-template<class T, class Layout>
-struct SmemAccessor {
-    T*     ptr_;
-    Layout layout_;
-
-    __device__ SmemAccessor(T* ptr): ptr_{ptr} {}
-
-    __device__ T& operator()(int s, int c, int offset = 0)
-    {
-        return ptr_[layout_(s, c, offset)];
     }
 };
 
@@ -225,6 +155,24 @@ struct LinearTileIter {
         else {
             return key_ptr_ + offset + offset_to_val_;
         }
+    }
+};
+
+template<int Stages, int Step = 1>
+struct PipeIter {
+    static constexpr int kMaxStep = Stages * Step;
+
+    int r = 0;
+    int w = kMaxStep - Step;
+
+    __inline__ __device__ PipeIter& operator++()
+    {
+        w = r;
+        r += Step;
+        if (r == kMaxStep) {
+            r -= kMaxStep;
+        }
+        return *this;
     }
 };
 

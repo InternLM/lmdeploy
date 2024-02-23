@@ -49,6 +49,7 @@ struct AttentionUniversal {
     __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
     {
         if constexpr (CTA_Q > 1) {
+            // using `max_split_cnt > 1` here make the kernel slightly slower
             return true;
         }
         else {
@@ -303,9 +304,6 @@ struct AttentionUniversal {
                  warp_id,
                  lane_id);
 
-        int tile_iter = iter_end - iter_begin - 1;
-        int mask_iter = (CTA_Q + CTA_S - 1) / CTA_S + 1;
-
         GmemIterK gmem_K{warp_id, lane_id};
         GmemIterV gmem_V{warp_id, lane_id};
 
@@ -342,6 +340,9 @@ struct AttentionUniversal {
 
         const int offset_Q = history_len + query_idx - iter_begin * CTA_S;
         const int max_step = context_len - iter_begin * CTA_S;
+
+        int tile_iter = iter_end - iter_begin - 1;
+        int mask_iter = (CTA_Q + CTA_S - 1) / CTA_S + 1;
 
         Mainloop mainloop;
         mainloop(frag_Q,

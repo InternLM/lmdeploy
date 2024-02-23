@@ -118,7 +118,7 @@ struct Sm70SmemIterV: BaseSmemIterator<T, Layout> {
         typename Layout::Swizzle swizzle;
         PRAGMA_UNROLL
         for (int n = 0; n < N; n += 2) {
-            const int idx = idxs_[n / 2] + k * 4 * Layout::kStride;
+            const int idx = idxs_[n / 2] + k * 4 * Layout::C0;
             Lds((Array<half, 8>&)frag_V[n], &smem_[idx]);
         }
     }
@@ -230,18 +230,18 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
         }
     };
 
-    using SmemLayoutQ = SmemLayout<HeadDim + 4, Identity>;
-    using SmemLayoutP = SmemLayout<CTA_S + 4, Identity>;
-    using SmemLayoutK = SmemLayout<HeadDim + 4, Identity>;
-    using SmemLayoutV = SmemLayout<HeadDim, SwizzleV>;
+    using SmemLayoutQ = SmemLayoutV2<CTA_Q, HeadDim + 4, 1, 1, Identity>;
+    using SmemLayoutP = SmemLayoutV2<CTA_Q, CTA_S + 4, 1, 1, Identity>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim + 4, 1, 1, Identity>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, CTA_S, HeadDim, SwizzleV>;
 
     struct SharedStorage {
         union {
-            __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
+            __align__(16) T Q[SmemLayoutQ::kSize];
             struct {
-                __align__(16) T K[CTA_S * SmemLayoutK::kStride];
-                __align__(16) T V[CTA_S * SmemLayoutV::kStride];
-                __align__(16) T P[CTA_Q * SmemLayoutP::kStride];
+                __align__(16) T K[SmemLayoutK::kSize];
+                __align__(16) T V[SmemLayoutV::kSize];
+                __align__(16) T P[SmemLayoutP::kSize];
             };
         };
     };
