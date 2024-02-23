@@ -12,6 +12,7 @@ Welcome to LMDeploy's tutorials!
 .. toctree::
    :maxdepth: 1
    :caption: Build
+
    build.md
 
 .. _benchmark:
