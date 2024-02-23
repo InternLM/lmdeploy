@@ -13,6 +13,7 @@
 .. toctree::
    :maxdepth: 1
    :caption: 编译和安装
+
    build.md
 
 .. _测试基准:
@@ -50,6 +51,7 @@
 
    serving/restful_api.md
    serving/proxy_server.md
+   serving/gradio.md
 
 
 .. _量化:

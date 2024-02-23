@@ -36,16 +36,18 @@ def _get_named_loralinears(model: torch.nn.Module):
 
 def _get_layer_index(key: str, config: Any):
     """get layer index of the lora linear."""
-    from peft.utils.other import COMMON_LAYERS_PATTERN
-    layer_indexing_pattern = getattr(config, 'layers_pattern', None)
-    layers_pattern = layer_indexing_pattern or COMMON_LAYERS_PATTERN
+    layers_pattern = getattr(config, 'layers_pattern', None)
     if isinstance(layers_pattern, str):
         layers_pattern = [layers_pattern]
-    for pattern in layers_pattern:
-        layer_index = re.match(f'.*.{pattern}\\.(\\d+)\\.*', key)
+    if layers_pattern is None or len(layers_pattern) == 0:
+        layer_index = re.match(r'.*\.[^.]*\.(\d+)\.', key)
+        return int(layer_index[1])
+    else:
+        for pattern in layers_pattern:
+            layer_index = re.match(f'.*.{pattern}\\.(\\d+)\\.*', key)
 
-        if layer_index is not None:
-            return int(layer_index[1])
+            if layer_index is not None:
+                return int(layer_index[1])
 
 
 def get_indexed_lora_linears(model: torch.nn.Module):
@@ -261,7 +263,7 @@ class SchedulerAdapter:
             adapter_name=adapter_name,
             config=config,
             target_modules=list(config.target_modules),
-            logical_blocks=LogicalTokenBlocks(1),
+            logical_blocks=LogicalTokenBlocks(),
             adapter_manager=manager)
         new_adapter._active = False
         return new_adapter
@@ -289,18 +291,6 @@ class SchedulerAdapter:
         """active adapter."""
         self.adapter_manager._on_active(self, flag)
         self._active = flag
-
-    def num_blocks(self):
-        """get num blocks."""
-        # ranks * (lora_a + lora_b) * num_targets
-        return self.rank * len(self.target_modules)
-
-    def num_required_blocks(self):
-        """get num required blocks."""
-        if self.is_actived():
-            return 0
-        else:
-            return self.num_blocks()
 
     def build_weight_map(self, block_table: Tensor):
         return AdapterWeightMap.new(self.name,

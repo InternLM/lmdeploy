@@ -2,7 +2,7 @@
 from typing import Dict, List
 
 from ...messages import SchedulerSequence
-from ..block_manager import BlockManager
+from ..block_manager import BaseBlockManager
 
 SeqList = List[SchedulerSequence]
 
@@ -10,8 +10,8 @@ SeqList = List[SchedulerSequence]
 class BaseEvictionHelper:
     """Base eviction helper."""
 
-    def __init__(self, block_manager: BlockManager):
-        self.block_manager: BlockManager = block_manager
+    def __init__(self, block_manager: BaseBlockManager):
+        self.block_manager: BaseBlockManager = block_manager
 
     def need_swap_in(self, seq: SchedulerSequence):
         """sequence need swap in."""

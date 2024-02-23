@@ -78,13 +78,11 @@ class ArgumentHelper:
             'model names')
 
     @staticmethod
-    def model_format(parser):
-        """Add argument model_format to parser."""
-
+    def model_format(parser, default: str = None):
         return parser.add_argument(
             '--model-format',
             type=str,
-            default=None,
+            default=default,
             choices=['hf', 'llama', 'awq'],
             help='The format of input model. `hf` meaning `hf_llama`, `llama` '
             'meaning `meta_llama`, `awq` meaning the quantized model by awq')
@@ -109,12 +107,10 @@ class ArgumentHelper:
                                    help='The identical id of a session')
 
     @staticmethod
-    def session_len(parser):
-        """Add argument session_len to parser."""
-
+    def session_len(parser, default: int = None):
         return parser.add_argument('--session-len',
                                    type=int,
-                                   default=None,
+                                   default=default,
                                    help='The max session length of a sequence')
 
     @staticmethod
@@ -189,12 +185,11 @@ class ArgumentHelper:
             'with the highest probability')
 
     @staticmethod
-    def temperature(parser):
-        """Add argument temperature to parser."""
-
-        return parser.add_argument('--temperature',
+    def temperature(parser, default: float = 0.8):
+        return parser.add_argument('-temp',
+                                   '--temperature',
                                    type=float,
-                                   default=0.8,
+                                   default=default,
                                    help='Sampling temperature')
 
     @staticmethod

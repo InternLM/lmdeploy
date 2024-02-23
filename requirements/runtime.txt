@@ -3,7 +3,7 @@ fire
 fuzzywuzzy
 mmengine-lite
 numpy
-peft==0.7.1
+peft<=0.8.2
 pydantic>2.0.0
 pynvml
 safetensors
@@ -12,5 +12,5 @@ shortuuid
 tiktoken
 torch<=2.1.2,>=2.0.0
 transformers>=4.33.0,<=4.37.1
-triton>=2.1.0,<2.2.0
+triton>=2.1.0,<=2.2.0
 uvicorn
