@@ -69,6 +69,12 @@ Welcome to LMDeploy's tutorials!
    advance/long_context.md
    serving/qos.md
 
+.. toctree::
+   :maxdepth: 1
+   :caption: API Reference
+
+   api/pipeline.rst
+
 Indices and tables
 ==================
 
