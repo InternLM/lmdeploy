@@ -156,7 +156,7 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
 
 # Third-party resources
 
-* Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
+- Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
 ## Contributing
 

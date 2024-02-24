@@ -157,7 +157,7 @@ print(response)
 
 # 第三方资源：
 
-* 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
+- 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
 ## 贡献指南
 
