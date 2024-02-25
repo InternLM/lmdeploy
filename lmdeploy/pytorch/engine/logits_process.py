@@ -1,10 +1,111 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict
+from dataclasses import asdict, dataclass
+from typing import Dict, List
 
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
 from ..messages import SamplingParam
+
+
+@dataclass
+class SamplingInputs:
+    temperature: torch.Tensor = None
+    bad_words: torch.LongTensor = None
+    repetition_penalty: torch.Tensor = None
+    top_k: torch.LongTensor = None
+    top_p: torch.Tensor = None
+    random_seed: int = None
+    max_top_k: int = 1
+    min_top_p: float = 1.0
+
+    @classmethod
+    def from_sampling_params(cls, sampling_params: List[SamplingParam]):
+        """from samplingg params."""
+        batch_size = len(sampling_params)
+        temperature = [None] * batch_size
+        repetition_penalty = [None] * batch_size
+        top_k = [None] * batch_size
+        top_p = [None] * batch_size
+        bad_words = [None] * batch_size
+        random_seed = [torch.seed()] * batch_size
+
+        def __gather_params():
+            """gather params."""
+            for idx, param in enumerate(sampling_params):
+                temperature[idx] = param.temperature
+                bad_words[idx] = param.bad_words
+                repetition_penalty[idx] = param.repetition_penalty
+                top_k[idx] = param.top_k
+                top_p[idx] = param.top_p
+                if param.random_seed is not None:
+                    random_seed[idx] = param.random_seed
+
+        def __get_topp(top_p):
+            """get topp."""
+            min_top_p = min(top_p)
+            if min_top_p == 1.0:
+                top_p = None
+            else:
+                top_p = torch.tensor(top_p)
+            return top_p, min_top_p
+
+        def __get_bad_words(bad_words, max_bw_len):
+            """get bad words."""
+            ret = torch.full((batch_size, max_bw_len), -1, dtype=torch.int64)
+            for idx, bw in enumerate(bad_words):
+                bw_len = len(bw)
+                if bw_len == 0:
+                    continue
+                bw = ret.new_tensor(bw)
+                ret[idx, :bw_len] = bw
+            return ret
+
+        __gather_params()
+
+        temperature = torch.tensor(temperature)
+
+        repetition_penalty = torch.tensor(repetition_penalty)
+        if (repetition_penalty == 1.0).all():
+            repetition_penalty = None
+
+        top_k = torch.tensor(top_k)
+        max_top_k = top_k.max().item()
+        if max_top_k == 1:
+            top_p, min_top_p = None, 1.0
+        else:
+            top_p, min_top_p = __get_topp(top_p)
+
+        max_bw_len = max(len(bw) for bw in bad_words)
+        if max_bw_len == 0:
+            bad_words = None
+        else:
+            bad_words = __get_bad_words(bad_words, max_bw_len)
+
+        random_seed = torch.tensor(random_seed)
+
+        sampling_input = cls(
+            temperature=temperature,
+            bad_words=bad_words,
+            repetition_penalty=repetition_penalty,
+            top_k=top_k,
+            top_p=top_p,
+            random_seed=random_seed,
+            max_top_k=max_top_k,
+            min_top_p=min_top_p,
+        )
+        return sampling_input
+
+    def to_device(self, device: str):
+        """to device."""
+        input_dict = asdict(self)
+        out_dict = dict()
+        for k, v in input_dict.items():
+            if isinstance(v, torch.Tensor):
+                v = v.to(device)
+            out_dict[k] = v
+
+        return SamplingInputs(**out_dict)
 
 
 class SeedManager:
