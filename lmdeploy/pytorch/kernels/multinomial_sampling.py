@@ -35,16 +35,13 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
         acc += tl.sum(scores, 1)
 
         pre_cum_scores = cum_scores - scores
-        unfinish_mask = output < 0
         valid_mask = (samp > pre_cum_scores) & (samp <= cum_scores)
-        valid_mask = valid_mask & unfinish_mask[:, None]
-        found_mask = tl.sum(valid_mask, 1)
+        found_mask = tl.sum(valid_mask, 1) > 0
 
         valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 1)
         indices = tl.load(Indices + off * stride_ib + valid_pos * stride_it,
                           mask=found_mask,
                           other=-1)
-        # found_mask = unfinish_mask & (indices >= 0)
         output = tl.where(found_mask, indices, output)
 
     tl.store(Outputs + off, output, mask=off_mask)
@@ -80,8 +77,8 @@ def multinomial_sampling(scores: torch.Tensor,
 
     outputs = indices.new_empty(batch_size)
 
-    BLOCK = 2
-    BLOCK_N = 4
+    BLOCK = 32
+    BLOCK_N = 64
 
     grid = [triton.cdiv(batch_size, BLOCK)]
     kernel_meta = __kernel_meta()
