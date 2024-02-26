@@ -258,8 +258,10 @@ class Engine:
         def __update_bad_words(msg):
             """update bad words."""
             sampling_param = msg.sampling_param
+            eos_token_id = self.model_config.eos_token_id
+            sampling_param.stop_words.append(eos_token_id)
             if sampling_param.ignore_eos:
-                sampling_param.bad_words.append(self.model_config.eos_token_id)
+                sampling_param.bad_words.append(eos_token_id)
 
         for req in reqs:
             session_id = req.data['session_id']
@@ -439,13 +441,6 @@ class Engine:
             bool: Whether the message should be stopped.
         """
 
-        # check eof
-        def _check_min_len(msg, sampling_param):
-            return msg.num_new_tokens < sampling_param.min_new_tokens
-
-        def _check_eof(next_token_id, eos_token_id):
-            return next_token_id == eos_token_id
-
         def _check_stop_word(sampling_param, next_token_id):
             return (sampling_param.stop_words is not None
                     and next_token_id in sampling_param.stop_words)
@@ -460,10 +455,6 @@ class Engine:
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
-        if _check_min_len(msg, sampling_param):
-            return False
-        if _check_eof(next_token_id, self.model_config.eos_token_id):
-            return True
         if _check_stop_word(sampling_param, next_token_id):
             return True
         if _check_request_len(msg):
@@ -477,16 +468,12 @@ class Engine:
         """sampling logits."""
 
         def _check_min_new_tokens(running, logits):
-            eos_token_id = self.model_config.eos_token_id
-            ignore_idx = []
             for idx, seq in enumerate(running):
                 param = seq.sampling_param
                 if param.ignore_eos:
                     continue
                 if seq.num_new_tokens < param.min_new_tokens:
-                    ignore_idx.append(idx)
-            if len(ignore_idx) > 0:
-                logits[ignore_idx, eos_token_id] = -float('inf')
+                    logits[idx, param.stop_words] = -float('inf')
             return logits
 
         def _group_params(running):
@@ -544,8 +531,6 @@ class Engine:
         """check if output is necessary."""
         if isinstance(token, torch.Tensor):
             token = token.item()
-        if token == self.model_config.eos_token_id:
-            return False
 
         if msg.num_new_tokens < msg.sampling_param.min_new_tokens:
             return True
