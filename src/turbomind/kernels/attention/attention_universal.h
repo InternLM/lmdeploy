@@ -23,6 +23,8 @@ struct AttentionUniversal {
     using Impl   = typename Mainloop::Impl;
     using CtaMap = CtaMap_;
 
+    using Arch = typename Impl::Arch;
+
     static constexpr int kWarpCount = Impl::kWarpCount;
 
     using ParamType = AttentionParams<T>;
@@ -501,12 +503,16 @@ struct AttentionUniversal {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-extern __shared__ char dynamic_smem[];
+extern __shared__ char smem_buf[];
 
-template<class AttentionType>
-__global__ void attention_kernel(typename AttentionType::ParamType params, typename AttentionType::CtaMap cta_map)
+template<class Attention>
+__global__ void attention_kernel(typename Attention::ParamType params, typename Attention::CtaMap cta_map)
 {
-    AttentionType{}(params, cta_map, dynamic_smem);
+#if __CUDA_ARCH__
+    if constexpr (Attention::Arch::is_compatible(__CUDA_ARCH__)) {
+        Attention{}(params, cta_map, smem_buf);
+    }
+#endif
 }
 
 }  // namespace turbomind

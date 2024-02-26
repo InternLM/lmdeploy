@@ -31,7 +31,7 @@ struct DecodingConfig<arch::Sm80, T, Tkv, Qh, HeadDim> {
 
 template<class T, class Tkv, int HeadDim>
 struct DecodingConfig<arch::Sm80, T, Tkv, 8, HeadDim> {
-    using Attention = Impl<Sm80_16816_Decoding, T, Tkv, 8, 1, 64, 8, 1, 16, HeadDim, 3>;
+    using Attention = Impl<Sm80_81616, T, Tkv, 8, 1, 64, 8, 1, 16, HeadDim, 3>;
     using Mainloop  = Mainloop<Sm80_CpAsync<3>, Attention>;
     using Kernel    = AttentionUniversal<Mainloop, int, DecodingCtaMap>;
 };
