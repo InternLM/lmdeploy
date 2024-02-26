@@ -145,6 +145,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
     'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
     'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
