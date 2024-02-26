@@ -85,6 +85,11 @@ def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
     for k, v in src_dict.items():
         if v is not None and k in dst_dict:
             dst_dict[k] = v
+    # A workaround to support max token number of each iteration in prefill
+    if src.max_prefill_token_num is not None:
+        dst.num_tokens_per_iter = src.max_prefill_token_num
+        dst.max_prefill_iters = (dst.session_len + dst.num_tokens_per_iter -
+                                 1) // src.max_prefill_token_num
     return TurbomindModelConfig.from_dict(dst_dict)
 
 
@@ -363,6 +368,7 @@ class TurboMind:
             self.gpu_count = cfg.tensor_para_size
 
         # update cfg
+        logger.error(f'engine_config: {engine_config}')
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
             cfg = _update_tm_config(cfg, engine_config)
