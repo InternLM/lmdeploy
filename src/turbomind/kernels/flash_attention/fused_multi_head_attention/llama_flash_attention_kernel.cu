@@ -1,7 +1,8 @@
-#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/kernels/flash_attention/flash_attention.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "41_fused_multi_head_attention/kernel_forward.h"
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cutlass/arch/arch.h>
 #include <cutlass/gemm/gemm.h>
@@ -14,8 +15,7 @@
 namespace turbomind {
 
 template<typename T>
-struct ToCutlassType_ {
-};
+struct ToCutlassType_ {};
 
 template<>
 struct ToCutlassType_<float> {

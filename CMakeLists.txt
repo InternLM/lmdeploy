@@ -336,8 +336,8 @@ endif()
 add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
-  $<TARGET_OBJECTS:llama_fmha>
-  $<TARGET_OBJECTS:flash_attention2>
+  # $<TARGET_OBJECTS:llama_fmha>
+  # $<TARGET_OBJECTS:flash_attention2>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
   $<TARGET_OBJECTS:gemm_s4_f16>
@@ -353,7 +353,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:custom_ar_comm>
   $<TARGET_OBJECTS:custom_ar_kernels>
   $<TARGET_OBJECTS:attention>
-  $<TARGET_OBJECTS:decoder_masked_multihead_attention>
+  # $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:logprob_kernels>

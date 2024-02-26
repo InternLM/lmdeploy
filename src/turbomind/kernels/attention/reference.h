@@ -1,8 +1,8 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/flash_attention/flash_attention.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include <cuda_runtime.h>
 #include <thrust/universal_vector.h>

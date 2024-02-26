@@ -3,8 +3,9 @@
  ******************************************************************************/
 // modify from: https://github.com/Dao-AILab/flash-attention
 
+#include "cuda_bf16.h"
 #include "flash.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/kernels/flash_attention/flash_attention.h"
 #include "static_switch.h"
 #include <cuda_runtime.h>
 #include <cutlass/numeric_types.h>
