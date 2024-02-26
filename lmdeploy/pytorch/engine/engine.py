@@ -532,9 +532,6 @@ class Engine:
         if isinstance(token, torch.Tensor):
             token = token.item()
 
-        if msg.num_new_tokens < msg.sampling_param.min_new_tokens:
-            return True
-
         stop_words = msg.sampling_param.stop_words
         if stop_words is not None and token in stop_words:
             return False
