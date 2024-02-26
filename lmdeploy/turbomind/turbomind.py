@@ -368,7 +368,6 @@ class TurboMind:
             self.gpu_count = cfg.tensor_para_size
 
         # update cfg
-        logger.error(f'engine_config: {engine_config}')
         if engine_config is not None:
             engine_config.tp = cfg.tensor_para_size
             cfg = _update_tm_config(cfg, engine_config)
