@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import argparse
 import csv
 import json
 import os
@@ -6,14 +7,16 @@ import random
 import time
 from queue import Queue
 from threading import Thread
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
-import fire
 import numpy as np
 from tqdm import tqdm
 
+from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
+from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+                               TurbomindEngineConfig)
+from lmdeploy.pytorch.engine.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
-from lmdeploy.turbomind import TurboMind
 
 
 def sample_requests(
@@ -59,19 +62,25 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str, tp: int, csv: str, **kwargs):
-        # avoid turbomind checking chat template name by setting
-        # `model_name='llama'`
-        tm_model = TurboMind(model_path=model_path,
-                             model_name='llama',
-                             tp=tp,
-                             **kwargs)
+    def __init__(self, model_path: str,
+                 engine_config: Union[PytorchEngineConfig,
+                                      TurbomindEngineConfig], csv: str):
+        if isinstance(engine_config, TurbomindEngineConfig):
+            from lmdeploy.turbomind import TurboMind
+            tm_model = TurboMind.from_pretrained(model_path,
+                                                 engine_config=engine_config)
+        elif isinstance(engine_config, PytorchEngineConfig):
+            from lmdeploy.pytorch.engine import Engine as PytorchEngine
+            tm_model = PytorchEngine(model_path, engine_config=engine_config)
+
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
+
         self.csv = csv
         self.pbar = None
 
     def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
+                   temperature: float, top_p: float, top_k: int,
                    stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
@@ -85,15 +94,18 @@ class Engine:
             n_prev_token = 0
 
             input_ids = self.tokenizer(prompt).input_ids
+
             for outputs in model_inst.stream_infer(
                     session_id,
                     input_ids=input_ids,
-                    request_output_len=output_seqlen,
-                    temperature=1.0,
-                    top_p=1.0,
+                    gen_config=EngineGenerationConfig(
+                        max_new_tokens=output_seqlen,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        ignore_eos=True),
                     sequence_start=True,
                     sequence_end=True,
-                    ignore_eos=True,
                     stream_output=stream_output):
                 _, res, n_token = outputs
                 _, state = self.tokenizer.detokenize_incrementally(res, state)
@@ -103,7 +115,9 @@ class Engine:
                         now - prev, 3)
                     n_prev_token = n_token
                 prev = now
-
+            # for pytorch engine to restart a session
+            if isinstance(model_inst, EngineInstance):
+                model_inst.end(session_id)
             assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \
                 f'tokens, but generate {n_token} tokens.\n' \
@@ -121,10 +135,8 @@ class Engine:
             self.pbar.update(1)
         res_queue.put((session_id, stats, per_token_latency_stats))
 
-    def process_request(self,
-                        requests,
-                        concurrency: int = 1,
-                        stream_output: bool = True):
+    def process_request(self, requests, concurrency, temperature, top_p, top_k,
+                        stream_output):
         res_queue = Queue()
         req_queue = Queue()
         threads = []
@@ -142,7 +154,9 @@ class Engine:
         # start threads
         for i in range(concurrency):
             t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, stream_output))
+                       args=(req_queue, res_queue, i, temperature, top_p,
+                             top_k, stream_output),
+                       daemon=True)
             t.start()
             threads.append(t)
 
@@ -224,53 +238,89 @@ class Engine:
                 ])
 
 
-def main(dataset: str,
-         model_path: str,
-         concurrency: int = 64,
-         num_prompts: int = 2000,
-         tp: int = 1,
-         top_k: int = 1,
-         top_p: float = 1.0,
-         temperature: float = 1.0,
-         stream_output: bool = True,
-         csv: str = './profile_throughput.csv',
-         log_level: str = 'ERROR',
-         seed: int = 0):
-    """Benchmark the request throughput of lmdeploy in localhost.
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Benchmark the request throughput of lmdeploy '
+        'in localhost',
+        formatter_class=DefaultsAndTypesHelpFormatter)
+    parser.add_argument('dataset', type=str, help='the path dataset')
+    parser.add_argument('model_path',
+                        type=str,
+                        help='the path of the model in localhost or '
+                        'the repo_id of the model in huggingface.co')
+    parser.add_argument(
+        '-c',
+        '--concurrency',
+        type=int,
+        help='Number of working threads to process the sampled prompts',
+        default=256)
+    parser.add_argument('-n',
+                        '--num-prompts',
+                        type=int,
+                        help='Number of prompts to process',
+                        default=5000)
+    parser.add_argument('--csv',
+                        type=str,
+                        help='Where to save the result.',
+                        default='./profile_throughput.csv')
+    parser.add_argument('--seed',
+                        type=int,
+                        default=0,
+                        help='Seed used in sampling prompts from dataset')
+    # other args
+    ArgumentHelper.top_p(parser)
+    ArgumentHelper.temperature(parser)
+    ArgumentHelper.top_k(parser)
+    ArgumentHelper.log_level(parser)
+    ArgumentHelper.backend(parser)
 
-    Args:
-        dataset (str): Path to the dataset
-        model_path (str): Path to a model in localhost or a model_repo_id in huggingface.co
-        concurrency (int, optional): Number of working threads to process the sampled prompts.
-            Defaults to 64.
-        num_prompts (int, optional): Number of prompts to process. Defaults to 2000.
-        tp (int, optional): Number of GPUs for tensor parallel. Defaults to 1.
-        top_k (int, optional): The number of highest probability vocabulary tokens
-            to keep for top-k-filtering. Defaults to 1.
-        top_p (float, optional): the set of most probable tokens with
-            probabilities that add up to top_p or higher
-            are kept for generation. Defaults to 1.0.
-        temperature (float, optional): The value used to modulate the next token probabilities.
-            Defaults to 1.0.
-        stream_output (bool, optional): Indicator for streaming output. Defaults to True.
-        csv (str, optional): The path to save the result.
-        log_level(str, optional): The log level. Defaults to INFO
-        seed (int, optional): Seed used in sampling prompts from dataset. Defaults to 0.
-    """    # noqa
-    random.seed(seed)
-    os.environ['TM_LOG_LEVEL'] = log_level
+    # pytorch engine args
+    pt_group = parser.add_argument_group('PyTorch engine arguments')
+    tp_act = ArgumentHelper.tp(pt_group)
+    session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
+    cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
 
-    engine = Engine(model_path,
-                    tp=tp,
-                    top_k=top_k,
-                    top_p=top_p,
-                    temperature=temperature,
-                    csv=csv)
+    # turbomind engine args
+    tb_group = parser.add_argument_group('TurboMind engine argument')
+    tb_group._group_actions.append(tp_act)
+    tb_group._group_actions.append(session_len_act)
+    tb_group._group_actions.append(cache_count_act)
+    ArgumentHelper.model_format(tb_group, default='hf')
 
-    requests = sample_requests(dataset, num_prompts, engine.tokenizer)
+    args = parser.parse_args()
+    return args
 
-    engine.process_request(requests, concurrency, stream_output)
+
+def main():
+    args = parse_args()
+    random.seed(args.seed)
+    os.environ['TM_LOG_LEVEL'] = args.log_level
+    if args.backend == 'turbomind':
+        engine_config = TurbomindEngineConfig(
+            session_len=args.session_len,
+            max_batch_size=args.concurrency,
+            tp=args.tp,
+            cache_max_entry_count=args.cache_max_entry_count,
+            model_format=args.model_format)
+    elif args.backend == 'pytorch':
+        engine_config = PytorchEngineConfig(
+            session_len=args.session_len,
+            cache_max_entry_count=args.cache_max_entry_count,
+            max_batch_size=args.concurrency,
+            tp=args.tp)
+
+    engine = Engine(args.model_path, engine_config, csv=args.csv)
+
+    requests = sample_requests(args.dataset, args.num_prompts,
+                               engine.tokenizer)
+
+    engine.process_request(requests,
+                           temperature=args.temperature,
+                           top_p=args.top_p,
+                           top_k=args.top_k,
+                           concurrency=args.concurrency,
+                           stream_output=True)
 
 
 if __name__ == '__main__':
-    fire.Fire(main)
+    main()

@@ -69,6 +69,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedChatGLMModel',
     'modeling_chatglm.MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.MLP',
+    'modeling_chatglm.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.PatchedRMSNorm',
 })
 
 # internlm
@@ -90,6 +92,38 @@ MODULE_MAP.update({
     'modeling_internlm2.InternLM2MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.PatchedInternLM2MLP',
     'modeling_internlm2.InternLM2RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
+# mistral
+MODULE_MAP.update({
+    'transformers.models.mistral.modeling_mistral.MistralAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.MistralFlashAttention2',
+    'transformers.models.mistral.modeling_mistral.MistralModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.mistral.modeling_mistral.MistralMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.mistral.modeling_mistral.MistralRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
+# qwen1.5
+MODULE_MAP.update({
+    'transformers.models.qwen2.modeling_qwen2.Qwen2Attention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2FlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2SdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2.PatchedQwen2Attention',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2Model':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.qwen2.modeling_qwen2.Qwen2RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 

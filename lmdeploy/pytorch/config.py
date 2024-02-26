@@ -28,7 +28,7 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    max_prefill_token_num: int = 16384
+    max_prefill_token_num: int = 8192
 
 
 @dataclass
@@ -38,6 +38,8 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    window_size: int = -1
+    cache_max_entry_count: float = 0.8
 
 
 @dataclass
@@ -50,6 +52,7 @@ class ModelConfig:
     num_key_value_heads: int
     bos_token_id: int
     eos_token_id: int
+    sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
     json_config: dict = field(default_factory=dict)
@@ -99,47 +102,39 @@ class ModelConfig:
 
         def __build_chatglm():
             """build chatglm."""
+            bos_token_id = hf_config.bos_token_id
+            if bos_token_id is None:
+                bos_token_id = hf_config.pad_token_id
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=hf_config.multi_query_group_num,
-                bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id)
-
-        def __build_internlm2():
-            """build internlm2."""
-            return ModelConfig(
-                hidden_size=hf_config.hidden_size,
-                num_layers=hf_config.num_hidden_layers,
-                num_attention_heads=hf_config.num_attention_heads,
-                num_key_value_heads=hf_config.num_key_value_heads,
-                bos_token_id=hf_config.bos_token_id,
+                bos_token_id=bos_token_id,
                 eos_token_id=hf_config.eos_token_id)
 
         def __build_default():
             num_attention_heads = hf_config.num_attention_heads
             num_key_value_heads = getattr(hf_config, 'num_key_value_heads',
                                           num_attention_heads)
+            use_sliding_window = getattr(hf_config, 'use_sliding_window', True)
+            sliding_window = -1
+            if use_sliding_window:
+                sliding_window = getattr(hf_config, 'sliding_window',
+                                         sliding_window)
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
                 bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id)
-
-        arch = getattr(hf_config, 'architectures', ['Unknown'])[0]
-        auto_map = getattr(hf_config, 'auto_map', dict())
-        causallm_name = auto_map.get('AutoModelForCausalLM', 'Unknown')
+                eos_token_id=hf_config.eos_token_id,
+                sliding_window=sliding_window)
 
         if 'falcon' in model_path:
             model_config = __build_falcon()
         elif 'chatglm' in model_path:
             model_config = __build_chatglm()
-        elif (arch == 'InternLM2ForCausalLM'
-              or causallm_name == 'modeling_internlm2.InternLM2ForCausalLM'):
-            model_config = __build_internlm2()
         else:
             model_config = __build_default()
 

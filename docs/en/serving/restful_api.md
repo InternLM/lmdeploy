@@ -1,6 +1,6 @@
 # Restful API
 
-### Launch Service
+## Launch Service
 
 The user can open the http url print by the following command in a browser.
 
@@ -26,7 +26,23 @@ our own api `/v1/chat/interactive` which provides more arguments for users to mo
 **Note** please, if you want to launch multiple requests, you'd better set different `session_id` for both
 `/v1/chat/completions` and `/v1/chat/interactive` apis. Or, we will set them random values.
 
-### python
+## Deploy http service with docker
+
+LMDeploy offers [official docker image](https://hub.docker.com/r/openmmlab/lmdeploy/tags) for deployment. The image can be used to run OpenAI compatible server.
+
+```shell
+docker run --runtime nvidia --gpus all \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
+    -p 23333:23333 \
+    --ipc=host \
+    openmmlab/lmdeploy:latest \
+    lmdeploy serve api_server internlm/internlm2-chat-7b
+```
+
+Just like the previous section, user can try the Swagger UI with a web browser.
+
+## python
 
 We have integrated the client-side functionalities of these services into the `APIClient` class. Below are some examples demonstrating how to invoke the `api_server` service on the client side.
 
@@ -67,7 +83,7 @@ for item in api_client.chat_interactive_v1(prompt='hi'):
     print(item)
 ```
 
-### Java/Golang/Rust
+## Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.
 Here is an example:
@@ -86,7 +102,7 @@ rust/src:
 apis  lib.rs  models
 ```
 
-### cURL
+## cURL
 
 cURL is a tool for observing the output of the api.
 
@@ -130,7 +146,7 @@ curl http://{server_ip}:{server_port}/v1/completions \
 }'
 ```
 
-### CLI client
+## CLI client
 
 There is a client script for restful api server.
 
@@ -139,7 +155,7 @@ There is a client script for restful api server.
 lmdeploy serve api_client api_server_url
 ```
 
-### webui through gradio
+## webui through gradio
 
 You can also test restful-api through webui.
 
@@ -150,7 +166,7 @@ You can also test restful-api through webui.
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
-### webui through OpenAOE
+## webui through OpenAOE
 
 You can use [OpenAOE](https://github.com/InternLM/OpenAOE) for seamless integration with LMDeploy.
 
@@ -161,7 +177,7 @@ openaoe -f /path/to/your/config-template.yaml
 
 Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md) for more deploy information.
 
-### FAQ
+## FAQ
 
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be
    modified by passing `--session_len` to api_server.
@@ -176,6 +192,6 @@ Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/doc
 
 6. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
 
-### request distribution service
+## request distribution service
 
 Please refer to our [request distributor server](./proxy_server.md)

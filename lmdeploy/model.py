@@ -940,6 +940,79 @@ class Yi(BaseModel):
         return ret
 
 
+@MODELS.register_module(name=['Mistral-7B-Instruct', 'Mixtral-8x7B-Instruct'])
+class MistralChat(BaseModel):
+    """Template of Mistral and Mixtral Instruct models.
+
+    `https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1`
+    `https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1`
+    """
+
+    def __init__(self,
+                 meta_instruction=None,
+                 bos='<s>',
+                 eos='</s>',
+                 b_inst='[INST]',
+                 e_inst='[/INST]',
+                 user='user',
+                 assistant='assistant',
+                 session_len=2048,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.meta_instruction = meta_instruction
+        self.bos = bos
+        self.eos = eos
+        self.b_inst = b_inst
+        self.e_inst = e_inst
+        self.session_len = session_len
+        self.user = user
+        self.assistant = assistant
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): the input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'{self.bos}{self.b_inst} {prompt} {self.e_inst}'
+
+        return f'{self.b_inst} {prompt} {self.e_inst}'
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Only evaluate the last instruction completion pair.
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        ret = f'{self.bos}'
+        for index, msg in enumerate(messages):
+            role, content = msg['role'], msg['content']
+            if role == self.user:
+                ret += f'{self.b_inst} {content} {self.e_inst}'
+            elif role == self.assistant:
+                ret += content + self.eos
+            else:
+                raise Exception(f'Only have {self.user} and '
+                                f'{self.assistant} roles, '
+                                f'but given: {role}')
+
+        return ret
+
+
 def best_match_model(query: str, similarity_cutoff: float = 0.5):
     """Get the model that matches the query.
 

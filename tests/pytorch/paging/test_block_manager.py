@@ -2,8 +2,10 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.messages import SchedulerSession
-from lmdeploy.pytorch.paging.block_manager import (BlockManager,
-                                                   LogicalAllocator)
+from lmdeploy.pytorch.paging.block_manager import (DefaultBlockManager,
+                                                   WindowBlockManager)
+from lmdeploy.pytorch.paging.block_manager.base_block_manager import \
+    LogicalAllocator  # noqa: E501
 
 
 class TestAllocator:
@@ -69,7 +71,7 @@ class TestAllocator:
         assert cpu_allocator.get_num_free_blocks() == num_cpu_blocks
 
 
-class TestBlockManager:
+class TestDefaultBlockManager:
 
     @pytest.fixture
     def block_size(self):
@@ -85,7 +87,7 @@ class TestBlockManager:
 
     @pytest.fixture
     def block_mgr(self, num_cpu_blocks, num_gpu_blocks):
-        yield BlockManager(num_cpu_blocks, num_gpu_blocks)
+        yield DefaultBlockManager(num_cpu_blocks, num_gpu_blocks)
 
     def test_alloc(self, block_mgr, block_size, num_gpu_blocks):
         sess = SchedulerSession(0, block_size)
@@ -93,7 +95,6 @@ class TestBlockManager:
         # test alloc
         token_ids = torch.tensor([1])
         msg = sess.add_sequence(token_ids)
-        # msg.append_tokens(1, block_size)
         assert block_mgr.can_allocate(msg)
         block_mgr.allocate(msg)
         block_table = block_mgr.get_block_table(msg)
@@ -201,3 +202,90 @@ class TestBlockManager:
         block_mgr.allocate(msg_full)
         success, swap_map = block_mgr.try_swap_out(msg)
         assert not success
+
+
+class TestWindowBlockManager:
+
+    @pytest.fixture
+    def window_size(self):
+        yield 32
+
+    @pytest.fixture
+    def block_size(self):
+        yield 16
+
+    @pytest.fixture
+    def num_cpu_blocks(self):
+        yield 4
+
+    @pytest.fixture
+    def num_gpu_blocks(self):
+        yield 4
+
+    @pytest.fixture
+    def block_mgr(self, num_cpu_blocks, num_gpu_blocks, window_size):
+        yield WindowBlockManager(num_cpu_blocks, num_gpu_blocks, window_size)
+
+    def test_alloc(self, block_mgr, block_size, num_gpu_blocks):
+        sess = SchedulerSession(0, block_size)
+
+        # test alloc
+        token_ids = torch.tensor([1])
+        msg = sess.add_sequence(token_ids)
+        assert block_mgr.can_allocate(msg)
+        block_mgr.allocate(msg)
+        block_table = block_mgr.get_block_table(msg)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 1
+        assert block_table is not None
+        assert len(block_table) == 1
+
+        # test free
+        block_mgr.free(msg)
+        block_table = block_mgr.get_block_table(msg)
+        assert block_table is None or len(block_table) == 0
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
+
+        # alloc over limit
+        token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ),
+                                dtype=torch.int64)
+        msg = sess.add_sequence(token_ids)
+        assert not block_mgr.can_allocate(msg)
+
+    def test_win_alloc(self, block_mgr, block_size, num_gpu_blocks,
+                       window_size):
+        sess = SchedulerSession(0, block_size)
+
+        # 2 win block
+        token_ids = torch.tensor([1] * window_size)
+        msg = sess.add_sequence(token_ids)
+        block_mgr.allocate(msg)
+        msg.update_token_ids(torch.tensor([1]))
+        block_mgr.allocate(msg)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        block_table = block_mgr.get_block_table(msg)
+        assert block_table is None or len(block_table) == 3
+        block_mgr.free(msg)
+
+        # 3 win block
+        token_ids = torch.tensor([1] * (window_size + 2))
+        msg = sess.add_sequence(token_ids)
+        block_mgr.allocate(msg)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        msg.update_token_ids(torch.tensor([1]))
+        block_mgr.allocate(msg)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        block_table = block_mgr.get_block_table(msg)
+        assert block_table is None or len(block_table) == 3
+        block_mgr.free(msg)
+
+        # not full win
+        token_ids = torch.tensor([1] * (window_size - 2))
+        msg = sess.add_sequence(token_ids)
+        block_mgr.allocate(msg)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+        msg.update_token_ids(torch.tensor([1]))
+        block_mgr.allocate(msg)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+        block_table = block_mgr.get_block_table(msg)
+        assert block_table is None or len(block_table) == 2
+        block_mgr.free(msg)
