@@ -8,6 +8,89 @@ from transformers.generation.logits_process import LogitsWarper
 from ..messages import SamplingParam
 
 
+def _process_temperature(scores: torch.Tensor,
+                         temperature: torch.Tensor,
+                         inplace: bool = True):
+    """process temperature."""
+    if not inplace:
+        scores = scores / temperature[:, None]
+    else:
+        scores /= temperature[:, None]
+    return scores
+
+
+def _process_bad_words(scores: torch.Tensor,
+                       bad_words: torch.LongTensor,
+                       filter_value: float = -float('inf'),
+                       inplace: bool = True):
+    """process bad words."""
+    batch_size = scores.size(0)
+    batch_idx = torch.arange(batch_size, device=scores.device)
+    filtered_scores = scores[batch_idx[:, None], bad_words]
+    filtered_scores[bad_words >= 0] = filter_value
+
+    if not inplace:
+        scores = scores.clone()
+
+    scores[batch_idx[:, None], bad_words] = filtered_scores
+    return scores
+
+
+def _process_repetition_penalty(scores: torch.Tensor,
+                                input_ids: torch.LongTensor,
+                                penalty: torch.Tensor,
+                                inplace: bool = True):
+    """process repetition penalty."""
+    score = torch.gather(scores, 1, input_ids)
+    score = torch.where(score < 0, score * penalty[:, None],
+                        score / penalty[:, None])
+    if not inplace:
+        scores = scores.clone()
+    scores.scatter_(1, input_ids, score)
+    return scores
+
+
+def _filter_topk_sorted(scores: torch.Tensor,
+                        topk: torch.LongTensor,
+                        filter_value: float = -float('inf'),
+                        inplace: bool = True):
+    """filter topk on sorted scores."""
+    filter_value = -float('inf')
+    num_tokens = scores.size(1)
+    token_idx = torch.arange(num_tokens, device=scores.device)
+    mask = token_idx[None, :] >= topk[:, None]
+    if inplace:
+        scores.masked_fill_(mask, filter_value)
+    else:
+        scores = scores.masked_fill(mask, filter_value)
+    return scores
+
+
+def _filter_topp_sorted(scores: torch.Tensor,
+                        topp: torch.Tensor,
+                        filter_value: float = -float('inf'),
+                        inplace: bool = True):
+    """filter topp on sorted scores."""
+    softmax_scores = scores.softmax(-1)
+    cum_scores = softmax_scores.cumsum(1) - softmax_scores
+    mask = cum_scores > topp[:, None]
+    mask[:, 0] = False  # keep at least one
+    if inplace:
+        scores.masked_fill_(mask, filter_value)
+    else:
+        scores = scores.masked_fill(mask, filter_value)
+    return scores
+
+
+def _multinomial_sampling(scores: torch.Tensor,
+                          seeds: torch.LongTensor,
+                          offsets: torch.LongTensor,
+                          indices: torch.LongTensor = None):
+    """sampling."""
+    from lmdeploy.pytorch.kernels import multinomial_sampling
+    return multinomial_sampling(scores, seeds, offsets, indices)
+
+
 @dataclass
 class SamplingInputs:
     temperature: torch.Tensor = None
@@ -15,12 +98,14 @@ class SamplingInputs:
     repetition_penalty: torch.Tensor = None
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
-    random_seed: int = None
+    random_seeds: int = None
+    random_offsets: int = None
     max_top_k: int = 1
     min_top_p: float = 1.0
 
     @classmethod
-    def from_sampling_params(cls, sampling_params: List[SamplingParam]):
+    def from_sampling_params(cls, sampling_params: List[SamplingParam],
+                             random_offsets: List[int]):
         """from samplingg params."""
         batch_size = len(sampling_params)
         temperature = [None] * batch_size
@@ -28,7 +113,7 @@ class SamplingInputs:
         top_k = [None] * batch_size
         top_p = [None] * batch_size
         bad_words = [None] * batch_size
-        random_seed = [torch.seed()] * batch_size
+        random_seeds = [torch.seed() & 0xffffffff] * batch_size
 
         def __gather_params():
             """gather params."""
@@ -39,7 +124,7 @@ class SamplingInputs:
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
                 if param.random_seed is not None:
-                    random_seed[idx] = param.random_seed
+                    random_seeds[idx] = param.random_seed & 0xffffffff
 
         def __get_topp(top_p):
             """get topp."""
@@ -63,26 +148,33 @@ class SamplingInputs:
 
         __gather_params()
 
-        temperature = torch.tensor(temperature)
-
-        repetition_penalty = torch.tensor(repetition_penalty)
-        if (repetition_penalty == 1.0).all():
+        if all(rp == 1.0 for rp in repetition_penalty):
             repetition_penalty = None
-
-        top_k = torch.tensor(top_k)
-        max_top_k = top_k.max().item()
-        if max_top_k == 1:
-            top_p, min_top_p = None, 1.0
         else:
-            top_p, min_top_p = __get_topp(top_p)
+            repetition_penalty = torch.tensor(repetition_penalty)
+
+        temperature = torch.tensor(temperature)
 
         max_bw_len = max(len(bw) for bw in bad_words)
         if max_bw_len == 0:
             bad_words = None
         else:
-            bad_words = __get_bad_words(bad_words, max_bw_len)
+            if all(len(bw) == max_bw_len for bw in bad_words):
+                bad_words = torch.tensor(bad_words)
+            else:
+                bad_words = __get_bad_words(bad_words, max_bw_len)
 
-        random_seed = torch.tensor(random_seed)
+        max_top_k = max(top_k)
+        if max_top_k == 1:
+            top_k = None
+            top_p, min_top_p = None, 1.0
+            random_seeds = None
+            random_offsets = None
+        else:
+            top_k = torch.tensor(top_k)
+            top_p, min_top_p = __get_topp(top_p)
+            random_seeds = torch.tensor(random_seeds)
+            random_offsets = torch.tensor(random_offsets)
 
         sampling_input = cls(
             temperature=temperature,
@@ -90,7 +182,8 @@ class SamplingInputs:
             repetition_penalty=repetition_penalty,
             top_k=top_k,
             top_p=top_p,
-            random_seed=random_seed,
+            random_seeds=random_seeds,
+            random_offsets=random_offsets,
             max_top_k=max_top_k,
             min_top_p=min_top_p,
         )
@@ -132,8 +225,8 @@ SEED_MANAGER = SeedManager()
 class FusedLogitsProcessor(LogitsWarper):
     """Custom logits processor."""
 
-    def __init__(self, sampling_param: SamplingParam):
-        self.sampling_param = sampling_param
+    def __init__(self, sampling_inputs: SamplingInputs):
+        self.sampling_inputs: SamplingInputs = sampling_inputs
 
     def __call__(self, input_ids: torch.LongTensor,
                  scores: torch.FloatTensor) -> torch.FloatTensor:
@@ -151,60 +244,46 @@ class FusedLogitsProcessor(LogitsWarper):
             torch.FloatTensor: The processed prediction scores.
 
         """
-        new_scores = scores
-        filter_value = -float('inf')
+        sampling_inputs = self.sampling_inputs
+        scores = scores.clone()
 
-        # temperature
-        temperature = self.sampling_param.temperature
-        if temperature is not None and temperature > 0:
-            new_scores /= temperature
+        repetition_penalty = sampling_inputs.repetition_penalty
+        if repetition_penalty is not None:
+            scores = _process_repetition_penalty(scores, input_ids,
+                                                 repetition_penalty)
 
-        # bad words
-        bad_words = self.sampling_param.bad_words
-        if bad_words:
-            bad_words = list(set(bad_words))
-            bad_words_bias = new_scores.new_zeros(new_scores.size(1))
-            bad_words_bias[bad_words] = filter_value
-            new_scores += bad_words_bias[None]
+        temperature = sampling_inputs.temperature
+        if temperature is not None:
+            scores = _process_temperature(scores, temperature)
 
-        # top_k
-        top_k_indices = None
-        top_k = self.sampling_param.top_k
-        if top_k is not None and top_k > 0:
-            top_k = min(top_k, scores.size(-1))
-            new_scores, top_k_indices = torch.topk(scores, top_k)
+        bad_words = sampling_inputs.bad_words
+        if bad_words is not None:
+            scores = _process_bad_words(scores, bad_words)
 
-        # top_p
-        top_p = self.sampling_param.top_p
-        if top_p is not None and top_p >= 0 and top_p <= 1:
-            sorted_logits, sorted_indices = torch.sort(new_scores,
-                                                       descending=False)
-            cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
-            sorted_indices_to_remove = cumulative_probs <= (1 - top_p)
-            sorted_indices_to_remove[..., -1:] = 0
-            indices_to_remove = sorted_indices_to_remove.scatter(
-                1, sorted_indices, sorted_indices_to_remove)
-            new_scores = new_scores.masked_fill(indices_to_remove,
-                                                filter_value)
-
-        # recovery top_k
-        if top_k_indices is not None:
-            output = torch.full_like(scores, filter_value)
-            new_scores = torch.scatter(output, 1, top_k_indices, new_scores)
-
-        return new_scores
+        return scores
 
     def sampling(self, logits: torch.Tensor):
         """sampling."""
+        sampling_inputs = self.sampling_inputs
 
-        def __random_sampling(seed, logits: torch.Tensor):
+        def __random_sampling(scores: torch.Tensor, indices: torch.LongTensor):
             """random sampling."""
-            generator = SEED_MANAGER.get(seed, logits.device)
-            logits = logits.softmax(-1)
-            return torch.multinomial(logits, 1, generator=generator)[:, 0]
+            top_k = sampling_inputs.top_k
+            if top_k is not None:
+                scores = _filter_topk_sorted(scores, top_k)
 
-        seed = self.sampling_param.random_seed
-        if seed is None or self.sampling_param.top_k == 1:
+            top_p = sampling_inputs.top_p
+            if top_p is not None:
+                scores = _filter_topp_sorted(scores, top_p)
+
+            softmax_scores = scores.softmax(1)
+            seeds = sampling_inputs.random_seeds
+            offsets = sampling_inputs.random_offsets
+            return _multinomial_sampling(softmax_scores, seeds, offsets,
+                                         indices)
+
+        if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)
         else:
-            return __random_sampling(seed, logits)
+            scores, indices = logits.sort(1, descending=True)
+            return __random_sampling(scores, indices)

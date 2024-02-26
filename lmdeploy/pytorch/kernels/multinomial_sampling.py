@@ -26,7 +26,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
 
     for b_idx in range(0, num_tokens, BLOCK_N):
         s_off = b_idx + n_off
-        s_mask = s_off[None, :] < num_tokens
+        s_mask = off_mask[:, None] & (s_off[None, :] < num_tokens)
         scores = tl.load(Scores + off[:, None] * stride_sb +
                          s_off[None, :] * stride_st,
                          mask=s_mask,
@@ -40,7 +40,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
 
         valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 1)
         indices = tl.load(Indices + off * stride_ib + valid_pos * stride_it,
-                          mask=found_mask,
+                          mask=found_mask & off_mask,
                           other=-1)
         output = tl.where(found_mask, indices, output)
 
@@ -96,5 +96,5 @@ def multinomial_sampling(scores: torch.Tensor,
                                        BLOCK=BLOCK,
                                        BLOCK_N=BLOCK_N,
                                        **kernel_meta)
-
+    torch.cuda.synchronize()
     return outputs

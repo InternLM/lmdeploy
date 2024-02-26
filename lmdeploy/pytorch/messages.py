@@ -13,11 +13,6 @@ from lmdeploy.messages import EngineGenerationConfig
 from .block import LogicalTokenBlocks
 
 
-def _div_up(x, n):
-    """perform div up."""
-    return (x + n - 1) // n
-
-
 @dataclass
 class SamplingParam:
     """Sampling parameter."""
@@ -29,12 +24,6 @@ class SamplingParam:
     random_seed: int = None
     stop_words: List[int] = None
     bad_words: List[int] = None
-
-    def __hash__(self):
-        """hash."""
-        return hash(
-            (self.top_k, self.top_p, self.temperature, self.repetition_penalty,
-             self.ignore_eos, self.random_seed))
 
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
@@ -136,7 +125,8 @@ class SchedulerSession:
             logical_blocks=seq.logical_blocks.clone(),
             adapter_name=seq.adapter_name,
             arrive_time=time.time(),
-            meta=deepcopy(seq.meta))
+            meta=deepcopy(seq.meta),
+            random_offsets=seq.random_offsets + 1)
 
         self.sequences[new_msg.seq_id] = new_msg
         return new_msg
@@ -160,6 +150,7 @@ class SchedulerSequence:
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
+    random_offsets: int = 0
 
     @property
     def history_len(self) -> int:
