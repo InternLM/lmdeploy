@@ -331,7 +331,8 @@ class ArgumentHelper:
             '--chat-template',
             type=str,
             default=None,
-            help='A JSON file that specifies the chat template configuration. '
+            help=\
+            'A JSON file or string that specifies the chat template configuration. '  # noqa
             'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification.'  # noqa
         )
 
