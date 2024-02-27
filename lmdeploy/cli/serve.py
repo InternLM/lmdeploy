@@ -191,7 +191,11 @@ class SubCliServe:
         """Serve LLMs with web UI using gradio."""
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
-        if args.backend == 'pytorch':
+        from lmdeploy.supported_models import autoget_backend
+        backend = args.backend
+        if backend is None:
+            backend = autoget_backend(args.model_path_or_server)
+        if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
@@ -217,7 +221,7 @@ class SubCliServe:
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
-            backend=args.backend,
+            backend=backend,
             backend_config=backend_config,
             chat_template_config=chat_template_config)
 
@@ -226,7 +230,12 @@ class SubCliServe:
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
-        if args.backend == 'pytorch':
+        from lmdeploy.supported_models import autoget_backend
+        backend = args.backend
+        if backend is None:
+            backend = autoget_backend(args.model_path)
+
+        if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
@@ -250,7 +259,7 @@ class SubCliServe:
             meta_instruction=args.meta_instruction,
             capability=args.cap)
         run_api_server(args.model_path,
-                       backend=args.backend,
+                       backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,
                        server_name=args.server_name,
