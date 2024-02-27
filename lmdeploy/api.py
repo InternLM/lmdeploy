@@ -50,7 +50,9 @@ def pipeline(model_path: str,
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
-    if backend_config is None:
+
+    if type(backend_config) is not PytorchEngineConfig:
+        # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
@@ -131,8 +133,8 @@ def serve(model_path: str,
     from lmdeploy.serve.openai.api_client import APIClient
     from lmdeploy.serve.openai.api_server import serve
 
-    # get backend config in auto backend mode
-    if backend_config is None:
+    if type(backend_config) is not PytorchEngineConfig:
+        # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'

@@ -251,7 +251,7 @@ class ArgumentHelper:
 
         return parser.add_argument('--backend',
                                    type=str,
-                                   default=None,
+                                   default='turbomind',
                                    choices=['pytorch', 'turbomind'],
                                    help='Set the inference backend')
 

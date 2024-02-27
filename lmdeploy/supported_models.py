@@ -1,7 +1,111 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal, Optional, Union
 
+from transformers import AutoConfig
+
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
+
+_SUPPORTED_ARCHS = dict(
+    # baichuan2-7b, baichuan-13b, baichuan2-13b
+    BaiChuanForCausalLM=dict(pytorch=True,
+                             turbomind=True,
+                             model_type='baichuan'),
+    # baichuan-7b
+    BaichuanForCausalLM=dict(pytorch=False,
+                             turbomind=True,
+                             model_type='baichuan'),
+    # chatglm2-6b, chatglm3-6b
+    ChatGLMModel=dict(pytorch=True, turbomind=False, model_type='chatglm'),
+    # deepseek-moe
+    DeepseekForCausalLM=dict(pytorch=True,
+                             turbomind=False,
+                             model_type='deepseek'),
+    # falcon-7b
+    FalconForCausalLM=dict(pytorch=True, turbomind=False, model_type='falcon'),
+    # gemma-7b
+    GemmaForCausalLM=dict(pytorch=False, turbomind=False, model_type='gemma'),
+    # internlm
+    InternLMForCausalLM=dict(pytorch=True,
+                             turbomind=True,
+                             model_type='internlm'),
+    # internlm2
+    InternLM2ForCausalLM=dict(pytorch=True,
+                              turbomind=True,
+                              model_type='internlm2'),
+    # internlm-xcomposer
+    InternLM2XComposerForCausalLM=dict(pytorch=False,
+                                       turbomind=True,
+                                       model_type='internlm'),
+    # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
+    # deepseek-coder, deepseek-llm
+    LlamaForCausalLM=dict(pytorch=True, turbomind=True, model_type='llama'),
+    # Mistral-7B
+    MistralForCausalLM=dict(pytorch=True,
+                            turbomind=False,
+                            model_type='mistral'),
+    # Mixtral-8x7B
+    MixtralForCausalLM=dict(pytorch=True,
+                            turbomind=False,
+                            model_type='mixtral'),
+    # Qwen 7B-72B, Qwen-VL-7B
+    QWenLMHeadModel=dict(pytorch=False, turbomind=True, model_type='qwen'),
+    # Qwen1.5 7B-72B
+    Qwen2ForCausalLM=dict(pytorch=True, turbomind=False, model_type='qwen2'),
+)
+
+
+def _is_support_by(model_path: str):
+    """Check whether supported by pytorch or turbomind engine.
+
+    Args:
+        model_path (str): the path of a model.
+            It could be one of the following options:
+                - i) A local directory path of a turbomind model which is
+                    converted by `lmdeploy convert` command or download from
+                    ii) and iii).
+                - ii) The model_id of a lmdeploy-quantized model hosted
+                    inside a model repo on huggingface.co, such as
+                    "InternLM/internlm-chat-20b-4bit",
+                    "lmdeploy/llama2-chat-70b-4bit", etc.
+                - iii) The model_id of a model hosted inside a model repo
+                    on huggingface.co, such as "internlm/internlm-chat-7b",
+                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
+                    and so on.
+    Returns:
+        support_by_torch (bool): Whether input model is supported by pytorch engine
+        support_by_turbomind (bool): Whether input model is supported by turbomind engine
+    """  # noqa: E501
+    import os
+
+    support_by_torch, support_by_turbomind = False, False
+
+    triton_model_path = os.path.join(model_path, 'triton_models')
+    if os.path.exists(triton_model_path):
+        support_by_turbomind = True
+        return support_by_torch, support_by_turbomind
+
+    cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+    if hasattr(cfg, 'architectures'):
+        arch = cfg.architectures[0]
+    elif hasattr(cfg, 'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
+        arch = cfg.auto_map['AutoModelForCausalLM'].split('.')[-1]
+    else:
+        raise RuntimeError(
+            f'Could not find model architecture from config: {cfg}')
+
+    if arch in _SUPPORTED_ARCHS:
+        info = _SUPPORTED_ARCHS[arch]
+        support_by_torch = info['pytorch']
+        support_by_turbomind = info['turbomind']
+        # special cases
+        if arch == 'BaiChuanForCausalLM':
+            num_attn_head = cfg['num_attention_heads']
+            if num_attn_head == 40:
+                # baichuan-13B, baichuan2-13B not supported by turbomind
+                support_by_turbomind = False
+
+    return support_by_torch, support_by_turbomind
 
 
 def autoget_backend(model_path: str) -> Union[Literal['turbomind', 'pytorch']]:
@@ -25,8 +129,8 @@ def autoget_backend(model_path: str) -> Union[Literal['turbomind', 'pytorch']]:
     Returns:
         str: the backend type.
     """
-    backend = 'pytorch'
-    # TODO
+    pytorch_has, turbomind_has = _is_support_by(model_path)
+    backend = 'turbomind' if turbomind_has else 'pytorch'
     return backend
 
 
