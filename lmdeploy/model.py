@@ -1021,6 +1021,7 @@ class Deepseek(BaseModel):
         self._user = user
         self._assistant = assistant
         self._bos = '<｜begin▁of▁sentence｜>'
+        self._eos = '<｜end▁of▁sentence｜>'
 
     def decorate_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -1036,6 +1037,8 @@ class Deepseek(BaseModel):
         ret = f'{self._user} {prompt}\n\n{self._assistant}'
         if sequence_start:
             ret = f'{self._bos}{ret}'
+        else:
+            ret = f'{self._eos}{ret}'
         return ret
 
     def messages2prompt(self, messages, sequence_start=True):
@@ -1051,11 +1054,16 @@ class Deepseek(BaseModel):
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         ret = f'{self._bos}'
+        is_start = True
         for _, msg in enumerate(messages):
             role, content = msg['role'], msg['content']
-            if role == self.user:
+            if role == 'user':
                 ret += f'{self._user} {content}\n\n{self._assistant}'
-            elif role == self.assistant:
+                if is_start:
+                    is_start = False
+                else:
+                    ret += f'{self._eos}{ret}'
+            elif role == 'assistant':
                 ret += f' {content}\n\n'
             else:
                 raise Exception(f'Only have {self.user} and '
