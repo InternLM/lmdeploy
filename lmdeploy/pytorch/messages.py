@@ -175,6 +175,7 @@ class SchedulerSequence:
         if token_ids.dim() == 0:
             token_ids = token_ids.unsqueeze(0)
         self.token_ids = token_ids
+        self.random_offsets += 1
         self.arrive_time = time.time()
 
     def set_step(self, step: int):
