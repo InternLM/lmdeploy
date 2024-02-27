@@ -192,4 +192,4 @@ openaoe -f /path/to/your/config-template.yaml
 
 ## 自定义对话模板
 
-自定义对话模板，请参考[chat_template.md](../supported_models/chat_template.md)
+自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
