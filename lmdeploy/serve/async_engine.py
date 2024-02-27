@@ -56,7 +56,8 @@ def deduce_a_name(
     if model_name is None:
         model_name = best_match_model(model_path)
         if model_name is None:
-            raise ArgumentError(f'Please set model_name for {model_path}')
+            raise ArgumentError(None,
+                                f'Please set model_name for {model_path}')
         else:
             logger.warning(f'Best matched chat template name: {model_name}')
     return model_name

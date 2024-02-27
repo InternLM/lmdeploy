@@ -23,7 +23,8 @@ class ChatTemplateConfig:
     """Parameters for chat template.
 
     Args:
-        model_name (str): the name of the deployed model. Determine which chat template will be applied
+        model_name (str): the name of the deployed model. Determine which chat template will be applied.
+            All the chat template names: `lmdeploy list`
         system (str | None): begin of the system prompt
         meta_instruction (str | None): system prompt
         eosys (str | None): end of the system prompt
