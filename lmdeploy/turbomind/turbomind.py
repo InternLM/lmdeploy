@@ -561,6 +561,11 @@ class TurboMindInstance:
                                                   sequence_end=True):
             pass
 
+    async def async_end(self, session_id: int):
+        """End the given session."""
+        self.end(session_id)
+        await asyncio.sleep(0.002)
+
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
@@ -572,6 +577,11 @@ class TurboMindInstance:
                                                    sequence_end=False,
                                                    stop=True):
             pass
+
+    async def async_cancel(self, session_id: int):
+        """End the given session."""
+        self.cancel(session_id)
+        await asyncio.sleep(0.002)
 
     def prepare_inputs(self,
                        session_id,

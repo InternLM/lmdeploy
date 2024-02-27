@@ -3,7 +3,7 @@ import asyncio
 import dataclasses
 import random
 from argparse import ArgumentError
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from queue import Empty, Queue
 from threading import Thread
 from typing import Dict, List, Literal, Optional, Union
@@ -256,26 +256,26 @@ class AsyncEngine:
                                 do_preprocess=do_preprocess,
                                 **kwargs)
 
-    def stop_session(self, session_id: int):
+    async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         if str(session_id) in self.id2generator:
-            self.id2generator[str(session_id)].cancel(session_id)
+            await self.id2generator[str(session_id)].async_cancel(session_id)
             self.gens_set.add(self.id2generator[str(session_id)])
 
-    def end_session(self, session_id: int):
+    async def end_session(self, session_id: int):
         """Clear a session by a session_id."""
         if str(session_id) in self.id2generator:
-            self.id2generator[str(session_id)].end(session_id)
+            await self.id2generator[str(session_id)].async_end(session_id)
             self.id2step[str(session_id)] = 0
             self.gens_set.add(self.id2generator[str(session_id)])
 
-    @contextmanager
-    def safe_run(self, session_id: Optional[int] = None):
+    @asynccontextmanager
+    async def safe_run(self, session_id: Optional[int] = None):
         """A context manager to make sure server's safe running."""
         try:
             yield
         except (Exception, asyncio.CancelledError) as e:  # noqa
-            self.stop_session(session_id)
+            await self.stop_session(session_id)
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
@@ -485,10 +485,10 @@ class AsyncEngine:
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
             if sequence_end is True and sequence_start is False:
-                self.end_session(session_id)
+                await self.end_session(session_id)
         else:
             generator = await self.get_generator(False, session_id)
-            with self.safe_run(session_id):
+            async with self.safe_run(session_id):
                 state = DetokenizeState()
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
@@ -524,4 +524,4 @@ class AsyncEngine:
                 # manually end pytorch session
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
-                    self.end_session(session_id)
+                    await self.end_session(session_id)
