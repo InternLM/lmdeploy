@@ -1038,6 +1038,31 @@ class Deepseek(BaseModel):
             ret = f'{self._bos}{ret}'
         return ret
 
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Only evaluate the last instruction completion pair.
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        ret = f'{self._bos}'
+        for _, msg in enumerate(messages):
+            role, content = msg['role'], msg['content']
+            if role == self.user:
+                ret += f'{self._user} {content}\n\n{self._assistant}'
+            elif role == self.assistant:
+                ret += f' {content}\n\n'
+            else:
+                raise Exception(f'Only have {self.user} and '
+                                f'{self.assistant} roles, '
+                                f'but given: {role}')
+        return ret
+
 
 def best_match_model(query: str, similarity_cutoff: float = 0.5):
     """Get the model that matches the query.

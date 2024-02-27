@@ -97,6 +97,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |         YI         |  6B - 34B  |
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
+|      Mixtral       |    8x7B    |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
@@ -154,6 +155,10 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - gemm tuning
   - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
+
+# Third-party projects
+
+- Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
 ## Contributing
 
