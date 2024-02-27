@@ -71,6 +71,11 @@
    advance/long_context.md
    serving/qos.md
 
+.. toctree::
+   :maxdepth: 1
+   :caption: API 文档
+
+   api/pipeline.rst
 
 索引与表格
 ==================
