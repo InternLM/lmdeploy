@@ -259,7 +259,8 @@ class Engine:
             """update bad words."""
             sampling_param = msg.sampling_param
             eos_token_id = self.model_config.eos_token_id
-            sampling_param.stop_words.append(eos_token_id)
+            if eos_token_id not in sampling_param.stop_words:
+                sampling_param.stop_words.append(eos_token_id)
             if sampling_param.ignore_eos:
                 sampling_param.bad_words.append(eos_token_id)
 
@@ -497,7 +498,6 @@ class Engine:
                 next_token_ids[idx] = argmax_ids
             return next_token_ids
 
-        logits = _check_min_new_tokens(running, logits)
         grouped_params = _group_params(running)
 
         is_decoding = inputs.is_decoding
@@ -511,6 +511,7 @@ class Engine:
             split_logits = logits
         split_logits = split_logits.cuda()
 
+        split_logits = _check_min_new_tokens(running, split_logits)
         next_token_ids = _sampling(grouped_params, split_logits, inputs)
 
         return next_token_ids, split_logits
