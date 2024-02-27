@@ -189,3 +189,7 @@ openaoe -f /path/to/your/config-template.yaml
 ## 多机并行服务
 
 请参考我们的 [请求分发服务器](./proxy_server.md)
+
+## 自定义对话模板
+
+自定义对话模板，请参考[chat_template.md](../supported_models/chat_template.md)

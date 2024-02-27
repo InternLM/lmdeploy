@@ -195,3 +195,7 @@ Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/doc
 ## request distribution service
 
 Please refer to our [request distributor server](./proxy_server.md)
+
+## customized chat template
+
+To customize a chat template, please refer to [chat_template.md](../supported_models/chat_template.md).
