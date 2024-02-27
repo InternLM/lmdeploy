@@ -140,6 +140,10 @@ class PytorchEngineConfig:
         tp (int): Tensor Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. Default 128.
+        cache_max_entry_count (float): the percentage of gpu memory occupied
+            by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
+            it defaults to 0.8, signifying the percentage of FREE GPU memory
+            to be reserved for the k/v cache
         eviction_type (str): What action to perform when kv cache
             is full, ['recompute', 'copy'], Default 'recompute'.
         prefill_interval (int): Interval to perform prefill,
@@ -161,13 +165,14 @@ class PytorchEngineConfig:
     tp: int = 1
     session_len: int = None
     max_batch_size: int = 128
+    cache_max_entry_count: float = 0.8
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     block_size: int = 64
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
-    max_prefill_token_num: int = 16384
+    max_prefill_token_num: int = 8192
     download_dir: str = None
     revision: str = None
 

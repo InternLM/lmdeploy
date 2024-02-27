@@ -12,6 +12,7 @@ Welcome to LMDeploy's tutorials!
 .. toctree::
    :maxdepth: 1
    :caption: Build
+
    build.md
 
 .. _benchmark:
@@ -49,6 +50,7 @@ Welcome to LMDeploy's tutorials!
 
    serving/restful_api.md
    serving/proxy_server.md
+   serving/gradio.md
 
 .. _quantization:
 .. toctree::
@@ -66,6 +68,12 @@ Welcome to LMDeploy's tutorials!
    advance/pytorch_new_model.md
    advance/long_context.md
    serving/qos.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: API Reference
+
+   api/pipeline.rst
 
 Indices and tables
 ==================

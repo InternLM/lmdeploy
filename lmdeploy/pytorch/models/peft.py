@@ -14,10 +14,10 @@ class PackedLoRAInput:
     x: torch.Tensor
     a_cache: torch.Tensor
     b_cache: torch.Tensor
-    b_start_loc: torch.Tensor
-    b_seq_lens: torch.Tensor
-    b_adapter_ids: torch.Tensor
-    b_scaling: torch.Tensor
+    q_start_loc: torch.Tensor
+    q_seqlens: torch.Tensor
+    adapter_ids: torch.Tensor
+    scaling: torch.Tensor
     rank_page_table: torch.Tensor
     rank_page_start: torch.Tensor
     ranks: torch.Tensor
@@ -45,10 +45,10 @@ class LoRALinear(torch.nn.Module):
         return PackedLoRAInput(x=x.flatten(0, -2).contiguous(),
                                a_cache=a_cache,
                                b_cache=b_cache,
-                               b_start_loc=context.q_start_loc,
-                               b_seq_lens=context.seq_length,
-                               b_adapter_ids=context.local_adapter_ids,
-                               b_scaling=scaling,
+                               q_start_loc=context.q_start_loc,
+                               q_seqlens=context.q_seq_length,
+                               adapter_ids=context.local_adapter_ids,
+                               scaling=scaling,
                                rank_page_table=context.adapter_offsets,
                                rank_page_start=block_starts,
                                ranks=ranks,
@@ -65,9 +65,9 @@ class LoRALinear(torch.nn.Module):
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
                          lora_input.a_cache,
-                         b_start_loc=lora_input.b_start_loc,
-                         b_seq_lens=lora_input.b_seq_lens,
-                         b_adapter_ids=lora_input.b_adapter_ids,
+                         q_start_loc=lora_input.q_start_loc,
+                         q_seqlens=lora_input.q_seqlens,
+                         adapter_ids=lora_input.adapter_ids,
                          rank_page_table=lora_input.rank_page_table,
                          rank_page_start=lora_input.rank_page_start,
                          ranks=lora_input.ranks,
@@ -75,10 +75,10 @@ class LoRALinear(torch.nn.Module):
                          max_rank=lora_input.max_rank)
             lora_out = mbgmm_b(xa,
                                lora_input.b_cache,
-                               b_start_loc=lora_input.b_start_loc,
-                               b_seq_lens=lora_input.b_seq_lens,
-                               b_adapter_ids=lora_input.b_adapter_ids,
-                               b_scaling=lora_input.b_scaling,
+                               q_start_loc=lora_input.q_start_loc,
+                               q_seqlens=lora_input.q_seqlens,
+                               adapter_ids=lora_input.adapter_ids,
+                               scaling=lora_input.scaling,
                                rank_page_table=lora_input.rank_page_table,
                                rank_page_start=lora_input.rank_page_start,
                                ranks=lora_input.ranks,
@@ -88,15 +88,15 @@ class LoRALinear(torch.nn.Module):
         else:
             xa = mbgmv_a(lora_input.x,
                          lora_input.a_cache,
-                         b_adapter_ids=lora_input.b_adapter_ids,
+                         adapter_ids=lora_input.adapter_ids,
                          rank_page_table=lora_input.rank_page_table,
                          rank_page_start=lora_input.rank_page_start,
                          ranks=lora_input.ranks,
                          max_rank=lora_input.max_rank)
             lora_out = mbgmv_b(xa,
                                lora_input.b_cache,
-                               b_adapter_ids=lora_input.b_adapter_ids,
-                               b_scaling=lora_input.b_scaling,
+                               adapter_ids=lora_input.adapter_ids,
+                               scaling=lora_input.scaling,
                                rank_page_table=lora_input.rank_page_table,
                                rank_page_start=lora_input.rank_page_start,
                                ranks=lora_input.ranks,
@@ -119,9 +119,9 @@ class LoRALinear(torch.nn.Module):
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
                          lora_input.a_cache,
-                         b_start_loc=lora_input.b_start_loc,
-                         b_seq_lens=lora_input.b_seq_lens,
-                         b_adapter_ids=lora_input.b_adapter_ids,
+                         q_start_loc=lora_input.q_start_loc,
+                         q_seqlens=lora_input.q_seqlens,
+                         adapter_ids=lora_input.adapter_ids,
                          rank_page_table=lora_input.rank_page_table,
                          rank_page_start=lora_input.rank_page_start,
                          ranks=lora_input.ranks,
@@ -129,10 +129,10 @@ class LoRALinear(torch.nn.Module):
                          max_rank=lora_input.max_rank)
             lora_out = mbgmm_b(xa,
                                lora_input.b_cache,
-                               b_start_loc=lora_input.b_start_loc,
-                               b_seq_lens=lora_input.b_seq_lens,
-                               b_adapter_ids=lora_input.b_adapter_ids,
-                               b_scaling=lora_input.b_scaling,
+                               q_start_loc=lora_input.q_start_loc,
+                               q_seqlens=lora_input.q_seqlens,
+                               adapter_ids=lora_input.adapter_ids,
+                               scaling=lora_input.scaling,
                                rank_page_table=lora_input.rank_page_table,
                                rank_page_start=lora_input.rank_page_start,
                                ranks=lora_input.ranks,
@@ -142,15 +142,15 @@ class LoRALinear(torch.nn.Module):
         else:
             xa = mbgmv_a(lora_input.x,
                          lora_input.a_cache,
-                         b_adapter_ids=lora_input.b_adapter_ids,
+                         adapter_ids=lora_input.adapter_ids,
                          rank_page_table=lora_input.rank_page_table,
                          rank_page_start=lora_input.rank_page_start,
                          ranks=lora_input.ranks,
                          max_rank=lora_input.max_rank)
             lora_out = mbgmv_b(xa,
                                lora_input.b_cache,
-                               b_adapter_ids=lora_input.b_adapter_ids,
-                               b_scaling=lora_input.b_scaling,
+                               adapter_ids=lora_input.adapter_ids,
+                               scaling=lora_input.scaling,
                                rank_page_table=lora_input.rank_page_table,
                                rank_page_start=lora_input.rank_page_start,
                                ranks=lora_input.ranks,
@@ -185,9 +185,9 @@ class LoRALinear(torch.nn.Module):
         if not lora_input.is_decoding:
             xa = mbgmm_a(lora_input.x,
                          lora_input.a_cache,
-                         b_start_loc=lora_input.b_start_loc,
-                         b_seq_lens=lora_input.b_seq_lens,
-                         b_adapter_ids=lora_input.b_adapter_ids,
+                         q_start_loc=lora_input.q_start_loc,
+                         q_seqlens=lora_input.q_seqlens,
+                         adapter_ids=lora_input.adapter_ids,
                          rank_page_table=lora_input.rank_page_table,
                          rank_page_start=lora_input.rank_page_start,
                          ranks=lora_input.ranks,
@@ -198,19 +198,19 @@ class LoRALinear(torch.nn.Module):
             if len(lora_input.ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
-                    b_start_loc=lora_input.b_start_loc,
-                    b_seq_lens=lora_input.b_seq_lens,
-                    adapter_ids=lora_input.b_adapter_ids,
+                    q_start_loc=lora_input.q_start_loc,
+                    q_seqlens=lora_input.q_seqlens,
+                    adapter_ids=lora_input.adapter_ids,
                     ranks=lora_input.ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
                     output=gathered_xa)
             lora_out = mbgmm_b(gathered_xa,
                                lora_input.b_cache,
-                               b_start_loc=lora_input.b_start_loc,
-                               b_seq_lens=lora_input.b_seq_lens,
-                               b_adapter_ids=lora_input.b_adapter_ids,
-                               b_scaling=lora_input.b_scaling,
+                               q_start_loc=lora_input.q_start_loc,
+                               q_seqlens=lora_input.q_seqlens,
+                               adapter_ids=lora_input.adapter_ids,
+                               scaling=lora_input.scaling,
                                rank_page_table=lora_input.rank_page_table,
                                rank_page_start=lora_input.rank_page_start,
                                ranks=lora_input.ranks,
@@ -220,7 +220,7 @@ class LoRALinear(torch.nn.Module):
         else:
             xa = mbgmv_a(lora_input.x,
                          lora_input.a_cache,
-                         b_adapter_ids=lora_input.b_adapter_ids,
+                         adapter_ids=lora_input.adapter_ids,
                          rank_page_table=lora_input.rank_page_table,
                          rank_page_start=lora_input.rank_page_start,
                          ranks=lora_input.ranks,
@@ -230,17 +230,17 @@ class LoRALinear(torch.nn.Module):
             if len(lora_input.ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
-                    b_start_loc=lora_input.b_start_loc,
-                    b_seq_lens=lora_input.b_seq_lens,
-                    adapter_ids=lora_input.b_adapter_ids,
+                    q_start_loc=lora_input.q_start_loc,
+                    q_seqlens=lora_input.q_seqlens,
+                    adapter_ids=lora_input.adapter_ids,
                     ranks=lora_input.ranks,
                     world_size=world_size,
                     max_seq_len=lora_input.max_seq_len,
                     output=gathered_xa)
             lora_out = mbgmv_b(gathered_xa,
                                lora_input.b_cache,
-                               b_adapter_ids=lora_input.b_adapter_ids,
-                               b_scaling=lora_input.b_scaling,
+                               adapter_ids=lora_input.adapter_ids,
+                               scaling=lora_input.scaling,
                                rank_page_table=lora_input.rank_page_table,
                                rank_page_start=lora_input.rank_page_start,
                                ranks=lora_input.ranks,

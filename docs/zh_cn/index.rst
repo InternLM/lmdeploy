@@ -13,6 +13,7 @@
 .. toctree::
    :maxdepth: 1
    :caption: 编译和安装
+
    build.md
 
 .. _测试基准:
@@ -50,6 +51,7 @@
 
    serving/restful_api.md
    serving/proxy_server.md
+   serving/gradio.md
 
 
 .. _量化:
@@ -69,6 +71,11 @@
    advance/long_context.md
    serving/qos.md
 
+.. toctree::
+   :maxdepth: 1
+   :caption: API 文档
+
+   api/pipeline.rst
 
 索引与表格
 ==================

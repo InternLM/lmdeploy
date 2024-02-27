@@ -277,6 +277,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
@@ -303,6 +305,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
+        top_k=request.top_k,
         top_p=request.top_p,
         temperature=request.temperature,
         repetition_penalty=request.repetition_penalty,

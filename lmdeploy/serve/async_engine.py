@@ -111,7 +111,8 @@ class AsyncEngine:
                                         or backend_config.model_name is None):
             potential_names = best_match_model(model_path)
             if potential_names is None:
-                raise ArgumentError('Please set model_name or backend_config.')
+                raise ArgumentError(
+                    None, 'Please set model_name or backend_config.')
             else:
                 self.model_name = potential_names
                 logger = get_logger('lmdeploy')
@@ -121,7 +122,7 @@ class AsyncEngine:
             if backend_config.model_name is not None \
                     and self.model_name != backend_config.model_name:
                 raise ArgumentError(
-                    f'Got different model names from model_name = '
+                    None, f'Got different model names from model_name = '
                     f'{self.model_name}, backend_config = {backend_config}')
         if self.model_name is not None and backend_config is None:
             backend_config = TurbomindEngineConfig(model_name=self.model_name,
@@ -172,7 +173,8 @@ class AsyncEngine:
                                         or backend_config.model_name is None):
             potential_names = best_match_model(model_path)
             if potential_names is None:
-                raise ArgumentError('Please set model_name or backend_config.')
+                raise ArgumentError(
+                    None, 'Please set model_name or backend_config.')
             else:
                 self.model_name = potential_names
                 logger = get_logger('lmdeploy')
@@ -181,7 +183,7 @@ class AsyncEngine:
         elif self.model_name is not None and backend_config is not None:
             if self.model_name != backend_config.model_name:
                 raise ArgumentError(
-                    f'Got different model names from model_name = '
+                    None, f'Got different model names from model_name = '
                     f'{self.model_name}, backend_config = {backend_config}')
         if self.model_name is not None and backend_config is None:
             backend_config = PytorchEngineConfig(self.model_name)

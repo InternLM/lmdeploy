@@ -73,6 +73,7 @@ class ChatCompletionRequestQos(BaseModel):
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
+    top_k: Optional[int] = 40
 
 
 class ChatCompletionRequest(BaseModel):
@@ -95,6 +96,7 @@ class ChatCompletionRequest(BaseModel):
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
     skip_special_tokens: Optional[bool] = True
+    top_k: Optional[int] = 40
 
 
 class ChatMessage(BaseModel):
@@ -184,7 +186,7 @@ class CompletionRequestQos(BaseModel):
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
     # additional argument of lmdeploy
-    top_k: int = 40
+    top_k: Optional[int] = 40
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False

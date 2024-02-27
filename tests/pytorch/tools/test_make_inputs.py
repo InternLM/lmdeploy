@@ -26,7 +26,7 @@ class TestMakeInputs:
         yield 4
 
     @pytest.fixture
-    def num_heads(self):
+    def num_key_value_heads(self):
         yield 1
 
     @pytest.fixture
@@ -38,10 +38,11 @@ class TestMakeInputs:
         yield torch.float16
 
     @pytest.fixture
-    def past_key_values(self, history_length, num_heads, head_size):
+    def past_key_values(self, history_length, num_key_value_heads, head_size):
         max_len = max(history_length)
         batch_size = len(history_length)
-        k_cache = torch.rand(batch_size, num_heads, max_len, head_size)
+        k_cache = torch.rand(batch_size, num_key_value_heads, max_len,
+                             head_size)
         v_cache = k_cache + 1
         yield [(k_cache, v_cache)]
 
@@ -60,8 +61,8 @@ class TestMakeInputs:
         torch.testing.assert_close(model_inputs.q_start_loc, q_start_loc)
 
     def test_make_step_context(self, input_ids, seq_length, history_length,
-                               past_key_values, block_size, num_heads,
-                               head_size, kv_cache_dtype):
+                               past_key_values, block_size,
+                               num_key_value_heads, head_size, kv_cache_dtype):
         step_ctx = make_step_context(input_ids,
                                      seq_length=seq_length,
                                      history_length=history_length,
@@ -69,7 +70,7 @@ class TestMakeInputs:
                                      world_size=1,
                                      device='cuda',
                                      block_size=block_size,
-                                     num_heads=num_heads,
+                                     num_key_value_heads=num_key_value_heads,
                                      head_size=head_size,
                                      kv_cache_dtype=kv_cache_dtype)
         block_offsets = step_ctx.block_offsets

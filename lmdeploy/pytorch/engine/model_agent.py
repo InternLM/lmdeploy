@@ -44,7 +44,6 @@ def _infer_block_size(model: torch.nn.Module,
 def _update_cache_config(model_config: ModelConfig,
                          cache_config: CacheConfig,
                          gpu_id: int = 0,
-                         gpu_mem_percent: float = 0.7,
                          host_mem_size: int = 4 * (1 << 30),
                          world_size: int = 1):
     """Update the gpu mem and cpu mem according to model info.
@@ -56,7 +55,7 @@ def _update_cache_config(model_config: ModelConfig,
     """
     torch.cuda.empty_cache()
     gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
-    gpu_mem = gpu_mem_physical_free * gpu_mem_percent
+    gpu_mem = gpu_mem_physical_free * cache_config.cache_max_entry_count
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config) // world_size
@@ -64,6 +63,7 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
         cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
+    cache_config.window_size = model_config.sliding_window
 
     logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
 
@@ -188,7 +188,7 @@ class StepContext:
     position_ids_1d: torch.LongTensor
     q_start_loc: torch.LongTensor
     history_lengths: torch.LongTensor
-    seq_length: torch.LongTensor
+    q_seq_length: torch.LongTensor
     max_seq_length: int
     kv_seq_length: torch.LongTensor
     kv_caches: List
@@ -226,8 +226,8 @@ class StepContext:
         kv_seq_length = position_ids[..., -1] + 1
 
         # position ids 1d
-        seq_length = inputs.seq_length
-        position_ids_1d = cls.get_position_ids_1d(position_ids, seq_length,
+        q_seq_length = inputs.seq_length
+        position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
 
         ret = StepContext(inputs=inputs,
@@ -236,7 +236,7 @@ class StepContext:
                           position_ids_1d=position_ids_1d,
                           q_start_loc=inputs.q_start_loc,
                           history_lengths=inputs.history_lengths,
-                          seq_length=inputs.seq_length,
+                          q_seq_length=inputs.seq_length,
                           max_seq_length=max_seq_length,
                           kv_seq_length=kv_seq_length,
                           kv_caches=kv_caches,
@@ -664,7 +664,10 @@ def _tp_build_model(
             cache_config.block_size = block_size
             if rank == 0:
                 logger.warning(f'infered block size: {block_size}')
-        _update_cache_config(model_config, cache_config, world_size=world_size)
+        _update_cache_config(model_config,
+                             cache_config,
+                             gpu_id=rank,
+                             world_size=world_size)
         cache_config = _broadcast_config(cache_config)
         cache_engine = CacheEngine(cache_config,
                                    model_config,
