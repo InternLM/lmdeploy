@@ -69,6 +69,7 @@
 
    advance/pytorch_new_model.md
    advance/long_context.md
+   advance/chat_template.md
    serving/qos.md
 
 .. toctree::

@@ -313,6 +313,17 @@ class ArgumentHelper:
                                    help='Device type of running')
 
     @staticmethod
+    def meta_instruction(parser):
+        """Add argument meta_instruction to parser."""
+
+        return parser.add_argument(
+            '--meta-instruction',
+            type=str,
+            default=None,
+            help='System prompt for ChatTemplateConfig. Deprecated. '
+            'Please use --chat-template instead.')
+
+    @staticmethod
     def chat_template(parser):
         """Add chat template config to parser."""
 
@@ -321,15 +332,8 @@ class ArgumentHelper:
             type=str,
             default=None,
             help='A JSON file that specifies the chat template configuration. '
-            'The file should contain a JSON object with the following keys: '
-            '"model_name", "system", "meta_instruction", "eosys", "user", '
-            '"eoh", "assistant", "eoa", and "capability". '
-            'Each key corresponds to a part of the chat template. '
-            'For example, the "model_name" is the name of the deployed model, '
-            'and "capability" can be either "completion", "infilling", "chat", or "python". '  # noqa
-            'The values should be strings, except for "capability" which should be one of the specified literals. '  # noqa
-            'Example: {"model_name": "llama2", "meta_instruction": "You are a helpful assistant.", '  # noqa
-            '"capability": "chat"}')
+            'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification.'  # noqa
+        )
 
     @staticmethod
     def cache_max_entry_count(parser):
