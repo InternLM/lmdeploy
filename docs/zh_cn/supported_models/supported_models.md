@@ -29,4 +29,5 @@
 |  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
 |    YI     | 6B - 34B  |    Yes    |   No    |  No  |
 |  Mistral  |    7B     |    Yes    |   No    |  No  |
+|  Mixtral  |   8x7B    |    Yes    |   No    |  No  |
 |  QWen1.5  | 7B - 72B  |    Yes    |   No    |  No  |
