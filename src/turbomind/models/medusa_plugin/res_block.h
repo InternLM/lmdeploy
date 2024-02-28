@@ -5,7 +5,6 @@
 #pragma once
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/medusa_plugin/ResBlockWeight.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 
 namespace turbomind {
