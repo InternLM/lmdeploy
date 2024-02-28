@@ -14,15 +14,20 @@ struct Arch {
     }
 };
 
-struct Sm80_16816: Arch<80> {};
+struct Sm80_16816: Arch<80> {
+};
 
-struct Sm80_81616: Arch<80> {};
+struct Sm80_81616: Arch<80> {
+};
 
-struct Sm75_1688: Arch<75, 80> {};
+struct Sm75_1688: Arch<75, 80> {
+};
 
-struct Sm70_884: Arch<70, 75> {};
+struct Sm70_884: Arch<70, 75> {
+};
 
-struct Sm70_Simt: Arch<70> {};
+struct Sm70_Simt: Arch<70> {
+};
 
 template<class Tag,
          class T,
@@ -35,7 +40,8 @@ template<class Tag,
          int WARP_S,
          int HeadDim,
          int Stages = 2>
-struct Impl {};
+struct Impl {
+};
 
 }  // namespace attention
 

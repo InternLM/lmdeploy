@@ -15,7 +15,8 @@
 namespace turbomind {
 
 template<typename T>
-struct ToCutlassType_ {};
+struct ToCutlassType_ {
+};
 
 template<>
 struct ToCutlassType_<float> {

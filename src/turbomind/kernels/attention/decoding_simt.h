@@ -208,7 +208,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
         for (int m = 0; m < K_M; ++m) {  // Q
             const int hi = m * OP_H;
             const int ri = threadIdx.x;
-            ((Func&&)func)(hi, 0, ri, frag_M[m][0], frag_L[m][0]);
+            ((Func &&) func)(hi, 0, ri, frag_M[m][0], frag_L[m][0]);
         }
     }
 
@@ -226,7 +226,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 const int hi = m * OP_H + warp_id_h * WARP_H;
                 const int si = n * OP_S + lane_id / 8 + warp_id_s * WARP_S;
                 const int ri = lane_id % 8;
-                ((Func&&)func)(hi, /*qi*/ 0, si, ri, S[m][n][0]);
+                ((Func &&) func)(hi, /*qi*/ 0, si, ri, S[m][n][0]);
             }
         }
     }
@@ -272,7 +272,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
 
             PRAGMA_UNROLL
@@ -291,10 +291,10 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 }
             }
             if (k < K_K - 1) {
-                ((Prefetch&&)prefetch)(k);
+                ((Prefetch &&) prefetch)(k);
             }
             if (k == K_K - 2) {
-                ((Prefetch&&)prefetch)(K_K - 1);
+                ((Prefetch &&) prefetch)(K_K - 1);
             }
         }
 
@@ -328,7 +328,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 smem_V.Load(frag_V[k + 1], k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
 
             PRAGMA_UNROLL
@@ -347,10 +347,10 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 }
             }
             if (k < V_K - 1) {
-                ((Prefetch&&)prefetch)(k);
+                ((Prefetch &&) prefetch)(k);
             }
             if (k == V_K - 2) {
-                ((Prefetch&&)prefetch)(V_K - 1);
+                ((Prefetch &&) prefetch)(V_K - 1);
             }
         }
     }
@@ -552,7 +552,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                     // for (int i = 0; i < 8; ++i) {
                     //     printf("O %4d %4d %f\n", hi + blockIdx.x * CTA_H, di + i, frag_O[m][n][i]);
                     // }
-                    ((Func&&)func)(hi, 0, di, frag_O[m][n]);
+                    ((Func &&) func)(hi, 0, di, frag_O[m][n]);
                 }
             }
         }

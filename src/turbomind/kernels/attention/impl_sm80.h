@@ -224,7 +224,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -235,10 +235,10 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                 }
             }
             if (k < K_K - 1) {
-                ((Prefetch&&)prefetch)(k);
+                ((Prefetch &&) prefetch)(k);
             }
             if (k == K_K - 2) {
-                ((Prefetch&&)prefetch)(K_K - 1);
+                ((Prefetch &&) prefetch)(K_K - 1);
             }
         }
     }
@@ -260,7 +260,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                 smem_V.Load(frag_V[k + 1], k + 1, offset);
             }
             else {
-                ((Preload&&)preload)();
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {
@@ -271,10 +271,10 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                 }
             }
             if (k < V_K - 1) {
-                ((Prefetch&&)prefetch)(k);
+                ((Prefetch &&) prefetch)(k);
             }
             if (k == V_K - 2) {
-                ((Prefetch&&)prefetch)(V_K - 1);
+                ((Prefetch &&) prefetch)(V_K - 1);
             }
         }
     }

@@ -16,7 +16,8 @@ void invokeApplyRotaryEmbedding(
 template<class T>
 class Reference {
 public:
-    enum Type {
+    enum Type
+    {
         kUNFUSED,
         kFLASH_ATTENTION
     };

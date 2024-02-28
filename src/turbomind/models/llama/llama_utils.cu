@@ -33,7 +33,6 @@ struct abs_diff_t<__nv_bfloat16> {
     using type = float;
 };
 
-
 template<typename T>
 struct abs_diff: public thrust::unary_function<thrust::tuple<T, T>, typename abs_diff_t<T>::type> {
     __host__ __device__ float operator()(thrust::tuple<T, T> x) const
