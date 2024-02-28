@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-add_library(attention STATIC 
-            attention.cu 
-            decoding.cu 
+add_library(attention STATIC
+            attention.cu
+            decoding.cu
             kv_cache_utils.cu
             utils.cc
             attention_128_f16_sm80.cu

@@ -317,7 +317,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     // Load      : K0,K1 | V0,K2,V1,K3 ...
     // Compute   :    K0 | K1,V0,K2,V1 ...
     // Conclusion:
-    // - more reigster consumption (209 -> 250)
+    // - more register consumption (209 -> 250)
     // - more interleaved HMMA and FMA
     // - slight performance gain
     template<class GmemIterK, class GmemIterV, class BlockIter, class StoreS>
