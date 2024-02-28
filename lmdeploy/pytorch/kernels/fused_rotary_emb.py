@@ -74,11 +74,11 @@ def fused_rotary_emb(q: Tensor,
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
-    if out_q is not None:
+    if out_q is None:
         out_q = torch.empty_like(q)
     else:
         assert q.stride() == out_q.stride()
-    if out_k is not None:
+    if out_k is None:
         out_k = torch.empty_like(k)
     else:
         assert k.stride() == out_k.stride()
