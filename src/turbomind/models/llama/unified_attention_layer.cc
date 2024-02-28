@@ -146,7 +146,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     //     Compare(qkv_buf_, num_token * weights->qkv.output_dims, "qkv_buf", kCmpRead, stream_);
     // }
 
-    auto CreateParams = [&](int offset, int batch_size) {
+    auto stream_ptr = streams_.data();
+
+    auto CreateParams = [&](int offset, int batch_size, cudaStream_t stream) {
         AttentionParams<T> params{};
 
         params.out    = qkv_buf_3_;
@@ -194,7 +196,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.max_split_k = 1;
 
         params.arch   = arch_;
-        params.stream = stream_;
+        params.stream = stream;
 
         params.quant_policy = quant_policy_;
         FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
@@ -203,23 +205,36 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         return params;
     };
 
+    cudaStream_t pf_stream = stream_;
+    cudaStream_t dc_stream = stream_;
+
+    if (pf_batch_size && dc_batch_size) {
+        pf_stream = aux_stream_;
+        check_cuda_error(cudaEventRecord(qkv_event_, stream_));
+        check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
+    }
+
     if (pf_batch_size) {
         const int offset    = dc_batch_size;
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
-        auto      params    = CreateParams(offset, pf_batch_size);
+        auto      params    = CreateParams(offset, pf_batch_size, pf_stream);
         if constexpr (std::is_same_v<T, half>) {
             invokeProcessKV_(params);
-            // printf("sum k len = %d\n", sum_k_len);
             invokeFlattenKV_(params, sum_k_len);
             dispatchAttention(params);
         }
     }
 
     if (dc_batch_size) {
-        auto params = CreateParams(0, dc_batch_size);
+        auto params = CreateParams(0, dc_batch_size, dc_stream);
         if constexpr (std::is_same_v<T, half>) {
             dispatchDecoding<T>(params);
         }
+    }
+
+    if (pf_batch_size && dc_batch_size) {
+        check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
+        check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
     }
 
     // if (layer_id == 0 && count == 0) {

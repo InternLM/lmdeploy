@@ -68,6 +68,13 @@ public:
     {
         FT_CHECK(head_num % kv_head_num == 0);
         arch_ = getSMVersion();
+
+        check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
+        check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
+        check_cuda_error(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
+
+        streams_[0] = stream_;
+        streams_[1] = aux_stream_;
     }
 
     void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
@@ -127,6 +134,12 @@ private:
     IAllocator*      allocator_;
     cublasMMWrapper* cublas_wrapper_;
     LlamaLinear<T>   linear_;
+
+    cudaStream_t aux_stream_;
+    cudaEvent_t  qkv_event_;
+    cudaEvent_t  aux_event_;
+
+    std::array<cudaStream_t, 2> streams_;
 
     int arch_{};
 
