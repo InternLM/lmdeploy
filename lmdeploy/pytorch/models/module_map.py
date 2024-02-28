@@ -127,6 +127,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
 })
 
+# deepseek
+MODULE_MAP.update({
+    'modeling_deepseek.DeepseekAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'modeling_deepseek.DeepseekMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_deepseek.DeepseekRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
 # qwen1.5
 MODULE_MAP.update({
     'transformers.models.qwen2.modeling_qwen2.Qwen2Attention':
@@ -147,4 +163,22 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'peft.tuners.lora.layer.Linear':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.peft.LoRALinear'
+})
+
+# mixtral
+MODULE_MAP.update({
+    'transformers.models.mixtral.modeling_mixtral.MixtralAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'transformers.models.mixtral.modeling_mixtral.MixtralFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'transformers.models.mixtral.modeling_mixtral.MixtralSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralAttention',
+    'transformers.models.mixtral.modeling_mixtral.MixtralModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralModel',
+    'transformers.models.mixtral.modeling_mixtral.MixtralBLockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralBlockSparseTop2MLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mixtral.PatchedMixtralBLockSparseTop2MLP',
+    'transformers.models.mixtral.modeling_mixtral.MixtralRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
