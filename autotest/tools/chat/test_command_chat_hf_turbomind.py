@@ -37,9 +37,13 @@ def test_hf_turbomind_chat(config, model, cli_case_config, usercase):
 @pytest.mark.parametrize(
     'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
 def test_hf_turbomind_chat_pr(config, model, cli_case_config, usercase):
-    result, chat_log, msg = hf_command_line_test(config, usercase,
-                                                 cli_case_config.get(usercase),
-                                                 model, 'turbomind')
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        cuda_prefix='CUDA_VISIBLE_DEVICES=5,6')
 
     if chat_log is not None:
         allure.attach.file(chat_log,

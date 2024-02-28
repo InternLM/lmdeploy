@@ -5,7 +5,13 @@ from utils.get_run_config import get_command_with_extra, get_model_name
 from utils.rule_condition_assert import assert_result
 
 
-def command_line_test(config, case, case_info, model_case, type, extra):
+def command_line_test(config,
+                      case,
+                      case_info,
+                      model_case,
+                      type,
+                      extra,
+                      cuda_prefix: str = None):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
@@ -13,9 +19,11 @@ def command_line_test(config, case, case_info, model_case, type, extra):
     elif type == 'triton_client':
         cmd = 'lmdeploy serve triton_client ' + extra
     else:
-        cmd = get_command_with_extra(
-            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model_case,
-            config, model_case)
+        cmd = get_command_with_extra('lmdeploy chat turbomind ' + dst_path +
+                                     '/workspace_' + model_case,
+                                     config,
+                                     model_case,
+                                     cuda_prefix=cuda_prefix)
         if 'kvint8' in model_case and 'w4' not in model_case:
             cmd += ' --model-format hf --quant-policy 4'
         if 'kvint8' in model_case and 'w4' in model_case:
@@ -26,13 +34,19 @@ def command_line_test(config, case, case_info, model_case, type, extra):
                         type == 'turbomind')
 
 
-def hf_command_line_test(config, case, case_info, model_case, type):
+def hf_command_line_test(config,
+                         case,
+                         case_info,
+                         model_case,
+                         type,
+                         cuda_prefix: str = None):
     model_path = config.get('model_path') + '/' + model_case
 
     cmd = get_command_with_extra(' '.join(['lmdeploy chat', type, model_path]),
                                  config,
                                  model_case,
-                                 need_tp=True)
+                                 need_tp=True,
+                                 cuda_prefix=cuda_prefix)
 
     if 'kvint8' in model_case and 'w4' not in model_case:
         cmd += ' --model-format hf --quant-policy 4'

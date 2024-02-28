@@ -8,7 +8,7 @@ tp_config:
     internlm-chat-20b: 2
     internlm2-chat-20b: 2
     Baichuan2-13B-Chat: 2
-    Mixtral-8x7B-Instruct: 2
+    Mixtral-8x7B-Instruct-v0.1: 2
 
 
 turbomind_model:
