@@ -68,6 +68,26 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+      - name: Test lmdeploy - quantization w4a16
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_w4a16.py -n 8 --alluredir=allure-results --clean-alluredir
+      - name: Test lmdeploy - quantization kv int8
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization w8a8
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization kv int8 and w4a16
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8_w4a16.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - convert
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/convert -n 6 --alluredir=allure-results
       - name: Test lmdeploy - interface turbomind case
         continue-on-error: true
         timeout-minutes: 120

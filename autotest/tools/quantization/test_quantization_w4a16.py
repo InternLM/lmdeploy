@@ -26,7 +26,7 @@ def test_quantization_w4a16(config, model, prefix):
 @pytest.mark.pr_test
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize('model, prefix',
-                         [('internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=1')])
+                         [('internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=5')])
 def test_quantization_w4a16_pr(config, model, prefix):
     quantization_w4a16(config, model + '-inner-w4a16', model, prefix)
 

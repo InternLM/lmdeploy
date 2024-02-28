@@ -89,17 +89,6 @@ def test_restful_chat(config, common_case_config):
     run_all_step(config, common_case_config)
 
 
-@pytest.mark.order(7)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api_pytorch
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.pr_test
-@pytest.mark.parametrize('prepare_environment', ['internlm2-chat-20b'],
-                         indirect=True)
-def test_restful_chat_pr(config, common_case_config):
-    run_all_step(config, common_case_config)
-
-
 def run_all_step(config, cases_info):
     http_url = HTTP_URL
 
