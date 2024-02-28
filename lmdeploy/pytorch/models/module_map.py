@@ -111,6 +111,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
+# deepseek
+MODULE_MAP = {
+    'modeling_deepseek.DeepseekAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'modeling_deepseek.DeepseekMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_deepseek.DeepseekRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+}
+
 # qwen1.5
 MODULE_MAP.update({
     'transformers.models.qwen2.modeling_qwen2.Qwen2Attention':
