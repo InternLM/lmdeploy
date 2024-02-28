@@ -206,7 +206,7 @@ int test_attention()
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz = 128;
+    constexpr int kBlockSz     = 128;
 
 #endif
 
