@@ -88,7 +88,8 @@ class SchedulerSession:
                      token_ids: Tensor,
                      max_output_len: int = 512,
                      sampling_param: SamplingParam = None,
-                     adapter_name: str = None) -> 'SchedulerSequence':
+                     adapter_name: str = None,
+                     return_logits: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
         if not isinstance(token_ids, Tensor):
             token_ids = torch.tensor(token_ids)
@@ -105,7 +106,8 @@ class SchedulerSession:
                                 remain_output_len=max_output_len,
                                 sampling_param=sampling_param,
                                 adapter_name=adapter_name,
-                                arrive_time=time.time())
+                                arrive_time=time.time(),
+                                return_logits=return_logits)
         self.sequences[seq.seq_id] = seq
         return seq
 
@@ -136,7 +138,8 @@ class SchedulerSession:
             logical_blocks=seq.logical_blocks.clone(),
             adapter_name=seq.adapter_name,
             arrive_time=time.time(),
-            meta=deepcopy(seq.meta))
+            meta=deepcopy(seq.meta),
+            return_logits=seq.return_logits)
 
         self.sequences[new_msg.seq_id] = new_msg
         return new_msg
@@ -160,6 +163,7 @@ class SchedulerSequence:
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
+    return_logits: bool = False
 
     @property
     def history_len(self) -> int:
