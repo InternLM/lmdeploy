@@ -1066,8 +1066,8 @@ class Deepseek(BaseModel):
             elif role == 'assistant':
                 ret += f' {content}\n\n'
             else:
-                raise Exception(f'Only have user and '
-                                f'assistant roles, '
+                raise Exception('Only have user and '
+                                'assistant roles, '
                                 f'but given: {role}')
         return ret
 
