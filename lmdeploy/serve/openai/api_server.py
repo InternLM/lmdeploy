@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import os
-import random
 import time
 from http import HTTPStatus
 from typing import AsyncGenerator, List, Literal, Optional, Union
@@ -31,6 +30,7 @@ from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    session_id: int = 0
     api_keys: Optional[List[str]] = None
     qos_engine: QosEngine = None
     request_hosts = []
@@ -143,7 +143,8 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     - frequency_penalty (replaced with repetition_penalty)
     """
     if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -291,7 +292,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - frequency_penalty (replaced with repetition_penalty)
     """
     if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -449,7 +451,8 @@ async def completions_v1_qos(request: CompletionRequestQos,
     - frequency_penalty (replaced with repetition_penalty)
     """
     if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -600,7 +603,8 @@ async def completions_v1(request: CompletionRequest,
     - frequency_penalty (replaced with repetition_penalty)
     """
     if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -797,7 +801,8 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
     - user_id (str): for qos; if not specified, will set to "default"
     """
     if request.session_id == -1:
-        request.session_id = random.randint(10087, 23333)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
 
     if VariableInterface.qos_engine is None:
         return create_error_response(
@@ -872,7 +877,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         VariableInterface.async_engine.stop_session(request.session_id)
         return {'text': '', 'tokens': 0, 'finish_reason': None}
     if request.session_id == -1:
-        request.session_id = random.randint(10087, 23333)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
 
     async_engine = VariableInterface.async_engine
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
