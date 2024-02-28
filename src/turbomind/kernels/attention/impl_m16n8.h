@@ -41,7 +41,7 @@ struct Impl_m16k8 {
             for (int q = 0; q < 2; ++q) {
                 const int qi = lane_id / 4 * 1 + m * OP_M + q * 8 + warp_id * WARP_Q;
                 const int ri = lane_id % 4 * 1;
-                ((Func&&)func)(qi % WARP_H, qi / WARP_H, ri, frag_M[m][q], frag_L[m][q]);
+                ((Func &&) func)(qi % WARP_H, qi / WARP_H, ri, frag_M[m][q], frag_L[m][q]);
             }
         }
     }
@@ -61,7 +61,7 @@ struct Impl_m16k8 {
                     for (int s = 0; s < 2; ++s) {
                         const int qi = lane_id / 4 * 1 + m * OP_M + q * 8 + warp_id * WARP_Q;
                         const int ki = lane_id % 4 * 2 + n * OP_N + s * 1;
-                        ((Func&&)func)(qi % WARP_H, qi / WARP_H, ki, /*ri*/ 0, S[m][n][q * 2 + s]);
+                        ((Func &&) func)(qi % WARP_H, qi / WARP_H, ki, /*ri*/ 0, S[m][n][q * 2 + s]);
                     }
                 }
             }
@@ -220,7 +220,9 @@ struct Impl_m16k8 {
     }
 
     template<class Storage>
-    __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, Storage& storage) {}
+    __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, Storage& storage)
+    {
+    }
 
     template<bool is_norm, class Func, class Storage>
     __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Storage& storage, Func&& func)
@@ -255,7 +257,7 @@ struct Impl_m16k8 {
                         }
                     }
                     const int di = n * 8 + lane_id % 4 * 2;
-                    ((Func&&)func)(qi % WARP_H, qi / WARP_H, di, (Array<float, 2>&)frag_O[m][n][q * 2]);
+                    ((Func &&) func)(qi % WARP_H, qi / WARP_H, di, (Array<float, 2>&)frag_O[m][n][q * 2]);
                 }
             }
         }

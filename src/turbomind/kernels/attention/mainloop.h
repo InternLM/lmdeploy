@@ -5,6 +5,7 @@
 namespace turbomind::attention {
 
 template<class Tag, class Attention>
-struct Mainloop {};
+struct Mainloop {
+};
 
 }  // namespace turbomind::attention
