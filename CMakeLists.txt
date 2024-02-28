@@ -353,7 +353,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:custom_ar_comm>
   $<TARGET_OBJECTS:custom_ar_kernels>
   $<TARGET_OBJECTS:attention>
-  # $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:logprob_kernels>

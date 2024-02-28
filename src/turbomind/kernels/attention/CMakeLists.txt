@@ -26,5 +26,4 @@ target_link_libraries(test_attention PRIVATE
     unfused_attention_kernels
     logger
     tensor
-    decoder_masked_multihead_attention
     cublas)

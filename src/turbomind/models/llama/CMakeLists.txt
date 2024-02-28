@@ -25,7 +25,6 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
-        # decoder_masked_multihead_attention
         attention
         bert_preprocess_kernels
         decoding_kernels

@@ -12,8 +12,6 @@
 #include <cooperative_groups/memcpy_async.h>
 #include <cooperative_groups/reduce.h>
 
-#include "src/turbomind/kernels/decoder_masked_multihead_attention.h"
-
 namespace turbomind {
 
 cublasHandle_t cublas_handle{};
@@ -180,83 +178,5 @@ template void RNG::GenerateNormal(float* out, size_t count, float scale, float s
 #if ENABLE_BF16
 template void RNG::GenerateNormal(nv_bfloat16* out, size_t count, float scale, float shift);
 #endif
-
-template<typename T>
-struct SATypeConverter {
-    using Type = T;
-};
-
-template<>
-struct SATypeConverter<half> {
-    using Type = uint16_t;
-};
-
-template<typename T>
-void mmha_ft_reference(const AttentionParams<T>& p,
-                       T**                       per_sample_k_cache,
-                       T**                       per_sample_v_cache,
-                       const int*                sequence_length,
-                       int                       max_memory_len,
-                       cudaStream_t              st)
-{
-    using DataType = typename SATypeConverter<T>::Type;
-
-    // Prepare the parameters.
-    Masked_multihead_attention_params<DataType> params{};
-    params.q_bias = reinterpret_cast<const DataType*>(p.q_bias);
-    params.k_bias = reinterpret_cast<const DataType*>(p.k_bias);
-    params.v_bias = reinterpret_cast<const DataType*>(p.v_bias);
-
-    // Set the output buffer.
-    params.out = reinterpret_cast<DataType*>(p.out);
-
-    // Set the input buffers.
-    // [B, nH + kvH, D]
-    params.q = reinterpret_cast<const DataType*>(p.q);
-    params.k = reinterpret_cast<const DataType*>(p.k);
-    params.v = reinterpret_cast<const DataType*>(p.v);
-
-    params.stride   = p.stride;
-    params.finished = (bool*)p.finished;
-
-    params.k_cache_per_sample         = reinterpret_cast<DataType**>(per_sample_k_cache);
-    params.v_cache_per_sample         = reinterpret_cast<DataType**>(per_sample_v_cache);
-    params.kv_cache_per_sample_offset = 0;  // single layer
-    params.batch_size                 = p.batch_size;
-    params.beam_width                 = 1;
-    params.memory_max_len             = max_memory_len;
-    params.prefix_prompt_lengths      = 0;
-    params.max_prefix_prompt_length   = 0;
-    params.length_per_sample          = sequence_length;  // max_input_length + current output length
-
-    for (int i = 0; i < p.batch_size; ++i) {
-        params.timestep = std::max(sequence_length[i], params.timestep);
-    }
-
-    std::cout << "timestep = " << params.timestep << "\n";
-
-    params.num_heads    = p.num_heads;
-    params.num_kv_heads = p.num_kv_heads;
-
-    params.hidden_size_per_head    = p.size_per_head;
-    params.rotary_embedding_dim    = p.rotary_embedding_dim;
-    params.max_position_embeddings = p.max_position_embeddings;
-    params.use_dynamic_ntk         = false;
-    params.use_logn_attn           = p.use_logn_attn;
-
-    // Note: keep norm factor (sqrt(K_dim)) when adopting megatron T5 structure (may adjust)
-    params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * 1.f);
-
-    params.int8_mode = 0;
-
-    masked_multihead_attention(params, st);
-}
-
-template void mmha_ft_reference(const AttentionParams<half>& params,
-                                half**                       per_sample_k_cache,
-                                half**                       per_sample_v_cache,
-                                const int*                   sequence_length,
-                                int                          max_memory_len,
-                                cudaStream_t                 st);
 
 }  // namespace turbomind
