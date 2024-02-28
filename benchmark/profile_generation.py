@@ -397,7 +397,8 @@ def main():
                 engine_config = PytorchEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
                     session_len=session_len,
-                    tp=args.tp)
+                    tp=args.tp,
+                    thread_safe=True)
             gen_config = EngineGenerationConfig(
                 top_k=args.top_k,
                 top_p=args.top_p,

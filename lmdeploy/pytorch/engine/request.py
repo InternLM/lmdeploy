@@ -2,7 +2,9 @@
 import asyncio
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List
+from queue import Empty, Queue
+from threading import Lock, Thread
+from typing import Any, Awaitable, Callable, Dict, List
 
 from lmdeploy.messages import ResponseType
 from lmdeploy.utils import get_logger
@@ -18,6 +20,16 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
         return
     except Exception as exc:
         raise RuntimeError(msg) from exc
+
+
+def _ignore_exception_on_finish(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.info(f'task: {task.get_name()} ended.')
+        logger.debug(f'task: {task.get_name()} exception: {exc}')
 
 
 class RequestType(enum.Enum):
@@ -68,6 +80,7 @@ class RequestSender:
     resp_dict: Dict[int, List[Response]] = field(default_factory=dict)
     _next_req_id: int = 0
     _resp_que: asyncio.Queue = None
+    _resp_thread_que: Queue = None
 
     @classmethod
     def new(cls, sender_id: int, manager: 'RequestManager'):
@@ -76,29 +89,120 @@ class RequestSender:
 
     @property
     def resp_que(self):
-        if self.manager._loop_task is None:
+        """response queue."""
+        if self.is_thread_safe():
+            return self.manager.responses
+        if self.manager._loop_task is None and not self.is_thread_safe():
             self.manager.create_loop_task()
         if self._resp_que is None:
-            self._resp_que = asyncio.Queue()
+            self._resp_que = asyncio.Queue(loop=self.manager.event_loop)
         return self._resp_que
 
     @property
     def req_que(self):
+        """request queue."""
         return self.manager.requests
 
-    async def _async_resp_get(self):
-        """get resp."""
+    @property
+    def resp_thread_que(self):
+        """response threadsafe queue."""
+        if self._resp_thread_que is None:
+            self._resp_thread_que = Queue()
+        return self._resp_thread_que
+
+    @property
+    def req_thread_que(self):
+        """request threadsafe queue."""
+        return self.manager.thread_requests
+
+    @property
+    def event_loop(self):
+        """get event loop."""
+        return self.manager.event_loop
+
+    def is_thread_safe(self):
+        """is thread safe."""
+        return self.manager.is_thread_safe()
+
+    def is_loop_alive(self):
+        """is loop alive."""
+        return self.manager.is_loop_alive()
+
+    def run_until_complete(self, future: Awaitable):
+        """run untile complete."""
+        return self.manager.run_until_complete(future)
+
+    def _resp_get(self):
+        """resp_que.get."""
         timeout = 1
+
         while True:
             if not self.manager.is_loop_alive():
                 logger.debug('Engine loop is not alive.')
                 exit(1)
             try:
-                return await asyncio.wait_for(self.resp_que.get(), timeout)
-            except asyncio.TimeoutError:
+                ret = self.resp_thread_que.get(timeout=timeout)
+                return ret
+            except Empty:
                 continue
             except Exception as e:
                 raise e
+
+    async def _async_resp_get(self):
+        """get resp.
+
+        Different behavior in threadsafe mode.
+        """
+        timeout = 1
+
+        async def __no_threadsafe_get():
+            while True:
+                if not self.manager.is_loop_alive():
+                    logger.debug('Engine loop is not alive.')
+                    exit(1)
+                try:
+                    return await asyncio.wait_for(self.resp_que.get(), timeout)
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    raise e
+
+        if self.is_thread_safe():
+            ret = self._resp_get()
+            await asyncio.sleep(0)
+            return ret
+        else:
+            return await __no_threadsafe_get()
+
+    def _req_put(self, reqs: Any):
+        """req put."""
+        self.req_thread_que.put(reqs)
+
+    async def _async_req_put(self, reqs: Any):
+        """async rq_que put.
+
+        Different behavior in threadsafe mode.
+        """
+        if self.is_thread_safe():
+            self._req_put(reqs)
+            await asyncio.sleep(0)
+        else:
+            await self.req_que.put(reqs)
+
+    def _prefetch_resps(self):
+        """prefetch from resp que.
+
+        Different behavior in threadsafe mode.
+        """
+        if self.is_thread_safe():
+            resp_que = self.resp_thread_que
+        else:
+            resp_que = self.resp_que
+        num_resps = resp_que.qsize()
+        for _ in range(num_resps):
+            resp: Response = resp_que.get_nowait()
+            req_id = resp.req_id
+            self._push_resp(req_id, resp)
 
     def _push_resp(self, req_id: int, resp: Response):
         """push response."""
@@ -115,21 +219,9 @@ class RequestSender:
             self.resp_dict.pop(req_id)
         return ret
 
-    def _prefetch_resps(self):
-        """prefetch from resp que."""
-        num_resps = self.resp_que.qsize()
-        for _ in range(num_resps):
-            resp: Response = self.resp_que.get_nowait()
-            req_id = resp.req_id
-            self._push_resp(req_id, resp)
-
-    def is_thread_alive(self):
-        """is thread alive."""
-        return self._thread and self._thread.is_alive()
-
     def _gather_request(self, req_types: List[RequestType], data: List[Any]):
         """gather requests."""
-        if self.manager._loop_task is None:
+        if self.manager._loop_task is None and not self.is_thread_safe():
             self.manager.create_loop_task()
         if not self.is_loop_alive():
             logger.error('Engine main loop stopped.')
@@ -154,7 +246,7 @@ class RequestSender:
                                        data: List[Any]):
         """Batched send request asynchronize."""
         req_ids, reqs = self._gather_request(req_types, data)
-        await self.req_que.put(reqs)
+        await self._async_req_put(reqs)
         return req_ids
 
     async def async_send_async(self, req_type: RequestType, data: Any):
@@ -164,9 +256,17 @@ class RequestSender:
 
     def batched_send_async(self, req_types: List[RequestType],
                            data: List[Any]) -> List[int]:
-        """Batched send request asynchronize."""
-        coro = self.async_batched_send_async(req_types, data)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        """Batched send request asynchronize.
+
+        Different behavior in threadsafe mode.
+        """
+        if not self.is_thread_safe():
+            coro = self.async_batched_send_async(req_types, data)
+            return asyncio.get_event_loop().run_until_complete(coro)
+
+        req_ids, reqs = self._gather_request(req_types, data)
+        self._req_put(reqs)
+        return req_ids
 
     def send_async(self, req_type: RequestType, data: Any) -> int:
         """send request asynchronize."""
@@ -209,9 +309,25 @@ class RequestSender:
                 return resp
 
     def recv(self, req_id: int, que_timeout: float = None) -> Response:
-        """receive response of given request id."""
-        coro = self.async_recv(req_id, que_timeout)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        """receive response of given request id.
+
+        Different behavior in threadsafe mode.
+        """
+        if not self.is_thread_safe():
+            coro = self.async_recv(req_id, que_timeout)
+            return asyncio.get_event_loop().run_until_complete(coro)
+
+        ret = self._pop_resp(req_id, default=None)
+        if ret is not None:
+            return ret
+
+        # check resp que
+        while True:
+            resp: Response = self._resp_get()
+            if resp.req_id != req_id:
+                self._push_resp(req_id, resp)
+            else:
+                return resp
 
     async def async_send(self,
                          req_type: RequestType,
@@ -229,19 +345,15 @@ class RequestSender:
         req_id = self.send_async(req_type, data)
         return self.recv(req_id, que_timeout=que_timeout)
 
-    def response_callback(self, resp: Response, timeout: float = None):
+    def response_callback(self, resp: Response):
         """response callback."""
         self.resp_que.put_nowait(resp)
-
-    def is_loop_alive(self):
-        """is loop alive."""
-        return self.manager.is_loop_alive()
 
 
 class RequestManager:
     """Request manager."""
 
-    def __init__(self):
+    def __init__(self, thread_safe: bool = False):
         self.senders: Dict[int, RequestSender] = dict()
         self.callbacks: Dict[RequestType, Callable] = dict()
         self.request_priority: List[RequestType] = [
@@ -252,24 +364,123 @@ class RequestManager:
         self.requests: asyncio.Queue = None
         self._loop_task: asyncio.Future = None
         self._loop_coro: Callable = None
+        self._thread_safe = thread_safe
         self._next_sender_id = 0
+        self._mutex = Lock()
+        self._loop_thread: Thread = None
+
+        self.thread_requests: Queue = None
+        # every sender has it's own responses, this responses is
+        # only used in thread safe mode.
+        self.responses: asyncio.Queue = None
+        if thread_safe:
+            self.thread_requests = Queue()
 
     def create_loop_task(self):
         """create coro task."""
         logger.debug('creating engine loop task.')
-        loop_unshielded = asyncio.get_event_loop().create_task(
-            self._loop_coro())
+        event_loop = asyncio.get_event_loop()
+        loop_unshielded = event_loop.create_task(self._loop_coro(),
+                                                 name='EngineMainLoop')
         loop_unshielded.add_done_callback(_raise_exception_on_finish)
         self._loop_task = asyncio.shield(loop_unshielded)
-        self.requests = asyncio.Queue()
+        self.requests = asyncio.Queue(loop=event_loop)
         return self._loop_task
+
+    @property
+    def event_loop(self):
+        """get event loop."""
+        if self._loop_task is None:
+            return None
+        else:
+            return self._loop_task.get_loop()
+
+    def is_thread_safe(self):
+        """is thread safe."""
+        return self._thread_safe
 
     def start_loop(self, loop: asyncio.Task):
         """start main loop."""
         self._loop_coro = loop
 
+        def __get_thread_reqs():
+            """get thread reqs."""
+            num_reqs = self.thread_requests.qsize()
+            reqs = []
+            for _ in range(num_reqs):
+                tmp_reqs = self.thread_requests.get_nowait()
+                if isinstance(tmp_reqs, Request):
+                    tmp_reqs = [tmp_reqs]
+                reqs += tmp_reqs
+            return reqs
+
+        async def __req_loop():
+            """req loop."""
+            while True:
+                # get reqs
+                reqs = __get_thread_reqs()
+
+                if len(reqs) > 0:
+                    await self.requests.put(reqs)
+                else:
+                    await asyncio.sleep(0.02)
+
+        def __put_thread_resps(resps: List[Response]):
+            """put thread resps."""
+            for resp in resps:
+                sender = self.senders.get(resp.sender_id, None)
+                if sender is None:
+                    continue
+                sender.resp_thread_que.put_nowait(resp)
+
+        async def __resp_loop():
+            """resp loop."""
+            while True:
+                num_resps = self.responses.qsize()
+                resps = []
+                for _ in range(num_resps):
+                    resps.append(self.responses.get_nowait())
+                if len(resps) > 0:
+                    __put_thread_resps(resps)
+                else:
+                    await asyncio.sleep(0.02)
+
+        def __run_forever(event_loop: asyncio.BaseEventLoop):
+            """run forever."""
+            logger.debug('start thread run forever.')
+            asyncio.set_event_loop(event_loop)
+            self.create_loop_task()
+            req_loop = event_loop.create_task(__req_loop(),
+                                              name='RunForeverReqLoop')
+            req_loop.add_done_callback(_ignore_exception_on_finish)
+            resp_loop = event_loop.create_task(__resp_loop(),
+                                               name='RunForeverRespLoop')
+            resp_loop.add_done_callback(_ignore_exception_on_finish)
+            self.event_loop.run_forever()
+
+        if self.is_thread_safe():
+            event_loop = asyncio.new_event_loop()
+            self.responses = asyncio.Queue(loop=event_loop)
+            self._loop_thread = Thread(target=__run_forever,
+                                       args=(event_loop, ),
+                                       daemon=True)
+            self._loop_thread.start()
+
     def is_loop_alive(self):
         """check if main loop is alive."""
+
+        def __check_threadsafe():
+            if self._loop_thread is None:
+                return False
+            if not self._loop_thread.is_alive():
+                return False
+            if self._loop_task is None:
+                return False
+            return not self._loop_task.done()
+
+        if self.is_thread_safe():
+            return __check_threadsafe()
+
         if self._loop_task is None:
             logger.debug('loop task has not been created.')
             return False
@@ -281,11 +492,12 @@ class RequestManager:
 
     def build_sender(self):
         """create a new sender."""
-        sender_id = self._next_sender_id
-        self._next_sender_id += 1
-        new_sender = RequestSender.new(sender_id, self)
-        self.senders[sender_id] = new_sender
-        return new_sender
+        with self._mutex:
+            sender_id = self._next_sender_id
+            self._next_sender_id += 1
+            new_sender = RequestSender.new(sender_id, self)
+            self.senders[sender_id] = new_sender
+            return new_sender
 
     def has_requests(self):
         """has unprocessed request."""
@@ -318,13 +530,13 @@ class RequestManager:
         """set the priority of request type."""
         self.request_priority = priority
 
-    def response(self, resp: Response, timeout: float = None):
+    def response(self, resp: Response):
         """send response."""
         if resp.sender_id not in self.senders:
             logger.warning(f'sender {resp.sender_id} not exist. '
                            f'Send {resp} failed.')
             return
-        self.senders[resp.sender_id].response_callback(resp, timeout=timeout)
+        self.senders[resp.sender_id].response_callback(resp)
 
     def process_request(self, req_type: RequestType, reqs: ReqList, **kwargs):
         """process reqs with given req type."""
@@ -354,3 +566,14 @@ class RequestManager:
 
             reqs: ReqList = reqs_by_type[req_type]
             self.process_request(req_type, reqs, **kwargs)
+
+    def run_until_complete(self, future: Awaitable):
+        """run untile complete."""
+        try:
+            event_loop = asyncio.get_event_loop()
+        except Exception:
+            logger.warning('Can not found event loop in current thread.'
+                           ' Create a new event loop.')
+            event_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(event_loop)
+        return event_loop.run_until_complete(future)

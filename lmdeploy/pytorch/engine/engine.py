@@ -19,30 +19,13 @@ from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
 from ..paging import Scheduler
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import AutoModelAgent, ModelInputs
-from .request import Request, RequestManager, RequestType, Response
+from .request import (Request, RequestManager, RequestSender, RequestType,
+                      Response)
 
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
-
-
-def iter_over_async(ait, event_loop):
-    """iter over async."""
-    ait = ait.__aiter__()
-
-    async def get_next():
-        try:
-            obj = await ait.__anext__()
-            return False, obj
-        except StopAsyncIteration:
-            return True, None
-
-    while True:
-        done, obj = event_loop.run_until_complete(get_next())
-        if done:
-            break
-        yield obj
 
 
 def _div_up(x, n):
@@ -61,21 +44,6 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
-
-
-def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
-    """check if response has state."""
-    if isinstance(state, ResponseType):
-        state = [state]
-    ret = resp.type in state
-    if not ret and warning_msg is not None:
-        logger.warning(warning_msg)
-    return ret
-
-
-def _check_resp_success(resp: Response, warning_msg: str = None):
-    """check if response success."""
-    return _check_resp(resp, ResponseType.SUCCESS, warning_msg)
 
 
 def _paging_adapters(adapters: dict, model_agent: AutoModelAgent,
@@ -103,6 +71,79 @@ def _get_adapter_ids(seqs: SeqList, adapters: AdapterList):
         (ada.name, idx) for idx, ada in enumerate(adapters))
     adapter_ids = [adapter_names_map[seq.adapter_name] for seq in seqs]
     return adapter_ids
+
+
+def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
+    """check if response has state."""
+    if isinstance(state, ResponseType):
+        state = [state]
+    ret = resp.type in state
+    if not ret and warning_msg is not None:
+        logger.warning(warning_msg)
+    return ret
+
+
+def _check_resp_success(resp: Response, warning_msg: str = None):
+    """check if response success."""
+    return _check_resp(resp, ResponseType.SUCCESS, warning_msg)
+
+
+async def async_try_add_session(req_sender: RequestSender, session_id: int):
+    """Add new session.
+
+    Args:
+        session_id (int): The session id to add.
+    """
+    resp = await req_sender.async_send(RequestType.ADD_SESSION,
+                                       dict(session_id=session_id))
+    _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
+                (f'Can not add session {session_id} '
+                 f'with error: {resp.type}'))
+
+
+async def async_end(req_sender: RequestSender, session_id: int):
+    """End the given session."""
+    resp = await req_sender.async_send(RequestType.END_SESSION,
+                                       dict(session_id=session_id))
+    _check_resp_success(resp, (f'Failed to end session: {session_id}. '
+                               f'Error: {resp.type}.'))
+
+
+async def async_cancel(req_sender: RequestSender, session_id: int):
+    """Stop current streaming inference."""
+    resp = await req_sender.async_send(RequestType.STOP_SESSION,
+                                       dict(session_id=session_id))
+    _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
+                               f'Error: {resp.type}.'))
+
+
+def try_add_session(req_sender: RequestSender, session_id: int):
+    """Add new session.
+
+    Args:
+        session_id (int): The session id to add.
+    """
+    resp = req_sender.send(RequestType.ADD_SESSION,
+                           dict(session_id=session_id))
+    _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
+                (f'Can not add session {session_id} '
+                 f'with error: {resp.type}'))
+
+
+def end(req_sender: RequestSender, session_id: int):
+    """End the given session."""
+    resp = req_sender.send(RequestType.END_SESSION,
+                           dict(session_id=session_id))
+    _check_resp_success(resp, (f'Failed to end session: {session_id}. '
+                               f'Error: {resp.type}.'))
+
+
+def cancel(req_sender: RequestSender, session_id: int):
+    """Stop current streaming inference."""
+    resp = req_sender.send(RequestType.STOP_SESSION,
+                           dict(session_id=session_id))
+    _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
+                               f'Error: {resp.type}.'))
 
 
 class Engine:
@@ -214,7 +255,7 @@ class Engine:
 
     def _bind_request_manager(self):
         """bind request manager."""
-        req_manager = RequestManager()
+        req_manager = RequestManager(self.engine_config.thread_safe)
         req_manager.bind_func(RequestType.ADD_SESSION, self._on_add_session)
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
@@ -335,40 +376,27 @@ class Engine:
 
     async def async_add_session(self, session_id: int):
         """Add new session."""
-        resp = await self.req_sender.async_send(RequestType.ADD_SESSION,
-                                                dict(session_id=session_id))
-        _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
-                    (f'Can not add session {session_id} '
-                     f'with error: {resp.type}'))
+        return await async_try_add_session(self.req_sender, session_id)
 
     def add_session(self, session_id: int):
         """Add new session."""
-        coro = self.async_add_session(session_id)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return try_add_session(self.req_sender, session_id)
 
     async def async_stop_session(self, session_id: int):
         """Stop the given session."""
-        resp = await self.req_sender.async_send(RequestType.STOP_SESSION,
-                                                dict(session_id=session_id))
-        _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
-                                   f'Error: {resp.type}.'))
+        return await async_cancel(self.req_sender, session_id)
 
     def stop_session(self, session_id: int):
         """Add new session."""
-        coro = self.async_stop_session(session_id)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return cancel(self.req_sender, session_id)
 
     async def async_end_session(self, session_id: int):
         """End the given session."""
-        resp = await self.req_sender.async_send(RequestType.END_SESSION,
-                                                dict(session_id=session_id))
-        _check_resp_success(resp, (f'Failed to end session: {session_id}. '
-                                   f'Error: {resp.type}.'))
+        return await async_end(self.req_sender, session_id)
 
     def end_session(self, session_id: int):
         """Add new session."""
-        coro = self.async_end_session(session_id)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return end(self.req_sender, session_id)
 
     @torch.inference_mode()
     def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
@@ -531,8 +559,7 @@ class Engine:
         with torch.inference_mode(), torch.cuda.stream(self.stream):
             logits = logits_processor(input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
-        await asyncio.get_event_loop().run_in_executor(None,
-                                                       self.stream.synchronize)
+        self.stream.synchronize()
         next_token_ids = next_token_ids.cpu()
 
         return next_token_ids, split_logits
@@ -673,7 +700,6 @@ class Engine:
         Returns:
             Dict[int, InferOutput]: The output of each session.
         """
-
         # schedule
         schedule_output = self.scheduler.schedule(is_prefill=is_prefill)
 
@@ -828,8 +854,7 @@ class Engine:
                                         gen_config=gen_config,
                                         adapter_names=adapter_names,
                                         keep_cache=keep_cache)
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(coro)
+        return self.req_sender.run_until_complete(coro)
 
     def decode(self, prompt_token_ids: List[List[int]]):
         """Perform one step inference and get logits.
@@ -947,11 +972,7 @@ class EngineInstance:
         Args:
             session_id (int): The session id to add.
         """
-        resp = await self.req_sender.async_send(RequestType.ADD_SESSION,
-                                                dict(session_id=session_id))
-        _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
-                    (f'Can not add session {session_id} '
-                     f'with error: {resp.type}'))
+        return await async_try_add_session(self.req_sender, session_id)
 
     def _try_add_session(self, session_id: int):
         """Add new session.
@@ -959,8 +980,7 @@ class EngineInstance:
         Args:
             session_id (int): The session id to add.
         """
-        coro = self._async_try_add_session(session_id)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return try_add_session(self.req_sender, session_id)
 
     async def async_stream_infer(self,
                                  session_id: int,
@@ -984,7 +1004,7 @@ class EngineInstance:
         gen_config = gen_config or EngineGenerationConfig()
         request_output_len = gen_config.max_new_tokens
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        await self._async_try_add_session(session_id)
+        await async_try_add_session(self.req_sender, session_id)
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
@@ -1002,6 +1022,7 @@ class EngineInstance:
                 break
 
             resp = await self.req_sender.async_recv(req_id)
+
             if resp.req_id != req_id:
                 continue
             if resp.type == ResponseType.SUCCESS:
@@ -1063,13 +1084,54 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
-        coro_gen = self.async_stream_infer(session_id, input_ids, gen_config,
-                                           adapter_name, **kwargs)
-        event_loop = asyncio.get_event_loop()
+
+        def __call_async():
+            """call async."""
+            coro_gen = self.async_stream_infer(session_id, input_ids,
+                                               gen_config, adapter_name,
+                                               **kwargs)
+            while True:
+                try:
+                    yield self.req_sender.run_until_complete(
+                        coro_gen.__anext__())
+                except StopAsyncIteration:
+                    break
+
+        if not self.req_sender.is_thread_safe():
+            return __call_async()
+
+        gen_config = gen_config or EngineGenerationConfig()
+        request_output_len = gen_config.max_new_tokens
+        sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
+        try_add_session(self.req_sender, session_id)
+        msg = dict(
+            token_ids=input_ids,
+            session_id=session_id,
+            max_request_output_len=request_output_len,
+            sampling_param=sampling_param,
+            adapter_name=adapter_name,
+        )
+        req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+
+        token_ids = []
         while True:
-            try:
-                yield event_loop.run_until_complete(coro_gen.__anext__())
-            except StopAsyncIteration:
+            if not self.req_sender.is_loop_alive():
+                yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
+                break
+
+            resp = self.req_sender.recv(req_id)
+
+            if resp.req_id != req_id:
+                continue
+            if resp.type == ResponseType.SUCCESS:
+                token_ids += resp.data['token_ids']
+                yield (resp.type, token_ids, len(token_ids))
+            elif resp.type == ResponseType.FINISH:
+                token_ids += resp.data['token_ids']
+                yield (resp.type, token_ids, len(token_ids))
+                break
+            else:
+                yield (resp.type, [], 0)
                 break
 
     def infer(self,
@@ -1089,35 +1151,33 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
-        coro = self.async_infer(session_id,
-                                input_ids,
-                                gen_config=gen_config,
-                                **kwargs)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        token_ids = []
+        for outputs in self.stream_infer(session_id,
+                                         input_ids,
+                                         gen_config=gen_config,
+                                         **kwargs):
+            status, tmp_ids, _ = outputs
+            if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
+                return (status, token_ids, len(token_ids))
+            token_ids = tmp_ids
+
+        return (0, token_ids, len(token_ids))
 
     async def async_end(self, session_id: int):
         """End the given session."""
-        resp = await self.req_sender.async_send(RequestType.END_SESSION,
-                                                dict(session_id=session_id))
-        _check_resp_success(resp, (f'Failed to end session: {session_id}. '
-                                   f'Error: {resp.type}.'))
+        return await async_end(self.req_sender, session_id)
 
     def end(self, session_id: int):
         """End the given session."""
-        coro = self.async_end(session_id)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return end(self.req_sender, session_id)
 
     async def async_cancel(self, session_id: int):
         """Stop current streaming inference."""
-        resp = await self.req_sender.async_send(RequestType.STOP_SESSION,
-                                                dict(session_id=session_id))
-        _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
-                                   f'Error: {resp.type}.'))
+        return await async_cancel(self.req_sender, session_id)
 
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
-        coro = self.async_cancel(session_id)
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return cancel(self.req_sender, session_id)
 
     def decode(self, prompt_token_ids: List[List[int]]):
         """Return logits of context decoding.

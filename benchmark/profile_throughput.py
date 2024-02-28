@@ -307,7 +307,8 @@ def main():
             session_len=args.session_len,
             cache_max_entry_count=args.cache_max_entry_count,
             max_batch_size=args.concurrency,
-            tp=args.tp)
+            tp=args.tp,
+            thread_safe=True)
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 
