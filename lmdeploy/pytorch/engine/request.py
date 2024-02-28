@@ -95,7 +95,7 @@ class RequestSender:
         if self.manager._loop_task is None and not self.is_thread_safe():
             self.manager.create_loop_task()
         if self._resp_que is None:
-            self._resp_que = asyncio.Queue(loop=self.manager.event_loop)
+            self._resp_que = asyncio.Queue()
         return self._resp_que
 
     @property
@@ -380,11 +380,13 @@ class RequestManager:
         """create coro task."""
         logger.debug('creating engine loop task.')
         event_loop = asyncio.get_event_loop()
+        assert self._loop_coro is not None, (
+            'Please set loop task with manager.start_loop')
         loop_unshielded = event_loop.create_task(self._loop_coro(),
                                                  name='EngineMainLoop')
         loop_unshielded.add_done_callback(_raise_exception_on_finish)
         self._loop_task = asyncio.shield(loop_unshielded)
-        self.requests = asyncio.Queue(loop=event_loop)
+        self.requests = asyncio.Queue()
         return self._loop_task
 
     @property
@@ -460,7 +462,7 @@ class RequestManager:
 
         if self.is_thread_safe():
             event_loop = asyncio.new_event_loop()
-            self.responses = asyncio.Queue(loop=event_loop)
+            self.responses = asyncio.Queue()
             self._loop_thread = Thread(target=__run_forever,
                                        args=(event_loop, ),
                                        daemon=True)
@@ -555,7 +557,10 @@ class RequestManager:
                 self.response(resp)
 
     def step(self, **kwargs):
-        """handle requests."""
+        """handle requests.
+
+        Should only be called in loop task.
+        """
         reqs_by_type = self.get_all_requests()
 
         # handle requests
