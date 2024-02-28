@@ -3,7 +3,7 @@ name: daily_ete_test
 on:
   workflow_dispatch:
   schedule:
-    - cron:  '00 23 * * *'
+    - cron:  '00 20 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -13,7 +13,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 240
+    timeout-minutes: 420
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -68,34 +68,43 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Test lmdeploy - quantization
+      - name: Test lmdeploy - interface turbomind case
         continue-on-error: true
+        timeout-minutes: 120
         run: |
-          pytest autotest -m '(quantization or quantization_w8a8) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 8 --alluredir=allure-results --clean-alluredir
-      - name: Test lmdeploy - convert
+          pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py --alluredir=allure-results
+      - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
+        timeout-minutes: 120
+        run: pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py --alluredir=allure-results
+      - name: Test lmdeploy - pipeline torch
+        continue-on-error: true
+        timeout-minutes: 120
+        run: pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py --alluredir=allure-results
+      - name: Test lmdeploy - restful turbomind
+        continue-on-error: true
+        timeout-minutes: 120
+        run: pytest autotest/tools/restful/test_restful_chat_turbomind.py --alluredir=allure-results
+      - name: Test lmdeploy - restful torch
+        continue-on-error: true
+        timeout-minutes: 120
+        run: pytest autotest/tools/restful/test_restful_chat_pytorch.py --alluredir=allure-results
+      - name: Test lmdeploy - chat workspace
+        continue-on-error: true
+        timeout-minutes: 120
         run: |
-          pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results
-      - name: Test lmdeploy - pipeline
+          pytest autotest/tools/chat/test_command_chat_workspace.py -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
-        timeout-minutes: 60
-        run: pytest autotest -m '(pipeline_chat) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results
-      - name: Test lmdeploy - restful
-        continue-on-error: true
-        run: pytest autotest -m restful_api --alluredir=allure-results
-      - name: Test lmdeploy - chat
-        continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: |
-          pytest autotest -m '(command_chat or command_chat_hf or command_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 4 --alluredir=allure-results
-      - name: Downgrade transformers
-        run: python3 -m pip install transformers==4.33.0
-      - name: Test lmdeploy - run Baichuan
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf torch
         continue-on-error: true
-        timeout-minutes: 50
+        timeout-minutes: 120
         run: |
-          pytest autotest -m '(Baichuan2_7B_Chat or Baichuan2_13B_Chat) and not pipeline_chat_pytorch' --alluredir=allure-results
-      - name: Test lmdeploy - rerun fail cases
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - rerun all fail cases
         run: |
           pytest autotest --alluredir=allure-results --lf
       - name: Generate reports
