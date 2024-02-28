@@ -121,7 +121,7 @@ class ModelConfig:
             sliding_window = -1
             if use_sliding_window:
                 sliding_window = getattr(hf_config, 'sliding_window',
-                                         sliding_window)
+                                         sliding_window) or -1
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
