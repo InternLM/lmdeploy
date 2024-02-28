@@ -206,7 +206,7 @@ int test_attention()
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz = 128;
 
 #endif
 
@@ -367,7 +367,7 @@ int test_attention()
     params.num_heads     = kHeadNum;
     params.num_kv_heads  = KvHeadNum;
     params.size_per_head = kHeadDim;
-    params.inv_sqrt_dh   = M_LOG2E / std::sqrt((float)params.size_per_head);
+    params.inv_sqrt_dh   = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
     params.rotary_embedding_dim  = kHeadDim;
     params.rotary_embedding_base = kRoPEBase;

@@ -186,7 +186,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
-        params.inv_sqrt_dh   = M_LOG2E / std::sqrt((float)params.size_per_head);
+        // MSVC does not have M_LOG2E
+        params.inv_sqrt_dh   =  (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
         params.rotary_embedding_dim    = size_per_head_;
         params.rotary_embedding_base   = params_.rotary_embedding_base;
