@@ -55,6 +55,10 @@ void Compare(const T* src, const T* ref, size_t stride, int m, int n, bool show,
 template void Compare(const half* src, const half* ref, size_t stride, int m, int n, bool show, float rtol, float atol);
 template void
 Compare(const float* src, const float* ref, size_t stride, int m, int n, bool show, float rtol, float atol);
+#if ENABLE_BF16
+template void Compare(const nv_bfloat16* src, const nv_bfloat16* ref, size_t stride, int m, int n, bool show, float rtol, float atol);
+#endif
+
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
 {
@@ -167,9 +171,16 @@ void RNG::GenerateNormal(T* out, size_t count, float scale, float shift)
 
 template void RNG::GenerateUniform(half* out, size_t count, float scale, float shift);
 template void RNG::GenerateUniform(float* out, size_t count, float scale, float shift);
+#if ENABLE_BF16
+template void RNG::GenerateUniform(nv_bfloat16* out, size_t count, float scale, float shift);
+#endif
 
 template void RNG::GenerateNormal(half* out, size_t count, float scale, float shift);
 template void RNG::GenerateNormal(float* out, size_t count, float scale, float shift);
+#if ENABLE_BF16
+template void RNG::GenerateNormal(nv_bfloat16* out, size_t count, float scale, float shift);
+#endif
+
 
 template<typename T>
 struct SATypeConverter {

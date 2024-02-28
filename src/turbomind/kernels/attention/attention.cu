@@ -26,6 +26,24 @@ void dispatchAttention(const AttentionParams<T>& params)
     }
 }
 
+#if ENABLE_BF16
+template<>
+void dispatchAttention(const AttentionParams<nv_bfloat16>& params)
+{
+    using namespace attention;
+    if (params.size_per_head == 128) {
+        if (0) {}
+        else if (params.arch >= 80) {
+            using Config = AttentionConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 128>;
+            invokeAttention<typename Config::Kernel>(params);
+        }
+    }
+}
+#endif
+
 template void dispatchAttention(const AttentionParams<half>& params);
+// #if ENABLE_BF16
+// template void dispatchAttention(const AttentionParams<nv_bfloat16>& params);
+// #endif
 
 }  // namespace turbomind

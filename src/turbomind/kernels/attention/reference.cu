@@ -58,6 +58,15 @@ void invokeApplyRotaryEmbedding(
 
 template void invokeApplyRotaryEmbedding(
     half* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int batch_size, cudaStream_t stream);
+#if ENABLE_BF16
+template void invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
+                                         int          max_k_len,
+                                         int          head_num,
+                                         int          head_dim,
+                                         float        rope_base,
+                                         int          batch_size,
+                                         cudaStream_t stream);
+#endif
 
 template<class T>
 __global__ void processQKV(T*       q_out,    // [B, H, s, D]
@@ -317,5 +326,9 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
 }
 
 template class Reference<half>;
+
+#if ENABLE_BF16
+template class Reference<nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

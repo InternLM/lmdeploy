@@ -247,6 +247,30 @@ template void invokeProcessKV(void**       blocks,
                               int          quant_policy,
                               const float* quant_params_kv,
                               cudaStream_t stream);
+#if ENABLE_BF16
+template void invokeProcessKV(void**             blocks,
+                              const nv_bfloat16* k,
+                              const nv_bfloat16* v,
+                              const nv_bfloat16* k_bias,
+                              const nv_bfloat16* v_bias,
+                              const int*         cu_q_len,
+                              const int*         cu_k_len,
+                              const int*         cu_block_num,
+                              const float*       rope_base,
+                              int                stride_b,
+                              int                stride_c,
+                              int                stride_h,
+                              int                stride_s,
+                              int                block_seq_len,
+                              int                block_k_offset,
+                              int                block_v_offset,
+                              int                max_q_len,
+                              int                kv_head_num,
+                              int                batch_size,
+                              int                quant_policy,
+                              const float*       quant_params_kv,
+                              cudaStream_t       stream);
+#endif
 
 template<int CTA_S, int HeadDim, int WarpCnt, class T, class Tkv, class Offset, class TransformK, class TransformV>
 __global__ void __launch_bounds__(128) flattenKV(T*           k,
@@ -431,5 +455,27 @@ template void invokeFlattenKV(half*        k,
                               int          quant_policy,
                               const float* quant_params,
                               cudaStream_t stream);
+
+#if ENABLE_BF16
+template void invokeFlattenKV(nv_bfloat16* k,
+                              nv_bfloat16* v,
+                              const void** blocks,
+                              const int*   cu_k_len,
+                              const int*   cu_block_num,
+                              const float* rope_base,
+                              int          stride_b,
+                              int          stride_c,
+                              int          stride_h,
+                              int          stride_s,
+                              int          block_seq_len,
+                              int          block_k_offset,
+                              int          block_v_offset,
+                              int          max_seq_len,
+                              int          head_num,
+                              int          batch_size,
+                              int          quant_policy,
+                              const float* quant_params,
+                              cudaStream_t stream);
+#endif
 
 }  // namespace turbomind

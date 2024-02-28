@@ -116,7 +116,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                         quant_params_kv);
     }
 
-    thrust::universal_vector<half> kv_cache_2(kv_cache.size());
+    thrust::universal_vector<T> kv_cache_2(kv_cache.size());
 
     // round trip test
     for (int i = 0; i < 1; ++i) {
@@ -153,11 +153,12 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 0
+#define DECODING 1
 
-int main(int argc, char* argv[])
+template<class T>
+int test_attention()
 {
-    AttentionParams<half> params{};
+    AttentionParams<T> params{};
 
     constexpr size_t kHeadDim = 128;
 
@@ -213,7 +214,7 @@ int main(int argc, char* argv[])
     using Tkv                  = uint8_t;
     constexpr int kQuantPolicy = QuantPolicy::kCacheKVInt8;
 #else
-    using Tkv                  = half;
+    using Tkv                  = T;
     constexpr int kQuantPolicy = 0;
 #endif
 
@@ -228,13 +229,13 @@ int main(int argc, char* argv[])
 
     RNG rng{};
 
-    thrust::universal_vector<half> k_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
-    thrust::universal_vector<half> v_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
+    thrust::universal_vector<T> k_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
+    thrust::universal_vector<T> v_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
 
-    thrust::universal_vector<half> kv_cache(KvHeadNum * 2 * kBatchSize * kContextLen * kHeadDim);
+    thrust::universal_vector<T> kv_cache(KvHeadNum * 2 * kBatchSize * kContextLen * kHeadDim);
 
-    thrust::universal_vector<half> qkv(kBatchSize * kInputLen * (kHeadNum + KvHeadNum * 2) * kHeadDim);
-    thrust::universal_vector<half> output(kBatchSize * kInputLen * kHeadNum * kHeadDim);
+    thrust::universal_vector<T> qkv(kBatchSize * kInputLen * (kHeadNum + KvHeadNum * 2) * kHeadDim);
+    thrust::universal_vector<T> output(kBatchSize * kInputLen * kHeadNum * kHeadDim);
 
     thrust::universal_vector<bool>  finished(kBatchSize);
     thrust::universal_vector<int>   sequence_length(kBatchSize);
@@ -250,11 +251,11 @@ int main(int argc, char* argv[])
     thrust::universal_vector<int>   split_cnt(kTokenNum);
     thrust::universal_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
 
-    thrust::universal_vector<half> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
+    thrust::universal_vector<T> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
     thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
 
     thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
-    thrust::universal_vector<half>  pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
+    thrust::universal_vector<T>     pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
     std::fill(semaphores.begin(), semaphores.end(), 0);
 
@@ -267,21 +268,21 @@ int main(int argc, char* argv[])
         // Set input range to zero
         // (BH, SD)
         cudaMemset2DAsync(k_cache.data().get() + kSequenceLen * kHeadDim,
-                          sizeof(half) * kContextLen * kHeadDim,
+                          sizeof(T) * kContextLen * kHeadDim,
                           0,
-                          sizeof(half) * kInputLen * kHeadDim,
+                          sizeof(T) * kInputLen * kHeadDim,
                           kBatchSize * KvHeadNum);
         cudaMemset2DAsync(v_cache.data().get() + kSequenceLen * kHeadDim,
-                          sizeof(half) * kContextLen * kHeadDim,
+                          sizeof(T) * kContextLen * kHeadDim,
                           0,
-                          sizeof(half) * kInputLen * kHeadDim,
+                          sizeof(T) * kInputLen * kHeadDim,
                           kBatchSize * KvHeadNum);
     }
 
     invokeApplyRotaryEmbedding(k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kBatchSize);
 
-    thrust::universal_vector<half> k_cache_ref = k_cache;
-    thrust::universal_vector<half> v_cache_ref = v_cache;
+    thrust::universal_vector<T> k_cache_ref = k_cache;
+    thrust::universal_vector<T> v_cache_ref = v_cache;
 
     thrust::universal_vector<Tkv>  blocks;
     thrust::universal_vector<Tkv*> k_ptrs;
@@ -310,7 +311,7 @@ int main(int argc, char* argv[])
 
     // return 0;
 
-    thrust::universal_vector<half>  output_ref = output;
+    thrust::universal_vector<T>     output_ref = output;
     thrust::universal_vector<void*> k_cache_ref_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ref_ptrs(kBatchSize);
 
@@ -383,8 +384,8 @@ int main(int argc, char* argv[])
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
-    Reference<half> reference(kDump ? Reference<half>::kUNFUSED : Reference<half>::kFLASH_ATTENTION, {});
-    // Reference<half> reference(Reference<half>::kUNFUSED, {});
+    Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
+    // Reference<T> reference(Reference<T>::kUNFUSED, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
     for (int i = 0; i < 1; ++i) {
@@ -418,12 +419,12 @@ int main(int argc, char* argv[])
 
     params.out = output.data().get();
 
-    std::vector<thrust::universal_vector<half>> outputs;
+    std::vector<thrust::universal_vector<T>> outputs;
 
     for (int i = 0; i < std::max(kTestIter, 1); ++i) {
 
 #if DECODING
-        dispatchDecoding<half>(params);
+        dispatchDecoding<T>(params);
 #else
         // input -> blocked
         invokeProcessKV_(params);
@@ -514,4 +515,11 @@ int main(int argc, char* argv[])
             kBatchSize * KvHeadNum);
 
     return 0;
+}
+
+int main(int argc, char* argv[])
+{
+    // test_attention<half>();
+
+    test_attention<nv_bfloat16>();
 }
