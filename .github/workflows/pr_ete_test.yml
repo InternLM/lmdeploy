@@ -96,7 +96,6 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Test lmdeploy
-        continue-on-error: true
         timeout-minutes: 120
         run: pytest autotest -m pr_test --alluredir=allure-results --clean-alluredir
       - name: Generate reports
