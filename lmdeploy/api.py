@@ -2,9 +2,9 @@
 import os
 from typing import List, Literal, Optional, Union
 
+from .archs import autoget_backend_config
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
-from .supported_models import autoget_backend_config
 
 
 def pipeline(model_path: str,

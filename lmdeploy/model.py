@@ -720,7 +720,7 @@ class Falcon(BaseModel):
 @MODELS.register_module(name='chatglm2-6b')
 class ChatGLM2(BaseModel):
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
         self.count = 0
 

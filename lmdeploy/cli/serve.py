@@ -189,14 +189,14 @@ class SubCliServe:
     @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
+        from lmdeploy.archs import autoget_backend
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
-        from lmdeploy.supported_models import autoget_backend
         backend = args.backend
 
-        if backend != 'pytorch':
+        if backend != 'pytorch' and ':' not in args.model_path_or_server:
             # set auto backend mode
             backend = autoget_backend(args.model_path_or_server)
         if backend == 'pytorch':
@@ -230,9 +230,9 @@ class SubCliServe:
     @staticmethod
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
+        from lmdeploy.archs import autoget_backend
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
-        from lmdeploy.supported_models import autoget_backend
         backend = args.backend
         if backend != 'pytorch':
             # set auto backend mode

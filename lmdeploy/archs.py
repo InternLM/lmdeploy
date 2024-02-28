@@ -6,51 +6,35 @@ from transformers import AutoConfig
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 
 _SUPPORTED_ARCHS = dict(
-    # baichuan2-7b, baichuan-13b, baichuan2-13b
-    BaiChuanForCausalLM=dict(pytorch=True,
-                             turbomind=True,
-                             model_type='baichuan'),
     # baichuan-7b
-    BaichuanForCausalLM=dict(pytorch=False,
-                             turbomind=True,
-                             model_type='baichuan'),
+    BaiChuanForCausalLM=dict(pytorch=False, turbomind=True),
+    # baichuan2-7b, baichuan-13b, baichuan2-13b
+    BaichuanForCausalLM=dict(pytorch=True, turbomind=True),
     # chatglm2-6b, chatglm3-6b
-    ChatGLMModel=dict(pytorch=True, turbomind=False, model_type='chatglm'),
+    ChatGLMModel=dict(pytorch=True, turbomind=False),
     # deepseek-moe
-    DeepseekForCausalLM=dict(pytorch=True,
-                             turbomind=False,
-                             model_type='deepseek'),
+    DeepseekForCausalLM=dict(pytorch=True, turbomind=False),
     # falcon-7b
-    FalconForCausalLM=dict(pytorch=True, turbomind=False, model_type='falcon'),
+    FalconForCausalLM=dict(pytorch=True, turbomind=False),
     # gemma-7b
-    GemmaForCausalLM=dict(pytorch=False, turbomind=False, model_type='gemma'),
+    GemmaForCausalLM=dict(pytorch=False, turbomind=False),
     # internlm
-    InternLMForCausalLM=dict(pytorch=True,
-                             turbomind=True,
-                             model_type='internlm'),
+    InternLMForCausalLM=dict(pytorch=True, turbomind=True),
     # internlm2
-    InternLM2ForCausalLM=dict(pytorch=True,
-                              turbomind=True,
-                              model_type='internlm2'),
+    InternLM2ForCausalLM=dict(pytorch=True, turbomind=True),
     # internlm-xcomposer
-    InternLM2XComposerForCausalLM=dict(pytorch=False,
-                                       turbomind=True,
-                                       model_type='internlm'),
+    InternLM2XComposerForCausalLM=dict(pytorch=False, turbomind=True),
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
-    LlamaForCausalLM=dict(pytorch=True, turbomind=True, model_type='llama'),
+    LlamaForCausalLM=dict(pytorch=True, turbomind=True),
     # Mistral-7B
-    MistralForCausalLM=dict(pytorch=True,
-                            turbomind=False,
-                            model_type='mistral'),
+    MistralForCausalLM=dict(pytorch=True, turbomind=False),
     # Mixtral-8x7B
-    MixtralForCausalLM=dict(pytorch=True,
-                            turbomind=False,
-                            model_type='mixtral'),
+    MixtralForCausalLM=dict(pytorch=True, turbomind=False),
     # Qwen 7B-72B, Qwen-VL-7B
-    QWenLMHeadModel=dict(pytorch=False, turbomind=True, model_type='qwen'),
+    QWenLMHeadModel=dict(pytorch=False, turbomind=True),
     # Qwen1.5 7B-72B
-    Qwen2ForCausalLM=dict(pytorch=True, turbomind=False, model_type='qwen2'),
+    Qwen2ForCausalLM=dict(pytorch=True, turbomind=False),
 )
 
 
@@ -99,12 +83,14 @@ def _is_support_by(model_path: str):
         support_by_torch = info['pytorch']
         support_by_turbomind = info['turbomind']
         # special cases
-        if arch == 'BaiChuanForCausalLM':
-            num_attn_head = cfg['num_attention_heads']
+        if arch == 'BaichuanForCausalLM':
+            num_attn_head = cfg.num_attention_heads
             if num_attn_head == 40:
                 # baichuan-13B, baichuan2-13B not supported by turbomind
                 support_by_turbomind = False
-
+                if cfg.vocab_size == 64000:
+                    # baichuan-13B not supported by pytorch
+                    support_by_torch = False
     return support_by_torch, support_by_turbomind
 
 
@@ -150,14 +136,16 @@ def autoget_backend_config(
         (PytorchEngineConfig | TurbomindEngineConfig): The auto-determined
             backend engine config.
     """
+    from dataclasses import asdict
+
     backend = autoget_backend(model_path)
     if backend == 'pytorch':
         config = PytorchEngineConfig()
     else:
         config = TurbomindEngineConfig()
-    if backend_config is None:
-        return config
-    for k, v in backend_config.items():
-        if v and hasattr(config, k):
-            setattr(config, k, v)
+    if backend_config is not None:
+        data = asdict(backend_config)
+        for k, v in data.items():
+            if v and hasattr(config, k):
+                setattr(config, k, v)
     return config
