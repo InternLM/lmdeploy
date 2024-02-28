@@ -11,14 +11,6 @@ MODELS = Registry('model', locations=['lmdeploy.model'])
 
 
 @dataclasses.dataclass
-class SamplingParam:
-    top_p: float = 0.8
-    top_k: float = None
-    temperature: float = 0.8
-    repetition_penalty: float = 1.0
-
-
-@dataclasses.dataclass
 class ChatTemplateConfig:
     """Parameters for chat template.
 
@@ -64,18 +56,10 @@ class BaseModel:
 
     def __init__(self,
                  session_len=2048,
-                 top_p=0.8,
-                 top_k=None,
-                 temperature=0.8,
-                 repetition_penalty=1.0,
                  capability='chat',
                  stop_words=None,
                  **kwargs):
         self.session_len = session_len
-        self.top_p = top_p
-        self.top_k = top_k
-        self.temperature = temperature
-        self.repetition_penalty = repetition_penalty
         self.stop_words = stop_words
         self.capability = capability
 
@@ -147,13 +131,6 @@ class BaseModel:
         if isinstance(messages, str):
             return self.get_prompt(messages)
         # chat history processing in derived classes
-
-    @property
-    def sampling_param(self):
-        return SamplingParam(top_p=self.top_p,
-                             top_k=self.top_k,
-                             temperature=self.temperature,
-                             repetition_penalty=self.repetition_penalty)
 
 
 @MODELS.register_module(name='wizardlm')
@@ -375,17 +352,8 @@ class Baichuan2_7B(BaseModel):
     """Chat template and generation parameters of Baichuan2-7B-Base and
     Baichuan2-7B-Chat models."""
 
-    def __init__(self,
-                 temperature=0.3,
-                 top_k=5,
-                 top_p=0.85,
-                 repetition_penalty=1.05,
-                 **kwargs):
-        super().__init__(temperature=temperature,
-                         top_k=top_k,
-                         top_p=top_p,
-                         repetition_penalty=repetition_penalty,
-                         **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.user_token = '<reserved_106>'  # id = 195
         self.assistant_token = '<reserved_107>'  # id = 196
 
@@ -573,9 +541,6 @@ class Qwen7BChat(BaseModel):
 
     def __init__(self,
                  session_len=8192,
-                 top_p=0.5,
-                 top_k=40,
-                 temperature=1.0,
                  im_start='<|im_start|>',
                  im_end='<|im_end|>',
                  system='You are a helpful assistant.',
@@ -583,9 +548,6 @@ class Qwen7BChat(BaseModel):
                  **kwargs):
         super().__init__(**kwargs)
         self.session_len = session_len
-        self.top_p = top_p
-        self.top_k = top_k
-        self.temperature = temperature
 
         self.im_start = im_start
         self.im_end = im_end
@@ -656,19 +618,6 @@ class CodeLlama(Llama2):
         self.session_len = session_len
         self.suffix_first = suffix_first
         self.stop_words = stop_words
-
-        # The following sampling parameters refers to https://github.com/facebookresearch/codellama # noqa: E501
-        if self.capability == 'completion' or self.capability == 'python':
-            self.top_p = kwargs.get('top_p', 0.9)
-            self.temperature = kwargs.get('temperature', 0.2)
-        if self.capability == 'chat':
-            self.top_p = kwargs.get('top_p', 0.95)
-            self.temperature = kwargs.get('temperature', 0.2)
-        elif self.capability == 'infilling':
-            self.top_p = kwargs.get('top_p', 0.9)
-            self.temperature = kwargs.get('temperature', 0.0)
-            if self.stop_words is None:
-                self.stop_words = ['<EOT>']
 
     def decorate_prompt(self, prompt, sequence_start=True):
         if self.capability == 'infilling':
