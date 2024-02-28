@@ -112,7 +112,7 @@ MODULE_MAP.update({
 })
 
 # deepseek
-MODULE_MAP = {
+MODULE_MAP.update({
     'modeling_deepseek.DeepseekAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
     'modeling_deepseek.DeepseekFlashAttention2':
@@ -125,7 +125,7 @@ MODULE_MAP = {
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
     'modeling_deepseek.DeepseekRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
-}
+})
 
 # qwen1.5
 MODULE_MAP.update({
