@@ -15,7 +15,7 @@ __global__ void createCausalMasks(T* mask, const int* q_lens, const int* k_lens,
         const int q        = i / max_k_len;  // [0, max_q_len)
         const int k        = i % max_k_len;  // [0, max_k_len)
         bool      is_valid = q < q_len && k < k_len && k <= q + (k_len - q_len);
-        mask[i]            = static_cast<T>(is_valid);
+        mask[i]            = is_valid ? T{1.} : T{0.};
     }
 }
 

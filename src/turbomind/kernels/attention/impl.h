@@ -4,14 +4,12 @@
 
 namespace turbomind {
 
-class TensorOp {};
-class Simt {};
-
 namespace attention {
 
 template<int Begin, int End = -1>
 struct Arch {
-    static constexpr bool is_compatible(int x)  {
+    static constexpr bool is_compatible(int x)
+    {
         return Begin <= x && (End == -1 || x <= End);
     }
 };

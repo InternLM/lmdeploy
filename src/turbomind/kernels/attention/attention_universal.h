@@ -509,7 +509,7 @@ template<class Attention>
 __global__ void attention_kernel(typename Attention::ParamType params, typename Attention::CtaMap cta_map)
 {
 #if __CUDA_ARCH__
-    if constexpr (Attention::Arch::is_compatible(__CUDA_ARCH__)) {
+    if constexpr (Attention::Arch::is_compatible(__CUDA_ARCH__ / 10)) {
         Attention{}(params, cta_map, smem_buf);
     }
 #endif

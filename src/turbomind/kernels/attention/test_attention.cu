@@ -252,7 +252,7 @@ int test_attention()
     thrust::universal_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
 
     thrust::universal_vector<T> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
-    thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
+    thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), T{0.});
 
     thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
     thrust::universal_vector<T>     pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
