@@ -32,7 +32,7 @@
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include <algorithm>
-#include <cmath>
+#include <math.h>
 
 namespace turbomind {
 
