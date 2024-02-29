@@ -62,17 +62,17 @@ def test_processrepetition_penalty(inplace):
         [4, 4],
         [0, 0],
     ])
-    penaltys = 1 + torch.rand(batch_size)
+    penalties = 1 + torch.rand(batch_size)
 
     gt = []
-    for score, ids, penalty in zip(scores, input_ids, penaltys):
+    for score, ids, penalty in zip(scores, input_ids, penalties):
         warper = RepetitionPenaltyLogitsProcessor(penalty.item())
         gt.append(warper(ids[None], score[None].clone()))
     gt = torch.cat(gt)
 
     out = _process_repetition_penalty(scores,
                                       input_ids,
-                                      penaltys,
+                                      penalties,
                                       inplace=inplace)
     torch.testing.assert_close(out, gt)
 

@@ -52,6 +52,4 @@ class TestMultinomialSampling:
                              indirect=True)
     def test_multinomial_sampling(self, scores, seeds, offsets, indices, gt):
         output = multinomial_sampling(scores, seeds, offsets, indices)
-        print(output)
-        print(gt)
         torch.testing.assert_close(output, gt)
