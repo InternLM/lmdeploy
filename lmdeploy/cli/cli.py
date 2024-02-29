@@ -108,7 +108,7 @@ class CLI(object):
             model_names = [
                 'llama', 'llama2', 'internlm', 'internlm2', 'baichuan2',
                 'chatglm2', 'falcon', 'yi', 'mistral', 'mixtral', 'qwen1.5',
-                'gemma'
+                'gemma', 'deepseek'
             ]
         elif engine == 'turbomind':
             from lmdeploy.model import MODELS

@@ -4,6 +4,9 @@ from typing import Literal, Optional, Union
 from transformers import AutoConfig
 
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
+from .utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 _SUPPORTED_ARCHS = dict(
     # baichuan-7b
@@ -116,6 +119,9 @@ def autoget_backend(model_path: str) -> Union[Literal['turbomind', 'pytorch']]:
         str: the backend type.
     """
     pytorch_has, turbomind_has = _is_support_by(model_path)
+    if not (pytorch_has or turbomind_has):
+        logger.warning(f'{model_path} is not explicitly supported by lmdeploy.'
+                       f' Try to run with lmdeploy pytorch engine.')
     backend = 'turbomind' if turbomind_has else 'pytorch'
     return backend
 
