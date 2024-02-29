@@ -38,7 +38,7 @@ def chat_stream_restful(instruction: str, state_chatbot: Sequence,
             interactive_mode=True,
             top_p=top_p,
             temperature=temperature):
-        if finish_reason == 'length':
+        if finish_reason == 'length' and tokens == 0:
             gr.Warning('WARNING: exceed session max length.'
                        ' Please restart the session by reset button.')
         if tokens < 0:
