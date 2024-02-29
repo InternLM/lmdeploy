@@ -82,7 +82,7 @@ def check_transformers_version(model_path: str):
     except Exception as e:
         message = (
             f'Load model config with transformers=={trans_version} failed. '
-            'Please make sure model can be loaded with huggingface API.')
+            'Please make sure model can be loaded with transformers API.')
         _handle_exception(e, 'transformers', logger, message=message)
 
     try:
