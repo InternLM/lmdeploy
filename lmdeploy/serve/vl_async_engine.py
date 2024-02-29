@@ -16,7 +16,7 @@ class VLAsyncEngine(AsyncEngine):
         super().__init__(model_path, **kwargs)
         self.vl_encoder = ImageEncoder(model_path)
         self.vl_prompt_template = get_vl_prompt_template(
-            model_path, self.chat_template)
+            model_path, self.chat_template, self.model_name)
 
     def __call__(self, prompts: Union[str, VLPromptType, List[Dict],
                                       List[Union[str, VLPromptType]],

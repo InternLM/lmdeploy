@@ -156,6 +156,66 @@ class BaseModel:
                              repetition_penalty=self.repetition_penalty)
 
 
+@MODELS.register_module(name='yi-vl-6b')
+@MODELS.register_module(name='yi-vl-34b')
+class YiVL(BaseModel):
+    """Chat template of yi vl model."""
+
+    def __init__(
+            self,
+            system="""This is a chat between an inquisitive human and an AI assistant. Assume the role of the AI assistant. Read all the images carefully, and respond to the human's questions with informative, helpful, detailed and polite answers. 这是一个好奇的人类和一个人工智能助手之间的对话。假设你扮演这个AI助手的角色。仔细阅读所有的图像，并对人类的问题做出信息丰富、有帮助、详细的和礼貌的回答。""",  # noqa: E501
+            user='Human',
+            assistant='Assistant',
+            sep='###',
+            stop_words=['###'],
+            **kwargs):
+        super().__init__(**kwargs)
+        self.system = system
+        self.user = user
+        self.assistant = assistant
+        self.sep = sep
+        self.stop_words = stop_words
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+        if sequence_start:
+            return f'{self.system}\n\n{self.sep} {self.user}: {prompt}\n{self.sep} {self.assistant}: '  # noqa: E501
+        else:
+            return f' {self.user}: {prompt}\n{self.sep} {self.assistant}: '
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        system, users, assistants = self._translate_messages(messages)
+        system = self.system if not system else system
+        ret = system + '\n\n'
+        for user, assistant in zip(users, assistants):
+            if assistant:
+                ret += f'{self.sep} {self.user}: {user}\n{self.sep} {self.assistant}: {assistant}\n'  # noqa: E501
+            else:
+                ret += f'{self.sep} {self.user}: {user}\n{self.sep} {self.assistant}: '  # noqa: E501
+        return ret
+
+
 @MODELS.register_module(name='wizardlm')
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseModel):

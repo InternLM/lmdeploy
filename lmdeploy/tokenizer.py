@@ -307,7 +307,9 @@ class HuggingFaceTokenizer:
             token = '▁'
         indexes = [i for _token, i in self.token2id.items() if token in _token]
         if len(indexes) > self.max_indexes_num:
-            indexes = self.encode(token, add_bos=False)[-1:]
+            # multiple id decode to same token
+            indexes = [i for i in indexes if self.decode([i]) == token]
+            indexes = indexes[:self.max_indexes_num]
             self.logger.warning(
                 f'There are too many(>{self.max_indexes_num}) possible '
                 f'indexes may decoding {token}, we will use {indexes} only')

@@ -45,6 +45,7 @@ class LlavaVLModelWrapper(nn.Module):
                                getattr(cfg, 'vision_tower', None))
         if os.path.exists(os.path.join(self.model_path, vision_tower)):
             vision_tower = os.path.join(self.model_path, vision_tower)
+            cfg.mm_vision_tower = vision_tower
 
         with torch.device(self.device):
             self.vision_tower = self._build_vision_tower()
