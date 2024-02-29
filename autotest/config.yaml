@@ -9,6 +9,7 @@ tp_config:
     internlm2-chat-20b: 2
     Baichuan2-13B-Chat: 2
     Mixtral-8x7B-Instruct-v0.1: 2
+    internlm2-20b: 2
 
 
 turbomind_model:
@@ -59,16 +60,16 @@ quatization_case_config:
         - llama-2-7b-chat
         - internlm-chat-20b
         - internlm2-chat-20b
-        - internlm2-1_8b
+        - internlm2-20b
     kvint8_w4a16:
         - llama-2-7b-chat
         - internlm-chat-20b
         - internlm2-chat-20b
-        - internlm2-1_8b
+        - internlm2-20b
     w8a8:
         - llama-2-7b-chat
         - internlm-chat-20b
         - internlm2-chat-20b
         - internlm2-chat-7b
         - Yi-6B-Chat
-        - internlm2-1_8b
+        - internlm2-20b

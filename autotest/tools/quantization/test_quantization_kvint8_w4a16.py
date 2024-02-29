@@ -9,7 +9,7 @@ model_list = [('llama-2-7b-chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=1'),
               ('internlm2-chat-20b-inner-kvint8', 'CUDA_VISIBLE_DEVICES=3'),
               ('Qwen-7B-Chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=4'),
               ('Qwen-14B-Chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=5'),
-              ('internlm2-1_8b-inner-kvint8', 'CUDA_VISIBLE_DEVICES=6'),
+              ('internlm2-20b-inner-kvint8', 'CUDA_VISIBLE_DEVICES=6'),
               ('Baichuan2-7B-Chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=7')]
 
 

@@ -6,10 +6,10 @@ from utils.quantization_utils import quantization
 
 model_list = [('llama-2-7b-chat', 'CUDA_VISIBLE_DEVICES=0'),
               ('internlm-chat-20b', 'CUDA_VISIBLE_DEVICES=1'),
-              ('Qwen-7B-Chat', 'CUDA_VISIBLE_DEVICES=3'),
-              ('Qwen-14B-Chat', 'CUDA_VISIBLE_DEVICES=4'),
-              ('Qwen-VL', 'CUDA_VISIBLE_DEVICES=5'),
-              ('internlm2-1_8b', 'CUDA_VISIBLE_DEVICES=6'),
+              ('Qwen-7B-Chat', 'CUDA_VISIBLE_DEVICES=2'),
+              ('Qwen-14B-Chat', 'CUDA_VISIBLE_DEVICES=3'),
+              ('Qwen-VL', 'CUDA_VISIBLE_DEVICES=4'),
+              ('internlm2-20b', 'CUDA_VISIBLE_DEVICES=6'),
               ('Baichuan2-7B-Chat', 'CUDA_VISIBLE_DEVICES=7')]
 
 

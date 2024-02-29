@@ -9,7 +9,7 @@ model_list = [('llama-2-7b-chat', 'CUDA_VISIBLE_DEVICES=0'),
               ('internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=2'),
               ('internlm2-chat-7b', 'CUDA_VISIBLE_DEVICES=3'),
               ('Yi-6B-Chat', 'CUDA_VISIBLE_DEVICES=4'),
-              ('internlm2-1_8b', 'CUDA_VISIBLE_DEVICES=5')]
+              ('internlm2-20b', 'CUDA_VISIBLE_DEVICES=5')]
 
 # ('Baichuan2-7B-Chat', 'CUDA_VISIBLE_DEVICES=6')
 # ('Baichuan2-13B-Chat', 'CUDA_VISIBLE_DEVICES=7')
