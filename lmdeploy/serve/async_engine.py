@@ -290,6 +290,7 @@ class AsyncEngine:
         """Only return the model instance if it is available."""
         if stop:
             return self.engine.create_instance()
+        # waiting no generator is available or the same session_id is running
         while self.gens_set == set() or session_id in self.running_session_ids:
             await asyncio.sleep(0)
         generator = self.gens_set.pop()
