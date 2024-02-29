@@ -62,7 +62,7 @@ class ChatCompletionRequestQos(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[bool] = False
     stream: Optional[bool] = False
     presence_penalty: Optional[float] = 0.0
@@ -84,7 +84,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     n: Optional[int] = 1
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
     # yapf: enable
     stream: Optional[bool] = False
@@ -264,7 +264,8 @@ class GenerateRequest(BaseModel):
     stream: bool = False
     stop: Optional[Union[str, List[str]]] = Field(default=None,
                                                   examples=[None])
-    request_output_len: int = 512
+    request_output_len: Optional[int] = Field(default=None,
+                                              examples=[None])  # noqa
     top_p: float = 0.8
     top_k: int = 40
     temperature: float = 0.8
@@ -294,4 +295,6 @@ class GenerateResponse(BaseModel):
     """Generate response."""
     text: str
     tokens: int
+    input_tokens: int
+    history_tokens: int
     finish_reason: Optional[Literal['stop', 'length']] = None
