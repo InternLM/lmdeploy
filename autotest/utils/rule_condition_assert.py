@@ -1,4 +1,5 @@
 def assert_result(input, rule_condition, model_name):
+    input = input.replace('\n', '\\n')
     input_lower = input.lower()
     for dict in rule_condition:
         if dict is None:

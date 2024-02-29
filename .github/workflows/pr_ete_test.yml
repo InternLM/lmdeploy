@@ -13,22 +13,6 @@ on:
       - "requirements.txt"
       - "CMakeLists.txt"
       - "setup.py"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/pr_ete_test.yml"
-      - "cmake/**"
-      - "src/**"
-      - "autotest/**"
-      - "3rdparty/**"
-      - "lmdeploy/**"
-      - "requirements/**"
-      - "requirements.txt"
-      - "CMakeLists.txt"
-      - "setup.py"
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
 
 
