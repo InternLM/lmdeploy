@@ -85,6 +85,7 @@ class AsyncEngine:
         self.id2step = {}
         self.id2generator = {}
         self.loop = asyncio.get_event_loop()
+        self.running_session_ids = set()
         self.gens_set = set()
         for i in range(self.instance_num):
             self.gens_set.add(self.engine.create_instance())
@@ -262,12 +263,16 @@ class AsyncEngine:
             self.id2generator[str(session_id)].cancel(session_id)
             self.gens_set.add(self.id2generator[str(session_id)])
 
+        self.running_session_ids.discard(session_id)
+
     def end_session(self, session_id: int):
         """Clear a session by a session_id."""
         if str(session_id) in self.id2generator:
             self.id2generator[str(session_id)].end(session_id)
             self.id2step[str(session_id)] = 0
             self.gens_set.add(self.id2generator[str(session_id)])
+
+        self.running_session_ids.discard(session_id)
 
     @contextmanager
     def safe_run(self, session_id: Optional[int] = None):
@@ -279,15 +284,17 @@ class AsyncEngine:
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
+        self.running_session_ids.discard(session_id)
 
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
         if stop:
             return self.engine.create_instance()
-        while self.gens_set == set():
+        while self.gens_set == set() or session_id in self.running_session_ids:
             await asyncio.sleep(0)
         generator = self.gens_set.pop()
         self.id2generator[str(session_id)] = generator
+        self.running_session_ids.add(session_id)
         return generator
 
     def batch_infer(self,
