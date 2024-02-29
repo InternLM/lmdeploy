@@ -56,16 +56,18 @@ quatization_case_config:
         - Qwen-14B-Chat
         - Baichuan2-7B-Chat
         - internlm2-20b
-    kvint8:
+    kvint8: # more models are supported kvint8 quantization, but the chat response are not good, already removed
         - llama-2-7b-chat
         - internlm-chat-20b
         - internlm2-chat-20b
-        - internlm2-20b
     kvint8_w4a16:
         - llama-2-7b-chat
         - internlm-chat-20b
         - internlm2-chat-20b
         - internlm2-20b
+        - Qwen-7B-Chat
+        - Qwen-14B-Chat
+        - Baichuan2-7B-Chat
     w8a8:
         - llama-2-7b-chat
         - internlm-chat-20b
