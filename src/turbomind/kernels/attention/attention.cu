@@ -19,6 +19,10 @@ void dispatchAttention(const AttentionParams<T>& params)
             using Config = AttentionConfig<arch::Sm80, T, T, 1, 128>;
             invokeAttention<typename Config::Kernel>(params);
         }
+        else if (params.arch == 75) {
+            using Config = AttentionConfig<arch::Sm75, T, T, 1, 128>;
+            invokeAttention<typename Config::Kernel>(params);
+        }
         else if (params.arch == 70) {
             using Config = AttentionConfig<arch::Sm70, T, T, 1, 128>;
             invokeAttention<typename Config::Kernel>(params);

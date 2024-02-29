@@ -6,6 +6,7 @@ add_library(attention STATIC
             kv_cache_utils.cu
             utils.cc
             attention_128_f16_sm80.cu
+            attention_128_f16_sm75.cu
             attention_128_f16_sm70.cu
             attention_128_bf16_sm80.cu
             decoding_128_f16_sm70.cu

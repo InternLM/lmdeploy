@@ -49,7 +49,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, int8_t, 1, kHeadDim>::Kernel>(params);
             }
         }
-        else if (params.arch == 70) {
+        else {
             if (0) {}
             else if (query_group_sz % 4 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 4, kHeadDim>::Kernel>(params);
@@ -63,7 +63,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
         }
     }
     else {
-        if (params.arch >= 80) {
+        if (params.arch >= 80) {  // tensor core & async copy
             if (0) {}
             else if (query_group_sz % 8 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 8, kHeadDim>::Kernel>(params);
@@ -78,7 +78,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 1, kHeadDim>::Kernel>(params);
             }
         }
-        else if (params.arch == 70) {
+        else {  // SIMT & sync copy
             if (0) {}
             else if (query_group_sz % 4 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm70, T, T, 4, kHeadDim>::Kernel>(params);

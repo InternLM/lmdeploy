@@ -114,8 +114,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     static constexpr int kWarpCntS  = CTA_S / WARP_S;
     static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
 
-    // static_assert(kWarpCntS == 1);
-
     static constexpr int OP_K = 16;
 
     static constexpr int K_K = HeadDim / OP_K;  // 128 / 16 = 8
@@ -164,6 +162,16 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     static constexpr int kBatchK = std::min(4, ThreadMapKV::kIterS);
     static constexpr int kBatchV = kBatchK;
+
+    __device__ static T* GetSmemK(SharedStorage& storage)
+    {
+        return storage.KV;
+    }
+
+    __device__ static T* GetSmemV(SharedStorage& storage)
+    {
+        return storage.KV + SmemLayoutK::kSize;
+    }
 
     __device__ static void Sync()
     {

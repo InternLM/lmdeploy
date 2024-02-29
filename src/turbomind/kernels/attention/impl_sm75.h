@@ -16,40 +16,20 @@ struct Sm75SmemIterK: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
 
     using Base::Base;
-    using Base::swizzle_uint_ptr;
+    using Base::smem_;
 
     static_assert(N % 4 == 0);
 
-    __device__ void Load(Array<T, 2> (&frag_K)[N], int k)
+    __device__ void Load(Array<T, 2> (&frag_K)[N], int k, int)
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
+
+        SmemAccessor<T, Layout> sK{smem_};
         PRAGMA_UNROLL
         for (int n = 0; n < N; n += 4) {  // Load (s32,d8) tiles
             const int s = n * 8 + lane_id;
             const int c = k * 8;
-            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], swizzle_uint_ptr(s, c));
-        }
-    }
-};
-
-template<class T, class Layout, int N>
-struct Sm75SmemIterV0: BaseSmemIterator<T, Layout> {
-
-    using Base = BaseSmemIterator<T, Layout>;
-
-    using Base::Base;
-    using Base::swizzle_uint_ptr;
-
-    static_assert(N % 4 == 0);
-
-    __device__ void Load(Array<T, 2> (&frag_V)[N], int k)
-    {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int n = 0; n < N; n += 4) {  // Load (d32,s8) tiles
-            const int si = k * 8 + lane_id % 8;
-            const int di = n * 8 + lane_id / 8 * 8;
-            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], swizzle_uint_ptr(si, di));
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], cast_smem_ptr_to_uint(&sK(s, c)));
         }
     }
 };
@@ -58,39 +38,31 @@ template<class T, class Layout, int N>
 struct Sm75SmemIterV: BaseSmemIterator<T, Layout> {
 
     using Base = BaseSmemIterator<T, Layout>;
+
     using Base::Base;
-    using Base::swizzle_uint_ptr;
+    using Base::smem_;
 
     static_assert(N % 4 == 0);
 
-    Array<int, N / 4> idxs_;
-
-    __device__ Sm75SmemIterV(T* smem): Base{smem}
+    __device__ void Load(Array<T, 2> (&frag_V)[N], int k, int)
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
+
+        SmemAccessor<T, Layout> sV{smem_};
         PRAGMA_UNROLL
         for (int n = 0; n < N; n += 4) {  // Load (d32,s8) tiles
-            const int si = 0 * 8 + lane_id % 8;
+            const int si = k * 8 + lane_id % 8;
             const int di = n * 8 + lane_id / 8 * 8;
-            idxs_[n / 4] = swizzle_uint_ptr(si, di);
-        }
-    }
-
-    __device__ void Load(Array<T, 2> (&frag_V)[N], int k)
-    {
-        PRAGMA_UNROLL
-        for (int n = 0; n < N; n += 4) {
-            const int idx = idxs_[n / 4] + sizeof(T) * k * 8 * Layout::kStride;
-            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], idx);
+            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], cast_smem_ptr_to_uint(&sV(si, di)));
         }
     }
 };
 
 template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H, int WARP_Q, int WARP_S, int HeadDim>
-struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, HeadDim>:
-    Impl_m16k8<T_, WARP_Q, WARP_S, HeadDim> {
+struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, HeadDim, 2>:
+    Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim> {
 
-    using Base = Impl_m16k8<T_, WARP_Q, WARP_S, HeadDim>;
+    using Base = Impl_m16k8<T_, WARP_H, WARP_Q, WARP_S, HeadDim>;
 
     using Arch = Sm75_1688;
 
@@ -116,10 +88,11 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
 
     static constexpr int kHeadDim = HeadDim;
 
+    static constexpr int CTA_H = CTA_H_;
     static constexpr int CTA_Q = CTA_Q_;
     static constexpr int CTA_S = CTA_S_;
 
-    static constexpr int kWarpCntQ  = CTA_Q / WARP_Q;
+    static constexpr int kWarpCntQ  = CTA_Q * CTA_H / WARP_Q;
     static constexpr int kWarpCntS  = CTA_S / WARP_S;
     static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
 
@@ -137,44 +110,43 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
     using FragV = Array<T, 2>[V_K][V_N];  // ((d8, s4), (Sk, Dn), (s2))
                                           //    1   2     8   8     1
 
-    struct Swizzle {
-        __device__ int operator()(int index)
-        {
-            // sssSSSdDDDddd
-            // DDD ^= SSS
-            constexpr int mask = 0x7 << 7;
-            return index ^ ((index & mask) >> 4);
-        }
-    };
+    using SmemLayoutQ = SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<3, 3, 4>>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;
 
-    using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutK = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutP = Identity;
-    using SmemLayoutV = SmemLayout<HeadDim, Swizzle>;
-
-    struct SharedStorage {
-        union {
-            __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
-            struct {
-                __align__(16) T K[CTA_S * SmemLayoutK::kStride];
-                __align__(16) T V[CTA_S * SmemLayoutV::kStride];
-            };
-            struct {
-                T P[1];
-            };
+    union SharedStorage {
+        __align__(16) T Q[SmemLayoutQ::kSize];
+        struct {
+            __align__(16) Tkv K[SmemLayoutK::kSize];
+            __align__(16) Tkv V[SmemLayoutV::kSize];
+        };
+        struct {
+            T P[1];
         };
     };
 
-    using SmemIterQ = NullSmemIter<T>;
-    using SmemIterP = NullSmemIter<T>;
-
-    using SmemIterK = Sm75SmemIterK<T, SmemLayoutK, K_N>;
-    using SmemIterV = Sm75SmemIterV<T, SmemLayoutV, V_N>;
+    using SmemIterQ = T*;
+    using SmemIterP = T*;
+    using SmemIterK = Sm75SmemIterK<Tkv, SmemLayoutK, K_N>;
+    using SmemIterV = Sm75SmemIterV<Tkv, SmemLayoutV, V_N>;
 
     static constexpr bool kUseSmemQ = false;
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 8, kWarpCount>;
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q * CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+
+    using TransformK = float2;
+    using TransformV = float2;
+
+    __device__ static T* GetSmemK(SharedStorage& storage)
+    {
+        return storage.K;
+    }
+
+    __device__ static T* GetSmemV(SharedStorage& storage)
+    {
+        return storage.V;
+    }
 
     __device__ static void Sync()
     {
@@ -188,66 +160,42 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
 
         __syncwarp();
 
-        uint32_t smem_int_ptr = cast_smem_ptr_to_uint(smem_Q);
+        SmemAccessor<T, SmemLayoutQ> sQ{smem_Q};
         if constexpr (!kUseSmemQ) {
             // Load from shared memory using LDSM, rearrange to m16n8k16 atom layout
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
                 PRAGMA_UNROLL
                 for (int k = 0; k < K_K; k += 2) {
-                    const int qi     = m * 16 + lane_id % 16 + warp_id * WARP_Q;
-                    const int di     = k * +8 + lane_id / 16 * 8;
-                    const int offset = sizeof(T) * SmemLayoutQ::swizzle(qi, di);
-                    ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], smem_int_ptr + offset);
+                    const int qi = lane_id % 16 * 1 + m * 16 + warp_id * WARP_Q;
+                    const int di = lane_id / 16 * 8 + k * 8;
+                    ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], cast_smem_ptr_to_uint(&sQ(qi, di)));
                 }
             }
         }
         else {
-            // Rearrange Q in smem so that swizzling is not needed for later LDSMs
-            const int group_id      = lane_id / 16;
-            const int group_lane_id = lane_id % 16;
-            PRAGMA_UNROLL
-            for (int k = 0; k < K_K; ++k) {
-                PRAGMA_UNROLL
-                for (int m = 0; m < K_M; ++m) {
-                    const int qi     = m * 16 + group_lane_id % 8 + group_id * 8 + warp_id * WARP_Q;
-                    const int di     = k * 16 + group_lane_id / 8 * 8;
-                    const int offset = sizeof(T) * SmemLayoutQ::swizzle(qi, di);
-                    ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], smem_int_ptr + offset);
-                }
-            }
-
-            __syncthreads();
-
-            constexpr int THREADS = kWarpCount * WARP_SIZE;
-            PRAGMA_UNROLL
-            for (int k = 0; k < K_K; ++k) {
-                PRAGMA_UNROLL
-                for (int m = 0; m < K_M; ++m) {
-                    constexpr int kVecSize = 8;
-                    Store(&smem_Q[(k * K_M * THREADS + m * THREADS + threadIdx.x) * kVecSize], frag_Q[k][m]);
-                }
-            }
+            static_assert(!std::is_same_v<T, T>, "not supported");
         }
     }
 
-    template<class SmemQ, class SmemK>
-    __device__ static void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S)
+    template<class SmemQ, class SmemK, class Prefetch, class Preload>
+    __device__ static void ComputeQK(SmemQ&      smem_Q,
+                                     SmemK&      smem_K,
+                                     FragQ&      frag_Q,
+                                     FragK&      frag_K,
+                                     FragS&      frag_S,
+                                     TransformV& transform,
+                                     int         offset,
+                                     Prefetch&&  prefetch,
+                                     Preload&&   preload)
     {
-        FragK frag_K;
-
-        smem_K.Load(frag_K[0], 0);
-        if constexpr (kUseSmemQ) {
-            smem_Q.Load(frag_Q[0], 0);
-        }
-
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
-                smem_K.Load(frag_K[k + 1], k + 1);
-                if constexpr (kUseSmemQ) {
-                    smem_Q.Load(frag_Q[k + 1], k + 1);
-                }
+                smem_K.Load(frag_K[k + 1], k + 1, offset);
+            }
+            else {
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -260,17 +208,25 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
         }
     }
 
-    template<class SmemP, class SmemV>
-    __device__ static void ComputePV(SmemP&, SmemV& smem_V, const FragP& frag_P, FragO& frag_O)
+    template<class SmemP, class SmemV, class Prefetch, class Preload>
+    __device__ static void ComputePV(SmemP&      smem_P,
+                                     SmemV&      smem_V,
+                                     FragP&      frag_P,
+                                     FragV&      frag_V,
+                                     FragO&      frag_O,
+                                     TransformV& transform,
+                                     int         offset,
+                                     Prefetch&&  prefetch,
+                                     Preload&&   preload)
     {
-        FragV frag_V;
-
-        smem_V.Load(frag_V[0], 0);
 
         PRAGMA_UNROLL
         for (int k = 0; k < V_K; ++k) {
             if (k < V_K - 1) {
-                smem_V.Load(frag_V[k + 1], k + 1);
+                smem_V.Load(frag_V[k + 1], k + 1, offset);
+            }
+            else {
+                ((Preload &&) preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {

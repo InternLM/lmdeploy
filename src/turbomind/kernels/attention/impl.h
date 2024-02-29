@@ -10,7 +10,7 @@ template<int Begin, int End = -1>
 struct Arch {
     static constexpr bool is_compatible(int x)
     {
-        return Begin <= x && (End == -1 || x <= End);
+        return Begin <= x && (End == -1 || x < End);
     }
 };
 

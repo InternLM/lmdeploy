@@ -153,7 +153,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 1
+#define DECODING 0
 
 template<class T>
 int test_attention()
@@ -379,7 +379,7 @@ int test_attention()
     params.locks     = semaphores.data().get();
 
     params.max_split_k = kMaxSplitK;
-    params.arch        = getSMVersion();
+    params.arch        = 75;  // getSMVersion();
 
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
@@ -519,7 +519,7 @@ int test_attention()
 
 int main(int argc, char* argv[])
 {
-    // test_attention<half>();
+    test_attention<half>();
 
-    test_attention<nv_bfloat16>();
+    // test_attention<nv_bfloat16>();
 }
