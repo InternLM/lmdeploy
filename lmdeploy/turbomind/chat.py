@@ -3,6 +3,7 @@ import os
 import random
 
 from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.tokenizer import DetokenizeState
 
@@ -30,6 +31,17 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
+def fill_config(cfg, kwargs):
+    """Fill config attributes with kwargs."""
+    new_kwargs = {}
+    for k, v in kwargs.items():
+        if hasattr(cfg, k):
+            setattr(cfg, k, v)
+        else:
+            new_kwargs[k] = v
+    return new_kwargs
+
+
 def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
@@ -38,6 +50,7 @@ def main(model_path: str,
          stream_output: bool = True,
          request_output_len: int = 1024,
          chat_template_cfg: ChatTemplateConfig = None,
+         engine_cfg: TurbomindEngineConfig = None,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -58,16 +71,15 @@ def main(model_path: str,
     if chat_template_cfg is None:
         chat_template_cfg = ChatTemplateConfig(model_name=model_name,
                                                capability=cap)
-        new_kwargs = {}
-        for k, v in kwargs.items():
-            if hasattr(chat_template_cfg, k):
-                setattr(chat_template_cfg, k, v)
-            else:
-                new_kwargs[k] = v
-        kwargs = new_kwargs
+        kwargs = fill_config(chat_template_cfg, kwargs)
+    if engine_cfg is None:
+        engine_cfg = TurbomindEngineConfig(model_name=model_name)
+        kwargs = fill_config(engine_cfg, kwargs)
+
     tm_model = tm.TurboMind.from_pretrained(
         model_path,
         model_name=model_name,
+        engine_config=engine_cfg,
         tp=tp,
         capability=cap,
         chat_template_config=chat_template_cfg,

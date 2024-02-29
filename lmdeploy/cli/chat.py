@@ -62,6 +62,7 @@ class SubCliChat(object):
         ArgumentHelper.quant_policy(engine_group)
         ArgumentHelper.model_name(engine_group)
         ArgumentHelper.cache_max_entry_count(engine_group)
+        ArgumentHelper.cache_block_seq_len(engine_group)
         ArgumentHelper.rope_scaling_factor(engine_group)
         ArgumentHelper.session_len(engine_group)
         # other arguments
