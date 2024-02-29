@@ -55,7 +55,7 @@ quatization_case_config:
         - Qwen-7B-Chat
         - Qwen-14B-Chat
         - Baichuan2-7B-Chat
-        - internlm2-1_8b
+        - internlm2-20b
     kvint8:
         - llama-2-7b-chat
         - internlm-chat-20b
