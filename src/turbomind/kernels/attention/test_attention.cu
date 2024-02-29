@@ -379,7 +379,7 @@ int test_attention()
     params.locks     = semaphores.data().get();
 
     params.max_split_k = kMaxSplitK;
-    params.arch        = 75;  // getSMVersion();
+    params.arch        = getSMVersion();
 
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();

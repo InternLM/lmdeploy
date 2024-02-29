@@ -115,7 +115,6 @@ struct Sm70SmemIterV: BaseSmemIterator<T, Layout> {
 
     __device__ void Load(Array<half, 4> (&frag_V)[N], int k, int)
     {
-        typename Layout::Swizzle swizzle;
         PRAGMA_UNROLL
         for (int n = 0; n < N; n += 2) {
             const int idx = idxs_[n / 2] + k * 4 * Layout::C0;
@@ -207,8 +206,8 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
             offset = ((offset & ~20) | (((offset & 16) >> 2) | ((offset & 4) << 2)));  // swap(x[4], x[2])
 
             // Shuffle C according S to avoid bank-conflict
-            // ssssSSddDDddd
-            offset = ((offset & (0x3 << 7)) >> 4) ^ offset;
+            // ssssSSdDDddd
+            offset = ((offset & (0x3 << 6)) >> 3) ^ offset;
             return offset;
         }
 
@@ -216,26 +215,12 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
         {
             return apply(offset);
         }
-
-        template<int D>
-        __device__ int AdvanceS(int offset, int s0, int s1)
-        {
-            if constexpr (D % 4 == 0) {
-                return offset;
-            }
-            else if constexpr (D % 2 == 0) {
-                return offset ^ (((s0 ^ s1) & 0x2) << 3);
-            }
-            else {
-                return offset ^ (((s0 ^ s1) & 0x3) << 3);
-            }
-        }
     };
 
     using SmemLayoutQ = SmemLayoutV2<CTA_Q, HeadDim + 4, 1, 1, Identity>;
     using SmemLayoutP = SmemLayoutV2<CTA_Q, CTA_S + 4, 1, 1, Identity>;
     using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim + 4, 1, 1, Identity>;
-    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, CTA_S, HeadDim, SwizzleV>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, CTA_S, 64, SwizzleV>;
 
     struct SharedStorage {
         union {
