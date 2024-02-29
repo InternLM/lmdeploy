@@ -339,6 +339,7 @@ def parse_args():
     tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_count_act)
     ArgumentHelper.model_format(tb_group, default='hf')
+    ArgumentHelper.cache_block_seq_len(tb_group)
     args = parser.parse_args()
     return args
 
@@ -390,6 +391,7 @@ def main():
             if args.backend == 'turbomind':
                 engine_config = TurbomindEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
+                    cache_block_seq_len=args.cache_block_seq_len,
                     model_format=args.model_format,
                     session_len=session_len,
                     tp=args.tp)

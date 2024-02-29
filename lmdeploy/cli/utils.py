@@ -354,3 +354,13 @@ class ArgumentHelper:
             type=str,
             default='./work_dir',
             help='The working directory to save results')
+
+    @staticmethod
+    def cache_block_seq_len(parser):
+        """Add argument cache_block_seq_len to parser."""
+
+        return parser.add_argument(
+            '--cache-block-seq-len',
+            type=int,
+            default=128,
+            help='The length of the token sequence in a k/v block')

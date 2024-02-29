@@ -66,6 +66,7 @@ class SubCliServe:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.cache_block_seq_len(tb_group)
 
     @staticmethod
     def add_parser_api_server():
@@ -149,6 +150,7 @@ class SubCliServe:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.cache_block_seq_len(tb_group)
 
     @staticmethod
     def add_parser_api_client():
@@ -215,7 +217,8 @@ class SubCliServe:
                 model_format=args.model_format,
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
-                cache_max_entry_count=args.cache_max_entry_count)
+                cache_max_entry_count=args.cache_max_entry_count,
+                cache_block_seq_len=args.cache_block_seq_len)
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
@@ -256,7 +259,8 @@ class SubCliServe:
                 model_format=args.model_format,
                 quant_policy=args.quant_policy,
                 rope_scaling_factor=args.rope_scaling_factor,
-                cache_max_entry_count=args.cache_max_entry_count)
+                cache_max_entry_count=args.cache_max_entry_count,
+                cache_block_seq_len=args.cache_block_seq_len)
         chat_template_config = ChatTemplateConfig(
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
