@@ -5,9 +5,11 @@ import logging
 import os
 import shutil
 import subprocess
+from collections import OrderedDict
 from typing import List
 
 import fire
+from mmengine.config import Config
 
 
 def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
@@ -74,6 +76,27 @@ def add_summary(csv_path: str):
             _append_summary(line)
 
 
+def _load_hf_results(test_results: dict, model_name: str):
+    """Read opencompass eval results."""
+    lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
+    hf_res_path = os.path.join(lmdeploy_dir, 'opencompass_results.json')
+    out = OrderedDict()
+    if os.path.exists(hf_res_path):
+        with open(hf_res_path, 'r') as f:
+            data = json.load(f)
+            if model_name in data:
+                res = data[model_name]
+                for dataset in test_results:
+                    value = '-'
+                    if dataset in res:
+                        value = res[dataset]
+                    out[dataset] = value
+            else:
+                logging.warning(
+                    f'No opencompass results found for model {model_name}')
+    return out
+
+
 def evaluate(models: List[str], workspace: str):
     """Evaluate models from lmdeploy using opencompass.
 
@@ -84,6 +107,7 @@ def evaluate(models: List[str], workspace: str):
     os.makedirs(workspace, exist_ok=True)
     output_csv = os.path.join(workspace, 'results.csv')
     num_model = len(models)
+    test_model_names = set()
     for idx, ori_model in enumerate(models):
         print()
         print(50 * '==')
@@ -111,6 +135,17 @@ def evaluate(models: List[str], workspace: str):
         target_model = f'{engine_type}_{model}'
         if do_lite:
             target_model = target_model + f'_{precision}'
+        cfg = Config.fromfile(config_path_new)
+        if not hasattr(cfg, target_model):
+            logging.error(
+                f'Model {target_model} not found in configuration file')
+            continue
+        model_cfg = cfg[target_model]
+        hf_model_path = model_cfg['path']
+        if not os.path.exists(hf_model_path):
+            logging.error(f'Model path not exists: {hf_model_path}')
+            continue
+        logging.info(f'Start evaluating {target_model} ...\\nn{model_cfg}\n\n')
         with open(config_path_new, 'a') as f:
             f.write(f'\nmodels = [ {target_model} ]\n')
 
@@ -134,14 +169,14 @@ def evaluate(models: List[str], workspace: str):
                 print(f.read())
 
         # parse evaluation results from csv file
-        data = []
+        model_results = OrderedDict()
         with open(csv_file, 'r') as f:
             lines = f.readlines()
             for line in lines[1:]:
                 row = line.strip().split(',')
                 row = [_.strip() for _ in row]
                 if row[-1] != '-':
-                    data.append((row[0], row[-1]))
+                    model_results[row[0]] = row[-1]
         crows_pairs_json = glob.glob(os.path.join(
             work_dir, '*/results/*/crows_pairs.json'),
                                      recursive=True)
@@ -149,18 +184,34 @@ def evaluate(models: List[str], workspace: str):
             with open(crows_pairs_json[0], 'r') as f:
                 acc = json.load(f)['accuracy']
                 acc = f'{float(acc):.2f}'
-                data.append(('crows_pairs', acc))
+                model_results['crows_pairs'] = acc
+        dataset_names = list(model_results.keys())
         prec = precision if do_lite else '-'
-        row = ','.join([model, engine_type, prec] + [_[1] for _ in data])
+
+        row = ','.join([model, engine_type, prec] +
+                       [model_results[_] for _ in dataset_names])
+        hf_res_row = None
+        if hf_model_path not in test_model_names:
+            test_model_names.add(hf_model_path)
+            hf_res = _load_hf_results(model_results, hf_model_path)
+            if hf_res:
+                hf_metrics = [
+                    hf_res[d] if d in hf_res else '-' for d in dataset_names
+                ]
+                hf_res_row = ','.join([model, 'hf', '-'] + hf_metrics)
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
                 header = ','.join(['Model', 'Engine', 'Precision'] +
-                                  [_[0] for _ in data])
+                                  dataset_names)
                 f.write(header + '\n')
                 f.write(row + '\n')
+                if hf_res_row:
+                    f.write(hf_res_row + '\n')
         else:
             with open(output_csv, 'a') as f:
                 f.write(row + '\n')
+                if hf_res_row:
+                    f.write(hf_res_row + '\n')
 
     # write to github action summary
     _append_summary('## Evaluation Results')
