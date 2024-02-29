@@ -1073,6 +1073,67 @@ class MistralChat(BaseModel):
         return ret
 
 
+@MODELS.register_module(name=['gemma'])
+class Gemma(BaseModel):
+    """Template of Gemma models.
+
+    `https://huggingface.co/google/gemma-7b-it`
+    """
+
+    def __init__(self,
+                 user='user\n',
+                 boh='<start_of_turn>',
+                 eoh='<end_of_turn>\n',
+                 assistant='model\n',
+                 boa='<start_of_turn>',
+                 eoa='<end_of_turn>\n',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.user = user
+        self.boh = boh
+        self.eoh = eoh
+        self.assistant = assistant
+        self.boa = boa
+        self.eoa = eoa
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+
+        return (f'{self.boh}{self.user}{prompt}{self.eoh}'
+                f'{self.boa}{self.assistant}')
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        _, users, assistants = self._translate_messages(messages)
+        ret = ''
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            ret += (f'{self.boh}{self.user}{user}{self.eoh}'
+                    f'{self.boa}{self.assistant}')
+            if assistant:
+                ret += f'{assistant}{self.eoa}'
+        return ret
+
+
 @MODELS.register_module(name=['deepseek-chat'])
 class Deepseek(BaseModel):
 

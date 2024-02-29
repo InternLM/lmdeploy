@@ -270,7 +270,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - n (int): How many chat completion choices to generate for each input
         message. Only support one here.
     - stream: whether to stream the results or not. Default to false.
-    - max_tokens (int): output token nums
+    - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
@@ -304,7 +304,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         request.stop = [request.stop]
 
     gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        max_new_tokens=request.max_tokens,
         top_k=request.top_k,
         top_p=request.top_p,
         temperature=request.temperature,
@@ -572,7 +572,7 @@ async def completions_v1(request: CompletionRequest,
     - model (str): model name. Available from /v1/models.
     - prompt (str): the input prompt.
     - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_tokens (int): output token nums
+    - max_tokens (int): output token nums. Default to 16.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
@@ -811,6 +811,8 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
         async for out in generation:
             chunk = GenerateResponse(text=out.response,
                                      tokens=out.generate_token_len,
+                                     input_tokens=out.input_token_len,
+                                     history_tokens=out.history_token_len,
                                      finish_reason=out.finish_reason)
             data = chunk.model_dump_json()
             yield f'{data}\n'
@@ -855,7 +857,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - stream: whether to stream the results or not.
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - request_output_len (int): output token nums
+    - request_output_len (int): output token nums. If not specified, will use
+        maximum possible number for a session.
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
@@ -870,7 +873,13 @@ async def chat_interactive_v1(request: GenerateRequest,
     """
     if request.cancel and request.session_id != -1:
         VariableInterface.async_engine.stop_session(request.session_id)
-        return {'text': '', 'tokens': 0, 'finish_reason': None}
+        return {
+            'text': '',
+            'tokens': 0,
+            'input_tokens': 0,
+            'history_tokens': 0,
+            'finish_reason': 'stop'
+        }
     if request.session_id == -1:
         request.session_id = random.randint(10087, 23333)
 
@@ -902,6 +911,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         async for out in generation:
             chunk = GenerateResponse(text=out.response,
                                      tokens=out.generate_token_len,
+                                     input_tokens=out.input_token_len,
+                                     history_tokens=out.history_token_len,
                                      finish_reason=out.finish_reason)
             data = chunk.model_dump_json()
             yield f'{data}\n'
@@ -912,7 +923,7 @@ async def chat_interactive_v1(request: GenerateRequest,
     else:
         ret = {}
         text = ''
-        tokens = 0
+        tokens, input_tokens, history_tokens = 0, 0, 0
         finish_reason = None
         async for out in generation:
             if await raw_request.is_disconnected():
@@ -922,8 +933,16 @@ async def chat_interactive_v1(request: GenerateRequest,
                                              'Client disconnected')
             text += out.response
             tokens = out.generate_token_len
+            input_tokens = out.input_token_len
+            history_tokens = out.history_token_len
             finish_reason = out.finish_reason
-        ret = {'text': text, 'tokens': tokens, 'finish_reason': finish_reason}
+        ret = {
+            'text': text,
+            'tokens': tokens,
+            'input_tokens': input_tokens,
+            'history_tokens': history_tokens,
+            'finish_reason': finish_reason
+        }
         return JSONResponse(ret)
 
 
