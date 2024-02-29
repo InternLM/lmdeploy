@@ -9,10 +9,10 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn, try_to_local)
+from ..kernels import apply_rotary_pos_emb
 from ..kernels.alibi_pagedattention import alibi_paged_attention_fwd
 from ..kernels.fill_kv_cache import fill_kv_cache
 from ..kernels.pagedattention import paged_attention_fwd
-from .llama import apply_rotary_pos_emb
 
 
 def _attention_partition_fn(mod_name: str, mod: nn.Module,

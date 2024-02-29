@@ -97,7 +97,7 @@ class APIClient:
                             temperature: Optional[float] = 0.7,
                             top_p: Optional[float] = 1.0,
                             n: Optional[int] = 1,
-                            max_tokens: Optional[int] = 512,
+                            max_tokens: Optional[int] = None,
                             stop: Optional[Union[str, List[str]]] = None,
                             stream: Optional[bool] = False,
                             presence_penalty: Optional[float] = 0.0,
@@ -121,7 +121,7 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
-            max_tokens (int): output token nums
+            max_tokens (int | None): output token nums. Default to None.
             stop (str | List[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
@@ -166,7 +166,7 @@ class APIClient:
                             interactive_mode: bool = False,
                             stream: bool = False,
                             stop: Optional[Union[str, List[str]]] = None,
-                            request_output_len: int = 512,
+                            request_output_len: Optional[int] = None,
                             top_p: float = 0.8,
                             top_k: int = 40,
                             temperature: float = 0.8,
@@ -192,7 +192,8 @@ class APIClient:
             stream: whether to stream the results or not.
             stop (str | List[str] | None): To stop generating further tokens.
                 Only accept stop words that's encoded to one token idex.
-            request_output_len (int): output token nums
+            request_output_len (int): output token nums. If not specified,
+                will use maximum possible number for a session.
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or
                 higher are kept for generation.
@@ -206,7 +207,8 @@ class APIClient:
                 in the decoding. Default to be True.
 
         Yields:
-            json objects consist of text, tokens, finish_reason
+            json objects consist of text, tokens, input_tokens,
+                history_tokens, finish_reason
         """
         pload = {
             k: v
