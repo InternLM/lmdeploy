@@ -87,6 +87,7 @@ class EngineGenerationConfig(GenerationConfig):
         return EngineGenerationConfig(
             n=gen_config.n,
             max_new_tokens=gen_config.max_new_tokens,
+            min_new_tokens=gen_config.min_new_tokens,
             top_p=gen_config.top_p,
             top_k=gen_config.top_k,
             temperature=gen_config.temperature,
