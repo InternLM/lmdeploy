@@ -25,14 +25,9 @@ def getModelList():
 @pytest.mark.parametrize('usercase', getPromptCaseList())
 @pytest.mark.parametrize('model', getModelList())
 def test_workspace_chat(config, cli_case_config, usercase, model):
-    result, chat_log, msg = command_line_test(
-        config,
-        usercase,
-        cli_case_config.get(usercase),
-        model,
-        'turbomind',
-        None,
-        cuda_prefix='CUDA_VISIBLE_DEVICES=5,6')
+    result, chat_log, msg = command_line_test(config, usercase,
+                                              cli_case_config.get(usercase),
+                                              model, 'turbomind', None)
     if chat_log is not None:
         allure.attach.file(chat_log,
                            attachment_type=allure.attachment_type.TEXT)
@@ -47,9 +42,14 @@ def test_workspace_chat(config, cli_case_config, usercase, model):
 @pytest.mark.parametrize(
     'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
 def test_workspace_chat_pr(config, cli_case_config, usercase, model):
-    result, chat_log, msg = command_line_test(config, usercase,
-                                              cli_case_config.get(usercase),
-                                              model, 'turbomind', None)
+    result, chat_log, msg = command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        None,
+        cuda_prefix='CUDA_VISIBLE_DEVICES=5,6')
     if chat_log is not None:
         allure.attach.file(chat_log,
                            attachment_type=allure.attachment_type.TEXT)

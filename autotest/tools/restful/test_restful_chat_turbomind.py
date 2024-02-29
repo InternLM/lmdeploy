@@ -19,7 +19,9 @@ def prepare_environment(request, config):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
 
-    model = request.param
+    param = request.param
+    model = param['model']
+    cuda_prefix = param['cuda_prefix']
 
     cmd = ['lmdeploy serve api_server ' + model_path + '/' + model]
 
@@ -27,7 +29,8 @@ def prepare_environment(request, config):
                                  '/' + model,
                                  config,
                                  model,
-                                 need_tp=True)
+                                 need_tp=True,
+                                 cuda_prefix=cuda_prefix)
 
     if 'kvint8' in model and 'w4' not in model:
         cmd += ' --model-format hf --quant-policy 4'
@@ -74,9 +77,10 @@ def prepare_environment(request, config):
 
 
 def getModelList():
-    return [
-        item for item in get_turbomind_model_list() if 'chat' in item.lower()
-    ]
+    return [{
+        'model': item,
+        'cuda_prefix': None
+    } for item in get_turbomind_model_list() if 'chat' in item.lower()]
 
 
 @pytest.mark.order(7)
@@ -93,10 +97,15 @@ def test_restful_chat(config, common_case_config):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
-@pytest.mark.parametrize(
-    'prepare_environment',
-    ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'],
-    indirect=True)
+@pytest.mark.parametrize('prepare_environment',
+                         [{
+                             'model': 'internlm2-chat-20b',
+                             'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6'
+                         }, {
+                             'model': 'internlm2-chat-20b-inner-w4a16',
+                             'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6'
+                         }],
+                         indirect=True)
 def test_restful_chat_pr(config, common_case_config):
     run_all_step(config, common_case_config)
 
