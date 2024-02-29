@@ -32,6 +32,7 @@ def test_hf_pytorch_chat(config, model, cli_case_config, usercase):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.pr_test
+@pytest.mark.xdist_group(name="pr_test")
 @pytest.mark.parametrize('usercase', getCaseList())
 @pytest.mark.parametrize('model', ['internlm2-chat-20b'])
 def test_hf_pytorch_chat_pr(config, model, cli_case_config, usercase):

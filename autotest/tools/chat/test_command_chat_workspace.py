@@ -38,6 +38,7 @@ def test_workspace_chat(config, cli_case_config, usercase, model):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.command_chat
 @pytest.mark.pr_test
+@pytest.mark.xdist_group(name="pr_test")
 @pytest.mark.parametrize('usercase', getPromptCaseList())
 @pytest.mark.parametrize(
     'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])

@@ -87,7 +87,7 @@ jobs:
       - name: Test lmdeploy - convert
         continue-on-error: true
         run: |
-          pytest autotest/tools/convert -n 6 --alluredir=allure-results
+          pytest autotest/tools/convert -n 6 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - interface turbomind case
         continue-on-error: true
         timeout-minutes: 120
@@ -113,17 +113,17 @@ jobs:
         continue-on-error: true
         timeout-minutes: 120
         run: |
-          pytest autotest/tools/chat/test_command_chat_workspace.py -n 4 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_workspace.py -n 4 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         timeout-minutes: 120
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -n 4 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -n 4 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         timeout-minutes: 120
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -n 4 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -n 4 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - rerun all fail cases
         run: |
           pytest autotest --alluredir=allure-results --lf
