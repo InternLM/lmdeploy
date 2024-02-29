@@ -142,6 +142,7 @@ def get_model_from_config(model_dir: str):
         config = json.load(f)
 
     ARCH_MAP = {
+        'LlavaLlamaForCausalLM': default,
         'LlamaForCausalLM': default,
         'InternLM2ForCausalLM': 'internlm2',
         'InternLMForCausalLM': default,

@@ -290,10 +290,14 @@ class HuggingFaceTokenizer:
         if self.token2id == {}:
             # decode is slower than convert_ids_to_tokens
             if self.maybe_decode_bytes:
-                self.token2id = {
-                    self.model.decode(i): i
-                    for i in range(self.vocab_size)
-                }
+                try:
+                    self.token2id = {
+                        self.model.decode(i): i
+                        for i in range(self.vocab_size)
+                    }
+                except Exception as e:
+                    # qwen-vl
+                    assert str(e) == 'Unclosed image token'
             else:
                 self.token2id = {
                     self.model.convert_ids_to_tokens(i): i
