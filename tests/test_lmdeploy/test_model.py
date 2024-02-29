@@ -1,20 +1,19 @@
 import pytest
 
-from lmdeploy.model import MODELS, SamplingParam, best_match_model
+from lmdeploy.model import MODELS, best_match_model
 
 
 @pytest.mark.parametrize(
     'model_path_and_name',
-    [('internlm/internlm-chat-7b', ['internlm-chat-7b']),
+    [('internlm/internlm-chat-7b', ['internlm-chat']),
      ('models--internlm--internlm-chat-7b/snapshots/1234567',
-      ['internlm-chat-7b']), ('Qwen/Qwen-7B-Chat', ['qwen-7b']),
-     ('baichuan-inc/Baichuan-7B', ['baichuan-7b']),
+      ['internlm-chat']), ('Qwen/Qwen-7B-Chat', ['qwen-chat']),
+     ('baichuan-inc/Baichuan-7B', ['baichuan-base']),
      ('codellama/CodeLlama-7b-hf', ['codellama']),
      ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
      ('meta-llama/Llama-2-7b-chat-hf', ['llama-2-chat', 'llama-2']),
-     ('THUDM/chatglm2-6b', ['chatglm2-6b']),
-     ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
-     ('01-ai/Yi-34B-Chat', ['yi-chat', 'yi-34b', 'yi-200k']),
+     ('THUDM/chatglm2-6b', ['chatglm2']),
+     ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']), ('01-ai/Yi-34B-Chat', ['yi']),
      ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
      ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
@@ -208,39 +207,3 @@ def test_codellama_others():
     with pytest.raises(AssertionError):
         model = MODELS.get('codellama')(capability='java')
     assert model is None
-
-
-def test_sampling_param():
-    model = MODELS.get('llama')()
-    default_sampling_param = SamplingParam()
-    assert model.sampling_param == default_sampling_param
-
-    model = MODELS.get('llama')(top_p=0.1, top_k=10)
-    assert model.sampling_param.top_p == 0.1 and \
-        model.sampling_param.top_k == 10
-    assert model.sampling_param.temperature == 0.8 and \
-        model.sampling_param.repetition_penalty == 1.0
-
-    model = MODELS.get('codellama')(capability='completion')
-    assert model.sampling_param.top_p == 0.9 and \
-        model.sampling_param.top_k is None and \
-        model.sampling_param.temperature == 0.2 and \
-        model.sampling_param.repetition_penalty == 1.0
-
-    model = MODELS.get('codellama')(capability='chat')
-    assert model.sampling_param.top_p == 0.95 and \
-        model.sampling_param.top_k is None and \
-        model.sampling_param.temperature == 0.2 and \
-        model.sampling_param.repetition_penalty == 1.0
-
-    model = MODELS.get('codellama')(capability='infilling')
-    assert model.sampling_param.top_p == 0.9 and \
-        model.sampling_param.top_k is None and \
-        model.sampling_param.temperature == 0.0 and \
-        model.sampling_param.repetition_penalty == 1.0
-
-    model = MODELS.get('codellama')(capability='python')
-    assert model.sampling_param.top_p == 0.9 and \
-        model.sampling_param.top_k is None and \
-        model.sampling_param.temperature == 0.2 and \
-        model.sampling_param.repetition_penalty == 1.0

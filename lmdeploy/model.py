@@ -93,6 +93,15 @@ class BaseModel:
             return self.get_prompt(messages)
         # chat history processing in derived classes
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        return None
+
 
 class BaseChatTemplate(BaseModel):
     """Base Chat template."""
@@ -188,6 +197,18 @@ class Vicuna(BaseChatTemplate):
                          stop_words=stop_words,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'vicuna' in model_path.lower():
+            return 'vicuna'
+        if 'wizardlm' in model_path.lower():
+            return 'wizardlm'
+
 
 @MODELS.register_module(name='internlm-chat')
 @MODELS.register_module(name='internlm-chat-7b')
@@ -220,9 +241,22 @@ class InternLMChat7B(BaseChatTemplate):
                          stop_words=stop_words,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if all([c not in path for c in ['internlm2', '8k']]) and \
+                all([c in path for c in ['internlm', 'chat']]):
+            return 'internlm-chat'
+
 
 @MODELS.register_module(name='internlm-chat-20b')
 @MODELS.register_module(name='internlm-chat-7b-8k')
+@MODELS.register_module(name='internlm-chat-8k')
 class InternLMChat7B8K(InternLMChat7B):
     """Chat template and generation parameters of InternLM-Chat-7B-8K and
     InternLM-Chat-20B models."""
@@ -230,6 +264,18 @@ class InternLMChat7B8K(InternLMChat7B):
     def __init__(self, session_len=8192, **kwargs):
         super(InternLMChat7B8K, self).__init__(**kwargs)
         self.session_len = session_len
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'intenlm' in path and 'internlm2' not in path and 'chat' in path:
+            if '20b' in path or '8k' in path:
+                return 'internlm-chat-8k'
 
 
 @MODELS.register_module(name='internlm-20b')
@@ -241,6 +287,18 @@ class InternLMBaseModel20B(BaseChatTemplate):
                          capability=capability,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'intenlm' in path and 'internlm2' not in path:
+            if '20b' in path and 'chat' not in path:
+                return 'internlm-20b'
+
 
 @MODELS.register_module(
     name=['internlm2', 'internlm2-1_8b', 'internlm2-7b', 'internlm2-20b'])
@@ -251,6 +309,17 @@ class InternLM2BaseModel7B(BaseChatTemplate):
         super().__init__(session_len=session_len,
                          capability=capability,
                          **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'intenlm2' in path and 'chat' not in path:
+            return 'internlm2'
 
 
 @MODELS.register_module(name=[
@@ -283,8 +352,20 @@ class InternLM2Chat7B(InternLMChat7B):
                              stop_words=stop_words,
                              **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'intenlm2' in path and 'chat' in path:
+            return 'internlm2-chat'
+
 
 @MODELS.register_module(name='baichuan-7b')
+@MODELS.register_module(name='baichuan-base')
 class Baichuan7B(BaseChatTemplate):
     """Generation parameters of Baichuan-7B base model."""
 
@@ -292,8 +373,21 @@ class Baichuan7B(BaseChatTemplate):
         super().__init__(**kwargs)
         self.repetition_penalty = repetition_penalty
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'baichuan' in path and 'chat' not in path \
+                and 'baichuan2' not in path:
+            return 'baichuan-base'
+
 
 @MODELS.register_module(name='baichuan2-7b')
+@MODELS.register_module(name='baichuan2-chat')
 class Baichuan2_7B(BaseChatTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
     Baichuan2-7B-Chat models."""
@@ -303,6 +397,17 @@ class Baichuan2_7B(BaseChatTemplate):
                  assistant='<reserved_107>',
                  **kwargs):
         super().__init__(user=user, assistant=assistant, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'baichuan2' in path and 'chat' in path:
+            return 'baichuan-base'
 
 
 @MODELS.register_module(name='puyu')
@@ -329,6 +434,16 @@ class Puyu(BaseChatTemplate):
                          eoa=eoa,
                          stop_words=stop_words,
                          **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'puyu' in model_path.lower():
+            return 'puyu'
 
 
 @MODELS.register_module(name=['llama2', 'llama-2', 'llama-2-chat'])
@@ -357,9 +472,20 @@ If a question does not make any sense, or is not factually coherent, explain why
                          session_len=session_len,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'llama2' in model_path.lower():
+            return 'llama2'
+
 
 @MODELS.register_module(name='qwen-14b')
 @MODELS.register_module(name='qwen-7b')
+@MODELS.register_module(name='qwen-chat')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
 
@@ -386,6 +512,16 @@ class Qwen7BChat(BaseChatTemplate):
                          stop_words=stop_words,
                          session_len=session_len,
                          **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'qwen' in model_path.lower():
+            return 'qwen-chat'
 
 
 @MODELS.register_module(name='codellama')
@@ -428,6 +564,16 @@ class CodeLlama(Llama2):
             prompt = f'<PRE> {prefix} <SUF>{suffix} <MID>'
         return prompt
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'codellama' in model_path.lower():
+            return 'codellama'
+
 
 @MODELS.register_module(name='falcon')
 class Falcon(BaseModel):
@@ -441,8 +587,19 @@ class Falcon(BaseModel):
             return '<|endoftext|>'
         return prompt
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'falcon' in model_path.lower():
+            return 'falcon'
+
 
 @MODELS.register_module(name='chatglm2-6b')
+@MODELS.register_module(name='chatglm2')
 class ChatGLM2(BaseModel):
 
     def __init__(self):
@@ -455,6 +612,16 @@ class ChatGLM2(BaseModel):
         # [64790, 64792] to be prepended
         self.count += 1
         return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'chatglm2' in model_path.lower():
+            return 'chatglm2'
 
 
 @MODELS.register_module(name=['solar', 'solar-70b'])
@@ -483,6 +650,16 @@ class SOLAR(BaseChatTemplate):
         self.eoa = eoa
         self.meta_instruction = meta_instruction
         self.session_len = session_len
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'solar' in model_path.lower():
+            return 'solar'
 
 
 @MODELS.register_module(name='ultracm')
@@ -519,6 +696,18 @@ class UltraChat(BaseChatTemplate):
                          session_len=session_len,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'ultracm' in model_path.lower():
+            return 'ultracm'
+        if 'ultralm' in model_path.lower():
+            return 'ultralm'
+
 
 @MODELS.register_module(name=['yi', 'yi-chat', 'yi-200k', 'yi-34b'])
 class Yi(BaseChatTemplate):
@@ -546,8 +735,18 @@ class Yi(BaseChatTemplate):
                          stop_words=stop_words,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
 
-@MODELS.register_module(name=['Mistral-7B-Instruct', 'Mixtral-8x7B-Instruct'])
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'yi' in model_path.lower():
+            return 'yi'
+
+
+@MODELS.register_module(name=['mistral-instruct', 'mixtral-instruct'])
 class MistralChat(BaseModel):
     """Template of Mistral and Mixtral Instruct models.
 
@@ -566,6 +765,19 @@ class MistralChat(BaseModel):
                          eoa=eoa,
                          session_len=session_len,
                          **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'instruct' in model_path.lower():
+            if 'mistral' in model_path.lower():
+                return 'mistral-instruct'
+            if 'mixtral' in model_path.lower():
+                return 'mixtral-instruct'
 
 
 @MODELS.register_module(name=['gemma'])
@@ -587,6 +799,16 @@ class Gemma(BaseModel):
                          eoa=eoa,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'gemma' in model_path.lower():
+            return 'gemma'
+
 
 @MODELS.register_module(name=['deepseek-chat'])
 class Deepseek(BaseModel):
@@ -603,6 +825,16 @@ class Deepseek(BaseModel):
                          eoa=eoa,
                          **kwargs)
 
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        if 'deepseek' in model_path.lower():
+            return 'deepseek-chat'
+
 
 def best_match_model(query: str, similarity_cutoff: float = 0.5):
     """Get the model that matches the query.
@@ -614,24 +846,13 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
     Return:
         List[str] | None: the possible model names or none.
     """
+    for name, model in MODELS.module_dict.items():
+        if model.match(query):
+            return model.match(query)
     model_names = list(MODELS.module_dict.keys())
-    if ('models--' in query) and ('snapshots' in query):
-        paths = query.split(os.sep)
-        paths = [x for x in paths if 'models--' in x]
-        query = paths[0].split('--')[-1]
-    elif query.endswith('/'):
+    if query.endswith('/'):
         query = query[:-1]
     base_name = os.path.basename(query).lower()
-    max_ratio, matched_name = float('-inf'), None
-    for model_name in model_names:
-        if model_name in base_name:
-            ratio = fuzz.ratio(model_name.lower(), base_name)
-            if ratio > max_ratio and model_name != 'base':  # skip base model
-                max_ratio = ratio
-                matched_name = model_name
-    if matched_name:
-        return matched_name
-
     # Using fuzzy matching
     matches = process.extract(base_name, model_names, scorer=fuzz.ratio)
 
