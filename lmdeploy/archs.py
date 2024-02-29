@@ -17,7 +17,7 @@ _SUPPORTED_ARCHS = dict(
     # falcon-7b
     FalconForCausalLM=dict(pytorch=True, turbomind=False),
     # gemma-7b
-    GemmaForCausalLM=dict(pytorch=False, turbomind=False),
+    GemmaForCausalLM=dict(pytorch=True, turbomind=False),
     # internlm
     InternLMForCausalLM=dict(pytorch=True, turbomind=True),
     # internlm2
