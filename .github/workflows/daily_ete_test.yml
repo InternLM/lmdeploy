@@ -3,7 +3,7 @@ name: daily_ete_test
 on:
   workflow_dispatch:
   schedule:
-    - cron:  '00 20 * * *'
+    - cron:  '00 18 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -90,41 +90,42 @@ jobs:
           pytest autotest/tools/convert -n 6 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - interface turbomind case
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 20
         run: |
           pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 45
         run: pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py --alluredir=allure-results
       - name: Test lmdeploy - pipeline torch
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 75
         run: pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 60
         run: pytest autotest/tools/restful/test_restful_chat_turbomind.py --alluredir=allure-results
       - name: Test lmdeploy - restful torch
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 80
         run: pytest autotest/tools/restful/test_restful_chat_pytorch.py --alluredir=allure-results
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 30
         run: |
           pytest autotest/tools/chat/test_command_chat_workspace.py -n 4 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 45
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -n 4 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
-        timeout-minutes: 120
+        timeout-minutes: 60
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -n 4 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - rerun all fail cases
+        timeout-minutes: 60
         run: |
           pytest autotest --alluredir=allure-results --lf
       - name: Generate reports
