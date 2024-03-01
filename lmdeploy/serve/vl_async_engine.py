@@ -55,8 +55,9 @@ class VLAsyncEngine(AsyncEngine):
                     begins.append(len(input_ids))
                     ends.append(begins[-1] + image_dim)
                     input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
-                seg_ids = self.tokenizer.encode(
-                    seg, add_special_tokens=((i == 0) and sequence_start))
+                seg_ids = self.tokenizer.encode(seg,
+                                                add_bos=((i == 0)
+                                                         and sequence_start))
                 input_ids.extend(seg_ids)
             ranges = np.stack([begins, ends], axis=1).tolist()
             results['input_embeddings'] = features
