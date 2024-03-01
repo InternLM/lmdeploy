@@ -111,6 +111,9 @@ class AsyncEngine:
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  tp: int = 1,
                  **kwargs) -> None:
+        logger.info(f'AsyncEngine init with backend={backend}, backend_config'
+                    f'={backend_config}, chat_template_config='
+                    f'{chat_template_config}')
         self.model_name = deduce_a_name(model_path, model_name, backend_config,
                                         chat_template_config)
         # build chat template config
@@ -118,7 +121,6 @@ class AsyncEngine:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
-        logger.info(f'Chat template config: {chat_template_config}')
         self.chat_template = chat_template_config.chat_template
         # prevent bc
         for k in list(kwargs.keys()):
