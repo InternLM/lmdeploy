@@ -79,6 +79,11 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
 
 
 def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
+    # A workaround to support max token number of each iteration in prefill
+    if src.max_prefill_token_num is not None and src.session_len is not None:
+        dst.num_tokens_per_iter = src.max_prefill_token_num
+        dst.max_prefill_iters = (src.session_len + src.max_prefill_token_num -
+                                 1) // src.max_prefill_token_num
     dst_dict = copy.deepcopy(dst.__dict__)
     src_dict = copy.deepcopy(src.__dict__)
     src_dict['tensor_para_size'] = src_dict['tp']

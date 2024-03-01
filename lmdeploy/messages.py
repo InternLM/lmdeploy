@@ -117,6 +117,7 @@ class TurbomindEngineConfig:
         use_logn_attn (bool): whether or not to use log attn: default to False
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
+        max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -130,6 +131,7 @@ class TurbomindEngineConfig:
     use_logn_attn: bool = False
     download_dir: Optional[str] = None
     revision: Optional[str] = None
+    max_prefill_token_num: int = 8192
 
 
 @dataclass
