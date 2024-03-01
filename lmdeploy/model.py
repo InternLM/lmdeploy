@@ -486,8 +486,8 @@ If a question does not make any sense, or is not factually coherent, explain why
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'llama2' in model_path.lower():
-            return 'llama2'
+        if 'llama-2' in model_path.lower() or 'llama2' in model_path.lower():
+            return 'llama-2'
 
 
 @MODELS.register_module(name='qwen-14b')
