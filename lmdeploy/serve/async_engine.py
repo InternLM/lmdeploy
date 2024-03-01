@@ -123,6 +123,8 @@ class AsyncEngine:
         # prevent bc
         for k in list(kwargs.keys()):
             if hasattr(chat_template_config, k):
+                logger.warning(f'{k} was deprecated. Please use '
+                               'chat_template_config instead')
                 v = kwargs.pop(k)
                 setattr(chat_template_config, k, v)
 
