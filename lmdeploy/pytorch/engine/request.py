@@ -68,7 +68,7 @@ class RequestSender:
     def _resp_que_get(self, block: bool = True, timeout: float = None):
         """warp of resp_que.get."""
         if not block:
-            return self.resp_que(block=block, timeout=timeout)
+            return self.resp_que.get_nowait()
         timeout_counter = timeout or float(1 << 30)
         while timeout_counter > self.THREAD_ALIVE_INTERVAL:
             try:
@@ -86,7 +86,7 @@ class RequestSender:
                                   timeout: float = None):
         """warp of resp_que.get."""
         if not block:
-            return self.resp_que(block=block, timeout=timeout)
+            return self.resp_que.get_nowait()
         timeout_counter = timeout or float(1 << 30)
         while timeout_counter > self.THREAD_ALIVE_INTERVAL:
             if self.resp_que.qsize() == 0:
@@ -120,7 +120,7 @@ class RequestSender:
         """prefetch from resp que."""
         num_resps = self.resp_que.qsize()
         for _ in range(num_resps):
-            resp: Response = self._resp_que_get()
+            resp: Response = self._resp_que_get(block=False)
             req_id = resp.req_id
             self._push_resp(req_id, resp)
 

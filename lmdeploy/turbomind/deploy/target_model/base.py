@@ -88,6 +88,13 @@ class TurbomindModelConfig:
         env['tensor_para_size'] = env['tp']
         ret = TurbomindModelConfig.from_dict(env, allow_none=True)
         ret.rotary_embedding = ret.size_per_head
+        # workround to support `max_prefill_token_num` in turbomind engine
+        if config.max_prefill_token_num is not None and \
+                config.session_len is not None:
+            ret.num_tokens_per_iter = config.max_prefill_token_num
+            ret.max_prefill_iters = (config.session_len +
+                                     config.max_prefill_token_num -
+                                     1) // config.max_prefill_token_num
         return ret
 
     def toini(self):

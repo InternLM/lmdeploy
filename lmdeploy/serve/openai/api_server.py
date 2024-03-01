@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import os
-import random
 import time
 from http import HTTPStatus
 from typing import AsyncGenerator, List, Literal, Optional, Union
@@ -31,6 +30,7 @@ from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    session_id: int = 0
     api_keys: Optional[List[str]] = None
     qos_engine: QosEngine = None
     request_hosts = []
@@ -72,7 +72,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.engine.model_name]
+    return [VariableInterface.async_engine.model_name]
 
 
 @app.get('/v1/models', dependencies=[Depends(check_api_key)])
@@ -133,7 +133,6 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
-    - session_id (int): if not specified, will set random value
     - user_id (str): for qos; if not specified, will set to "default"
 
     Currently we do not support the following features:
@@ -142,8 +141,8 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -270,7 +269,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - n (int): How many chat completion choices to generate for each input
         message. Only support one here.
     - stream: whether to stream the results or not. Default to false.
-    - max_tokens (int): output token nums
+    - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
@@ -282,7 +281,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
-    - session_id (int): if not specified, will set random value
 
     Currently we do not support the following features:
     - function_call (Users should implement this by themselves)
@@ -290,8 +288,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -304,7 +302,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         request.stop = [request.stop]
 
     gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens if request.max_tokens else 512,
+        max_new_tokens=request.max_tokens,
         top_k=request.top_k,
         top_p=request.top_p,
         temperature=request.temperature,
@@ -440,7 +438,6 @@ async def completions_v1_qos(request: CompletionRequestQos,
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
     - ignore_eos (bool): indicator for ignoring eos
-    - session_id (int): if not specified, will set random value
     - user_id (str): for qos; if not specified, will set to "default"
 
     Currently we do not support the following features:
@@ -448,8 +445,8 @@ async def completions_v1_qos(request: CompletionRequestQos,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -572,7 +569,7 @@ async def completions_v1(request: CompletionRequest,
     - model (str): model name. Available from /v1/models.
     - prompt (str): the input prompt.
     - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_tokens (int): output token nums
+    - max_tokens (int): output token nums. Default to 16.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
@@ -590,7 +587,6 @@ async def completions_v1(request: CompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
-    - session_id (int): if not specified, will set random value
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
 
@@ -599,8 +595,8 @@ async def completions_v1(request: CompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -797,7 +793,8 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
     - user_id (str): for qos; if not specified, will set to "default"
     """
     if request.session_id == -1:
-        request.session_id = random.randint(10087, 23333)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
 
     if VariableInterface.qos_engine is None:
         return create_error_response(
@@ -811,6 +808,8 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
         async for out in generation:
             chunk = GenerateResponse(text=out.response,
                                      tokens=out.generate_token_len,
+                                     input_tokens=out.input_token_len,
+                                     history_tokens=out.history_token_len,
                                      finish_reason=out.finish_reason)
             data = chunk.model_dump_json()
             yield f'{data}\n'
@@ -855,7 +854,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - stream: whether to stream the results or not.
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - request_output_len (int): output token nums
+    - request_output_len (int): output token nums. If not specified, will use
+        maximum possible number for a session.
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
@@ -868,11 +868,23 @@ async def chat_interactive_v1(request: GenerateRequest,
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
     """
-    if request.cancel and request.session_id != -1:
-        VariableInterface.async_engine.stop_session(request.session_id)
-        return {'text': '', 'tokens': 0, 'finish_reason': None}
+    if request.cancel:
+        if request.session_id != -1:
+            VariableInterface.async_engine.stop_session(request.session_id)
+            return {
+                'text': '',
+                'tokens': 0,
+                'input_tokens': 0,
+                'history_tokens': 0,
+                'finish_reason': 'stop'
+            }
+        else:
+            create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'please set a session_id to cancel a request')
     if request.session_id == -1:
-        request.session_id = random.randint(10087, 23333)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
 
     async_engine = VariableInterface.async_engine
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
@@ -902,6 +914,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         async for out in generation:
             chunk = GenerateResponse(text=out.response,
                                      tokens=out.generate_token_len,
+                                     input_tokens=out.input_token_len,
+                                     history_tokens=out.history_token_len,
                                      finish_reason=out.finish_reason)
             data = chunk.model_dump_json()
             yield f'{data}\n'
@@ -912,7 +926,7 @@ async def chat_interactive_v1(request: GenerateRequest,
     else:
         ret = {}
         text = ''
-        tokens = 0
+        tokens, input_tokens, history_tokens = 0, 0, 0
         finish_reason = None
         async for out in generation:
             if await raw_request.is_disconnected():
@@ -922,8 +936,16 @@ async def chat_interactive_v1(request: GenerateRequest,
                                              'Client disconnected')
             text += out.response
             tokens = out.generate_token_len
+            input_tokens = out.input_token_len
+            history_tokens = out.history_token_len
             finish_reason = out.finish_reason
-        ret = {'text': text, 'tokens': tokens, 'finish_reason': finish_reason}
+        ret = {
+            'text': text,
+            'tokens': tokens,
+            'input_tokens': input_tokens,
+            'history_tokens': history_tokens,
+            'finish_reason': finish_reason
+        }
         return JSONResponse(ret)
 
 
