@@ -3,6 +3,7 @@
 // Zhiwei Bao <zwbao@foxmail.com>
 
 #include "src/turbomind/models/medusa_plugin/medusa_head.h"
+#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 
@@ -52,15 +53,24 @@ void MedusaHead<T>::forward(T*                     medusa_head_output,
                             int                    head_id)
 {
     allocate_buffer(batch_size);
+    // TODO support multi medusa_num_layers
     resblock_->forward(resblock_buf_, medusa_head_input, batch_size, medusa_weight.get_resblocks_weights()[head_id][0]);
     linear_->forward(medusa_head_output, resblock_buf_, batch_size, medusa_weight.get_heads_weights()[head_id]);
+
+    if (tensor_para_.world_size_ > 1) {
+        NcclGuard nccl_guard(tensor_para_, stream_);
+        ftNcclAllReduceSum(medusa_head_output, medusa_head_output, batch_size * vocab_size_, tensor_para_, stream_);
+        sync_check_cuda_error();
+    }
+
     free_buffer();
 }
 
 template<typename T>
 void MedusaHead<T>::allocate_buffer(size_t batch_size)
 {
-    resblock_buf_        = (T*)allocator_->reMalloc(resblock_buf_, sizeof(T) * batch_size * in_size_, false);
+    resblock_buf_ =
+        (T*)allocator_->reMalloc(resblock_buf_, sizeof(T) * batch_size * in_size_ / tensor_para_.world_size_, false);
     is_allocated_buffer_ = true;
 }
 
