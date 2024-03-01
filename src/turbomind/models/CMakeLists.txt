@@ -13,3 +13,4 @@
 # limitations under the License.
 
 add_subdirectory(llama)
+add_subdirectory(medusa_plugin)
