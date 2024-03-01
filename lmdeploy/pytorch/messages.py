@@ -9,13 +9,11 @@ import torch
 from torch import Tensor
 
 from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
 
-
-def _div_up(x, n):
-    """perform div up."""
-    return (x + n - 1) // n
+logger = get_logger('lmdeploy')
 
 
 @dataclass
@@ -42,12 +40,6 @@ class SamplingParam:
                              random_seed=self.random_seed,
                              bad_words=self.bad_words)
 
-    def __hash__(self):
-        """hash."""
-        return hash(
-            (self.top_k, self.top_p, self.temperature, self.repetition_penalty,
-             self.ignore_eos, self.random_seed, tuple(self.bad_words)))
-
     @classmethod
     def from_gen_config(self, gen_config: EngineGenerationConfig):
         """from gen config."""
@@ -57,15 +49,47 @@ class SamplingParam:
         bad_words = gen_config.bad_words or []
         if gen_config.ignore_eos:
             bad_words += stop_words
-        return SamplingParam(top_p=gen_config.top_p,
-                             top_k=gen_config.top_k,
-                             temperature=gen_config.temperature,
-                             repetition_penalty=gen_config.repetition_penalty,
+
+        top_k = gen_config.top_k
+        top_p = gen_config.top_p
+        temperature = gen_config.temperature
+        repetition_penalty = gen_config.repetition_penalty
+        max_new_tokens = gen_config.max_new_tokens
+
+        if top_k <= 0:
+            logger.warning('`top_k` has to be a strictly'
+                           f' positive value, but is {top_k}')
+            top_k = 1
+        if top_p < 0 or top_p > 1.0:
+            logger.warning('`top_p` has to be a float > 0 and < 1'
+                           f' but is {top_p}')
+            top_p = 1.0
+        if temperature <= 0:
+            logger.warning('`temperature` has to be a strictly'
+                           f' positive value, but is {temperature}')
+            temperature = 1.0
+        if repetition_penalty <= 0:
+            logger.warning('`repetition_penalty` has to be a strictly'
+                           f' positive value, but is {repetition_penalty}')
+            repetition_penalty = 1.0
+        if max_new_tokens < 0:
+            logger.warning('`max_new_tokens` has to be a strictly'
+                           f' positive value, but is {max_new_tokens}')
+            max_new_tokens = 0
+        if min_new_tokens < 0 or min_new_tokens > max_new_tokens:
+            logger.warning('`min_new_tokens` has to be '
+                           'a int >=0 and <= `max_new_tokens`,'
+                           f' but is {min_new_tokens}')
+            min_new_tokens = 0
+        return SamplingParam(top_p=top_p,
+                             top_k=top_k,
+                             temperature=temperature,
+                             repetition_penalty=repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,
                              random_seed=gen_config.random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
-                             max_new_tokens=gen_config.max_new_tokens,
+                             max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens)
 
 
@@ -149,7 +173,8 @@ class SchedulerSession:
             logical_blocks=seq.logical_blocks.clone(),
             adapter_name=seq.adapter_name,
             arrive_time=time.time(),
-            meta=deepcopy(seq.meta))
+            meta=deepcopy(seq.meta),
+            random_offsets=seq.random_offsets + 1)
 
         self.sequences[new_msg.seq_id] = new_msg
         return new_msg
@@ -173,6 +198,7 @@ class SchedulerSequence:
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
+    random_offsets: int = 0
 
     @property
     def history_len(self) -> int:
@@ -197,6 +223,7 @@ class SchedulerSequence:
         if token_ids.dim() == 0:
             token_ids = token_ids.unsqueeze(0)
         self.token_ids = token_ids
+        self.random_offsets += 1
         self.arrive_time = time.time()
 
     def set_step(self, step: int):

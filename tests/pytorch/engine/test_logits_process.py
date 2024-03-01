@@ -1,40 +1,115 @@
 import pytest
 import torch
-from transformers.generation.logits_process import (LogitsProcessorList,
-                                                    TemperatureLogitsWarper,
-                                                    TopKLogitsWarper,
-                                                    TopPLogitsWarper)
-
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor
-from lmdeploy.pytorch.messages import SamplingParam
+from transformers.generation.logits_process import (
+    RepetitionPenaltyLogitsProcessor, TemperatureLogitsWarper,
+    TopKLogitsWarper, TopPLogitsWarper)
 
 
-class TestFusedLogitsProcessor:
+@pytest.mark.parametrize('inplace', [True, False])
+def test_process_temperature(inplace):
+    from lmdeploy.pytorch.engine.logits_process import _process_temperature
 
-    @pytest.fixture
-    def scores(self):
-        torch.random.manual_seed(1234)
-        yield torch.rand(4, 100).cuda().half()
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens)
+    temperatures = torch.rand(batch_size)
 
-    @pytest.fixture
-    def input_ids(self):
-        yield None
+    gt = []
+    for score, temperature in zip(scores, temperatures):
+        warper = TemperatureLogitsWarper(temperature.item())
+        gt.append(warper(None, score[None]))
+    gt = torch.cat(gt)
 
-    @pytest.fixture
-    def sampling_param(self):
-        yield SamplingParam(top_k=20, top_p=0.8, temperature=0.8)
+    out = _process_temperature(scores, temperatures, inplace=inplace)
+    torch.testing.assert_close(out, gt)
 
-    @pytest.fixture
-    def gt(self, input_ids, scores, sampling_param):
-        logits_processor = LogitsProcessorList([
-            TemperatureLogitsWarper(sampling_param.temperature),
-            TopKLogitsWarper(sampling_param.top_k),
-            TopPLogitsWarper(sampling_param.top_p),
-        ])
-        yield logits_processor(input_ids, scores)
 
-    def test_processor(self, input_ids, scores, sampling_param, gt):
-        logits_processor = FusedLogitsProcessor(sampling_param)
-        output = logits_processor(input_ids, scores)
+@pytest.mark.parametrize('inplace', [True, False])
+def test_process_bad_words(inplace):
+    from lmdeploy.pytorch.engine.logits_process import _process_bad_words
 
-        torch.testing.assert_close(output, gt)
+    filter_value: float = -float('inf')
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens)
+    bad_words = torch.tensor([
+        [0, 1],
+        [3, -1],
+        [4, 4],
+        [-1, -1],
+    ])
+
+    out_scores = _process_bad_words(scores, bad_words, inplace=inplace)
+
+    for score, bw in zip(out_scores, bad_words):
+        bw = bw.tolist()
+
+        for w in bw:
+            if w >= 0:
+                assert score[w] == filter_value
+
+
+@pytest.mark.parametrize('inplace', [True, False])
+def test_processrepetition_penalty(inplace):
+    from lmdeploy.pytorch.engine.logits_process import \
+        _process_repetition_penalty
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens)
+    input_ids = torch.tensor([
+        [0, 1],
+        [3, 6],
+        [4, 4],
+        [0, 0],
+    ])
+    penalties = 1 + torch.rand(batch_size)
+
+    gt = []
+    for score, ids, penalty in zip(scores, input_ids, penalties):
+        warper = RepetitionPenaltyLogitsProcessor(penalty.item())
+        gt.append(warper(ids[None], score[None].clone()))
+    gt = torch.cat(gt)
+
+    out = _process_repetition_penalty(scores,
+                                      input_ids,
+                                      penalties,
+                                      inplace=inplace)
+    torch.testing.assert_close(out, gt)
+
+
+@pytest.mark.parametrize('inplace', [True, False])
+def test_filter_topk_sorted(inplace):
+    from lmdeploy.pytorch.engine.logits_process import _filter_topk_sorted
+
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens).sort(1, descending=True)[0]
+    top_k = torch.randint(4, num_tokens - 4, (batch_size, ))
+
+    gt = []
+    for score, k in zip(scores, top_k):
+        warper = TopKLogitsWarper(k.item())
+        gt.append(warper(None, score[None].clone()))
+    gt = torch.cat(gt)
+
+    out = _filter_topk_sorted(scores, top_k, inplace=inplace)
+    torch.testing.assert_close(out, gt)
+
+
+@pytest.mark.parametrize('inplace', [True, False])
+def test_filter_topp_sorted(inplace):
+    from lmdeploy.pytorch.engine.logits_process import _filter_topp_sorted
+
+    batch_size = 4
+    num_tokens = 16
+    scores = torch.rand(batch_size, num_tokens).sort(1, descending=True)[0]
+    top_p = torch.rand(batch_size)
+
+    gt = []
+    for score, p in zip(scores, top_p):
+        warper = TopPLogitsWarper(p.item())
+        gt.append(warper(None, score[None].clone()))
+    gt = torch.cat(gt)
+
+    out = _filter_topp_sorted(scores, top_p, inplace=inplace)
+    torch.testing.assert_close(out, gt)

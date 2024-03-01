@@ -19,7 +19,7 @@ from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SamplingParam, SchedulerSequence,
                         SchedulerSession)
 from ..paging import Scheduler
-from .logits_process import FusedLogitsProcessor
+from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import AutoModelAgent, ModelInputs
 from .request import Request, RequestManager, RequestType, Response
 
@@ -468,37 +468,18 @@ class Engine:
                         inputs: ModelInputs):
         """sampling logits."""
 
-        def _check_min_new_tokens(running, logits):
-            for idx, seq in enumerate(running):
-                param = seq.sampling_param
-                if param.ignore_eos:
-                    continue
-                if seq.num_new_tokens < param.min_new_tokens:
-                    logits[idx, param.stop_words] = -float('inf')
-            return logits
-
-        def _group_params(running):
-            sampling_params: List[SamplingParam] = [
-                msg.sampling_param.logical_sampling_param() for msg in running
-            ]
-            grouped_params = dict()
-            for i, key in enumerate(sampling_params):
-                grouped_params.setdefault(key, list())
-                grouped_params[key].append(i)
-            return grouped_params
-
-        def _sampling(grouped_params, split_logits, inputs):
-            next_token_ids = torch.empty((len(running), ), dtype=torch.long)
-            for param, idx in grouped_params.items():
-                logits_processor = FusedLogitsProcessor(param)
-                input_ids = inputs.input_ids.reshape(-1, 1)
-                new_logits = split_logits[idx]
-                new_logits = logits_processor(input_ids, new_logits)
-                argmax_ids = logits_processor.sampling(new_logits).cpu()
-                next_token_ids[idx] = argmax_ids
-            return next_token_ids
-
-        grouped_params = _group_params(running)
+        def _gather_history(seqs: SeqList, device: torch.device):
+            """gather history."""
+            batch = len(seqs)
+            max_len = max(seq.history_len for seq in seqs)
+            output = torch.full((batch, max_len),
+                                self.model_config.bos_token_id,
+                                dtype=torch.int64)
+            for idx, seq in enumerate(seqs):
+                h_len = seq.history_len
+                h_ids = output.new_tensor(seq.history_token_ids)
+                output[idx, :h_len] = h_ids
+            return output.to(device)
 
         is_decoding = inputs.is_decoding
         # TODO: support repetition_penalty
@@ -511,8 +492,14 @@ class Engine:
             split_logits = logits
         split_logits = split_logits.cuda()
 
-        split_logits = _check_min_new_tokens(running, split_logits)
-        next_token_ids = _sampling(grouped_params, split_logits, inputs)
+        sampling_inputs = SamplingInputs.from_sampling_params(running)
+        sampling_inputs = sampling_inputs.to_device(split_logits.device)
+        input_ids = None
+        if sampling_inputs.repetition_penalty is not None:
+            input_ids = _gather_history(running, split_logits.device)
+        logits_processor = FusedLogitsProcessor(sampling_inputs)
+        logits = logits_processor(input_ids, split_logits)
+        next_token_ids = logits_processor.sampling(logits).cpu()
 
         return next_token_ids, split_logits
 
@@ -926,6 +913,7 @@ class EngineInstance:
             List[int]: The streaming output tokens.
             int: The number of the output tokens.
         """
+        import asyncio
         gen_config = gen_config or EngineGenerationConfig()
         request_output_len = gen_config.max_new_tokens
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
@@ -937,6 +925,7 @@ class EngineInstance:
             sampling_param=sampling_param,
             adapter_name=adapter_name,
         )
+
         req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
         token_ids = []
@@ -944,19 +933,25 @@ class EngineInstance:
             if not self.engine.loop_threads.is_alive():
                 yield (ResponseType.ENGINE_STOP_ERROR, [], 0)
                 break
-            resp = await self.req_sender.async_recv(req_id)
-            # avoid token decoding and scheduling simultaneously
-            if resp.req_id != req_id:
+
+            resps = self.req_sender.recv_all(req_id)
+            if len(resps) == 0:
+                await asyncio.sleep(0.1)
                 continue
-            if resp.type == ResponseType.SUCCESS:
-                token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
-            elif resp.type == ResponseType.FINISH:
-                token_ids += resp.data['token_ids']
-                yield (resp.type, token_ids, len(token_ids))
-                break
-            else:
-                yield (resp.type, [], 0)
+
+            resp_type = ResponseType.SUCCESS
+            for resp in resps:
+                resp_type = resp.type
+                if resp.type == ResponseType.SUCCESS:
+                    token_ids += resp.data['token_ids']
+                elif resp.type == ResponseType.FINISH:
+                    token_ids += resp.data['token_ids']
+                    break
+                else:
+                    token_ids = []
+                    break
+            yield (resp_type, token_ids, len(token_ids))
+            if resp_type != ResponseType.SUCCESS:
                 break
 
     def stream_infer(self,
