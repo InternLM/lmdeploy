@@ -1003,13 +1003,11 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         gen_config = gen_config or EngineGenerationConfig()
-        request_output_len = gen_config.max_new_tokens
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         await async_try_add_session(self.req_sender, session_id)
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
-            max_request_output_len=request_output_len,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
         )
@@ -1099,16 +1097,14 @@ class EngineInstance:
                     break
 
         if not self.req_sender.is_thread_safe():
-            return __call_async()
+            yield from __call_async()
 
         gen_config = gen_config or EngineGenerationConfig()
-        request_output_len = gen_config.max_new_tokens
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         try_add_session(self.req_sender, session_id)
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
-            max_request_output_len=request_output_len,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
         )
