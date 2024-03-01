@@ -50,9 +50,9 @@ def deduce_a_name(
     chat_template_config_model_name = _config_model_name(chat_template_config)
     model_name = model_name or chat_template_config_model_name or backend_config_model_name  # noqa
     if model_name is None:
-        # model mayebe from workspace for turbomind
+        # model maybe from workspace for turbomind
         model_name = get_model_name_from_workspace_model(model_path)
-    # try fuzzy matching to get a model_name
+    # may get a model name from model_path
     if model_name is None:
         model_name = best_match_model(model_path)
         if model_name is None:
@@ -118,6 +118,7 @@ class AsyncEngine:
             chat_template_config = ChatTemplateConfig(self.model_name)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
+        logger.info(f'Chat template config: {chat_template_config}')
         self.chat_template = chat_template_config.chat_template
         # prevent bc
         for k in list(kwargs.keys()):
@@ -127,12 +128,14 @@ class AsyncEngine:
 
         # build backend engine
         if backend == 'turbomind':
+            logger.info('Running turbomind engine for pipeline.')
             self._build_turbomind(model_path=model_path,
                                   backend_config=backend_config,
                                   chat_template_config=chat_template_config,
                                   tp=tp,
                                   **kwargs)
         elif backend == 'pytorch':
+            logger.info('Running pytorch engine for pipeline.')
             self._build_pytorch(model_path=model_path,
                                 backend_config=backend_config,
                                 **kwargs)
