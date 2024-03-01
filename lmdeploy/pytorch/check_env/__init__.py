@@ -77,7 +77,7 @@ def check_transformers_version(model_path: str):
     model_trans_version = None
     try:
         from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(model_path)
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         model_trans_version = getattr(config, 'transformers_version')
     except Exception as e:
         message = (
