@@ -478,7 +478,8 @@ class BaseModelAgent(AutoModelAgent):
             hf_model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code)
+                trust_remote_code=trust_remote_code,
+                **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
 
@@ -671,7 +672,8 @@ def _tp_build_model(
             model = AutoModelForCausalLM.from_config(
                 config,
                 torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code)
+                trust_remote_code=trust_remote_code,
+                **model_config.init_kwargs)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
             _add_adapters(model, adapters)
@@ -688,7 +690,8 @@ def _tp_build_model(
                     model_path,
                     torch_dtype=torch_dtype,
                     device_map=device_map,
-                    trust_remote_code=trust_remote_code)
+                    trust_remote_code=trust_remote_code,
+                    **model_config.init_kwargs)
                 _load_adapters(param_model, adapters, device_map=device_map)
                 __load_state_dict_assign(param_model, model)
                 param_model = param_model.to('meta')

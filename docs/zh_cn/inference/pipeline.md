@@ -147,8 +147,12 @@ print(response)
 
 ## FAQs
 
-- *RuntimeError: context has already been set*. 如果你在使用 tp>1 和 pytorch 后端的时候，遇到了这个错误。请确保 python 脚本中有下面内容作为入口
+- **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
+
+  如果你在使用 tp>1 和 pytorch 后端的时候，遇到了这个错误。请确保 python 脚本中有下面内容作为入口
+
   ```python
   if __name__ == '__main__':
   ```
+
   一般来说，在多线程或多进程上下文中，可能需要确保初始化代码只执行一次。这时候，`if __name__ == '__main__':` 可以帮助确保这些初始化代码只在主程序执行，而不会在每个新创建的进程或线程中重复执行。
