@@ -5,7 +5,7 @@ from typing import Dict, List
 import torch
 from transformers.generation.logits_process import LogitsWarper
 
-from ..messages import SamplingParam
+from ..messages import SchedulerSequence
 
 
 def _process_temperature(scores: torch.Tensor,
@@ -104,27 +104,34 @@ class SamplingInputs:
     min_top_p: float = 1.0
 
     @classmethod
-    def from_sampling_params(cls, sampling_params: List[SamplingParam],
-                             random_offsets: List[int]):
+    def from_sampling_params(cls, seqs: List[SchedulerSequence]):
         """from samplingg params."""
-        batch_size = len(sampling_params)
+        batch_size = len(seqs)
         temperature = [None] * batch_size
         repetition_penalty = [None] * batch_size
         top_k = [None] * batch_size
         top_p = [None] * batch_size
         bad_words = [None] * batch_size
         random_seeds = [torch.seed() & 0xffffffff] * batch_size
+        random_offsets = [None] * batch_size
 
         def __gather_params():
             """gather params."""
-            for idx, param in enumerate(sampling_params):
+            for idx, seq in enumerate(seqs):
+                param = seq.sampling_param
                 temperature[idx] = param.temperature
-                bad_words[idx] = param.bad_words
                 repetition_penalty[idx] = param.repetition_penalty
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
+                random_offsets[idx] = seq.random_offsets
                 if param.random_seed is not None:
                     random_seeds[idx] = param.random_seed & 0xffffffff
+
+                bw = param.bad_words.copy()
+                if (not param.ignore_eos
+                        and seq.num_new_tokens < param.min_new_tokens):
+                    bw += param.stop_words
+                bad_words[idx] = bw
 
         def __get_topp(top_p):
             """get topp."""

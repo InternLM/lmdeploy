@@ -258,8 +258,11 @@ class Engine:
         def __update_bad_words(msg):
             """update bad words."""
             sampling_param = msg.sampling_param
+            eos_token_id = self.model_config.eos_token_id
+            if eos_token_id not in sampling_param.stop_words:
+                sampling_param.stop_words.append(eos_token_id)
             if sampling_param.ignore_eos:
-                sampling_param.bad_words.append(self.model_config.eos_token_id)
+                sampling_param.bad_words.append(eos_token_id)
 
         for req in reqs:
             session_id = req.data['session_id']
@@ -275,18 +278,16 @@ class Engine:
             if len(sess.sequences) == 0:
                 assert len(
                     req.data['token_ids']) > 0, ('Empty input is not allowed.')
-                sess.add_sequence(
-                    req.data['token_ids'],
-                    max_output_len=req.data['max_request_output_len'],
-                    sampling_param=req.data['sampling_param'],
-                    adapter_name=req.data['adapter_name'])
+                sess.add_sequence(req.data['token_ids'],
+                                  sampling_param=req.data['sampling_param'],
+                                  adapter_name=req.data['adapter_name'])
                 msg = next(iter(sess.sequences.values()))
                 __update_bad_words(msg)
                 self.scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(req.data['token_ids'])
-                msg.remain_output_len = req.data['max_request_output_len']
+                msg.num_new_tokens = 0
                 msg.sampling_param = req.data['sampling_param']
                 msg.status = MessageStatus.WAITING
                 __update_bad_words(msg)
@@ -441,16 +442,12 @@ class Engine:
             bool: Whether the message should be stopped.
         """
 
-        # check eof
-        def _check_eof(next_token_id, eos_token_id):
-            return next_token_id == eos_token_id
-
         def _check_stop_word(sampling_param, next_token_id):
             return (sampling_param.stop_words is not None
                     and next_token_id in sampling_param.stop_words)
 
         def _check_request_len(msg):
-            return msg.remain_output_len <= 0
+            return msg.num_new_tokens >= msg.sampling_param.max_new_tokens
 
         def _check_session_len(msg, max_session_len):
             if max_session_len is None:
@@ -459,8 +456,6 @@ class Engine:
             return session_len >= max_session_len
 
         sampling_param = msg.sampling_param
-        if _check_eof(next_token_id, self.model_config.eos_token_id):
-            return True
         if _check_stop_word(sampling_param, next_token_id):
             return True
         if _check_request_len(msg):
@@ -497,12 +492,7 @@ class Engine:
             split_logits = logits
         split_logits = split_logits.cuda()
 
-        sampling_params: List[SamplingParam] = [
-            msg.sampling_param for msg in running
-        ]
-        random_offsets = [msg.random_offsets for msg in running]
-        sampling_inputs = SamplingInputs.from_sampling_params(
-            sampling_params, random_offsets)
+        sampling_inputs = SamplingInputs.from_sampling_params(running)
         sampling_inputs = sampling_inputs.to_device(split_logits.device)
         input_ids = None
         if sampling_inputs.repetition_penalty is not None:
@@ -519,8 +509,8 @@ class Engine:
         for token, msg in zip(next_token_ids, running):
             msg.meta = meta
             msg.update_token_ids(token)
-            msg.remain_output_len -= 1
-            if msg.remain_output_len < 0:
+            msg.num_new_tokens += 1
+            if msg.num_new_tokens > msg.sampling_param.max_new_tokens:
                 msg.token_ids = torch.empty((0, ), dtype=torch.long)
             if self._stopping_criteria(msg, token):
                 msg.status = MessageStatus.STOPPED
@@ -529,8 +519,6 @@ class Engine:
         """check if output is necessary."""
         if isinstance(token, torch.Tensor):
             token = token.item()
-        if token == self.model_config.eos_token_id:
-            return False
 
         stop_words = msg.sampling_param.stop_words
         if stop_words is not None and token in stop_words:
@@ -735,13 +723,11 @@ class Engine:
 
         def _add_messages(session_ids, token_ids):
             add_msgs = []
-            request_output_len = gen_config.max_new_tokens
             sampling_param = SamplingParam.from_gen_config(gen_config)
             for session_id, token_id, adapter_name in zip(
                     session_ids, token_ids, adapter_names):
                 msg = dict(token_ids=token_id,
                            session_id=session_id,
-                           max_request_output_len=request_output_len,
                            sampling_param=sampling_param,
                            adapter_name=adapter_name)
                 add_msgs.append(msg)
@@ -990,13 +976,11 @@ class EngineInstance:
 
         # TODO: support input embedding, step
         gen_config = gen_config or EngineGenerationConfig()
-        request_output_len = gen_config.max_new_tokens
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         self._try_add_session(session_id)
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
-            max_request_output_len=request_output_len,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
         )
