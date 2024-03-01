@@ -59,6 +59,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanAttention',  # noqa
     'modeling_baichuan.MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',  # noqa
+    'modeling_baichuan.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.PatchedRMSNorm',
 })
 
 # chatglm2
@@ -81,6 +83,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'modeling_internlm.InternLMMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_internlm.InternLMRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
 # internlm2
