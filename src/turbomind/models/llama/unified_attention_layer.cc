@@ -81,26 +81,27 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     /**
      * input_tensors:
      *   \param input_query [token_num, hidden_dim]
-     *   \param attention_mask [batch_size, 1, max_q_len, max_kv_len]
-     *   \param padding_offset [token_num], int
-     *   \param input_lengths [batch_size], int
-     *   \param history_lengths [batch_size], int
-     *   \param context_lengths [batch_size], int
-     *   \param cu_seqlens [batch_size+1], int
+     *   \param cu_q_len [batch_size+1], int
+     *   \param cu_k_len [batch_size+1], int
      *   \param cu_block_counts [batch_size+1], int
-     *   \param max_seq_len [1], int on cpu
-     *   \param is_final_layer [1], bool on cpu
+     *   \param finished [batch_size], bool
+     *   \param rope_theta [batch_size], float
+     *   \param h_q_len [batch_size], int on cpu
+     *   \param h_k_len [batch_size], int on cpu
+     *   \param h_cu_q_len [batch_size+1], int on cpu
+     *   \param h_cu_k_len [batch_size+1], int on cpu
+     *   \param dc_batch_size [1], int on cpu
+     *   \param pf_batch_size [1], int on cpu
      *   \param layer_id [1], int on cpu
      *
      * output_tensors:
-     *   \param hidden_features [token_num, hidden_dim]
-     *   \param key_cache [batch_size], uint64
-     *   \param value_cache [batch_size], uint64
+     *   \param hidden_features [token_num, hidden_dim], float
+     *   \param block_ptrs [total_block_counts], void*
      */
 
     /////////////////////////////////////////////
     /// parse inputs
-    const int num_token = inputs->at("input_query").shape[0];
+    const int token_num = inputs->at("input_query").shape[0];
     const int layer_id  = inputs->getVal<int>("layer_id");
 
     const int dc_batch_size = inputs->getVal<int>("dc_batch_size");
@@ -125,7 +126,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     /////////////////////////////////////////////
     /// allocate buffers
-    allocateBuffer(num_token,                                           // shared
+    allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
                    batch_size);
 
@@ -141,7 +142,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     //////////////////////////////////////////////
     /// qkv gemm
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_.forward(qkv_buf_, attention_input, num_token, weights->qkv);
+    linear_.forward(qkv_buf_, attention_input, token_num, weights->qkv);
 
     // if (layer_id == 0 && count == 0) {
     //     Compare(qkv_buf_, num_token * weights->qkv.output_dims, "qkv_buf", kCmpRead, stream_);
@@ -187,7 +188,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
         // MSVC does not have M_LOG2E
-        params.inv_sqrt_dh   =  (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
+        params.inv_sqrt_dh = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
         params.rotary_embedding_dim    = size_per_head_;
         params.rotary_embedding_base   = params_.rotary_embedding_base;
@@ -247,13 +248,13 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_.forward(attention_out, qkv_buf_3_, num_token, weights->output);
+    linear_.forward(attention_out, qkv_buf_3_, token_num, weights->output);
 
     ++count;
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(attention_out, attention_out, num_token * hidden_units_, tensor_para_, stream_);
+        ftNcclAllReduceSum(attention_out, attention_out, token_num * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
     }
 

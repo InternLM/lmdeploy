@@ -94,23 +94,21 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 {
     /**
      * input tensors:
-     *   \param decoder_input [num_token, hidden_units], float
-     *   \param input_lengths [batch_size], int
-     *   \param history_lengths [batch_size], int
-     *   \param context_legnths [batch_size], int
+     *   \param decoder_input [token_num, hidden_units], float
      *   \param output_norm_weight [hidden_dims], float
-     *   \param max_q_len [1], int on cpu
-     *   \param max_kv_len [1], int on cpu
-     *   \param max_seq_len [1], int on cpu
+     *   \param cu_block_counts [batch_size+1], int
+     *   \param finished [batch_size], bool
+     *   \param rope_theta [batch_size], float
+     *   \param h_q_len [batch_size], int on cpu
+     *   \param h_k_len [batch_size], int on cpu
+     *   \param pf_batch_size [1], int on cpu
+     *   \param dc_batch_size [1], int on cpu
      *
      * output tensors:
      *   \param decoder_output [num_token, hidden_units],
-     *   \param key_cache [num_layer, batch, local_head_num, size_per_head // x, max_seq_len, x]
-     *   \param value_cache [num_layer, batch, local_head_num, max_seq_len, size_per_head]
      *   \param last_token_hidden_units [batch_size, hidden_units]
+     *   \param block_ptrs [total_block_counts], void*
      */
-
-    // Session sess{};
 
     const size_t token_num = inputs->at("decoder_input").shape[0];
 
