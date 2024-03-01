@@ -18,6 +18,7 @@ turbomind_model:
     - internlm-chat-7b
     - internlm-chat-20b
     - internlm2-chat-7b
+    - internlm2-chat-20b
     - Qwen-7B-Chat
     - Qwen-14B-Chat
     - llama2-chat-7b-w4
@@ -54,6 +55,7 @@ quatization_case_config:
         - internlm-chat-20b
         - Qwen-7B-Chat
         - Qwen-14B-Chat
+        - internlm2-chat-20b
         - Baichuan2-7B-Chat
         - internlm2-20b
     kvint8: # more models are supported kvint8 quantization, but the chat response are not good, already removed

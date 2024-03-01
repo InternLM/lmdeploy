@@ -71,11 +71,11 @@ jobs:
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
         run: |
-          pytest autotest/tools/quantization/test_quantization_w4a16.py -n 8 --alluredir=allure-results --clean-alluredir
+          pytest autotest/tools/quantization/test_quantization_w4a16.py -m 'not pr_test' -n 8 --alluredir=allure-results --clean-alluredir
       - name: Test lmdeploy - quantization kv int8
         continue-on-error: true
         run: |
-          pytest autotest/tools/quantization/test_quantization_kvint8.py -n 8 --alluredir=allure-results
+          pytest autotest/tools/quantization/test_quantization_kvint8.py pr_test -n 8 --alluredir=allure-results
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         run: |
@@ -87,47 +87,47 @@ jobs:
       - name: Test lmdeploy - convert
         continue-on-error: true
         run: |
-          pytest autotest/tools/convert -n 6 --alluredir=allure-results --dist loadgroup
+          pytest autotest/tools/convert -m 'not pr_test' -n 6 --alluredir=allure-results --dist loadgroup
       - name: Test lmdeploy - interface turbomind case
         continue-on-error: true
         timeout-minutes: 20
         run: |
-          pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py --alluredir=allure-results
+          pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - pipeline turbomind
         continue-on-error: true
         timeout-minutes: 45
-        run: pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py --alluredir=allure-results
+        run: pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - pipeline torch
         continue-on-error: true
         timeout-minutes: 75
-        run: pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py --alluredir=allure-results
+        run: pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind
         continue-on-error: true
         timeout-minutes: 60
-        run: pytest autotest/tools/restful/test_restful_chat_turbomind.py --alluredir=allure-results
+        run: pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - restful torch
         continue-on-error: true
         timeout-minutes: 80
-        run: pytest autotest/tools/restful/test_restful_chat_pytorch.py --alluredir=allure-results
+        run: pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
         timeout-minutes: 30
         run: |
-          pytest autotest/tools/chat/test_command_chat_workspace.py -n 4 --alluredir=allure-results --dist loadgroup
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
         timeout-minutes: 45
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -n 4 --alluredir=allure-results --dist loadgroup
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - chat hf torch
         continue-on-error: true
         timeout-minutes: 60
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -n 4 --alluredir=allure-results --dist loadgroup
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - rerun all fail cases
         timeout-minutes: 60
         run: |
-          pytest autotest --alluredir=allure-results --lf
+          pytest autotest --lf --alluredir=allure-results
       - name: Generate reports
         if: always()
         run: |
