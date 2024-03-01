@@ -796,12 +796,11 @@ class Engine:
 
         def __add_messages(session_ids, input_ids, adapter_names):
             add_msgs = []
-            sampling_param = SamplingParam()
+            sampling_param = SamplingParam(max_new_tokens=0)
             for session_id, token_id, adapter_name in zip(
                     session_ids, input_ids, adapter_names):
                 msg = dict(token_ids=token_id,
                            session_id=session_id,
-                           max_request_output_len=0,
                            sampling_param=sampling_param,
                            adapter_name=adapter_name,
                            return_logits=True)
@@ -834,8 +833,8 @@ class Engine:
             resp = self.req_sender.recv_any()
             if resp.req_id not in req_ids:
                 continue
-            assert resp.type in (ResponseType.SUCCESS, ResponseType.FINISH), (
-                f'response type: {resp.type}')
+
+            assert resp.type == ResponseType.FINISH
             idx = req_idx_map[resp.req_id]
             ret[idx] = resp.data['logits']
             finish_count -= 1
