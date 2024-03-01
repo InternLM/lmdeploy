@@ -16,7 +16,8 @@ class ChatTemplateConfig:
     """Parameters for chat template.
 
     Args:
-        model_name (str): the name of the deployed model. Determine which chat template will be applied
+        model_name (str): the name of the deployed model. Determine which chat template will be applied.
+            All the chat template names: `lmdeploy list`
         system (str | None): begin of the system prompt
         meta_instruction (str | None): system prompt
         eosys (str | None): end of the system prompt
@@ -871,14 +872,14 @@ class Deepseek(BaseModel):
             return 'deepseek-chat'
 
 
-def best_match_model(query: str):
+def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
     Args:
         query (str): the input query. Could be a model path.
 
     Return:
-        List[str] | None: the possible model names or none.
+        str | None: the possible model name or none.
     """
     for name, model in MODELS.module_dict.items():
         if model.match(query):
