@@ -588,14 +588,8 @@ class CodeLlama(Llama2):
 @MODELS.register_module(name='falcon')
 class Falcon(BaseModel):
 
-    def __init__(self):
-        super().__init__()
-
-    def get_prompt(self, prompt, sequence_start=True):
-        prompt = super().get_prompt(prompt, sequence_start)
-        if len(prompt) == 0:
-            return '<|endoftext|>'
-        return prompt
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -612,16 +606,48 @@ class Falcon(BaseModel):
 @MODELS.register_module(name='chatglm2')
 class ChatGLM2(BaseModel):
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self,
+                 user='问：',
+                 eoh='\n\n',
+                 assistant='答：',
+                 eoa='\n\n',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self._user = user
+        self._assistant = assistant
+        self._eoh = eoh
+        self._eoa = eoa
         self.count = 0
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """decorate prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
         self.count += 1
-        return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+        ret = f'[Round {self.count}]\n\n'
+        ret += f'{self._user}{prompt}{self._eoh}'
+        ret += f'{self._assistant}'
+        return ret
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """message to prompt."""
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        _, users, assistants = self._translate_messages(messages)
+        count = 0
+        ret = ''
+        for user, assistant in zip(users, assistants):
+            count += 1
+            if assistant:
+                ret += f'[Round {count}]\n\n'
+                ret += f'{self._user}{user}{self._eoh}'
+                ret += f'{self._assistant}{assistant}'
+            else:
+                ret += f'[Round {count}]\n\n'
+                ret += f'{self._user}{user}{self._eoh}'
+                ret += f'{self._assistant}'
+        return ret
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
