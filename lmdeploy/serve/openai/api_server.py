@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import os
-import random
 import time
 from http import HTTPStatus
 from typing import AsyncGenerator, List, Literal, Optional, Union
@@ -31,6 +30,7 @@ from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 class VariableInterface:
     """A IO interface maintaining variables."""
     async_engine: AsyncEngine = None
+    session_id: int = 0
     api_keys: Optional[List[str]] = None
     qos_engine: QosEngine = None
     request_hosts = []
@@ -133,7 +133,6 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
-    - session_id (int): if not specified, will set random value
     - user_id (str): for qos; if not specified, will set to "default"
 
     Currently we do not support the following features:
@@ -142,8 +141,8 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -282,7 +281,6 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
-    - session_id (int): if not specified, will set random value
 
     Currently we do not support the following features:
     - function_call (Users should implement this by themselves)
@@ -290,8 +288,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -440,7 +438,6 @@ async def completions_v1_qos(request: CompletionRequestQos,
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
     - ignore_eos (bool): indicator for ignoring eos
-    - session_id (int): if not specified, will set random value
     - user_id (str): for qos; if not specified, will set to "default"
 
     Currently we do not support the following features:
@@ -448,8 +445,8 @@ async def completions_v1_qos(request: CompletionRequestQos,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -590,7 +587,6 @@ async def completions_v1(request: CompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
-    - session_id (int): if not specified, will set random value
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
 
@@ -599,8 +595,8 @@ async def completions_v1(request: CompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        request.session_id = random.randint(1, 10086)
+    VariableInterface.session_id += 1
+    request.session_id = VariableInterface.session_id
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -797,7 +793,8 @@ async def chat_interactive_v1_qos(request: GenerateRequestQos,
     - user_id (str): for qos; if not specified, will set to "default"
     """
     if request.session_id == -1:
-        request.session_id = random.randint(10087, 23333)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
 
     if VariableInterface.qos_engine is None:
         return create_error_response(
@@ -871,17 +868,23 @@ async def chat_interactive_v1(request: GenerateRequest,
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
     """
-    if request.cancel and request.session_id != -1:
-        VariableInterface.async_engine.stop_session(request.session_id)
-        return {
-            'text': '',
-            'tokens': 0,
-            'input_tokens': 0,
-            'history_tokens': 0,
-            'finish_reason': 'stop'
-        }
+    if request.cancel:
+        if request.session_id != -1:
+            VariableInterface.async_engine.stop_session(request.session_id)
+            return {
+                'text': '',
+                'tokens': 0,
+                'input_tokens': 0,
+                'history_tokens': 0,
+                'finish_reason': 'stop'
+            }
+        else:
+            create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                'please set a session_id to cancel a request')
     if request.session_id == -1:
-        request.session_id = random.randint(10087, 23333)
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
 
     async_engine = VariableInterface.async_engine
     sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
