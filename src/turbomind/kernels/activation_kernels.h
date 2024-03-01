@@ -108,7 +108,13 @@ template<typename T>
 void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stream);
 
 template<template<typename T> class Activation, typename T, typename BT>
-void invokeFusedBiasResidualActivation(
-    T* out, const BT* bias, const T* residual, const int m, const int n, cudaStream_t stream);
+void invokeFusedBiasResidualActivation(T*           out,
+                                       const BT*    bias,
+                                       const T*     residual,
+                                       const int    m,
+                                       const int    n,
+                                       cudaStream_t stream,
+                                       const int    tp_num,
+                                       const int    tp_offset);
 
 }  // namespace turbomind

@@ -330,8 +330,8 @@ INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif
 
 template<template<typename T> class Activation, typename T, typename BT>
-__global__ void
-fused_bias_residual_activation(T* out, const BT* __restrict bias, const T* __restrict residual, int m, int n)
+__global__ void fused_bias_residual_activation(
+    T* out, const BT* __restrict bias, const T* __restrict residual, int m, int n, int tp_num, int tp_offset)
 {
     const bool with_bias     = bias != nullptr;
     const bool with_residual = residual != nullptr;
@@ -349,7 +349,7 @@ fused_bias_residual_activation(T* out, const BT* __restrict bias, const T* __res
         val = cuda_cast<T>(Activation<T>::apply(val));
 
         if (with_residual) {
-            T residual_val = static_cast<T>(residual[id]);
+            T residual_val = static_cast<T>(residual[id % n + (id - id % n) * tp_num + tp_offset]);
             val            = add(val, residual_val);
         }
 
@@ -358,8 +358,14 @@ fused_bias_residual_activation(T* out, const BT* __restrict bias, const T* __res
 }
 
 template<template<typename T> class Activation, typename T, typename BT>
-void invokeFusedBiasResidualActivation(
-    T* out, const BT* bias, const T* residual, const int m, const int n, cudaStream_t stream)
+void invokeFusedBiasResidualActivation(T*           out,
+                                       const BT*    bias,
+                                       const T*     residual,
+                                       const int    m,
+                                       const int    n,
+                                       cudaStream_t stream,
+                                       const int    tp_num,
+                                       const int    tp_offset)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     using PT                   = typename packed_type<T>::type;
@@ -379,13 +385,21 @@ void invokeFusedBiasResidualActivation(
                                                                            reinterpret_cast<const PBT*>(bias),
                                                                            reinterpret_cast<const PT*>(residual),
                                                                            m,
-                                                                           n / packed_elems);
+                                                                           n / packed_elems,
+                                                                           tp_num,
+                                                                           tp_offset / packed_elems);
     sync_check_cuda_error();
 }
 
 #define INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(Activation, T, BT)                                                  \
-    template void invokeFusedBiasResidualActivation<Activation, T, BT>(                                                \
-        T * out, const BT* bias, const T* residual, const int m, const int n, cudaStream_t stream);
+    template void invokeFusedBiasResidualActivation<Activation, T, BT>(T * out,                                        \
+                                                                       const BT*    bias,                              \
+                                                                       const T*     residual,                          \
+                                                                       const int    m,                                 \
+                                                                       const int    n,                                 \
+                                                                       cudaStream_t stream,                            \
+                                                                       const int    tp_num,                            \
+                                                                       const int    tp_offset);
 
 INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(SiluActivation, float, float);
 INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(SiluActivation, half, half);

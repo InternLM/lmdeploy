@@ -30,12 +30,16 @@ void ResBlock<T>::forward(T*                         resblock_output,
      *   \param resblock_output [batch_size, hidden_dimension]
      */
     linear_->forward(resblock_output, resblock_input, batch_size, weight);
+    const int tp_num    = tensor_para_.world_size_;
+    const int tp_offset = tensor_para_.rank_ * in_size_ / tp_num;
     invokeFusedBiasResidualActivation<SiluActivation>(resblock_output,
                                                       (const T*)weight.bias,     // bias
                                                       (const T*)resblock_input,  // residual
                                                       batch_size,                // m
                                                       hidden_size_,              // n
-                                                      stream_);
+                                                      stream_,
+                                                      tp_num,
+                                                      tp_offset);
 }
 
 template class ResBlock<float>;

@@ -4,13 +4,12 @@
 
 #pragma once
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/medusa_plugin/medusa_weight.h"
 #include "src/turbomind/models/medusa_plugin/res_block.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <cuda_runtime.h>
 #include <memory>
-#include <vector>
 
 namespace turbomind {
 
@@ -23,6 +22,7 @@ public:
                cudaStream_t     stream,
                cublasMMWrapper* cublas_wrapper,
                IAllocator*      allocator,
+               NcclParam        tensor_para,
                bool             is_free_buffer_after_forward = false);
     ~MedusaHead()                 = default;
     MedusaHead(const MedusaHead&) = delete;
@@ -52,6 +52,8 @@ private:
     cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;
     IAllocator*      allocator_;
+
+    NcclParam tensor_para_;
 
     bool is_allocated_buffer_          = false;
     bool is_free_buffer_after_forward_ = false;

@@ -3,16 +3,22 @@
 // Zhiwei Bao <zwbao@foxmail.com>
 
 #pragma once
+
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 
 template<typename T>
 class ResBlock {
 public:
-    ResBlock(size_t in_size, size_t hidden_size, cudaStream_t stream, cublasMMWrapper* cublas_wrapper):
+    ResBlock(size_t           in_size,
+             size_t           hidden_size,
+             cudaStream_t     stream,
+             cublasMMWrapper* cublas_wrapper,
+             NcclParam        tensor_para):
         in_size_(in_size), hidden_size_(hidden_size), stream_(stream)
     {
         linear_ = std::make_unique<LlamaLinear<T>>(cublas_wrapper, stream);
@@ -30,5 +36,6 @@ private:
 
     cudaStream_t                    stream_;
     std::unique_ptr<LlamaLinear<T>> linear_;
+    NcclParam                       tensor_para_;
 };
 }  // namespace turbomind

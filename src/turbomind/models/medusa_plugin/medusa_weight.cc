@@ -158,10 +158,10 @@ const std::vector<std::vector<LlamaDenseWeight<T>>>& MedusaWeight<T>::get_resblo
     return resblocks_weights_;
 }
 
-template struct MedusaWeight<float>;
-template struct MedusaWeight<half>;
+template class MedusaWeight<float>;
+template class MedusaWeight<half>;
 #ifdef ENABLE_BF16
-template struct MedusaWeight<__nv_bfloat16>;
+template class MedusaWeight<__nv_bfloat16>;
 #endif
 
 }  // namespace turbomind

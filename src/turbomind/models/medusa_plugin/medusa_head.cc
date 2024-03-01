@@ -3,7 +3,6 @@
 // Zhiwei Bao <zwbao@foxmail.com>
 
 #include "src/turbomind/models/medusa_plugin/medusa_head.h"
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 
@@ -16,6 +15,7 @@ MedusaHead<T>::MedusaHead(size_t           in_size,
                           cudaStream_t     stream,
                           cublasMMWrapper* cublas_wrapper,
                           IAllocator*      allocator,
+                          NcclParam        tensor_para,
                           bool             is_free_buffer_after_forward):
     in_size_(in_size),
     vocab_size_(vocab_size),
@@ -23,9 +23,10 @@ MedusaHead<T>::MedusaHead(size_t           in_size,
     stream_(stream),
     cublas_wrapper_(cublas_wrapper),
     allocator_(allocator),
+    tensor_para_(tensor_para),
     is_free_buffer_after_forward_(is_free_buffer_after_forward)
 {
-    resblock_ = std::make_unique<ResBlock<T>>(in_size_, vocab_size, stream_, cublas_wrapper_);
+    resblock_ = std::make_unique<ResBlock<T>>(in_size_, vocab_size_, stream_, cublas_wrapper_, tensor_para_);
     linear_   = std::make_unique<LlamaLinear<T>>(cublas_wrapper_, stream_);
 }
 
@@ -72,10 +73,10 @@ void MedusaHead<T>::free_buffer()
     }
 }
 
-template struct MedusaHead<float>;
-template struct MedusaHead<half>;
+template class MedusaHead<float>;
+template class MedusaHead<half>;
 #ifdef ENABLE_BF16
-template struct MedusaHead<__nv_bfloat16>;
+template class MedusaHead<__nv_bfloat16>;
 #endif
 
 }  // namespace turbomind
