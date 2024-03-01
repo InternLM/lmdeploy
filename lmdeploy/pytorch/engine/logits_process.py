@@ -127,10 +127,10 @@ class SamplingInputs:
                 if param.random_seed is not None:
                     random_seeds[idx] = param.random_seed & 0xffffffff
 
-                bw = param.bad_words.copy()
+                bw = param.bad_words
                 if (not param.ignore_eos
                         and seq.num_new_tokens < param.min_new_tokens):
-                    bw += param.stop_words
+                    bw = bw + param.stop_words
                 bad_words[idx] = bw
 
         def __get_topp(top_p):
