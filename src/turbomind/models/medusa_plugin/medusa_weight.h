@@ -17,7 +17,9 @@ public:
                  size_t     medusa_num_layers,
                  size_t     hidden_size,
                  size_t     vocab_size,
-                 WeightType weight_type);
+                 WeightType weight_type,
+                 size_t     tensor_para_size,
+                 size_t     tensor_para_rank);
     ~MedusaWeight();
     MedusaWeight(const MedusaWeight&) = delete;
     MedusaWeight& operator=(const MedusaWeight&) = delete;
@@ -41,6 +43,9 @@ private:
     size_t     hidden_size_;
     size_t     vocab_size_;
     WeightType weight_type_;
+
+    size_t tensor_para_size_;
+    size_t tensor_para_rank_;
 
     std::vector<LlamaDenseWeight<T>>              heads_weights_;
     std::vector<std::vector<LlamaDenseWeight<T>>> resblocks_weights_;

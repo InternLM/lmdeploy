@@ -12,25 +12,33 @@
 namespace turbomind {
 
 template<typename T>
-MedusaWeight<T>::MedusaWeight(
-    size_t medusa_num_heads, size_t medusa_num_layers, size_t hidden_size, size_t vocab_size, WeightType weight_type):
+MedusaWeight<T>::MedusaWeight(size_t     medusa_num_heads,
+                              size_t     medusa_num_layers,
+                              size_t     hidden_size,
+                              size_t     vocab_size,
+                              WeightType weight_type,
+                              size_t     tensor_para_size,
+                              size_t     tensor_para_rank):
     medusa_num_heads_(medusa_num_heads),
     medusa_num_layers_(medusa_num_layers),
     hidden_size_(hidden_size),
     vocab_size_(vocab_size),
-    weight_type_(weight_type)
+    weight_type_(weight_type),
+    tensor_para_size_(tensor_para_size),
+    tensor_para_rank_(tensor_para_rank)
 {
     heads_weights_.resize(medusa_num_heads_);
-    std::fill_n(heads_weights_.begin(),
-                medusa_num_heads_,
-                LlamaDenseWeight<T>{hidden_size_, vocab_size_, nullptr, weight_type_, nullptr, nullptr, 0});
+    std::fill_n(
+        heads_weights_.begin(),
+        medusa_num_heads_,
+        LlamaDenseWeight<T>{hidden_size_ / tensor_para_size_, vocab_size_, nullptr, weight_type_, nullptr, nullptr, 0});
 
     resblocks_weights_.resize(medusa_num_heads_);
     std::fill_n(resblocks_weights_.begin(), medusa_num_heads_, std::vector<LlamaDenseWeight<T>>(medusa_num_layers_));
     std::for_each(resblocks_weights_.begin(), resblocks_weights_.end(), [this](auto& resblock_weights) {
         std::for_each(resblock_weights.begin(), resblock_weights.end(), [this](auto& resblock_weight) {
             resblock_weight.input_dims  = hidden_size_;
-            resblock_weight.output_dims = hidden_size_;
+            resblock_weight.output_dims = hidden_size_ / tensor_para_size_;
             resblock_weight.type        = weight_type_;
         });
     });
@@ -96,7 +104,6 @@ void MedusaWeight<T>::free_weight()
 template<typename T>
 void MedusaWeight<T>::load_weight(LlamaDenseWeight<T>* weight, const std::string& path, FtCudaDataType model_file_type)
 {
-    // TODO support quant
     const size_t bit_size = getBitSize(weight->type);
     if (bit_size >= 16) {
         loadWeightFromBin((T*)weight->kernel, {weight->input_dims, weight->output_dims}, path, model_file_type);
@@ -106,7 +113,6 @@ void MedusaWeight<T>::load_weight(LlamaDenseWeight<T>* weight, const std::string
 template<typename T>
 void MedusaWeight<T>::load_bias(LlamaDenseWeight<T>* weight, const std::string& path, FtCudaDataType model_file_type)
 {
-    // TODO support quant
     const size_t bit_size = getBitSize(weight->type);
     if (bit_size >= 16) {
         loadWeightFromBin((T*)weight->bias, {weight->output_dims}, path, model_file_type);
@@ -126,8 +132,7 @@ void MedusaWeight<T>::load_model(const std::string& dir_path, FtCudaDataType mod
         weight_path.append("/");
     }
     std::string prefix = "medusa.";
-    // TODO support TP
-    std::string rank = "0.";
+    std::string rank   = std::to_string(tensor_para_rank_) + ".";
     weight_path.append(prefix);
     for (int i = 0; i < medusa_num_heads_; i++) {
         for (int j = 0; j < medusa_num_layers_; j++) {
