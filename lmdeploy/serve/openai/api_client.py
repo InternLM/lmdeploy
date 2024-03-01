@@ -129,7 +129,7 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            session_id (int): if not specified, will set random value
+            session_id (int): Deprecated.
 
         Yields:
             json objects in openai formats
@@ -271,7 +271,7 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            session_id (int): if not specified, will set random value
+            session_id (int): Deprecated.
 
         Yields:
             json objects in openai formats
