@@ -22,7 +22,7 @@ env:
 
 
 jobs:
-  test_functions:
+  pr_functions_test:
     runs-on: [self-hosted, linux-a100-pr]
     timeout-minutes: 120
     env:
