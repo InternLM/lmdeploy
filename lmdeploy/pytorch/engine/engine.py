@@ -821,6 +821,8 @@ class Engine:
         session_ids = tuple(range(batch_size))
         if sequence_start:
             for sid in session_ids:
+                self.req_sender.send(RequestType.END_SESSION,
+                                     dict(session_id=sid))
                 self.add_session(sid)
 
         req_ids = __add_messages(session_ids, input_ids, adapter_names)
