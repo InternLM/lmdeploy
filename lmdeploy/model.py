@@ -619,8 +619,8 @@ class ChatGLM2(BaseModel):
         self._eoa = eoa
         self.count = 0
 
-    def decorate_prompt(self, prompt, sequence_start=True):
-        """decorate prompt."""
+    def get_prompt(self, prompt, sequence_start=True):
+        """get prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
@@ -634,19 +634,18 @@ class ChatGLM2(BaseModel):
         """message to prompt."""
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
-        _, users, assistants = self._translate_messages(messages)
-        count = 0
         ret = ''
-        for user, assistant in zip(users, assistants):
-            count += 1
-            if assistant:
+        count = 0
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role == 'user':
+                count += 1
                 ret += f'[Round {count}]\n\n'
-                ret += f'{self._user}{user}{self._eoh}'
-                ret += f'{self._assistant}{assistant}'
-            else:
-                ret += f'[Round {count}]\n\n'
-                ret += f'{self._user}{user}{self._eoh}'
+                ret += f'{self._user}{content}{self._eoh}'
                 ret += f'{self._assistant}'
+            if role == 'assistant':
+                ret += f'{content}'
         return ret
 
     @classmethod
