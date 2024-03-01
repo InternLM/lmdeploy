@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
-import os
 from abc import abstractmethod
 from typing import Literal, Optional
 
-from fuzzywuzzy import fuzz, process
 from mmengine import Registry
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 MODELS = Registry('model', locations=['lmdeploy.model'])
 
 
@@ -45,7 +46,13 @@ class ChatTemplateConfig:
             for key, value in dataclasses.asdict(self).items()
             if value is not None
         }
-        model: BaseModel = MODELS.get(self.model_name)(**attrs)
+        if self.model_name in MODELS.module_dict.keys():
+            model: BaseModel = MODELS.get(self.model_name)(**attrs)
+        else:
+            logger.warning(
+                f'Could not find {self.model_name} in registered models. '
+                f'Register {self.model_name} using the BaseChatTemplate.')
+            model = BaseChatTemplate(**attrs)
         return model
 
 
@@ -839,12 +846,11 @@ class Deepseek(BaseModel):
             return 'deepseek-chat'
 
 
-def best_match_model(query: str, similarity_cutoff: float = 0.5):
+def best_match_model(query: str):
     """Get the model that matches the query.
 
     Args:
         query (str): the input query. Could be a model path.
-        similarity_cutoff (float): similarities below the limit are ignored.
 
     Return:
         List[str] | None: the possible model names or none.
@@ -852,16 +858,3 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
-    model_names = list(MODELS.module_dict.keys())
-    if query.endswith('/'):
-        query = query[:-1]
-    base_name = os.path.basename(query).lower()
-    # Using fuzzy matching
-    matches = process.extract(base_name, model_names, scorer=fuzz.ratio)
-
-    # Ignore matches with score below similarity_cutoff
-    matches = [
-        match for match, score in matches if score / 100 >= similarity_cutoff
-    ]
-
-    return matches[0] if matches else None
