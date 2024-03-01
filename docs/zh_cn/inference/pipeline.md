@@ -224,7 +224,6 @@ print(response)
 | num_cpu_blocks        | int   | CPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 | num_gpu_blocks        | int   | GPU块的数量。如果值为0，缓存将根据当前环境进行分配。         | 0           |
 | adapters              | dict  | lora adapters的配置路径                                      | None        |
-| thread_safe           | dict  | EngineInstance 是否线程安全                                  | False       |
 | download_dir          | str   | 模型缓存路径                                                 | None        |
 | revision              | str   | Git revision id, 可以是branch，tag或者commit id              | None        |
 

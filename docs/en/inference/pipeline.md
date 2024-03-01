@@ -224,7 +224,6 @@ This class provides the configuration parameters for Pytorch backend.
 | num_cpu_blocks        | int   | Number of CPU blocks. If the number is 0, cache would be allocated according to the current environment.                              | 0           |
 | num_gpu_blocks        | int   | Number of GPU blocks. If the number is 0, cache would be allocated according to the current environment.                              | 0           |
 | adapters              | dict  | The path configs to lora adapters.                                                                                                    | None        |
-| thread_safe           | dict  | EngineInstance is threadsafe or not.                                                                                                  | False       |
 | download_dir          | str   | Directory to download and load the weights, default to the default cache directory of huggingface.                                    | None        |
 | revision              | str   | The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version. | None        |
 
