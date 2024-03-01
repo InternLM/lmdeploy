@@ -831,7 +831,9 @@ class Engine:
             resp = self.req_sender.recv_any()
             if resp.req_id not in req_ids:
                 continue
-            assert resp.type == ResponseType.FINISH
+            assert resp.type in (ResponseType.SUCCESS,
+                                     ResponseType.FINISH), (
+                                         f'response type: {resp.type}')
             idx = req_idx_map[resp.req_id]
             ret[idx] = resp.data['logits']
             finish_count -= 1

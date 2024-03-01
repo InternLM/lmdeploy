@@ -25,8 +25,8 @@ class SamplingParam:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[int] = None
-    bad_words: List[int] = None
+    stop_words: List[int] = field(default_factory=list)
+    bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
 
