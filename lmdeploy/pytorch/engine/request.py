@@ -67,6 +67,18 @@ class Response:
 ReqList = List[Request]
 
 
+def _run_until_complete(future: Awaitable):
+    """run untile complete."""
+    try:
+        event_loop = asyncio.get_event_loop()
+    except Exception:
+        logger.warning('Can not found event loop in current thread.'
+                       ' Create a new event loop.')
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+    return event_loop.run_until_complete(future)
+
+
 @dataclass
 class RequestSender:
     """Request sender.
@@ -262,7 +274,7 @@ class RequestSender:
         """
         if not self.is_thread_safe():
             coro = self.async_batched_send_async(req_types, data)
-            return asyncio.get_event_loop().run_until_complete(coro)
+            return self.run_until_complete(coro)
 
         req_ids, reqs = self._gather_request(req_types, data)
         self._req_put(reqs)
@@ -283,8 +295,8 @@ class RequestSender:
 
     def recv_any(self, que_timeout: float = None) -> Response:
         """receive any response."""
-        return asyncio.get_event_loop().run_until_complete(
-            self.async_recv_any(que_timeout))
+        coro = self.async_recv_any(que_timeout)
+        return self.run_until_complete(coro)
 
     def recv_all(self, req_id: int, block: bool = True):
         """revceive all response with req_id."""
@@ -315,7 +327,7 @@ class RequestSender:
         """
         if not self.is_thread_safe():
             coro = self.async_recv(req_id, que_timeout)
-            return asyncio.get_event_loop().run_until_complete(coro)
+            return self.run_until_complete(coro)
 
         ret = self._pop_resp(req_id, default=None)
         if ret is not None:
@@ -574,11 +586,4 @@ class RequestManager:
 
     def run_until_complete(self, future: Awaitable):
         """run untile complete."""
-        try:
-            event_loop = asyncio.get_event_loop()
-        except Exception:
-            logger.warning('Can not found event loop in current thread.'
-                           ' Create a new event loop.')
-            event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(event_loop)
-        return event_loop.run_until_complete(future)
+        return _run_until_complete(future)
