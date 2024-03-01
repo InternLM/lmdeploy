@@ -104,6 +104,7 @@ class APIClient:
                             frequency_penalty: Optional[float] = 0.0,
                             user: Optional[str] = None,
                             repetition_penalty: Optional[float] = 1.0,
+                            session_id: Optional[int] = -1,
                             ignore_eos: Optional[bool] = False,
                             skip_special_tokens: Optional[bool] = True,
                             **kwargs):
@@ -128,6 +129,7 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
+            session_id (int): if not specified, will set random value
 
         Yields:
             json objects in openai formats
@@ -240,6 +242,7 @@ class APIClient:
             user: Optional[str] = None,
             # additional argument of lmdeploy
             repetition_penalty: Optional[float] = 1.0,
+            session_id: Optional[int] = -1,
             ignore_eos: Optional[bool] = False,
             skip_special_tokens: Optional[bool] = True,
             **kwargs):
@@ -268,6 +271,7 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
+            session_id (int): if not specified, will set random value
 
         Yields:
             json objects in openai formats
