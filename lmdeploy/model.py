@@ -23,7 +23,8 @@ class ChatTemplateConfig:
     """Parameters for chat template.
 
     Args:
-        model_name (str): the name of the deployed model. Determine which chat template will be applied
+        model_name (str): the name of the deployed model. Determine which chat template will be applied.
+            All the chat template names: `lmdeploy list`
         system (str | None): begin of the system prompt
         meta_instruction (str | None): system prompt
         eosys (str | None): end of the system prompt
@@ -707,29 +708,55 @@ class CodeLlama(Llama2):
 @MODELS.register_module(name='falcon')
 class Falcon(BaseModel):
 
-    def __init__(self):
-        super().__init__()
-
-    def get_prompt(self, prompt, sequence_start=True):
-        prompt = super().get_prompt(prompt, sequence_start)
-        if len(prompt) == 0:
-            return '<|endoftext|>'
-        return prompt
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
 @MODELS.register_module(name='chatglm2-6b')
 class ChatGLM2(BaseModel):
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self,
+                 user='问：',
+                 eoh='\n\n',
+                 assistant='答：',
+                 eoa='\n\n',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self._user = user
+        self._assistant = assistant
+        self._eoh = eoh
+        self._eoa = eoa
         self.count = 0
 
-    def get_prompt(self, prompt, sequence_start=True):
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """decorate prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
         self.count += 1
-        return f'[Round {self.count}]\n\n问：{prompt}\n\n答：'
+        ret = f'[Round {self.count}]\n\n'
+        ret += f'{self._user}{prompt}{self._eoh}'
+        ret += f'{self._assistant}'
+        return ret
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """message to prompt."""
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        _, users, assistants = self._translate_messages(messages)
+        count = 0
+        ret = ''
+        for user, assistant in zip(users, assistants):
+            count += 1
+            if assistant:
+                ret += f'[Round {count}]\n\n'
+                ret += f'{self._user}{user}{self._eoh}'
+                ret += f'{self._assistant}{assistant}'
+            else:
+                ret += f'[Round {count}]\n\n'
+                ret += f'{self._user}{user}{self._eoh}'
+                ret += f'{self._assistant}'
+        return ret
 
 
 @MODELS.register_module(name=['solar', 'solar-70b'])
@@ -1013,6 +1040,67 @@ class MistralChat(BaseModel):
         return ret
 
 
+@MODELS.register_module(name=['gemma'])
+class Gemma(BaseModel):
+    """Template of Gemma models.
+
+    `https://huggingface.co/google/gemma-7b-it`
+    """
+
+    def __init__(self,
+                 user='user\n',
+                 boh='<start_of_turn>',
+                 eoh='<end_of_turn>\n',
+                 assistant='model\n',
+                 boa='<start_of_turn>',
+                 eoa='<end_of_turn>\n',
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.user = user
+        self.boh = boh
+        self.eoh = eoh
+        self.assistant = assistant
+        self.boa = boa
+        self.eoa = eoa
+
+    def decorate_prompt(self, prompt, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            prompt (str): user's input prompt
+            sequence_start (bool): indicator for the first round chat of a
+               session sequence
+        Returns:
+            str: the concatenated prompt
+        """
+        assert self.capability == 'chat', \
+            f'{type(self).__name__} has no capability of {self.capability}'
+
+        return (f'{self.boh}{self.user}{prompt}{self.eoh}'
+                f'{self.boa}{self.assistant}')
+
+    def messages2prompt(self, messages, sequence_start=True):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        _, users, assistants = self._translate_messages(messages)
+        ret = ''
+        for i, (user, assistant) in enumerate(zip(users, assistants)):
+            ret += (f'{self.boh}{self.user}{user}{self.eoh}'
+                    f'{self.boa}{self.assistant}')
+            if assistant:
+                ret += f'{assistant}{self.eoa}'
+        return ret
+
+
 @MODELS.register_module(name=['deepseek-chat'])
 class Deepseek(BaseModel):
 
@@ -1072,7 +1160,8 @@ class Deepseek(BaseModel):
         return ret
 
 
-def best_match_model(query: str, similarity_cutoff: float = 0.5):
+def best_match_model(query: str,
+                     similarity_cutoff: float = 0.5) -> Optional[str]:
     """Get the model that matches the query.
 
     Args:
@@ -1080,7 +1169,7 @@ def best_match_model(query: str, similarity_cutoff: float = 0.5):
         similarity_cutoff (float): similarities below the limit are ignored.
 
     Return:
-        List[str] | None: the possible model names or none.
+        str | None: the possible model name or none.
     """
     model_names = list(MODELS.module_dict.keys())
     if ('models--' in query) and ('snapshots' in query):
