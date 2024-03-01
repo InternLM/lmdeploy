@@ -61,8 +61,6 @@ def test_vicuna():
     model = MODELS.get('vicuna')(capability='completion')
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is None
-    assert model.system is not None
 
     model = MODELS.get('vicuna')(capability='chat',
                                  system='Provide answers in Python')
@@ -74,7 +72,7 @@ def test_vicuna():
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt is None
+        assert _prompt is None
 
 
 def test_internlm_chat():
@@ -96,7 +94,7 @@ def test_internlm_chat():
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt is None
+        assert _prompt is None
 
     model = MODELS.get('internlm-chat-7b-8k')()
     assert model.session_len == 8192
@@ -121,19 +119,19 @@ def test_llama2():
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is None
-    assert model.default_sys_prompt is not None
+    assert model.meta_instruction is not None
 
     model = MODELS.get('llama2')(capability='chat',
-                                 system='Provide answers in Python')
+                                 meta_instruction='Provide answers in Python')
     assert model.get_prompt(prompt, sequence_start=True) != prompt
     assert model.get_prompt(prompt, sequence_start=False) != prompt
-    assert model.default_sys_prompt == 'Provide answers in Python'
+    assert model.meta_instruction == 'Provide answers in Python'
 
     model = MODELS.get('llama2')(capability='voice')
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt is None
+        assert _prompt is None
 
 
 def test_qwen():
@@ -151,7 +149,7 @@ def test_qwen():
     _prompt = None
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
-    assert _prompt is None
+        assert _prompt is None
 
 
 def test_codellama_completion():

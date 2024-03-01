@@ -545,6 +545,9 @@ class CodeLlama(Llama2):
         self.session_len = session_len
         self.suffix_first = suffix_first
         self.stop_words = stop_words
+        if self.capability == 'infilling':
+            if self.stop_words is None:
+                self.stop_words = ['<EOT>']
 
     def get_prompt(self, prompt, sequence_start=True):
         if self.capability == 'infilling':
