@@ -72,7 +72,7 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.engine.model_name]
+    return [VariableInterface.async_engine.model_name]
 
 
 @app.get('/v1/models', dependencies=[Depends(check_api_key)])
