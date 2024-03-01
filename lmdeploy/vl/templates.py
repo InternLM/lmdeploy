@@ -68,11 +68,10 @@ class VLChatTemplateWrapper:
         return images
 
     def append_image_token(self, prompt, num_images: int):
-        return prompt
+        return IMAGE_TOKEN * num_images + '\n' + prompt
 
     def convert_messages(self, messages, sequence_start=True):
         new_messages = []
-        total_images = 0
         for message in messages:
             role = message['role']
             content = message['content']
@@ -89,21 +88,19 @@ class VLChatTemplateWrapper:
                 'content': self.append_image_token(prompt, num_images)
             }
             new_messages.append(new_item)
-            total_images += num_images
-        return new_messages, total_images
+        return new_messages
 
     def messages2prompt(self, messages, sequence_start=True):
-        new_messages, _ = self.convert_messages(messages, sequence_start)
+        new_messages = self.convert_messages(messages, sequence_start)
         return self.chat_template.messages2prompt(new_messages, sequence_start)
 
 
 class LlavaVLChatTemplateWrapper(VLChatTemplateWrapper):
+    pass
 
-    def messages2prompt(self, messages, sequence_start=True):
-        new_messages, total_images = self.convert_messages(
-            messages, sequence_start)
-        return IMAGE_TOKEN * total_images + self.chat_template.messages2prompt(
-            new_messages, sequence_start)
+
+class YiVLChatTemplateWrapper(VLChatTemplateWrapper):
+    pass
 
 
 class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
@@ -114,12 +111,6 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
             res += f'Picture {str(i)}:{IMAGE_TOKEN}\n'
         res = res + prompt
         return res
-
-
-class YiVLChatTemplateWrapper(VLChatTemplateWrapper):
-
-    def append_image_token(self, prompt, num_images: int):
-        return IMAGE_TOKEN * num_images + '\n' + prompt
 
 
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
