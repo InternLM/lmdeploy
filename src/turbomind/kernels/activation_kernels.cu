@@ -329,4 +329,82 @@ INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, half, half);
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif
 
+template<template<typename T> class Activation, typename T, typename BT>
+__global__ void fused_bias_residual_activation(
+    T* out, const BT* __restrict bias, const T* __restrict residual, int m, int n, int tp_num, int tp_offset)
+{
+    const bool with_bias     = bias != nullptr;
+    const bool with_residual = residual != nullptr;
+
+    for (int64_t id = blockIdx.x * blockDim.x + threadIdx.x; id < 1LL * m * n; id += blockDim.x * gridDim.x) {
+        T val;
+
+        val = out[id];
+
+        if (with_bias) {
+            T bias_val = static_cast<T>(bias[id % n]);
+            val        = add(val, bias_val);
+        }
+
+        val = cuda_cast<T>(Activation<T>::apply(val));
+
+        if (with_residual) {
+            T residual_val = static_cast<T>(residual[id % n + (id - id % n) * tp_num + tp_offset]);
+            val            = add(val, residual_val);
+        }
+
+        out[id] = val;
+    }
+}
+
+template<template<typename T> class Activation, typename T, typename BT>
+void invokeFusedBiasResidualActivation(T*           out,
+                                       const BT*    bias,
+                                       const T*     residual,
+                                       const int    m,
+                                       const int    n,
+                                       cudaStream_t stream,
+                                       const int    tp_num,
+                                       const int    tp_offset)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    using PT                   = typename packed_type<T>::type;
+    constexpr int packed_elems = num_elems<PT>::value;
+    using PBT                  = typename packed_as<BT, packed_elems>::type;
+
+    dim3 block, grid;
+    if (n / 4 / packed_elems <= 1024) {
+        block.x = n / 4 / packed_elems;
+        grid.x  = m;
+    }
+    else {
+        block.x = 1024;
+        grid.x  = ceil(m * n / 1024.);
+    }
+    fused_bias_residual_activation<Activation><<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
+                                                                           reinterpret_cast<const PBT*>(bias),
+                                                                           reinterpret_cast<const PT*>(residual),
+                                                                           m,
+                                                                           n / packed_elems,
+                                                                           tp_num,
+                                                                           tp_offset / packed_elems);
+    sync_check_cuda_error();
+}
+
+#define INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(Activation, T, BT)                                                  \
+    template void invokeFusedBiasResidualActivation<Activation, T, BT>(T * out,                                        \
+                                                                       const BT*    bias,                              \
+                                                                       const T*     residual,                          \
+                                                                       const int    m,                                 \
+                                                                       const int    n,                                 \
+                                                                       cudaStream_t stream,                            \
+                                                                       const int    tp_num,                            \
+                                                                       const int    tp_offset);
+
+INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(SiluActivation, float, float);
+INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(SiluActivation, half, half);
+#ifdef ENABLE_BF16
+INSTANTIATE_FUSED_BIAS_RESIDUAL_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
+#endif
+
 }  // namespace turbomind
