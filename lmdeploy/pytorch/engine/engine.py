@@ -1098,6 +1098,7 @@ class EngineInstance:
 
         if not self.req_sender.is_thread_safe():
             yield from __call_async()
+            return
 
         gen_config = gen_config or EngineGenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
