@@ -59,7 +59,7 @@ def deduce_a_name(
             raise ArgumentError(None,
                                 f'Please set model_name for {model_path}')
         else:
-            logger.warning(f'Best matched chat template name: {model_name}')
+            logger.info(f'matched chat template name: {model_name}')
     return model_name
 
 
@@ -111,9 +111,10 @@ class AsyncEngine:
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  tp: int = 1,
                  **kwargs) -> None:
-        logger.info(f'AsyncEngine init with backend={backend}, backend_config'
-                    f'={backend_config}, chat_template_config='
-                    f'{chat_template_config}')
+        logger.info(
+            f'input backend={backend}, backend_config={backend_config}')
+        logger.info(f'input chat_template_config={chat_template_config}')
+
         self.model_name = deduce_a_name(model_path, model_name, backend_config,
                                         chat_template_config)
         # build chat template config
@@ -122,6 +123,7 @@ class AsyncEngine:
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = self.model_name
         self.chat_template = chat_template_config.chat_template
+
         # prevent bc
         for k in list(kwargs.keys()):
             if hasattr(chat_template_config, k):
@@ -129,26 +131,26 @@ class AsyncEngine:
                                'chat_template_config instead')
                 v = kwargs.pop(k)
                 setattr(chat_template_config, k, v)
+        logger.info(f'updated chat_template_onfig={chat_template_config}')
 
         # build backend engine
         if backend == 'turbomind':
-            logger.info('Running turbomind engine for pipeline.')
             self._build_turbomind(model_path=model_path,
                                   backend_config=backend_config,
                                   chat_template_config=chat_template_config,
                                   tp=tp,
                                   **kwargs)
         elif backend == 'pytorch':
-            logger.info('Running pytorch engine for pipeline.')
             self._build_pytorch(model_path=model_path,
                                 backend_config=backend_config,
                                 **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')
 
+        logger.info(f'updated backend_config={self.backend_config}')
+
         # parameters for member functions
-        self.session_len = backend_config.session_len
-        self.backend_config = backend_config
+        self.session_len = self.backend_config.session_len
         self.stop_words = _stop_words(self.chat_template.stop_words,
                                       self.engine.tokenizer)
         if self.stop_words is not None:
@@ -187,6 +189,7 @@ class AsyncEngine:
             engine_config=backend_config,
             chat_template_config=chat_template_config,
             **kwargs)
+        self.backend_config = backend_config
 
     def _build_pytorch(
             self,
@@ -205,6 +208,7 @@ class AsyncEngine:
             backend_config.session_len = self.chat_template.session_len
         self.engine = Engine(model_path=model_path,
                              engine_config=backend_config)
+        self.backend_config = backend_config
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
