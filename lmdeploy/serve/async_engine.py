@@ -288,7 +288,7 @@ class AsyncEngine:
             return self.engine.create_instance()
         # waiting no generator is available or the same session_id is running
         while self.gens_set == set() or session_id in self.running_session_ids:
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.1)
         generator = self.gens_set.pop()
         self.id2generator[str(session_id)] = generator
         self.running_session_ids.add(session_id)
