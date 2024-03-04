@@ -72,22 +72,29 @@ class Postprocessor:
     def __call__(self, *args, **kwargs):
         return self.infer(*args, **kwargs)
 
-    def infer(self, output_ids: np.ndarray, seqlen: np.ndarray):
+    def infer(self,
+              output_ids: np.ndarray,
+              seqlen: np.ndarray,
+              skip_special_tokens: bool = True):
         """De-tokenize tokens for text.
 
         Args:
             output_ids(np.ndarray): tokens' id
             seqlen(np.ndarray): sequence length
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
 
         Returns:
             str: decoded tokens
         """
         inputs = [
             prepare_tensor('TOKENS_BATCH', output_ids),
-            prepare_tensor('sequence_length', seqlen)
+            prepare_tensor('sequence_length', seqlen),
+            prepare_tensor('skip_special_tokens', skip_special_tokens)
         ]
         inputs[0].set_data_from_numpy(output_ids)
         inputs[1].set_data_from_numpy(seqlen)
+        inputs[2].set_data_from_numpy(skip_special_tokens)
         model_name = 'postprocessing'
         with grpcclient.InferenceServerClient(self.tritonserver_addr) \
                 as client:

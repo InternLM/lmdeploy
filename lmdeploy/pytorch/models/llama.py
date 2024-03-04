@@ -3,15 +3,19 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+import transformers
+from packaging import version
 from torch import nn
 from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
-from .functional import (apply_rotary_pos_emb,
-                         attention_forward_with_paged_attention,
-                         attention_forward_with_rerope, repeat_kv, rotate_half)
+from ..kernels import apply_rotary_pos_emb as apply_rotary_pos_emb_old
+from ..kernels import fill_kv_cache, fused_rotary_emb, paged_attention_fwd
+from .functional import attention_forward_with_rerope, repeat_kv
+
+TRANSFORMERS_VERSION = version.parse(transformers.__version__)
 
 
 class LlamaRMSNorm(nn.Module):
@@ -25,6 +29,22 @@ class LlamaRMSNorm(nn.Module):
         ret = rms_norm(hidden_states, self.weight, self.variance_epsilon)
 
         return ret
+
+
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., :x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """Applies Rotary Position Embedding to the query and key tensors."""
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
 
 
 class LlamaAttention(nn.Module):
@@ -165,8 +185,26 @@ class LlamaAttention(nn.Module):
         """default rewrite."""
         context = self.context.context
         history_lengths = context.history_lengths
+        kv_seq_length = context.kv_seq_length
+        q_seq_length = context.q_seq_length
+        q_start_loc = context.q_start_loc
+        block_offsets = context.block_offsets
 
-        def _rotary_emb_fn(query_states, key_states, value_states):
+        num_heads = self.num_heads // world_size
+        num_kv_heads = self.num_key_value_heads // world_size
+        head_dim = self.head_dim
+        hidden_size = num_heads * head_dim
+
+        def __qkv_proj(hidden_states):
+            """qkv proj."""
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            return query_states, key_states, value_states
+
+        def __rotary_emb_fn_old(query_states, key_states, value_states):
+            """rotary embedding old."""
             max_seq_len = position_ids.size(-1)
             kv_seq_len = max_seq_len + max(history_lengths)
             if kv_seq_len >= self.rotary_emb.max_seq_len_cached:
@@ -175,33 +213,97 @@ class LlamaAttention(nn.Module):
                                            seq_len=kv_seq_len + 128)
             cos = self.rotary_emb.cos_cached
             sin = self.rotary_emb.sin_cached
-            query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states = apply_rotary_pos_emb_old(
                 query_states,
                 key_states,
                 cos,
                 sin,
                 position_ids,
-                getattr(context, 'position_ids_1d', None),
+                context.position_ids_1d,
                 q_embed=query_states,
                 k_embed=key_states)
             return query_states, key_states, value_states
 
-        attn_output = attention_forward_with_paged_attention(
-            hidden_states,
-            history_lengths=history_lengths,
-            block_offsets=context.block_offsets,
-            num_heads=self.num_heads // world_size,
-            num_kv_heads=self.num_key_value_heads // world_size,
-            head_dim=self.head_dim,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            context=context,
-            q_proj=self.q_proj,
-            k_proj=self.k_proj,
-            v_proj=self.v_proj,
-            o_proj=self.o_proj,
-            rotary_emb_fn=_rotary_emb_fn,
+        def __rotary_emb_fn_438_naive(query_states, key_states, value_states):
+            """rotary embedding transformers>4.38."""
+            cos, sin = self.rotary_emb(value_states,
+                                       context.position_ids_1d[None])
+            cos = cos[0]
+            sin = sin[0]
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos, sin)
+            return query_states, key_states, value_states
+
+        def __rotary_emb_fn_438_fused(query_states, key_states, value_states):
+            scaling_factor = getattr(self.rotary_emb, 'scaling_factor', 1.0)
+            inv_freq = self.rotary_emb.inv_freq
+            query_states, key_states = fused_rotary_emb(
+                query_states[None],
+                key_states[None],
+                context.position_ids_1d[None],
+                inv_freq=inv_freq,
+                scaling_factor=scaling_factor,
+                out_q=query_states[None],
+                out_k=key_states[None])
+            return query_states[0], key_states[0], value_states
+
+        def __rotary_emb_fn_438(query_states, key_states, value_states):
+            rotary_name = type(self.rotary_emb).__name__
+            if rotary_name in [
+                    'LlamaRotaryEmbedding', 'LlamaLinearScalingRotaryEmbedding'
+            ]:
+                return __rotary_emb_fn_438_fused(query_states, key_states,
+                                                 value_states)
+            else:
+                return __rotary_emb_fn_438_naive(query_states, key_states,
+                                                 value_states)
+
+        def __rotary_emb_fn(query_states, key_states, value_states):
+            """rotary embedding."""
+            if TRANSFORMERS_VERSION >= version.parse('4.38.0'):
+                return __rotary_emb_fn_438(query_states, key_states,
+                                           value_states)
+            else:
+                return __rotary_emb_fn_old(query_states, key_states,
+                                           value_states)
+
+        query_states, key_states, value_states = __qkv_proj(hidden_states)
+
+        query_states = query_states.view(-1, num_heads, head_dim)
+        key_states = key_states.view(-1, num_kv_heads, head_dim)
+        value_states = value_states.view(-1, num_kv_heads, head_dim)
+
+        query_states, key_states, value_states = __rotary_emb_fn(
+            query_states, key_states, value_states)
+
+        fill_kv_cache(key_states,
+                      value_states,
+                      past_key_value[0],
+                      past_key_value[1],
+                      q_start_loc,
+                      q_seq_length,
+                      block_offsets=block_offsets,
+                      history_lengths=history_lengths,
+                      context=context)
+
+        attn_output = query_states
+        max_seq_len = position_ids.size(-1)
+        paged_attention_fwd(
+            query_states,
+            past_key_value[0],
+            past_key_value[1],
+            attn_output,
+            block_offsets,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_len,
         )
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1],
+                                          hidden_size)
+
+        attn_output = self.o_proj(attn_output)
+
         return attn_output, None, past_key_value
 
     def _contiguous_batching_forward_impl(
@@ -250,6 +352,7 @@ class LlamaAttention(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """Rewrite of LlamaAttention.forward."""
@@ -387,6 +490,7 @@ class LlamaModel(nn.Module):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite of LlamaModel.forward."""
         return self._continuous_batching_forward(

@@ -1,15 +1,49 @@
-identity_case:
+common_case:
     - 你好，你叫什么名字#hi, what's your name:
-
+    - 介绍成都的景点#please introduce attractions in Chengdu:
+        - contain:
+            - chengdu
+            - 成都
+        - codellama:
+            - contain:
+                - chengdu
+                - 成都
+                - llama
+        - internlm2-1_8b:
+            - contain:
+                - chengdu
+                - 成都
+                - 你好
+    - end:
+    - 介绍相应美食#please introduce some delicious foods:
+        - not_contain:
+            - 成都
+            - chengdu
 memory_test:
-    - 介绍成都的景点#please introduce some attractions in Chengdu:
+    - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
             - chengdu
             - 成都
         - contain:
             - 熊猫
             - panda
-    - 介绍美食#please introduce some delicious foods:
+            - 宽窄巷子
+            - jinli
+            - leshan
+            - 历史悠久
+        - falcon:
+            - contain:
+                - chengdu
+                - 成都
+        - internlm2-1_8b:
+            - contain:
+                - chengdu
+                - 成都
+        - internlm2-20b:
+            - contain:
+                - chengdu
+                - 成都
+    - 介绍相应美食#please introduce some delicious foods:
         - contain:
             - 成都
             - chengdu
@@ -17,25 +51,15 @@ memory_test:
             - 火锅
             - hotpot
             - hot pot
-new_session_without_memory:
-    - 介绍成都的景点#please introduce some attractions in Chengdu:
-        - contain:
-            - chengdu
-            - 成都
-    - end:
-    - 介绍美食#please introduce some delicious foods:
-        - not_contain:
-            - 成都
-            - chengdu
-chinese_poem_case:
-    - 给我一首中文打油诗，需要添加标点符号。和，Give me a Chinese poem in Chinese:
-        - len_g:
-            10
-english_poem_case:
-    - write a romantic poem:
-        - contain:
-            - "."
-            - ","
-            - "love"
-        - len_g:
-            100
+            - 四川
+        - falcon:
+            - len_g:
+                10
+        - internlm2-1_8b:
+            - contain:
+                - chengdu
+                - 成都
+        - internlm2-20b:
+            - contain:
+                - chengdu
+                - 成都

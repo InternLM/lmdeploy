@@ -10,9 +10,22 @@ import torch.utils.checkpoint
 from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from ..dist_utils import rowwise_parallelize_linear_fn, try_to_local
+from ..dist_utils import (colwise_parallelize_linear,
+                          rowwise_parallelize_linear_fn, try_to_local)
 from ..kernels import paged_attention_fwd
 from .functional import fill_kv_cache
+
+
+class PatchedRMSNorm(nn.Module):
+    """Rewrite RMSNorm."""
+
+    def forward(self, hidden_states):
+        """forward."""
+        # torch.nn.functional.normalize based implementation might leads
+        # to wrong output
+        from ..kernels import rms_norm
+        ret = rms_norm(hidden_states.permute(1, 0, 2), self.weight, self.eps)
+        return ret.permute(1, 0, 2)
 
 
 def split_tensor_along_last_dim(
@@ -31,30 +44,24 @@ def split_tensor_along_last_dim(
     Returns:
         A list of Tensors
     """
-    # Get the size and dimension.
-    last_dim = tensor.dim() - 1
-    last_dim_size = tensor.size()[last_dim] // num_partitions
-    # Split.
-    tensor_list = torch.split(tensor, last_dim_size, dim=last_dim)
-    # Note: torch.split does not create contiguous tensors by default.
+    tensor_list = tensor.chunk(num_partitions, dim=-1)
     if contiguous_split_chunks:
         return tuple(chunk.contiguous() for chunk in tensor_list)
 
     return tensor_list
 
 
-@torch.jit.script
 def apply_rotary_pos_emb(x: torch.Tensor,
                          rope_cache: torch.Tensor) -> torch.Tensor:
     # x: [sq, b, np, hn]
-    sq, _, np, _ = x.size(0), x.size(1), x.size(2), x.size(3)
-    rot_dim = rope_cache.shape[-2] * 2
-    x, x_pass = x[..., :rot_dim], x[..., rot_dim:]
-    # truncate to support variable sizes
+    sq, hn = x.size(0), x.size(-1)
+    xslice = x[..., :hn // 2]
     rope_cache = rope_cache[:sq]
-    xshaped = x.reshape(sq, -1, np, rot_dim // 2, 2)
-    rope_cache = rope_cache.view(sq, -1, 1, xshaped.size(3), 2)
-    x_out2 = torch.stack(
+    xshaped = xslice.unflatten(-1, (-1, 2))
+    rope_cache = rope_cache.unsqueeze(2)
+
+    # inplace
+    torch.stack(
         [
             xshaped[..., 0] * rope_cache[..., 0] -
             xshaped[..., 1] * rope_cache[..., 1],
@@ -62,9 +69,9 @@ def apply_rotary_pos_emb(x: torch.Tensor,
             xshaped[..., 0] * rope_cache[..., 1],
         ],
         -1,
+        out=xshaped,
     )
-    x_out2 = x_out2.flatten(3)
-    return torch.cat((x_out2, x_pass), dim=-1)
+    return x
 
 
 class PatchedSelfAttention(nn.Module):
@@ -74,28 +81,55 @@ class PatchedSelfAttention(nn.Module):
     the same size.
     """
 
+    def _distribute_qkv_linear(self, mod: nn.Module, device_mesh: DeviceMesh):
+        """distribute qkv linear."""
+        sections = [
+            self.num_attention_heads_per_partition *
+            self.hidden_size_per_attention_head,
+            self.num_multi_query_groups_per_partition *
+            self.hidden_size_per_attention_head,
+            self.num_multi_query_groups_per_partition *
+            self.hidden_size_per_attention_head,
+        ]
+        for name, param in mod.named_parameters():
+            splited_param = param.split(sections, dim=0)
+            updated_param = []
+            for p in splited_param:
+                dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
+                dist_tensor = try_to_local(dist_tensor)
+                updated_param.append(dist_tensor)
+            param = torch.cat(updated_param)
+            dist_param = torch.nn.Parameter(param)
+            mod.register_parameter(name, dist_param)
+
+    def _distribute_qkv_lora_linear(self, module: nn.Module,
+                                    device_mesh: DeviceMesh):
+        """distribute qkv lora linear."""
+        to_local = True
+        self._distribute_qkv_linear(
+            module.base_layer,
+            device_mesh=device_mesh,
+        )
+        for mod in module.lora_A.values():
+            colwise_parallelize_linear(mod,
+                                       device_mesh=device_mesh,
+                                       to_local=to_local)
+        for mod in module.lora_B.values():
+            self._distribute_qkv_linear(
+                mod,
+                device_mesh=device_mesh,
+            )
+        module._tp_mode = 'colwise'
+
     def _distribute_partition_fn(self, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
         if mod_name in ['query_key_value']:
-            sections = [
-                self.num_attention_heads_per_partition *
-                self.hidden_size_per_attention_head,
-                self.num_multi_query_groups_per_partition *
-                self.hidden_size_per_attention_head,
-                self.num_multi_query_groups_per_partition *
-                self.hidden_size_per_attention_head,
-            ]
-            for name, param in mod.named_parameters():
-                splited_param = param.split(sections, dim=0)
-                updated_param = []
-                for p in splited_param:
-                    dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
-                    dist_tensor = try_to_local(dist_tensor)
-                    updated_param.append(dist_tensor)
-                param = torch.cat(updated_param)
-                dist_param = torch.nn.Parameter(param)
-                mod.register_parameter(name, dist_param)
+            from peft.tuners.lora import Linear as LoraLinear
+            if isinstance(mod, LoraLinear):
+                self._distribute_qkv_lora_linear(mod, device_mesh)
+            else:
+                self._distribute_qkv_linear(mod, device_mesh)
         elif mod_name in ['dense']:
             rowwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
@@ -110,11 +144,8 @@ class PatchedSelfAttention(nn.Module):
     def _contiguous_batching_forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
         rotary_pos_emb: Optional[torch.Tensor] = None,
         kv_cache: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         # hidden_states: [sq, b, h]
@@ -130,50 +161,49 @@ class PatchedSelfAttention(nn.Module):
         world_size = 1
         if dist.is_initialized():
             world_size = dist.get_world_size()
-        origin_self = self
 
         context = self.context.context
         history_lengths = context.history_lengths
-        mixed_x_layer = origin_self.query_key_value(hidden_states)
+        max_seq_length = context.max_seq_length
+        q_start_loc = context.q_start_loc
+        q_seq_length = context.q_seq_length
+        kv_seq_length = context.kv_seq_length
+        block_offsets = context.block_offsets
 
-        if origin_self.multi_query_attention:
+        mixed_x_layer = self.query_key_value(hidden_states)
+
+        if self.multi_query_attention:
             (query_layer, key_layer, value_layer) = mixed_x_layer.split(
                 [
-                    origin_self.num_attention_heads_per_partition *
-                    origin_self.hidden_size_per_attention_head // world_size,
-                    origin_self.num_multi_query_groups_per_partition *
-                    origin_self.hidden_size_per_attention_head // world_size,
-                    origin_self.num_multi_query_groups_per_partition *
-                    origin_self.hidden_size_per_attention_head // world_size,
+                    self.num_attention_heads_per_partition *
+                    self.hidden_size_per_attention_head // world_size,
+                    self.num_multi_query_groups_per_partition *
+                    self.hidden_size_per_attention_head // world_size,
+                    self.num_multi_query_groups_per_partition *
+                    self.hidden_size_per_attention_head // world_size,
                 ],
                 dim=-1,
             )
-            query_layer = query_layer.view(query_layer.size()[:-1] + (
-                origin_self.num_attention_heads_per_partition // world_size,
-                origin_self.hidden_size_per_attention_head,
-            ))
-            key_layer = key_layer.view(key_layer.size()[:-1] + (
-                origin_self.num_multi_query_groups_per_partition // world_size,
-                origin_self.hidden_size_per_attention_head,
-            ))
-            value_layer = value_layer.view(value_layer.size()[:-1] + (
-                origin_self.num_multi_query_groups_per_partition // world_size,
-                origin_self.hidden_size_per_attention_head,
-            ))
+            query_layer = query_layer.unflatten(
+                -1, (-1, self.hidden_size_per_attention_head))
+            key_layer = key_layer.unflatten(
+                -1, (-1, self.hidden_size_per_attention_head))
+            value_layer = value_layer.unflatten(
+                -1, (-1, self.hidden_size_per_attention_head))
         else:
             new_tensor_shape = mixed_x_layer.size()[:-1] + (
-                origin_self.num_attention_heads_per_partition // world_size,
-                3 * origin_self.hidden_size_per_attention_head,
+                self.num_attention_heads_per_partition // world_size,
+                3 * self.hidden_size_per_attention_head,
             )
             mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
 
             # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
             (query_layer, key_layer,
              value_layer) = split_tensor_along_last_dim(mixed_x_layer, 3)
+
         # apply relative positional encoding (rotary embedding)
-        if rotary_pos_emb is not None:
-            query_layer = apply_rotary_pos_emb(query_layer, rotary_pos_emb)
-            key_layer = apply_rotary_pos_emb(key_layer, rotary_pos_emb)
+        query_layer = apply_rotary_pos_emb(query_layer, rotary_pos_emb)
+        key_layer = apply_rotary_pos_emb(key_layer, rotary_pos_emb)
 
         # [b, sq, np, hn]
         query_layer, key_layer, value_layer = [
@@ -181,46 +211,31 @@ class PatchedSelfAttention(nn.Module):
         ]
 
         # adjust key and value for inference
-        if kv_cache is not None:
-            cache_k, cache_v = kv_cache
-            q_start_loc = context.q_start_loc
-            q_seq_length = context.seq_length
-
-            q_start_loc: torch.Tensor
-            history_lengths = q_seq_length.new_tensor(history_lengths)
-            kv_seq_length = q_seq_length + history_lengths
-            max_seq_len = q_seq_length.max().item()
-            fill_kv_cache(key_layer[0],
-                          value_layer[0],
-                          cache_k,
-                          cache_v,
-                          q_start_loc,
-                          q_seq_length,
-                          block_offsets=context.block_offsets,
-                          history_lengths=history_lengths)
-
-        if use_cache:
-            kv_cache = (key_layer, value_layer)
-        else:
-            kv_cache = None
+        cache_k, cache_v = kv_cache
+        fill_kv_cache(key_layer[0],
+                      value_layer[0],
+                      cache_k,
+                      cache_v,
+                      q_start_loc,
+                      q_seq_length,
+                      block_offsets=block_offsets,
+                      history_lengths=history_lengths,
+                      context=context)
 
         # ==================================
         # core attention computation
         # ==================================
 
-        context_layer = torch.empty_like(query_layer)
-
-        block_offsets = context.block_offsets
-
+        context_layer = query_layer
         paged_attention_fwd(query_layer,
                             cache_k,
                             cache_v,
                             context_layer,
                             block_offsets,
-                            b_start_loc=q_start_loc,
-                            b_seq_len=q_seq_length,
-                            b_kv_seq_len=kv_seq_length,
-                            max_input_len=max_seq_len)
+                            q_start_loc=q_start_loc,
+                            q_seqlens=q_seq_length,
+                            kv_seqlens=kv_seq_length,
+                            max_seqlen=max_seq_length)
 
         context_layer = context_layer.transpose(1, 0).flatten(-2)
 
@@ -228,7 +243,7 @@ class PatchedSelfAttention(nn.Module):
         # Output. [sq, b, h]
         # =================
 
-        output = origin_self.dense(context_layer)
+        output = self.dense(context_layer)
 
         return output, kv_cache
 
@@ -243,10 +258,8 @@ class PatchedSelfAttention(nn.Module):
     ):
         return self._contiguous_batching_forward(
             hidden_states,
-            attention_mask,
             rotary_pos_emb,
             kv_cache,
-            use_cache,
         )
 
 
@@ -285,57 +298,40 @@ class PatchedChatGLMModel(nn.Module):
             full_attention_mask: Optional[torch.BoolTensor] = None,
             past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
                                             ...]] = None,
-            inputs_embeds: Optional[torch.Tensor] = None,
-            use_cache: Optional[bool] = True,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None):
-        orig_self = self.origin_mod
-        output_hidden_states = (output_hidden_states
-                                if output_hidden_states is not None else
-                                orig_self.config.output_hidden_states)
-        use_cache = use_cache if use_cache is not None else orig_self.config.use_cache  # noqa: E501
-        return_dict = return_dict if return_dict is not None else orig_self.config.use_return_dict  # noqa: E501
+            inputs_embeds: Optional[torch.Tensor] = None):
+        output_hidden_states = False
+        use_cache = True
 
         batch_size, seq_length = input_ids.shape
 
         if inputs_embeds is None:
-            inputs_embeds = orig_self.embedding(input_ids)
+            inputs_embeds = self.embedding(input_ids)
 
-        if orig_self.pre_seq_len is not None:
+        if self.pre_seq_len is not None:
             if past_key_values is None:
-                past_key_values = orig_self.get_prompt(
-                    batch_size=batch_size,
-                    device=input_ids.device,
-                    dtype=inputs_embeds.dtype)
-            if attention_mask is not None:
-                attention_mask = torch.cat([
-                    attention_mask.new_ones(
-                        (batch_size, orig_self.pre_seq_len)), attention_mask
-                ],
-                                           dim=-1)
+                past_key_values = self.get_prompt(batch_size=batch_size,
+                                                  device=input_ids.device,
+                                                  dtype=inputs_embeds.dtype)
 
         # Rotary positional embeddings
-        rotary_pos_emb = orig_self.rotary_pos_emb(orig_self.seq_length)
+        rotary_pos_emb = self.rotary_pos_emb(self.seq_length)
         if position_ids is not None:
-            rotary_pos_emb = rotary_pos_emb[position_ids]
+            context = self.context.context
+            position_ids_1d = context.position_ids_1d
+            rotary_pos_emb = rotary_pos_emb[position_ids_1d[None]]
         else:
             rotary_pos_emb = rotary_pos_emb[None, :seq_length]
         rotary_pos_emb = rotary_pos_emb.transpose(0, 1).contiguous()
 
         # Run encoder.
         (hidden_states, presents, all_hidden_states,
-         all_self_attentions) = orig_self.encoder(
+         all_self_attentions) = self.encoder(
              inputs_embeds,
              full_attention_mask,
              rotary_pos_emb=rotary_pos_emb,
              kv_caches=past_key_values,
              use_cache=use_cache,
              output_hidden_states=output_hidden_states)
-
-        if not return_dict:
-            return tuple(v for v in [
-                hidden_states, presents, all_hidden_states, all_self_attentions
-            ] if v is not None)
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
@@ -364,6 +360,4 @@ class PatchedChatGLMModel(nn.Module):
             full_attention_mask=full_attention_mask,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict)
+        )

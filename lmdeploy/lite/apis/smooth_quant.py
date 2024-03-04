@@ -49,7 +49,7 @@ AUTO_MAP = {
         'AutoModelForCausalLM': 'modeling_internlm.InternLMForCausalLM'
     },
     'InternLM2ForCausalLM': {
-        'AutoConfig': 'configuration_internlm.InternLMConfig',
+        'AutoConfig': 'configuration_internlm2.InternLMConfig',
         'AutoModelForCausalLM': 'modeling_internlm2.InternLM2ForCausalLM',
         'AutoModel': 'modeling_internlm2.InternLM2ForCausalLM'
     },

@@ -80,21 +80,26 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 # 支持的模型
 
-|       Model        |   Size    |
-| :----------------: | :-------: |
-|       Llama        | 7B - 65B  |
-|       Llama2       | 7B - 70B  |
-|      InternLM      | 7B - 20B  |
-|     InternLM2      | 7B - 20B  |
-| InternLM-XComposer |    7B     |
-|        QWen        | 7B - 72B  |
-|      QWen-VL       |    7B     |
-|      Baichuan      | 7B - 13B  |
-|     Baichuan2      | 7B - 13B  |
-|     Code Llama     | 7B - 34B  |
-|      ChatGLM2      |    6B     |
-|       Falcon       | 7B - 180B |
-|         YI         | 6B - 34B  |
+|       Model        |    Size    |
+| :----------------: | :--------: |
+|       Llama        |  7B - 65B  |
+|       Llama2       |  7B - 70B  |
+|      InternLM      |  7B - 20B  |
+|     InternLM2      |  7B - 20B  |
+| InternLM-XComposer |     7B     |
+|        QWen        |  7B - 72B  |
+|      QWen-VL       |     7B     |
+|      QWen1.5       | 0.5B - 72B |
+|      Baichuan      |  7B - 13B  |
+|     Baichuan2      |  7B - 13B  |
+|     Code Llama     |  7B - 34B  |
+|      ChatGLM2      |     6B     |
+|       Falcon       | 7B - 180B  |
+|         YI         |  6B - 34B  |
+|      Mistral       |     7B     |
+|    DeepSeek-MoE    |    16B     |
+|      Mixtral       |    8x7B    |
+|       Gemma        |   2B-7B    |
 
 LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
 
@@ -127,6 +132,11 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
+> \[!NOTE\]
+> LMDeploy 默认从 HuggingFace 上面下载模型，如果要从 ModelScope 上面下载模型，请通过命令 `pip install modelscope` 安装ModelScope，并设置环境变量：
+>
+> `export LMDEPLOY_USE_MODELSCOPE=True`
+
 关于 pipeline 的更多推理参数说明，请参考[这里](./docs/zh_cn/inference/pipeline.md)
 
 # 用户教程
@@ -147,6 +157,10 @@ print(response)
   - gemm tuning
   - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](./docs/zh_cn/serving/proxy_server.md)
+
+# 社区项目
+
+- 使用LMDeploy在英伟达Jetson系列板卡部署大模型：[LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
 ## 贡献指南
 

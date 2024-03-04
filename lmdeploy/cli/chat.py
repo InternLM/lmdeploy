@@ -30,6 +30,7 @@ class SubCliChat(object):
         ArgumentHelper.tp(engine_group)
         ArgumentHelper.session_len(engine_group)
         ArgumentHelper.adapters(engine_group)
+        ArgumentHelper.cache_max_entry_count(engine_group)
 
         # other args
         parser.add_argument('--trust-remote-code',
@@ -73,10 +74,12 @@ class SubCliChat(object):
         from lmdeploy.messages import PytorchEngineConfig
         from lmdeploy.pytorch.chat import run_chat
         adapters = get_lora_adapters(args.adapters)
-        engine_config = PytorchEngineConfig(model_name=args.model_name,
-                                            tp=args.tp,
-                                            session_len=args.session_len,
-                                            adapters=adapters)
+        engine_config = PytorchEngineConfig(
+            model_name=args.model_name,
+            tp=args.tp,
+            session_len=args.session_len,
+            cache_max_entry_count=args.cache_max_entry_count,
+            adapters=adapters)
         run_chat(args.model_path,
                  engine_config,
                  trust_remote_code=args.trust_remote_code)

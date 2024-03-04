@@ -79,21 +79,26 @@ For detailed inference benchmarks in more devices and more settings, please refe
 
 # Supported Models
 
-|       Model        |   Size    |
-| :----------------: | :-------: |
-|       Llama        | 7B - 65B  |
-|       Llama2       | 7B - 70B  |
-|      InternLM      | 7B - 20B  |
-|     InternLM2      | 7B - 20B  |
-| InternLM-XComposer |    7B     |
-|        QWen        | 7B - 72B  |
-|      QWen-VL       |    7B     |
-|      Baichuan      | 7B - 13B  |
-|     Baichuan2      | 7B - 13B  |
-|     Code Llama     | 7B - 34B  |
-|      ChatGLM2      |    6B     |
-|       Falcon       | 7B - 180B |
-|         YI         | 6B - 34B  |
+|       Model        |    Size    |
+| :----------------: | :--------: |
+|       Llama        |  7B - 65B  |
+|       Llama2       |  7B - 70B  |
+|      InternLM      |  7B - 20B  |
+|     InternLM2      |  7B - 20B  |
+| InternLM-XComposer |     7B     |
+|        QWen        |  7B - 72B  |
+|      QWen1.5       | 0.5B - 72B |
+|      QWen-VL       |     7B     |
+|      Baichuan      |  7B - 13B  |
+|     Baichuan2      |  7B - 13B  |
+|     Code Llama     |  7B - 34B  |
+|      ChatGLM2      |     6B     |
+|       Falcon       | 7B - 180B  |
+|         YI         |  6B - 34B  |
+|      Mistral       |     7B     |
+|    DeepSeek-MoE    |    16B     |
+|      Mixtral       |    8x7B    |
+|       Gemma        |   2B-7B    |
 
 LMDeploy has developed two inference engines - [TurboMind](./docs/en/inference/turbomind.md) and [PyTorch](./docs/en/inference/pytorch.md), each with a different focus. The former strives for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
 
@@ -126,6 +131,11 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
+> \[!NOTE\]
+> By default, LMDeploy downloads model from HuggingFace. If you would like to use models from ModelScope, please install ModelScope by `pip install modelscope` and set the environment variable:
+>
+> `export LMDEPLOY_USE_MODELSCOPE=True`
+
 For more information about inference pipeline, please refer to [here](./docs/en/inference/pipeline.md).
 
 # Tutorials
@@ -146,6 +156,10 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - gemm tuning
   - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
+
+# Third-party projects
+
+- Deploying LLMs offline on the NVIDIA Jetson platform by LMDeploy: [LMDeploy-Jetson](https://github.com/BestAnHongjun/LMDeploy-Jetson)
 
 ## Contributing
 

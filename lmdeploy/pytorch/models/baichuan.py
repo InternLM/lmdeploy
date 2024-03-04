@@ -9,10 +9,24 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn, try_to_local)
+from ..kernels import apply_rotary_pos_emb
 from ..kernels.alibi_pagedattention import alibi_paged_attention_fwd
 from ..kernels.fill_kv_cache import fill_kv_cache
 from ..kernels.pagedattention import paged_attention_fwd
-from .llama import apply_rotary_pos_emb
+
+
+class PatchedRMSNorm(nn.Module):
+    """Rewrite RMSNorm."""
+
+    def forward(self, hidden_states):
+        """forward."""
+        from ..kernels import rms_norm
+        epsilon = getattr(self, 'epsilon', None)
+        if epsilon is None:
+            epsilon = getattr(self, 'variance_epsilon', 1e-10)
+        ret = rms_norm(hidden_states, self.weight, epsilon)
+
+        return ret
 
 
 def _attention_partition_fn(mod_name: str, mod: nn.Module,
@@ -110,9 +124,10 @@ class Attention(nn.Module):
         context = self.context.context
         history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
-        q_seq_length = context.seq_length
+        q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
+        max_seq_length = context.max_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_heads // world_size
@@ -125,12 +140,11 @@ class Attention(nn.Module):
 
         def _rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                max_seq_len = position_ids.size(-1)
-                kv_seq_len = max_seq_len + max(history_lengths)
+                kv_seq_len = max_seq_length + max(history_lengths)
                 cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
                 query_states, key_states = apply_rotary_pos_emb(
                     query_states, key_states, cos, sin, position_ids,
-                    getattr(context, 'position_ids_1d', None))
+                    context.position_ids_1d)
             return query_states, key_states, value_states
 
         query_states, key_states, value_states = _qkv_proj(hidden_states)
@@ -153,17 +167,16 @@ class Attention(nn.Module):
                       context=context)
 
         attn_output = query_states
-        max_seq_len = position_ids.size(-1)
         paged_attention_fwd(
             query_states,
             past_key_value[0],
             past_key_value[1],
             attn_output,
             block_offsets,
-            b_start_loc=q_start_loc,
-            b_seq_len=q_seq_length,
-            b_kv_seq_len=kv_seq_length,
-            max_input_len=max_seq_len,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seq_length,
+            kv_seqlens=kv_seq_length,
+            max_seqlen=max_seq_length,
         )
 
         hidden_size = num_heads * head_dim
@@ -200,24 +213,15 @@ class BaichuanAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """Rewrite of BaichuanAttention.forward."""
-        if self.context.use_origin:
-            return self.origin_mod(
-                hidden_states,
-                attention_mask,
-                past_key_value,
-                output_attentions,
-                use_cache,
-            )
-        else:
-            world_size = 1
-            if dist.is_initialized():
-                world_size = dist.get_world_size()
-            return self._contiguous_batching_forward(
-                hidden_states,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                world_size=world_size,
-            )
+        world_size = 1
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+        return self._contiguous_batching_forward(
+            hidden_states,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            world_size=world_size,
+        )
 
     def _contiguous_batching_forward(
         self,
@@ -234,12 +238,12 @@ class BaichuanAttention(nn.Module):
         """
         assert not output_attentions
         context = self.context.context
-        position_ids = context.position_ids
         history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
-        q_seq_length = context.seq_length
+        q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
+        max_seq_length = context.max_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_heads // world_size
@@ -268,7 +272,6 @@ class BaichuanAttention(nn.Module):
 
         num_heads_full = num_heads
         head_offset = 0
-        max_seq_len = position_ids.size(-1)
         if dist.is_initialized():
             world_size = dist.get_world_size()
             rank = dist.get_rank()
@@ -282,7 +285,7 @@ class BaichuanAttention(nn.Module):
                                   b_start_loc=q_start_loc,
                                   b_seq_len=q_seq_length,
                                   b_kv_seq_len=kv_seq_length,
-                                  max_input_len=max_seq_len,
+                                  max_input_len=max_seq_length,
                                   head_offset=head_offset,
                                   num_heads=num_heads_full)
 
@@ -304,28 +307,10 @@ class BaichuanModel(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of 7b BaichuanModel.forward."""
-        output_attentions = (output_attentions if output_attentions is not None
-                             else self.config.output_attentions)
-        output_hidden_states = (output_hidden_states
-                                if output_hidden_states is not None else
-                                self.config.output_hidden_states)
-
-        if use_cache is None:
-            use_cache = self.config.use_cache
-
-        return_dict = (return_dict if return_dict is not None else
-                       self.config.use_return_dict)
-
-        assert (
-            position_ids is not None
-        ), 'position_ids can not be none when using continuous batching mode.'
-        assert position_ids.dim() == 2
+        output_attentions = False
+        use_cache = True
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
@@ -336,16 +321,8 @@ class BaichuanModel(nn.Module):
         hidden_states = inputs_embeds
 
         # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = () if use_cache else None
-
         for idx, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states, )
-
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
+            past_key_value = past_key_values[idx]
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -356,31 +333,13 @@ class BaichuanModel(nn.Module):
             )
             hidden_states = layer_outputs[0]
 
-            if use_cache:
-                next_decoder_cache += (
-                    layer_outputs[2 if output_attentions else 1], )
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1], )
-
         hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states, )
-
-        next_cache = next_decoder_cache if use_cache else None
-        if not return_dict:
-            return tuple(
-                v for v in
-                [hidden_states, next_cache, all_hidden_states, all_self_attns]
-                if v is not None)
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
+            past_key_values=past_key_values,
+            hidden_states=None,
+            attentions=None,
         )
 
     def _continuous_batching_forward(
@@ -389,16 +348,15 @@ class BaichuanModel(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of BaichuanModel.forward.
 
         Add continuous batching support. Add paged attention support. TP
         support.
         """
+        use_cache = False
+        output_attentions = False
+
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
         # Attention mask is not necessary in continuous batching
@@ -406,16 +364,8 @@ class BaichuanModel(nn.Module):
         hidden_states = inputs_embeds
 
         # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = () if use_cache else None
-
         for idx, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states, )
-
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
+            past_key_value = past_key_values[idx]
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -426,31 +376,13 @@ class BaichuanModel(nn.Module):
 
             hidden_states = layer_outputs[0]
 
-            if use_cache:
-                next_decoder_cache += (
-                    layer_outputs[2 if output_attentions else 1], )
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1], )
-
         hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states, )
-
-        next_cache = next_decoder_cache if use_cache else None
-        if not return_dict:
-            return tuple(
-                v for v in
-                [hidden_states, next_cache, all_hidden_states, all_self_attns]
-                if v is not None)
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
+            past_key_values=past_key_values,
+            hidden_states=None,
+            attentions=None,
         )
 
     def forward(
@@ -473,10 +405,6 @@ class BaichuanModel(nn.Module):
                 position_ids,
                 past_key_values,
                 inputs_embeds,
-                use_cache,
-                output_attentions,
-                output_hidden_states,
-                return_dict,
             )
         else:
             return self._continuous_batching_forward(
@@ -484,8 +412,4 @@ class BaichuanModel(nn.Module):
                 attention_mask,
                 past_key_values,
                 inputs_embeds,
-                use_cache,
-                output_attentions,
-                output_hidden_states,
-                return_dict,
             )

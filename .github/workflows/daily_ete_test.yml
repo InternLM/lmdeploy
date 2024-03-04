@@ -3,7 +3,7 @@ name: daily_ete_test
 on:
   workflow_dispatch:
   schedule:
-    - cron:  '00 23 * * *'
+    - cron:  '00 18 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -13,7 +13,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 120 # 2hours
+    timeout-minutes: 420
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -37,18 +37,17 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
           python3 -m pip install -r requirements/build.txt
-          # use cached build
           mkdir build
           cd build
           cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=./install \
+              -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
               -DBUILD_PY_FFI=ON \
               -DBUILD_MULTI_GPU=ON \
               -DCMAKE_CUDA_FLAGS="-lineinfo" \
@@ -59,7 +58,7 @@ jobs:
           make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers==4.33.0 datasets
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -69,26 +68,66 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Test lmdeploy - quantization
+      - name: Test lmdeploy - quantization w4a16
+        continue-on-error: true
         run: |
-          pytest autotest -m 'quantization or quantization_w8a8' -n 8 --alluredir=allure-results --clean-alluredir
+          pytest autotest/tools/quantization/test_quantization_w4a16.py -m 'not pr_test' -n 8 --alluredir=allure-results --clean-alluredir
+      - name: Test lmdeploy - quantization kv int8
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization w8a8
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization kv int8 and w4a16
+        continue-on-error: true
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8_w4a16.py -n 8 --alluredir=allure-results
       - name: Test lmdeploy - convert
+        continue-on-error: true
         run: |
-          pytest autotest -m convert -n 6 --alluredir=allure-results --reruns 2
-      - name: Test lmdeploy - pipeline
+          pytest autotest/tools/convert -m 'not pr_test' -n 6 --alluredir=allure-results --dist loadgroup
+      - name: Test lmdeploy - interface turbomind case
         continue-on-error: true
-        run: pytest autotest -m 'pipeline_chat or pipeline_chat_pytorch' --alluredir=allure-results --reruns 2
-      - name: Test lmdeploy - restful
-        continue-on-error: true
-        run: pytest autotest -m restful_api --alluredir=allure-results
-      - name: Test lmdeploy - chat
-        continue-on-error: true
-        timeout-minutes: 40 # 40mins
+        timeout-minutes: 20
         run: |
-          pytest autotest -m 'command_chat or command_chat_hf or command_chat_pytorch' -n 4 --alluredir=allure-results --reruns 2
-      - name: Test lmdeploy - rerun fail cases
-        run:
-          pytest autotest --alluredir=allure-results --lf
+          pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - pipeline turbomind
+        continue-on-error: true
+        timeout-minutes: 45
+        run: pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - pipeline torch
+        continue-on-error: true
+        timeout-minutes: 75
+        run: pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - restful turbomind
+        continue-on-error: true
+        timeout-minutes: 60
+        run: pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - restful torch
+        continue-on-error: true
+        timeout-minutes: 80
+        run: pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - chat workspace
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf turbomind
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf torch
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - rerun all fail cases
+        timeout-minutes: 60
+        run: |
+          pytest autotest --lf --alluredir=allure-results
       - name: Generate reports
         if: always()
         run: |
@@ -107,7 +146,7 @@ jobs:
 
   test_triton:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 30 # 30mins
+    timeout-minutes: 30
     env:
       HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
       WORKDIR: /nvme/qa_test_models/triton_workspace
@@ -151,7 +190,7 @@ jobs:
             $CONTAINER_ID  cmake .. \
                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
                -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-               -DCMAKE_INSTALL_PREFIX=./install \
+               -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
                -DBUILD_PY_FFI=ON \
                -DBUILD_MULTI_GPU=ON \
                -DCMAKE_CUDA_FLAGS="-lineinfo" \
