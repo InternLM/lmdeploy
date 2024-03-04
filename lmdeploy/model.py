@@ -414,7 +414,7 @@ class Baichuan2_7B(BaseChatTemplate):
         """
         path = model_path.lower()
         if 'baichuan2' in path and 'chat' in path:
-            return 'baichuan-base'
+            return 'baichuan2-chat'
 
 
 @MODELS.register_module(name='puyu')
