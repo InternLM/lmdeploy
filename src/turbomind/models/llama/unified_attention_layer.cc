@@ -225,7 +225,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         const int offset    = dc_batch_size;
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
         auto      params    = CreateParams(offset, pf_batch_size, pf_stream);
-        if constexpr (std::is_same_v<T, half>) {
+        if constexpr (sizeof(T) == 2) {
             invokeProcessKV_(params);
             invokeFlattenKV_(params, sum_k_len);
             dispatchAttention(params);
@@ -234,7 +234,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     if (dc_batch_size) {
         auto params = CreateParams(0, dc_batch_size, dc_stream);
-        if constexpr (std::is_same_v<T, half>) {
+        if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
         }
     }
