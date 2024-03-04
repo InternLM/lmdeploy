@@ -36,7 +36,7 @@ class ChatTemplateConfig:
     eoh: Optional[str] = None
     assistant: Optional[str] = None
     eoa: Optional[str] = None
-    stop_word_suffix: Optional[str] = None
+    separator: Optional[str] = None
     capability: Optional[Literal['completion', 'infilling', 'chat',
                                  'python']] = None
 
@@ -122,7 +122,7 @@ class BaseChatTemplate(BaseModel):
                  eoh='',
                  assistant='',
                  eoa='',
-                 stop_word_suffix='',
+                 separator='',
                  **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -130,7 +130,7 @@ class BaseChatTemplate(BaseModel):
         self.user = user
         self.eoh = eoh
         self.eoa = eoa
-        self.stop_word_suffix = stop_word_suffix
+        self.separator = separator
         self.eosys = eosys
         self.assistant = assistant
 
@@ -152,7 +152,7 @@ class BaseChatTemplate(BaseModel):
                    f'{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
         else:
-            return f'{self.stop_word_suffix}{self.user}{prompt}{self.eoh}' \
+            return f'{self.separator}{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
 
     def messages2prompt(self, messages, sequence_start=True):
@@ -170,7 +170,7 @@ class BaseChatTemplate(BaseModel):
                        assistant=self.assistant,
                        system=self.system)
         eox_map = dict(user=self.eoh,
-                       assistant=self.eoa + self.stop_word_suffix,
+                       assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
         for message in messages:
@@ -193,7 +193,7 @@ class Vicuna(BaseChatTemplate):
             eoh='\n',
             assistant='ASSISTANT: ',
             eoa='</s>',
-            stop_word_suffix='\n',
+            separator='\n',
             stop_words=['</s>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
@@ -201,7 +201,7 @@ class Vicuna(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         stop_word_suffix=stop_word_suffix,
+                         separator=separator,
                          stop_words=stop_words,
                          **kwargs)
 
@@ -235,7 +235,7 @@ class InternLMChat7B(BaseChatTemplate):
             eoh='\n',
             assistant='<|Bot|>:',
             eoa='<eoa>',
-            stop_word_suffix='\n',
+            separator='\n',
             stop_words=['<eoa>'],
             **kwargs):
         super().__init__(system=system,
@@ -245,7 +245,7 @@ class InternLMChat7B(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         stop_word_suffix=stop_word_suffix,
+                         separator=separator,
                          stop_words=stop_words,
                          **kwargs)
 
@@ -345,20 +345,19 @@ class InternLM2Chat7B(InternLMChat7B):
                  eosys='<|im_end|>\n',
                  eoh='<|im_end|>\n',
                  eoa='<|im_end|>',
-                 stop_word_suffix='\n',
+                 separator='\n',
                  stop_words=['<|im_end|>', '<|action_end|>'],
                  **kwargs):
-        super(InternLM2Chat7B,
-              self).__init__(session_len=session_len,
-                             system=system,
-                             user=user,
-                             assistant=assistant,
-                             eosys=eosys,
-                             eoh=eoh,
-                             eoa=eoa,
-                             stop_word_suffix=stop_word_suffix,
-                             stop_words=stop_words,
-                             **kwargs)
+        super(InternLM2Chat7B, self).__init__(session_len=session_len,
+                                              system=system,
+                                              user=user,
+                                              assistant=assistant,
+                                              eosys=eosys,
+                                              eoh=eoh,
+                                              eoa=eoa,
+                                              separator=separator,
+                                              stop_words=stop_words,
+                                              **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -468,7 +467,7 @@ If a question does not make any sense, or is not factually coherent, explain why
             eosys='\n<</SYS>>\n\n',
             assistant=' [/INST] ',
             eoa='</s>',
-            stop_word_suffix='<s>[INST] ',
+            separator='<s>[INST] ',
             session_len=4096,
             **kwargs):
         super().__init__(system=system,
@@ -476,7 +475,7 @@ If a question does not make any sense, or is not factually coherent, explain why
                          eosys=eosys,
                          assistant=assistant,
                          eoa=eoa,
-                         stop_word_suffix=stop_word_suffix,
+                         separator=separator,
                          session_len=session_len,
                          **kwargs)
 
@@ -506,7 +505,7 @@ class Qwen7BChat(BaseChatTemplate):
                  eoh='<|im_end|>\n',
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
-                 stop_word_suffix='\n',
+                 separator='\n',
                  stop_words=['<|im_end|>'],
                  **kwargs):
         super().__init__(system=system,
@@ -516,7 +515,7 @@ class Qwen7BChat(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         stop_word_suffix=stop_word_suffix,
+                         separator=separator,
                          stop_words=stop_words,
                          session_len=session_len,
                          **kwargs)
@@ -716,7 +715,7 @@ class UltraChat(BaseChatTemplate):
             eoh='</s>\n',
             assistant='Assistant: ',
             eoa='</s>',
-            stop_word_suffix='\n',
+            separator='\n',
             stop_words=['</s>'],
             session_len=2048,
             **kwargs):
@@ -727,7 +726,7 @@ class UltraChat(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         stop_word_suffix=stop_word_suffix,
+                         separator=separator,
                          stop_words=stop_words,
                          session_len=session_len,
                          **kwargs)
@@ -757,7 +756,7 @@ class Yi(BaseChatTemplate):
                  eoh='<|im_end|>\n',
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
-                 stop_word_suffix='\n',
+                 separator='\n',
                  stop_words=['<|im_end|>', '<|endoftext|>'],
                  **kwargs):
         super().__init__(system=system,
@@ -767,7 +766,7 @@ class Yi(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         stop_word_suffix=stop_word_suffix,
+                         separator=separator,
                          stop_words=stop_words,
                          **kwargs)
 
