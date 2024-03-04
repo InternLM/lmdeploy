@@ -75,7 +75,7 @@ class SamplingParam:
         if max_new_tokens < 0:
             logger.warning('`max_new_tokens` has to be a strictly'
                            f' positive value, but is {max_new_tokens}')
-            max_new_tokens = 0
+            max_new_tokens = 512
         if min_new_tokens < 0 or min_new_tokens > max_new_tokens:
             logger.warning('`min_new_tokens` has to be '
                            'a int >=0 and <= `max_new_tokens`,'

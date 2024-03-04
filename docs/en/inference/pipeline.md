@@ -145,8 +145,12 @@ print(response)
 
 ## FAQs
 
-- *RuntimeError: context has already been set*. If you got this for tp>1 in pytorch backend. Please make sure the python script has following
+- **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
+
+  If you got this for tp>1 in pytorch backend. Please make sure the python script has following
+
   ```python
   if __name__ == '__main__':
   ```
+
   Generally, in the context of multi-threading or multi-processing, it might be necessary to ensure that initialization code is executed only once. In this case, `if __name__ == '__main__':` can help to ensure that these initialization codes are run only in the main program, and not repeated in each newly created process or thread.
