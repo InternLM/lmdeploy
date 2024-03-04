@@ -86,7 +86,7 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if model == 'CodeLlama-7b-Instruct-hf':
+        if 'CodeLlama-7b-Instruct-hf' in model:
             spliter = '\n!!\n'
         # join prompt together
         prompt = ''

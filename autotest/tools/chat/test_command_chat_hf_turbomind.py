@@ -1,7 +1,8 @@
 import allure
 import conftest
 import pytest
-from utils.config_utils import get_turbomind_model_list, get_cuda_prefix_by_workerid
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_turbomind_model_list)
 from utils.run_client_chat import hf_command_line_test
 
 conftest._init_cli_case_list()
