@@ -212,6 +212,8 @@ def _dist_model(model: torch.nn.Module,
                 lambda mod, inputs, outputs: output_fn(outputs, device_mesh))
 
     for name, child in model.named_children():
+        if rank == 0:
+            logger.debug(f'Distribute module: <{name}>')
         new_child = _dist_model(child, rank, device_mesh)
         if new_child != child:
             model.register_module(name, child)
