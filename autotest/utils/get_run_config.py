@@ -102,7 +102,8 @@ def _get_available_cude():
 
 
 def _simple_model_name(model):
-    model_name = model.replace('-inner-w4a16', '')
+    model_name = model.split('/')[1]
+    model_name = model_name.replace('-inner-w4a16', '')
     model_name = model_name.replace('-inner-w8a8', '')
     model_name = model_name.replace('-inner-kvint8', '')
     model_name = model_name.replace('-w4a16', '')
@@ -110,4 +111,4 @@ def _simple_model_name(model):
 
 
 if __name__ == '__main__':
-    print(_simple_model_name('Baichuan2-7B-Chat-inner-w4a16'))
+    print(_simple_model_name('baichuan-inc/Baichuan2-7B-Chat-inner-w4a16'))

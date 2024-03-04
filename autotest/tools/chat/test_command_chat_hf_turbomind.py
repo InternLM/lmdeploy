@@ -1,7 +1,8 @@
 import allure
 import conftest
 import pytest
-from utils.config_utils import get_turbomind_model_list
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_turbomind_model_list)
 from utils.run_client_chat import hf_command_line_test
 
 conftest._init_cli_case_list()
@@ -16,11 +17,38 @@ def getCaseList():
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.parametrize('usercase', getCaseList())
-@pytest.mark.parametrize('model', get_turbomind_model_list())
-def test_hf_turbomind_chat(config, model, cli_case_config, usercase):
-    result, chat_log, msg = hf_command_line_test(config, usercase,
-                                                 cli_case_config.get(usercase),
-                                                 model, 'turbomind')
+@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
+def test_hf_turbomind_chat_tp1(config, model, cli_case_config, usercase,
+                               worker_id):
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id))
+
+    if chat_log is not None:
+        allure.attach.file(chat_log,
+                           attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.parametrize('usercase', getCaseList())
+@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=2))
+def test_hf_turbomind_chat_tp2(config, model, cli_case_config, usercase,
+                               worker_id):
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2))
 
     if chat_log is not None:
         allure.attach.file(chat_log,

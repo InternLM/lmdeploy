@@ -10,7 +10,7 @@ def command_line_test(config,
                       case_info,
                       model_case,
                       type,
-                      extra,
+                      extra: str = None,
                       cuda_prefix: str = None):
     dst_path = config.get('dst_path')
 

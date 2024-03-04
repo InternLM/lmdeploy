@@ -4,15 +4,16 @@ from subprocess import PIPE
 
 import allure
 import pytest
-from utils.config_utils import get_turbomind_model_list
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_turbomind_model_list)
 from utils.get_run_config import get_command_with_extra, get_model_name
 
 
 @pytest.mark.order(5)
 @pytest.mark.convert
 @pytest.mark.parametrize('model', get_turbomind_model_list())
-def test_convert(config, model):
-    convert(config, model)
+def test_convert(config, model, worker_id):
+    convert(config, model, get_cuda_prefix_by_workerid(worker_id))
 
 
 @pytest.mark.order(5)
@@ -22,10 +23,10 @@ def test_convert(config, model):
 @pytest.mark.parametrize(
     'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
 def test_convert_pr(config, model):
-    convert(config, model)
+    convert(config, model, 'CUDA_VISIBLE_DEVICES=5')
 
 
-def convert(config, model_case):
+def convert(config, model_case, cuda_prefix):
     origin_model_path = config.get('model_path') + '/' + model_case
     dst_path = config.get('dst_path') + '/workspace_' + model_case
     log_path = config.get('log_path')
@@ -33,11 +34,14 @@ def convert(config, model_case):
     model_name = get_model_name(model_case)
 
     if 'w4' in model_case:
-        cmd = get_command_with_extra(
-            ' '.join([
-                'lmdeploy convert', model_name, origin_model_path,
-                '--dst-path', dst_path, '--model-format awq --group-size 128'
-            ]), config, model_name, True)
+        cmd = get_command_with_extra(' '.join([
+            'lmdeploy convert', model_name, origin_model_path, '--dst-path',
+            dst_path, '--model-format awq --group-size 128'
+        ]),
+                                     config,
+                                     model_name,
+                                     True,
+                                     cuda_prefix=cuda_prefix)
     else:
         cmd = get_command_with_extra(
             ' '.join([

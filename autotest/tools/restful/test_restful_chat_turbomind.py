@@ -5,28 +5,40 @@ from time import sleep, time
 import allure
 import pytest
 from pytest import assume
-from utils.config_utils import get_turbomind_model_list
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_turbomind_model_list, get_workerid)
 from utils.get_run_config import get_command_with_extra
 from utils.run_client_chat import command_line_test
 from utils.run_restful_chat import (get_model, health_check, interactive_test,
                                     open_chat_test)
 
-HTTP_URL = 'http://localhost:23333'
+BASE_HTTP_URL = 'http://10.140.0.187'
+DEFAULT_PORT = 23333
 
 
 @pytest.fixture(scope='function', autouse=True)
-def prepare_environment(request, config):
+def prepare_environment(request, config, worker_id):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
 
     param = request.param
     model = param['model']
     cuda_prefix = param['cuda_prefix']
+    tp_num = param['tp_num']
+
+    if cuda_prefix is None:
+        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
+
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = DEFAULT_PORT
+    else:
+        port = DEFAULT_PORT + worker_num
 
     cmd = ['lmdeploy serve api_server ' + model_path + '/' + model]
 
     cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 '/' + model,
+                                 '/' + model + ' --server-port ' + str(port),
                                  config,
                                  model,
                                  need_tp=True,
@@ -56,7 +68,7 @@ def prepare_environment(request, config):
         pid = convertRes.pid
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
-    http_url = HTTP_URL
+    http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     sleep(5)
     for i in range(120):
@@ -76,20 +88,46 @@ def prepare_environment(request, config):
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 
 
-def getModelList():
+def getModelList(tp_num):
     return [{
         'model': item,
-        'cuda_prefix': None
-    } for item in get_turbomind_model_list() if 'chat' in item.lower()]
+        'cuda_prefix': None,
+        'tp_num': tp_num
+    } for item in get_turbomind_model_list(tp_num) if 'chat' in item.lower()]
 
 
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
+@pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', getModelList(), indirect=True)
-def test_restful_chat(config, common_case_config):
-    run_all_step(config, common_case_config)
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=1),
+                         indirect=True)
+def test_restful_chat_tp1(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=2),
+                         indirect=True)
+def test_restful_chat_tp2(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
@@ -97,21 +135,22 @@ def test_restful_chat(config, common_case_config):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
-@pytest.mark.parametrize('prepare_environment',
-                         [{
-                             'model': 'internlm2-chat-20b',
-                             'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6'
-                         }, {
-                             'model': 'internlm2-chat-20b-inner-w4a16',
-                             'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6'
-                         }],
+@pytest.mark.parametrize('prepare_environment', [{
+    'model': 'internlm2-chat-20b',
+    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+    'tp_num': 2
+}, {
+    'model': 'internlm2-chat-20b-inner-w4a16',
+    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+    'tp_num': 2
+}],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
     run_all_step(config, common_case_config)
 
 
-def run_all_step(config, cases_info):
-    http_url = HTTP_URL
+def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
+    http_url = BASE_HTTP_URL + ':' + str(port)
 
     model = get_model(http_url)
     print(model)

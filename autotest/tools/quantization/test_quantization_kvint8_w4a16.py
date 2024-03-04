@@ -2,23 +2,24 @@ import os
 
 import allure
 import pytest
+from utils.config_utils import get_cuda_prefix_by_workerid
 from utils.quantization_utils import quantization
 
-model_list = [('llama-2-7b-chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=1'),
-              ('internlm-chat-20b-inner-kvint8', 'CUDA_VISIBLE_DEVICES=2'),
-              ('internlm2-chat-20b-inner-kvint8', 'CUDA_VISIBLE_DEVICES=3'),
-              ('Qwen-7B-Chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=4'),
-              ('Qwen-14B-Chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=5'),
-              ('internlm2-20b-inner-kvint8', 'CUDA_VISIBLE_DEVICES=6'),
-              ('Baichuan2-7B-Chat-inner-kvint8', 'CUDA_VISIBLE_DEVICES=7')]
+model_list = [
+    'llama-2-7b-chat-inner-kvint8', 'internlm-chat-20b-inner-kvint8',
+    'internlm2-chat-20b-inner-kvint8', 'Qwen-7B-Chat-inner-kvint8',
+    'Qwen-14B-Chat-inner-kvint8', 'internlm2-20b-inner-kvint8',
+    'Baichuan2-7B-Chat-inner-kvint8'
+]
 
 
 @pytest.mark.order(4)
 @pytest.mark.quantization_kvint8_w4a16
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize('model, prefix', model_list)
-def test_quantization_kvint8_w4a16(config, model, prefix):
-    quantization_kvint8(config, model + '-w4a16', model, prefix)
+@pytest.mark.parametrize('model', model_list)
+def test_quantization_kvint8_w4a16(config, model, worker_id):
+    quantization_kvint8(config, model + '-w4a16', model,
+                        get_cuda_prefix_by_workerid(worker_id))
 
 
 def quantization_kvint8(config, quantization_model_name, origin_model_name,
