@@ -193,6 +193,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.rotary_embedding_dim    = size_per_head_;
         params.rotary_embedding_base   = params_.rotary_embedding_base;
         params.max_position_embeddings = params_.max_position_embeddings;
+        params.rope_ti_scale           = 1.f;
+        if (!params_.use_dynamic_ntk && params_.rope_scaling_factor) {
+            params.rope_ti_scale /= params_.rope_scaling_factor;
+        }
 
         params.use_logn_attn = params_.use_logn_attn;
 

@@ -353,31 +353,27 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 
         // compute rope scaling factor
         if (r->start_flag) {
-            seq.rope_theta      = model_->attn_params_.rotary_embedding_base;
-            auto scaling_factor = 1.f;
-            if (r->inputs[rank_].isExist("rope_scaling_factor")) {  // runtime scaling factor
-                scaling_factor = r->inputs[rank_].getVal<float>("rope_scaling_factor");
-            }
-            else if (model_->attn_params_.rope_scaling_factor >= 1.f) {  // infer by `seq_len_limit`
-                scaling_factor   = model_->attn_params_.rope_scaling_factor;
-                auto max_seq_len = state.seq_len_limit[idx];
-                auto max_pos_emb = model_->attn_params_.max_position_embeddings;
-                if (max_seq_len > max_pos_emb) {
-                    scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
-                    // scaling_factor = std::max(exp2f(ceilf(log2f((float)max_seq_len / max_pos_emb) + 1.f))
-                    // - 1.f, 1.f);
+            seq.rope_theta = model_->attn_params_.rotary_embedding_base;
+            if (model_->attn_params_.use_dynamic_ntk) {
+                auto scaling_factor = model_->attn_params_.rope_scaling_factor;
+                if (scaling_factor >= 1.f) {  // infer by `seq_len_limit`
+                    auto max_seq_len = state.seq_len_limit[idx];
+                    auto max_pos_emb = model_->attn_params_.max_position_embeddings;
+                    if (max_seq_len > max_pos_emb) {
+                        scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
+                    }
+                    else {
+                        scaling_factor = 1.f;
+                    }
                 }
-                else {
-                    scaling_factor = 1.f;
+                if (scaling_factor != 1.f) {
+                    float rope_dim = model_->attn_params_.rotary_embedding_dim;
+                    seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
+                    TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
+                                (long)seq.id,
+                                scaling_factor,
+                                seq.rope_theta);
                 }
-            }
-            if (scaling_factor != 1.f) {
-                float rope_dim = model_->attn_params_.rotary_embedding_dim;
-                seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
-                TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                            (long)seq.id,
-                            scaling_factor,
-                            seq.rope_theta);
             }
         }
         state.h_rope_theta[idx] = seq.rope_theta;
