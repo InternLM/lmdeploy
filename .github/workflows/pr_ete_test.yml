@@ -81,7 +81,7 @@ jobs:
           lmdeploy check_env
       - name: Test lmdeploy
         timeout-minutes: 120
-        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test --alluredir=allure-results --clean-alluredir
+        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -v -s --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |

@@ -52,11 +52,11 @@ def hf_command_line_test(config,
 
     if 'kvint8' in model_case:
         cmd += ' --quant-policy 4'
-        if 'w4' in model_case or '4bits' not in model_case:
+        if 'w4' in model_case or '4bits' in model_case:
             cmd += ' --model-format awq'
         else:
             cmd += ' --model-format hf'
-    elif 'w4' in model_case or '4bits' not in model_case:
+    elif 'w4' in model_case or '4bits' in model_case:
         cmd += ' --model-format awq'
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)
@@ -144,15 +144,13 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
 # 从输出中解析模型输出的对话内容
 def parse_dialogue(inputs: str, model: str):
     dialogues = inputs.strip()
-    if model == 'CodeLlama-7b-Instruct-hf':
+    if 'CodeLlama-7b-Instruct-hf' in model:
         sep = 'enter !! to end the input >>>'
     else:
         sep = 'double enter to end input >>>'
     dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
     dialogues = [d.strip() for d in dialogues]
-    if 'Llama' in model:
-        return dialogues
     return dialogues[1:-1]  # 去除首尾无用字符
 
 
