@@ -71,6 +71,7 @@ mistral_meta_template = dict(begin='<s>',
                              ],
                              eos_token_id=2)
 
+# ===== Configs for internlm/internlm-chat-7b =====
 # config for internlm-chat-7b
 hf_internlm_chat_7b = dict(type=HuggingFaceCausalLM,
                            abbr='internlm-chat-7b-hf',
@@ -150,6 +151,7 @@ tb_internlm_chat_7b_w4a16 = dict(type=TurboMindModel,
                                  run_cfg=dict(num_gpus=1, num_procs=1),
                                  end_str='<eoa>')
 
+# ===== Configs for internlm/internlm-chat-20b =====
 # config for internlm-chat-20b
 tb_internlm_chat_20b = dict(type=TurboMindModel,
                             abbr='internlm-chat-20b-turbomind',
@@ -227,6 +229,7 @@ pt_internlm_chat_20b = dict(type=LmdeployPytorchModel,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str='<eoa>')
 
+# ===== Configs for internlm/internlm2-chat-7b =====
 # config for internlm2-chat-7b
 tb_internlm2_chat_7b = dict(type=TurboMindModel,
                             abbr='internlm2-chat-7b-turbomind',
@@ -307,6 +310,7 @@ pt_internlm2_chat_7b = dict(type=LmdeployPytorchModel,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str='<|im_end|>')
 
+# ===== Configs for internlm/internlm2-chat-20b =====
 # config for internlm2-chat-20b
 tb_internlm2_chat_20b = dict(type=TurboMindModel,
                              abbr='internlm2-chat-20b-turbomind',
@@ -387,7 +391,8 @@ pt_internlm2_chat_20b = dict(type=LmdeployPytorchModel,
                              run_cfg=dict(num_gpus=1, num_procs=1),
                              end_str='<|im_end|>')
 
-# config for qwen-chat-7b
+# ===== Configs for Qwen/Qwen-7B-Chat =====
+# config for qwen-chat-7b turbomind
 tb_qwen_chat_7b = dict(type=TurboMindModel,
                        abbr='qwen-7b-chat-turbomind',
                        path='Qwen/Qwen-7B-Chat',
@@ -405,7 +410,25 @@ tb_qwen_chat_7b = dict(type=TurboMindModel,
                        meta_template=qwen_meta_template,
                        run_cfg=dict(num_gpus=1, num_procs=1),
                        end_str='<|im_end|>')
-# hf qwen
+
+# config for qwen-chat-7b pytorch
+pt_qwen_chat_7b = dict(type=LmdeployPytorchModel,
+                       abbr='qwen-7b-chat-pytorch',
+                       path='Qwen/Qwen-7B-Chat',
+                       engine_config=dict(session_len=2048, max_batch_size=16),
+                       gen_config=dict(top_k=1,
+                                       top_p=0.8,
+                                       temperature=1.0,
+                                       max_new_tokens=256),
+                       max_out_len=256,
+                       max_seq_len=2048,
+                       batch_size=16,
+                       concurrency=16,
+                       meta_template=qwen_meta_template,
+                       run_cfg=dict(num_gpus=1, num_procs=1),
+                       end_str='<|im_end|>')
+
+# config for qwen-chat-7b huggingface
 hf_qwen_chat_7b = dict(
     type=HuggingFaceCausalLM,
     abbr='qwen-7b-chat-hf',
@@ -425,7 +448,9 @@ hf_qwen_chat_7b = dict(
     run_cfg=dict(num_gpus=1, num_procs=1),
     end_str='<|im_end|>',
 )
-# config for llama2-chat-7b
+
+# ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
+# config for llama2-chat-7b turbomind
 tb_llama2_chat_7b = dict(type=TurboMindModel,
                          abbr='llama-2-7b-chat-turbomind',
                          path='meta-llama/Llama-2-7b-chat-hf',
@@ -444,7 +469,7 @@ tb_llama2_chat_7b = dict(type=TurboMindModel,
                          run_cfg=dict(num_gpus=1, num_procs=1),
                          end_str='[INST]')
 
-# config for llama2-chat-7b
+# config for llama2-chat-7b pytorch
 pt_llama2_chat_7b = dict(type=LmdeployPytorchModel,
                          abbr='llama-2-7b-chat-pytorch',
                          path='meta-llama/Llama-2-7b-chat-hf',
@@ -462,7 +487,7 @@ pt_llama2_chat_7b = dict(type=LmdeployPytorchModel,
                          run_cfg=dict(num_gpus=1, num_procs=1),
                          end_str='[INST]')
 
-# config for llama2-chat-7b
+# config for llama2-chat-7b huggingface
 hf_llama2_chat_7b = dict(type=HuggingFaceCausalLM,
                          abbr='llama-2-7b-chat-hf',
                          path='meta-llama/Llama-2-7b-chat-hf',
@@ -481,7 +506,8 @@ hf_llama2_chat_7b = dict(type=HuggingFaceCausalLM,
                          run_cfg=dict(num_gpus=1, num_procs=1),
                          end_str='[INST]')
 
-# config for baichuan2-chat-7b
+# ===== Configs for baichuan-inc/Baichuan2-7B-Chat =====
+# config for baichuan2-chat-7b turbomind
 tb_baichuan2_chat_7b = dict(type=TurboMindModel,
                             abbr='Baichuan2-7B-Chat-turbomind',
                             path='baichuan-inc/Baichuan2-7B-Chat',
@@ -499,26 +525,25 @@ tb_baichuan2_chat_7b = dict(type=TurboMindModel,
                             meta_template=baichuan2_meta_template,
                             run_cfg=dict(num_gpus=1, num_procs=1))
 
-hf_baichuan2_chat_7b = dict(
-    type=HuggingFaceCausalLM,
-    abbr='baichuan2-7b-chat-hf',
-    path='baichuan-inc/Baichuan2-7B-Chat',
-    tokenizer_path='baichuan-inc/Baichuan2-7B-Chat',
-    tokenizer_kwargs=dict(
-        padding_side='left',
-        truncation_side='left',
-        trust_remote_code=True,
-        use_fast=False,
-    ),
-    meta_template=baichuan2_meta_template,
-    max_out_len=100,
-    max_seq_len=2048,
-    batch_size=16,
-    batch_padding=False,
-    model_kwargs=dict(device_map='auto', trust_remote_code=True),
-    run_cfg=dict(num_gpus=1, num_procs=1),
-)
+# config for baichuan2-chat-7b huggingface
+hf_baichuan2_chat_7b = dict(type=HuggingFaceCausalLM,
+                            abbr='baichuan2-7b-chat-hf',
+                            path='baichuan-inc/Baichuan2-7B-Chat',
+                            tokenizer_path='baichuan-inc/Baichuan2-7B-Chat',
+                            tokenizer_kwargs=dict(padding_side='left',
+                                                  truncation_side='left',
+                                                  trust_remote_code=True,
+                                                  use_fast=False),
+                            meta_template=baichuan2_meta_template,
+                            max_out_len=100,
+                            max_seq_len=2048,
+                            batch_size=16,
+                            batch_padding=False,
+                            model_kwargs=dict(device_map='auto',
+                                              trust_remote_code=True),
+                            run_cfg=dict(num_gpus=1, num_procs=1))
 
+# config for baichuan2-chat-7b pytorch
 pt_baichuan2_chat_7b = dict(type=LmdeployPytorchModel,
                             abbr='baichuan2-7b-chat-hf',
                             path='baichuan-inc/Baichuan2-7B-Chat',
@@ -536,6 +561,7 @@ pt_baichuan2_chat_7b = dict(type=LmdeployPytorchModel,
                             run_cfg=dict(num_gpus=1, num_procs=1),
                             end_str=None)
 
+# ===== Configs for mistralai/Mistral-7B-Instruct-v0.1 =====
 # config for pt Mistral-7B-Instruct-v0.1
 pt_mistral_chat_7b = dict(type=LmdeployPytorchModel,
                           abbr='mistral-7b-instruct-v0.1-pytorch',
@@ -574,6 +600,7 @@ hf_mistral_chat_7b = dict(abbr='mistral-7b-instruct-v0.1-hf',
                           run_cfg=dict(num_gpus=1, num_procs=1),
                           end_str='</s>')
 
+# ===== Configs for mistralai/Mixtral-8x7B-Instruct-v0.1 =====
 # config for hf Mixtral-8x7B-Instruct-v0.1
 hf_mixtral_chat_8x7b = dict(
     abbr='mixtral-8x7b-instruct-v0.1-hf',
@@ -610,9 +637,3 @@ pt_mixtral_chat_8x7b = dict(type=LmdeployPytorchModel,
                             meta_template=mistral_meta_template,
                             run_cfg=dict(num_gpus=2, num_procs=1),
                             end_str='</s>')
-
-models = [
-    hf_internlm_chat_7b, hf_internlm2_chat_7b, hf_llama2_chat_7b,
-    hf_baichuan2_chat_7b, hf_qwen_chat_7b, hf_mistral_chat_7b,
-    hf_internlm2_chat_20b
-]
