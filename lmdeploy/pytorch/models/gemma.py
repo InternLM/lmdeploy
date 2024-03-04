@@ -100,7 +100,7 @@ class PatchedGemmaAttention(nn.Module):
                 scaling_factor=scaling_factor,
                 out_q=query_states[None],
                 out_k=key_states[None])
-            return query_states, key_states, value_states
+            return query_states[0], key_states[0], value_states
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
 

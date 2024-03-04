@@ -12,71 +12,11 @@ import torch.utils.checkpoint
 from torch.distributed._tensor import DeviceMesh
 from transformers.modeling_outputs import \
     BaseModelOutputWithPastAndCrossAttentions
-from transformers.models.falcon.modeling_falcon import build_alibi_tensor
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
-from ..kernels import (alibi_paged_attention_fwd, fill_kv_cache,
-                       paged_attention_fwd)
-
-
-# rotary pos emb helpers
-# (torch.jit.script does not seem to support staticmethod...)
-def rotate_half(x):
-    x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-class PatchedFalconRotaryEmbedding(nn.Module):
-    """Implementation adapted from Huggingface transformers."""
-
-    def _patched_set_cos_sin_cache(self, seq_len, device, dtype):
-        self.seq_len_cached = seq_len
-        t = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
-        freqs = torch.einsum('i,j->ij', t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1).to(device)
-
-        if dtype in [torch.float16, torch.bfloat16]:
-            emb = emb.float()
-
-        self.cos_cached = emb.cos()[None, :, :]
-        self.sin_cached = emb.sin()[None, :, :]
-
-        self.cos_cached = self.cos_cached.type(dtype)
-        self.sin_cached = self.sin_cached.type(dtype)
-
-    def patched_cos_sin(self,
-                        position_ids_1d: torch.Tensor,
-                        device='cpu',
-                        dtype=torch.bfloat16) -> torch.Tensor:
-        total_length = int(position_ids_1d.max().item()) + 1
-
-        if (self.seq_len_cached is None) or (total_length >
-                                             self.seq_len_cached):
-            self._patched_set_cos_sin_cache(total_length, device, dtype)
-        # position_ids.shape == [1, packed_seq_len]
-        # position_ids_1d.shape == [packed_seq_len]
-        return (
-            self.cos_cached[:, position_ids_1d, None, :],
-            self.sin_cached[:, position_ids_1d, None, :],
-        )
-
-    def _contiguous_batching_forward(self, query: torch.Tensor,
-                                     key: torch.Tensor,
-                                     position_ids_1d: torch.Tensor):
-        # batch, seq_len, *_ = query.shape
-        cos, sin = self.patched_cos_sin(position_ids_1d,
-                                        device=query.device,
-                                        dtype=query.dtype)
-        return (
-            (query * cos) + (rotate_half(query) * sin),
-            (key * cos) + (rotate_half(key) * sin),
-        )
-
-    def forward(self, query, key, position_ids_or_past_key_values_length=0):
-        """forward."""
-        return self._contiguous_batching_forward(
-            query, key, position_ids_or_past_key_values_length)
+from ..kernels import (alibi_paged_attention_fwd, apply_rotary_pos_emb,
+                       fill_kv_cache, fused_rotary_emb, paged_attention_fwd)
 
 
 class PatchedFalconAttention(nn.Module):
@@ -93,7 +33,7 @@ class PatchedFalconAttention(nn.Module):
                 # e.g. 40b-instruct, GQA
                 # split qkv across groups
                 # no finer-grained partitioning
-                weight = mod.weight.reshape(
+                mod.weight.data = mod.weight.reshape(
                     -1,  # num groups
                     (self.num_heads + self.num_kv_heads * 2) * self.head_dim,
                     self.hidden_size,
@@ -101,31 +41,22 @@ class PatchedFalconAttention(nn.Module):
             elif self.multi_query:
                 # e.g. 7b-instruct, MQA
                 # split to q, copy kv
-                weight = mod.weight.reshape(
-                    -1,
-                    self.head_dim,
-                    self.hidden_size,
-                )
+                weight = mod.weight.unflatten(0, (-1, self.head_dim))
                 q_weight = weight[:self.num_heads]
-                k_weight = weight[self.num_heads:self.num_heads + 1]
-                v_weight = weight[self.num_heads + 1:self.num_heads + 2]
-                q_weight_shards = torch.tensor_split(q_weight,
-                                                     world_size,
-                                                     dim=0)
+                kv_weight = weight[-2:]
+                q_weight_shards = q_weight.chunk(world_size, 0)
                 weight_shards = []
                 for q in q_weight_shards:
                     # only shard q heads but
                     # copy single k/v head to all ranks
                     weight_shards.append(q)
-                    weight_shards.append(k_weight)
-                    weight_shards.append(v_weight)
+                    weight_shards.append(kv_weight)
                 mod.weight.data = torch.cat(weight_shards, dim=0)
                 # here we keep the weight to be 3D,
                 # so that column parallel will split it
                 # into integer-numbered heads
 
             # no bias for 7b-instruct and 40b-instruct
-
             colwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
                                           to_local=True)
@@ -137,7 +68,7 @@ class PatchedFalconAttention(nn.Module):
         elif mod_name in ['dense']:
             if self.new_decoder_architecture:
                 # e.g. 40b-instruct, GQA
-                weight = mod.weight.reshape(
+                mod.weight.data = mod.weight.reshape(
                     self.hidden_size,
                     -1,  # num groups
                     self.num_heads * self.head_dim,
@@ -202,79 +133,82 @@ class PatchedFalconAttention(nn.Module):
                                                                          2, :]
         else:
             # e.g. 7b-instruct model
-            batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
-            if not dist.is_initialized():
-                num_head = self.num_heads
-            else:
-                # this trick will, for example, split 11 into [4, 4, 3]
-                # following the way column parallel linear splitting
-                # non-dividable dims
-                num_head = self.num_heads - dist.get_rank() - 1
-                num_head = 1 + num_head // dist.get_world_size()
-            fused_qkv = fused_qkv.view(batch_size, seq_length, num_head + 2,
-                                       self.head_dim)
-            return fused_qkv[..., :-2, :], fused_qkv[..., [-2], :], fused_qkv[
-                ..., [-1], :]
+            fused_qkv = fused_qkv.unflatten(-1, (-1, self.head_dim))
+            split_shape = (fused_qkv.size(-2) - 2, 1, 1)
+            return fused_qkv.split(split_shape, dim=-2)
 
     def _contiguous_batching_forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: torch.Tensor,
         alibi: Optional[torch.Tensor],
-        attention_mask: torch.Tensor,
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
         output_attentions: bool = False,
     ):
         # prepare inputs for continuous batch forwarding
         context = self.context.context
-
-        history_lengths = context.history_lengths
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
-        history_lengths = q_seq_length.new_tensor(history_lengths)
-        kv_seq_length = q_seq_length + history_lengths
-        max_seq_len = q_seq_length.max().item()
+        history_lengths = context.history_lengths
+        kv_seq_length = context.kv_seq_length
+        max_seq_length = context.max_seq_length
+        block_offsets = context.block_offsets
+        position_ids_1d = context.position_ids_1d
 
-        fused_qkv = self.query_key_value(
-            hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
+        def __maybe_rotary_fn(query_states, key_states, value_states):
+            scaling_factor = 1.0
+            inv_freq = self.maybe_rotary.inv_freq
+            query_states, key_states = fused_rotary_emb(
+                query_states[None],
+                key_states[None],
+                position_ids_1d[None],
+                inv_freq=inv_freq,
+                scaling_factor=scaling_factor,
+                out_q=query_states[None],
+                out_k=key_states[None])
+            return query_states[0], key_states[0], value_states
+
+        def __rotary_emb_fn(query_states, key_states, value_states):
+            """rotary embedding func."""
+            kv_seq_len = max_seq_length + max(history_lengths)
+
+            cos, sin = self.rotary_emb(value_states.transpose(0, 1),
+                                       kv_seq_len)
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos, sin, context.position_ids,
+                position_ids_1d)
+            return query_states, key_states, value_states
+
+        fused_qkv = self.query_key_value(hidden_states)
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self._split_heads(fused_qkv)
 
-        batch_size, query_length, _, _ = query_layer.shape
+        query_layer = query_layer.flatten(0, 1)
+        key_layer = key_layer.flatten(0, 1)
+        value_layer = value_layer.flatten(0, 1)
+        if hasattr(self, 'maybe_rotary'):
+            query_layer, key_layer, value_layer = __maybe_rotary_fn(
+                query_layer, key_layer, value_layer)
+        elif hasattr(self, 'rotary_emb'):
+            query_layer, key_layer, value_layer = __rotary_emb_fn(
+                query_layer, key_layer, value_layer)
 
-        if isinstance(self.maybe_rotary, nn.Module):
-            position_ids_1d = self.context.context.position_ids_1d
-            query_layer, key_layer = self.maybe_rotary(query_layer, key_layer,
-                                                       position_ids_1d)
+        past_key, past_value = layer_past
+        fill_kv_cache(
+            key_layer.contiguous(),
+            value_layer.contiguous(),
+            past_key,
+            past_value,
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_seq_length,
+            block_offsets=block_offsets,
+        )
 
-        if layer_past is not None:
-            past_key, past_value = layer_past
-            # concatenate along seq_length dimension:
-            #  - key: [batch_size * self.num_heads, kv_length, head_dim]
-            #  - value: [batch_size * self.num_heads, kv_length, head_dim]
+        attn_output = query_layer
 
-            fill_kv_cache(key_layer.contiguous(),
-                          value_layer.contiguous(),
-                          past_key,
-                          past_value,
-                          q_start_loc,
-                          q_seq_length,
-                          block_offsets=context.block_offsets,
-                          history_lengths=context.history_lengths,
-                          context=context)
-
-        if use_cache:
-            present = (key_layer, value_layer)
-        else:
-            present = None
-
-        attn_output = torch.empty_like(query_layer)
-        block_offsets = context.block_offsets
-
-        if alibi is None:
+        if not alibi:
             paged_attention_fwd(q=query_layer,
                                 k=past_key,
                                 v=past_value,
@@ -283,9 +217,15 @@ class PatchedFalconAttention(nn.Module):
                                 q_start_loc=q_start_loc,
                                 q_seqlens=q_seq_length,
                                 kv_seqlens=kv_seq_length,
-                                max_seqlen=max_seq_len)
+                                max_seqlen=max_seq_length)
 
         else:
+            num_heads_full = self.num_heads
+            head_offset = 0
+            if dist.is_initialized():
+                world_size = dist.get_world_size()
+                rank = dist.get_rank()
+                head_offset = self.num_heads // world_size * rank
             alibi_paged_attention_fwd(q=query_layer,
                                       k=past_key,
                                       v=past_value,
@@ -294,17 +234,18 @@ class PatchedFalconAttention(nn.Module):
                                       b_start_loc=q_start_loc,
                                       b_seq_len=q_seq_length,
                                       b_kv_seq_len=kv_seq_length,
-                                      max_input_len=max_seq_len,
+                                      max_input_len=max_seq_length,
+                                      head_offset=head_offset,
+                                      num_heads=num_heads_full,
                                       alibi_scale=self.inv_norm_factor)
 
-        attn_output = attn_output.reshape(batch_size, query_length, -1)
-
+        attn_output = attn_output[None].flatten(-2, -1)
         output_tensor = self.dense(attn_output)
 
         if output_attentions:
-            return output_tensor, present, None
+            return output_tensor, layer_past, None
         else:
-            return output_tensor, present
+            return output_tensor, layer_past
 
     def forward(
         self,
@@ -316,11 +257,8 @@ class PatchedFalconAttention(nn.Module):
         use_cache: bool = False,
         output_attentions: bool = False,
     ):
-        position_ids = self.context.context.position_ids
-        return self._contiguous_batching_forward(hidden_states, position_ids,
-                                                 alibi, attention_mask,
-                                                 layer_past, head_mask,
-                                                 use_cache, output_attentions)
+        return self._contiguous_batching_forward(hidden_states, alibi,
+                                                 layer_past)
 
 
 class PatchedFalconMLP(nn.Module):
@@ -350,16 +288,12 @@ class PatchedFalconModel(nn.Module):
     def _contiguous_batching_forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        # position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
                                         ...]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.LongTensor] = None,
     ) -> Union[Tuple[torch.Tensor, ...],
                BaseModelOutputWithPastAndCrossAttentions]:
-
-        # history_lengths = self.context.context.history_lengths
 
         output_attentions = False
         use_cache = True
@@ -374,28 +308,20 @@ class PatchedFalconModel(nn.Module):
         hidden_states = inputs_embeds
 
         # Compute alibi tensor: check build_alibi_tensor documentation
-        if use_alibi:
-            alibi = build_alibi_tensor(attention_mask,
-                                       self.num_heads,
-                                       dtype=hidden_states.dtype)
-        else:
-            alibi = None
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
             outputs = block(
                 hidden_states,
-                # position_ids=position_ids,
                 layer_past=layer_past,
                 attention_mask=None,
                 head_mask=head_mask[i],
                 use_cache=use_cache,
                 output_attentions=output_attentions,
-                alibi=alibi,
+                alibi=use_alibi,
             )
             hidden_states = outputs[0]
 
         # Add last hidden state
-
         hidden_states = self.ln_f(hidden_states)
 
         return BaseModelOutputWithPastAndCrossAttentions(
@@ -408,7 +334,6 @@ class PatchedFalconModel(nn.Module):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        # position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor],
                                         ...]] = None,
         attention_mask: Optional[torch.Tensor] = None,
@@ -421,10 +346,7 @@ class PatchedFalconModel(nn.Module):
     ) -> Union[Tuple[torch.Tensor, ...],
                BaseModelOutputWithPastAndCrossAttentions]:
         return self._contiguous_batching_forward(
-            input_ids=input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            head_mask=head_mask)
+            input_ids=input_ids, past_key_values=past_key_values)
 
 
 class PatchedFalconForCausalLM(nn.Module):

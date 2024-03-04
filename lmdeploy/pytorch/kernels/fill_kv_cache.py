@@ -57,12 +57,13 @@ def _fill_kv_cache_kernel(
 
     block0_first_tokenloc = history_seqlen % BLOCK
 
-    s_block_startloc = tl.maximum(block_id * BLOCK - block0_first_tokenloc, 0)
+    state_token_offset = tl.maximum(block_id * BLOCK - block0_first_tokenloc,
+                                    0)
     kv_block_id = _div_up(history_seqlen + 1, BLOCK) - 1 + block_id
     kv_block_id = min(kv_block_id, stride_boff - 1)
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
 
-    cur_startloc = q_startloc + s_block_startloc
+    cur_startloc = q_startloc + state_token_offset
     ks_ptr = KStates + cur_startloc * stride_kss
     vs_ptr = VStates + cur_startloc * stride_vss
 
@@ -109,6 +110,7 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
+    block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
     block_size, num_heads, head_dim = k_caches.size()[1:]
     max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1

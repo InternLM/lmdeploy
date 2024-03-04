@@ -61,7 +61,8 @@ def check_env():
     check_env_triton()
 
 
-def check_transformers_version(model_path: str):
+def check_transformers_version(model_path: str,
+                               trust_remote_code: bool = True):
     """check transformers version."""
     from packaging import version
     logger = get_logger('lmdeploy')
@@ -77,7 +78,8 @@ def check_transformers_version(model_path: str):
     model_trans_version = None
     try:
         from transformers import AutoConfig
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=trust_remote_code)
         model_trans_version = getattr(config, 'transformers_version')
     except Exception as e:
         message = (
@@ -97,7 +99,7 @@ def check_transformers_version(model_path: str):
         _handle_exception(e, 'transformers', logger, message=message)
 
 
-def check_model(model_path: str):
+def check_model(model_path: str, trust_remote_code: bool = True):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
