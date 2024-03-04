@@ -10,7 +10,7 @@ from lmdeploy import TurbomindEngineConfig, pipeline
 class TestPipelineLongtextFunc:
 
     def test_long_test_chat_7b(self, config):
-        model = 'internlm2-chat-7b'
+        model = 'internlm/internlm2-chat-7b'
         tp_config = get_tp_num(config, model)
         model_path = '/'.join([config.get('model_path'), model])
 
@@ -36,7 +36,7 @@ class TestPipelineLongtextFunc:
             continue
 
     def test_long_test_chat_20b(self, config):
-        model = 'internlm2-chat-20b'
+        model = 'internlm/internlm2-chat-20b'
         tp_config = get_tp_num(config, model)
         model_path = '/'.join([config.get('model_path'), model])
 
@@ -62,7 +62,7 @@ class TestPipelineLongtextFunc:
             continue
 
     def test_long_test_20b(self, config):
-        model = 'internlm2-20b'
+        model = 'internlm/internlm2-20b'
         tp_config = get_tp_num(config, model)
         model_path = '/'.join([config.get('model_path'), model])
 
