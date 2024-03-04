@@ -12,7 +12,7 @@ from utils.run_client_chat import command_line_test
 from utils.run_restful_chat import (get_model, health_check, interactive_test,
                                     open_chat_test)
 
-BASE_HTTP_URL = 'http://10.140.0.187'
+BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 
 
@@ -44,7 +44,8 @@ def prepare_environment(request, config, worker_id):
 
     print('reproduce command restful: ' + cmd)
 
-    start_log = os.path.join(log_path, 'start_restful_' + model + '.log')
+    start_log = os.path.join(log_path,
+                             'start_restful_' + model.split('/')[1] + '.log')
 
     with open(start_log, 'w') as f:
         f.writelines('reproduce command restful: ' + cmd + '\n')
@@ -72,7 +73,8 @@ def prepare_environment(request, config, worker_id):
     yield
     if pid > 0:
 
-        kill_log = os.path.join(log_path, 'kill_' + model + '.log')
+        kill_log = os.path.join(log_path,
+                                'kill_' + model.split('/')[1] + '.log')
 
         with open(kill_log, 'w') as f:
             convertRes.kill()
@@ -96,8 +98,14 @@ def getModelList(tp_num):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
-def test_restful_chat_tp1(config, common_case_config):
-    run_all_step(config, common_case_config)
+def test_restful_chat_tp1(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
@@ -108,15 +116,26 @@ def test_restful_chat_tp1(config, common_case_config):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=2),
                          indirect=True)
-def test_restful_chat_tp2(config, common_case_config):
-    run_all_step(config, common_case_config)
+def test_restful_chat_tp2(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
 
 
-def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
+def run_all_step(config,
+                 cases_info,
+                 worker_id: str = 'default',
+                 port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
 
     model = get_model(http_url)
-    print(model)
+    if model is None:
+        assert False, 'server not start correctly'
+
     for case in cases_info.keys():
         if (case == 'memory_test'
                 or case == 'emoji_case') and 'chat' not in model.lower():
@@ -126,15 +145,17 @@ def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
 
         with allure.step(case + ' step1 - command chat regression'):
             chat_result, chat_log, msg = command_line_test(
-                config, case, case_info, model, 'api_client', http_url)
-            allure.attach.file(chat_log,
-                               attachment_type=allure.attachment_type.TEXT)
-        with assume:
-            assert chat_result, msg
+                config, case, case_info, model + worker_id, 'api_client',
+                http_url)
+            if chat_log is not None:
+                allure.attach.file(chat_log,
+                                   attachment_type=allure.attachment_type.TEXT)
+            with assume:
+                assert chat_result, msg
 
         with allure.step(case + ' step2 - restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(
-                config, case_info, model, http_url)
+                config, case_info, model, http_url, worker_id)
             allure.attach.file(restful_log,
                                attachment_type=allure.attachment_type.TEXT)
         with assume:
@@ -142,7 +163,7 @@ def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
 
         with allure.step(case + ' step3 - restful_test - interactive chat'):
             active_result, interactive_log, msg = interactive_test(
-                config, case_info, model, http_url)
+                config, case_info, model, http_url, worker_id)
             allure.attach.file(interactive_log,
                                attachment_type=allure.attachment_type.TEXT)
 

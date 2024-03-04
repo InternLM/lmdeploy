@@ -5,14 +5,14 @@ from time import sleep, time
 import allure
 import pytest
 from pytest import assume
-from utils.config_utils import (get_cuda_prefix_by_workerid,
-                                get_turbomind_model_list, get_workerid)
+from utils.config_utils import (get_all_model_list,
+                                get_cuda_prefix_by_workerid, get_workerid)
 from utils.get_run_config import get_command_with_extra
 from utils.run_client_chat import command_line_test
 from utils.run_restful_chat import (get_model, health_check, interactive_test,
                                     open_chat_test)
 
-BASE_HTTP_URL = 'http://10.140.0.187'
+BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 
 
@@ -53,7 +53,8 @@ def prepare_environment(request, config, worker_id):
     if 'w4' in model or '4bits' in model:
         cmd += ' --model-format awq'
 
-    start_log = os.path.join(log_path, 'start_restful_' + model + '.log')
+    start_log = os.path.join(log_path,
+                             'start_restful_' + model.split('/')[1] + '.log')
 
     print('reproduce command restful: ' + cmd)
 
@@ -82,7 +83,8 @@ def prepare_environment(request, config, worker_id):
             break
     yield
     if pid > 0:
-        kill_log = os.path.join(log_path, 'kill_' + model + '.log')
+        kill_log = os.path.join(log_path,
+                                'kill_' + model.split('/')[1] + '.log')
 
         with open(kill_log, 'w') as f:
             convertRes.kill()
@@ -95,7 +97,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num
-    } for item in get_turbomind_model_list(tp_num) if 'chat' in item.lower()]
+    } for item in get_all_model_list(tp_num) if 'chat' in item.lower()]
 
 
 @pytest.mark.order(7)
@@ -106,12 +108,13 @@ def getModelList(tp_num):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
-def test_restful_chat_tp1(config, common_case_config, worker_id):
+def test_restful_chat_tp1(request, config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
     else:
         run_all_step(config,
                      common_case_config,
+                     worker_id=worker_id,
                      port=DEFAULT_PORT + get_workerid(worker_id))
 
 
@@ -129,6 +132,7 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
     else:
         run_all_step(config,
                      common_case_config,
+                     worker_id=worker_id,
                      port=DEFAULT_PORT + get_workerid(worker_id))
 
 
@@ -151,11 +155,16 @@ def test_restful_chat_pr(config, common_case_config):
     run_all_step(config, common_case_config)
 
 
-def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
+def run_all_step(config,
+                 cases_info,
+                 worker_id: str = 'default',
+                 port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
 
     model = get_model(http_url)
-    print(model)
+
+    if model is None:
+        assert False, 'server not start correctly'
     for case in cases_info.keys():
         if (case == 'memory_test'
                 or case == 'emoji_case') and 'chat' not in model.lower():

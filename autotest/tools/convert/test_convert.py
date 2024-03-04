@@ -43,13 +43,17 @@ def convert(config, model_case, cuda_prefix):
                                      True,
                                      cuda_prefix=cuda_prefix)
     else:
-        cmd = get_command_with_extra(
-            ' '.join([
-                'lmdeploy convert', model_name, origin_model_path,
-                '--dst-path', dst_path
-            ]), config, model_name, True)
+        cmd = get_command_with_extra(' '.join([
+            'lmdeploy convert', model_name, origin_model_path, '--dst-path',
+            dst_path
+        ]),
+                                     config,
+                                     model_name,
+                                     True,
+                                     cuda_prefix=cuda_prefix)
 
-    convert_log = os.path.join(log_path, 'convert_' + model_case + '.log')
+    convert_log = os.path.join(log_path,
+                               'convert_' + model_case.split('/')[1] + '.log')
     print('reproduce command convert: ' + cmd + '\n')
     with open(convert_log, 'w') as f:
         # remove existing workspace

@@ -116,7 +116,7 @@ jobs:
         continue-on-error: true
         if: contains(${{github.event.inputs.model}}, 'convert') && contains(${{github.event.inputs.backend}}, 'turbomind')
         run: |
-          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=allure-results --dist loadgroup
+          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=allure-results
       - name: Test lmdeploy - interface pipeline turbomind case
         continue-on-error: true
         if: contains(${{github.event.inputs.model}}, 'interface-pipeline') && contains(${{github.event.inputs.backend}}, 'turbomind')
@@ -141,20 +141,12 @@ jobs:
         continue-on-error: true
         if: contains(${{github.event.inputs.model}}, 'restful') && contains(${{github.event.inputs.backend}}, 'turbomind')
         timeout-minutes: 60
-        run: pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'not pr_test' --alluredir=allure-results
-      - name: Test lmdeploy - restful torch
-        continue-on-error: true
-        timeout-minutes: 80
-        run: pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'not pr_test' --alluredir=allure-results
-      - name: Test lmdeploy - chat workspace
-        continue-on-error: true
-        timeout-minutes: 30
         run: |
           pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
           pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - restful torch
         continue-on-error: true
-        if: contains(${{github.event.inputs.model}}, 'restful') && contains(${{github.event.inputs.backend}}, 'pytorch')
+        if: contains(${{github.event.inputs.model}}, 'restful') && contains(${{github.event.inputs.backend}}, 'turbomind')
         timeout-minutes: 80
         run: |
           pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results

@@ -102,11 +102,19 @@ def _get_available_cude():
 
 
 def _simple_model_name(model):
-    model_name = model.split('/')[1]
+    if '/' in model:
+        model_name = model.split('/')[1]
+    else:
+        model_name = model
     model_name = model_name.replace('-inner-w4a16', '')
     model_name = model_name.replace('-inner-w8a8', '')
     model_name = model_name.replace('-inner-kvint8', '')
     model_name = model_name.replace('-w4a16', '')
+    return model_name
+
+
+def _split_model_name(model):
+    model_name = model.split('/')[1]
     return model_name
 
 

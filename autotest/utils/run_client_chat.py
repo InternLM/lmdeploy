@@ -70,8 +70,12 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
         log_path = config.get('log_path')
         model_name = get_model_name(model)
 
-        chat_log = os.path.join(log_path,
-                                'chat_' + model + '_' + case + '.log')
+        if '/' in model:
+            chat_log = os.path.join(
+                log_path, 'chat_' + model.split('/')[1] + '_' + case + '.log')
+        else:
+            chat_log = os.path.join(log_path,
+                                    'chat_' + model + '_' + case + '.log')
 
         file = open(chat_log, 'w')
 

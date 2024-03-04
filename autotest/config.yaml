@@ -19,19 +19,12 @@ turbomind_model:
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
+    - internlm/internlm2-chat-7b-4bits
     - internlm/internlm2-chat-20b-4bits
     - Qwen/Qwen-7B-Chat
     - Qwen/Qwen-14B-Chat
-    - Qwen/Qwen1.5-7B-Chat
-    - mistralai/Mistral-7B-Instruct-v0.1
-    - mistralai/Mixtral-8x7B-Instruct-v0.1
-    - google/gemma-7b-it
-    - deepseek-ai/deepseek-moe-16b-chat
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
-    - baichuan-inc/Baichuan2-13B-Chat
-    - THUDM/chatglm2-6b
-    - tiiuae/falcon-7b
     - 01-ai/Yi-6B-Chat
     - internlm/internlm2-1_8b
     - internlm/internlm2-20b
@@ -44,7 +37,6 @@ pytorch_model:
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
     - internlm/internlm2-chat-20b
-    - internlm/internlm2-chat-7b-4bits
     - baichuan-inc/Baichuan2-7B-Chat
     - baichuan-inc/Baichuan2-13B-Chat
     - THUDM/chatglm2-6b

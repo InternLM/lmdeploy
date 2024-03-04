@@ -6,8 +6,9 @@ from utils.config_utils import get_cuda_prefix_by_workerid
 from utils.quantization_utils import quantization
 
 model_list = [
-    'llama-2-7b-chat', 'internlm-chat-20b', 'internlm2-chat-20b',
-    'internlm2-chat-7b', 'Yi-6B-Chat', 'internlm2-20b'
+    'meta-llama/Llama-2-7b-chat', 'internlm/internlm-chat-20b',
+    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-7b',
+    '01-ai/Yi-6B-Chat', 'internlm/internlm2-20b'
 ]
 
 
@@ -28,9 +29,10 @@ def quantization_w8a8(config, quantization_model_name, origin_model_name,
                                cuda_prefix)
     log_path = config.get('log_path')
     quantization_log = os.path.join(
-        log_path,
-        '_'.join(['quantization', quantization_type, quantization_model_name
-                  ]) + '.log')
+        log_path, '_'.join([
+            'quantization', quantization_type,
+            quantization_model_name.split('/')[1]
+        ]) + '.log')
 
     allure.attach.file(quantization_log,
                        attachment_type=allure.attachment_type.TEXT)

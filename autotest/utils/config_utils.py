@@ -44,6 +44,31 @@ def get_torch_model_list(tp_num: int = None):
     return case_list
 
 
+def get_all_model_list(tp_num: int = None):
+    config_path = os.path.join('autotest/config.yaml')
+    with open(config_path) as f:
+        config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+
+    case_list = config.get('turbomind_model')
+    for key in config.get('pytorch_model'):
+        if key not in case_list:
+            case_list.append(key)
+    quatization_case_config = config.get('quatization_case_config')
+    for key in quatization_case_config.get('w4a16'):
+        case_list.append(key + '-inner-w4a16')
+    for key in quatization_case_config.get('kvint8'):
+        case_list.append(key + '-inner-kvint8')
+    for key in quatization_case_config.get('kvint8_w4a16'):
+        case_list.append(key + '-inner-kvint8-w4a16')
+
+    if tp_num is not None:
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
+
+    return case_list
+
+
 def get_cuda_prefix_by_workerid(worker_id, tp_num: int = 1):
     if worker_id is None or 'gw' not in worker_id:
         return None

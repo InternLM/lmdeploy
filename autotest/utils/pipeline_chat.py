@@ -51,7 +51,8 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
 
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
-            log_path, 'pipeline_chat_' + model_case + '_' + case + '.log')
+            log_path,
+            'pipeline_chat_' + model_case.split('/')[1] + '_' + case + '.log')
 
         file = open(pipeline_chat_log, 'w')
 
@@ -95,7 +96,8 @@ def assert_pipeline_chat_log(config, cases_info, model_case):
         result = False
         with allure.step('case - ' + case):
             pipeline_chat_log = os.path.join(
-                log_path, 'pipeline_chat_' + model_case + '_' + case + '.log')
+                log_path, 'pipeline_chat_' + model_case.split('/')[1] + '_' +
+                case + '.log')
 
             with open(pipeline_chat_log, 'r') as f:
                 lines = f.readlines()
