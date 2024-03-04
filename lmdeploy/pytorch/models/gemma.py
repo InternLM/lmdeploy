@@ -69,11 +69,11 @@ class PatchedGemmaAttention(nn.Module):
         support.
         """
         context = self.context.context
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
+        max_seq_length = context.max_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_key_value_heads // world_size
@@ -111,18 +111,19 @@ class PatchedGemmaAttention(nn.Module):
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
-        max_seq_len = position_ids.size(-1)
         paged_attention_fwd(
             query_states,
             past_key_value[0],
@@ -132,7 +133,7 @@ class PatchedGemmaAttention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_len,
+            max_seqlen=max_seq_length,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)

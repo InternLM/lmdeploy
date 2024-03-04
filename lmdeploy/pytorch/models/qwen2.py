@@ -51,6 +51,7 @@ class PatchedQwen2Attention(nn.Module):
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
+        max_seq_length = context.max_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_key_value_heads // world_size
@@ -67,8 +68,7 @@ class PatchedQwen2Attention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                max_seq_len = position_ids.size(-1)
-                kv_seq_len = max_seq_len + max(history_lengths)
+                kv_seq_len = max_seq_length + max(history_lengths)
                 cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
                 query_states, key_states = apply_rotary_pos_emb(
                     query_states, key_states, cos, sin, position_ids,
@@ -84,18 +84,19 @@ class PatchedQwen2Attention(nn.Module):
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
-        max_seq_len = position_ids.size(-1)
 
         use_sliding_windows = (getattr(self.config, 'sliding_window', None)
                                is not None and self.config.use_sliding_window)
@@ -111,7 +112,7 @@ class PatchedQwen2Attention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_len,
+            max_seqlen=max_seq_length,
             window_size=window_size,
         )
 

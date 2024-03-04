@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Sequence
-
 import torch
 import triton
 import triton.language as tl
@@ -23,6 +21,8 @@ def _fill_kv_cache_kernel(
     QSeqLens,
     KVSeqLens,
     BlockOffsets,
+    num_heads: tl.constexpr,
+    head_dim: tl.constexpr,
     stride_kss,
     stride_ksh,
     stride_ksd,
@@ -59,6 +59,7 @@ def _fill_kv_cache_kernel(
 
     s_block_startloc = tl.maximum(block_id * BLOCK - block0_first_tokenloc, 0)
     kv_block_id = _div_up(history_seqlen + 1, BLOCK) - 1 + block_id
+    kv_block_id = min(kv_block_id, stride_boff - 1)
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
 
     cur_startloc = q_startloc + s_block_startloc
@@ -76,17 +77,22 @@ def _fill_kv_cache_kernel(
 
     for bidx in range(c_first_tokenloc, c_last_tokenloc):
         sidx = bidx - c_first_tokenloc
+        mask = (h_off[:, None] < num_heads) & (d_off[None, :] < head_dim)
         k = tl.load(ks_ptr + sidx * stride_kss + h_off[:, None] * stride_ksh +
-                    d_off[None, :] * stride_ksd)
-        tl.store(
-            kc_ptr + bidx * stride_kcb + h_off[:, None] * stride_kch +
-            d_off[None, :] * stride_kcd, k)
+                    d_off[None, :] * stride_ksd,
+                    mask=mask)
+        tl.store(kc_ptr + bidx * stride_kcb + h_off[:, None] * stride_kch +
+                 d_off[None, :] * stride_kcd,
+                 k,
+                 mask=mask)
 
         v = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh +
-                    d_off[None, :] * stride_vsd)
-        tl.store(
-            vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
-            d_off[None, :] * stride_vcd, v)
+                    d_off[None, :] * stride_vsd,
+                    mask=mask)
+        tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
+                 d_off[None, :] * stride_vcd,
+                 v,
+                 mask=mask)
 
 
 @torch.inference_mode()
@@ -108,8 +114,8 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
     max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
     BLOCK = block_size
-    BLOCK_H = num_heads
-    BLOCK_D = head_dim
+    BLOCK_H = triton.next_power_of_2(num_heads)
+    BLOCK_D = triton.next_power_of_2(head_dim)
     grid = [batch_size, max_num_blocks]
     kernel_meta = _kernel_meta()
     _fill_kv_cache_kernel[grid](
@@ -121,6 +127,8 @@ def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
         q_seq_length,
         kv_seq_length,
         block_offsets,
+        num_heads=num_heads,
+        head_dim=head_dim,
         stride_kss=k_states.stride(-3),
         stride_ksh=k_states.stride(-2),
         stride_ksd=k_states.stride(-1),

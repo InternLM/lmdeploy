@@ -156,15 +156,17 @@ class Attention(nn.Module):
         query_states, key_states, value_states = _rotary_emb_fn(
             query_states, key_states, value_states)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
         paged_attention_fwd(
@@ -238,7 +240,6 @@ class BaichuanAttention(nn.Module):
         """
         assert not output_attentions
         context = self.context.context
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
@@ -258,15 +259,17 @@ class BaichuanAttention(nn.Module):
         key_states = key_states.view(-1, num_kv_heads, head_dim)
         value_states = value_states.view(-1, num_kv_heads, head_dim)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
 
