@@ -1052,6 +1052,11 @@ def serve(model_path: str,
                 VariableInterface.qos_engine.start()
         except FileNotFoundError:
             VariableInterface.qos_engine = None
+    else:
+        # hide qos functions if not applied
+        for i in range(len(app.router.routes)):
+            if 'qos' in app.router.routes[i].path:
+                app.router.routes[i].include_in_schema = False
 
     for i in range(3):
         print(
