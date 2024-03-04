@@ -4,22 +4,22 @@ from opencompass.models import (HuggingFaceCausalLM, LmdeployPytorchModel,
 
 with read_base():
     # choose a list of datasets
-    from .datasets.ceval.ceval_gen_5f30c7 import \
-        ceval_datasets  # noqa: F401, E501
-    from .datasets.crowspairs.crowspairs_gen_381af0 import \
-        crowspairs_datasets  # noqa: F401, E501
+    # from .datasets.ceval.ceval_gen_5f30c7 import \
+    #     ceval_datasets  # noqa: F401, E501
+    # from .datasets.crowspairs.crowspairs_gen_381af0 import \
+    #     crowspairs_datasets  # noqa: F401, E501
     from .datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_datasets  # noqa: F401, E501
     from .datasets.mmlu.mmlu_gen_a484b3 import \
         mmlu_datasets  # noqa: F401, E501
-    from .datasets.race.race_gen_69ee4f import \
-        race_datasets  # noqa: F401, E501
-    from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
-        WiC_datasets  # noqa: F401, E501
-    from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
-        WSC_datasets  # noqa: F401, E501
-    from .datasets.triviaqa.triviaqa_gen_2121ce import \
-        triviaqa_datasets  # noqa: F401, E501
+    # from .datasets.race.race_gen_69ee4f import \
+    #     race_datasets  # noqa: F401, E501
+    # from .datasets.SuperGLUE_WiC.SuperGLUE_WiC_gen_d06864 import \
+    #     WiC_datasets  # noqa: F401, E501
+    # from .datasets.SuperGLUE_WSC.SuperGLUE_WSC_gen_7902a7 import \
+    #     WSC_datasets  # noqa: F401, E501
+    # from .datasets.triviaqa.triviaqa_gen_2121ce import \
+    #     triviaqa_datasets  # noqa: F401, E501
     # and output the results in a chosen format
     from .summarizers.medium import summarizer  # noqa: F401, E501
 
@@ -54,6 +54,17 @@ qwen_meta_template = dict(round=[
          generate=True),
 ], )
 
+qwen1dot5_meta_template = dict(
+    round=[
+        dict(role='HUMAN', begin='<|im_start|>user\n', end='<|im_end|>\n'),
+        dict(role='BOT',
+             begin='<|im_start|>assistant\n',
+             end='<|im_end|>\n',
+             generate=True),
+    ],
+    eos_token_id=151645,
+)
+
 baichuan2_meta_template = dict(round=[
     dict(role='HUMAN', begin='<reserved_106>'),
     dict(role='BOT', begin='<reserved_107>', generate=True),
@@ -70,6 +81,15 @@ mistral_meta_template = dict(begin='<s>',
                                       generate=True),
                              ],
                              eos_token_id=2)
+
+gemma_meta_template = dict(round=[
+    dict(role='HUMAN', begin='<start_of_turn>user\n', end='<end_of_turn>\n'),
+    dict(role='BOT',
+         begin='<start_of_turn>model',
+         end='<end_of_turn>\n',
+         generate=True),
+],
+                           eos_token_id=1)
 
 # ===== Configs for internlm/internlm-chat-7b =====
 # config for internlm-chat-7b
@@ -637,3 +657,57 @@ pt_mixtral_chat_8x7b = dict(type=LmdeployPytorchModel,
                             meta_template=mistral_meta_template,
                             run_cfg=dict(num_gpus=2, num_procs=1),
                             end_str='</s>')
+
+# ===== Configs for Qwen/Qwen1.5-7B-Chat =====
+hf_qwen1dot5_chat_7b = dict(type=HuggingFaceCausalLM,
+                            abbr='qwen1.5-7b-chat-hf',
+                            path='Qwen/Qwen1.5-7B-Chat',
+                            model_kwargs=dict(device_map='auto',
+                                              trust_remote_code=True),
+                            tokenizer_kwargs=dict(padding_side='left',
+                                                  truncation_side='left',
+                                                  trust_remote_code=True,
+                                                  use_fast=False),
+                            meta_template=qwen1dot5_meta_template,
+                            pad_token_id=151645,
+                            max_out_len=256,
+                            max_seq_len=2048,
+                            batch_size=8,
+                            batch_padding=False,
+                            run_cfg=dict(num_gpus=1, num_procs=1),
+                            end_str='<|im_end|>')
+
+pt_qwen1dot5_chat_7b = dict(type=LmdeployPytorchModel,
+                            abbr='qwen1.5-7b-chat-pytorch',
+                            path='Qwen/Qwen1.5-7B-Chat',
+                            engine_config=dict(session_len=2048,
+                                               max_batch_size=16),
+                            gen_config=dict(top_k=1,
+                                            top_p=0.8,
+                                            temperature=1.0,
+                                            max_new_tokens=256),
+                            max_out_len=256,
+                            max_seq_len=2048,
+                            batch_size=16,
+                            concurrency=16,
+                            meta_template=qwen1dot5_meta_template,
+                            run_cfg=dict(num_gpus=1, num_procs=1),
+                            end_str='<|im_end|>')
+
+# ===== Configs for google/gemma-7b-it =====
+pt_gemma_chat_7b = dict(type=LmdeployPytorchModel,
+                        abbr='gemma-7b-it-pytorch',
+                        path='google/gemma-7b-it',
+                        engine_config=dict(session_len=2048,
+                                           max_batch_size=16),
+                        gen_config=dict(top_k=1,
+                                        top_p=0.8,
+                                        temperature=1.0,
+                                        max_new_tokens=256),
+                        max_out_len=256,
+                        max_seq_len=2048,
+                        batch_size=16,
+                        concurrency=16,
+                        meta_template=gemma_meta_template,
+                        run_cfg=dict(num_gpus=1, num_procs=1),
+                        end_str='<end_of_turn>')
