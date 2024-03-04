@@ -30,8 +30,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconAttention',
     'modeling_falcon.FalconModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconModel',
-    'modeling_falcon.FalconRotaryEmbedding':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconRotaryEmbedding',
     'modeling_falcon.FalconMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconMLP',
     'modeling_falcon.FalconForCausalLM':

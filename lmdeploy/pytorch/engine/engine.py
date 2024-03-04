@@ -159,7 +159,7 @@ class Engine:
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
         check_env()
-        check_model(model_path)
+        check_model(model_path, trust_remote_code)
 
         if engine_config is None:
             engine_config = PytorchEngineConfig()
