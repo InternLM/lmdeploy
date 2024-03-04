@@ -65,9 +65,9 @@ class QosEngine:
         """check while qos engine is enabled."""
         return self.qos_config.is_qos_enabled
 
-    def stop_session(self, session_id: int):
+    async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        self.engine.stop_session(session_id)
+        await self.engine.stop_session(session_id)
 
     async def generate(self, request):
         """entry of qos engine generate for three api."""

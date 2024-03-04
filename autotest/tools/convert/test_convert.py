@@ -33,7 +33,7 @@ def convert(config, model_case, cuda_prefix):
 
     model_name = get_model_name(model_case)
 
-    if 'w4' in model_case:
+    if 'w4' in model_case or '4bits' in model_case:
         cmd = get_command_with_extra(' '.join([
             'lmdeploy convert', model_name, origin_model_path, '--dst-path',
             dst_path, '--model-format awq --group-size 128'

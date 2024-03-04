@@ -24,11 +24,13 @@ def command_line_test(config,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
-        if 'kvint8' in model_case and 'w4' not in model_case:
-            cmd += ' --model-format hf --quant-policy 4'
-        if 'kvint8' in model_case and 'w4' in model_case:
+        if 'kvint8' in model_case:
             cmd += ' --quant-policy 4'
-        if 'w4' in model_case:
+            if 'w4' in model_case or '4bits' in model_case:
+                cmd += ' --model-format awq'
+            else:
+                cmd += ' --model-format hf'
+        elif 'w4' in model_case or '4bits' in model_case:
             cmd += ' --model-format awq'
     return command_test(config, [cmd], model_case, case, case_info,
                         type == 'turbomind')
@@ -48,11 +50,13 @@ def hf_command_line_test(config,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'kvint8' in model_case and 'w4' not in model_case:
-        cmd += ' --model-format hf --quant-policy 4'
-    if 'kvint8' in model_case and 'w4' in model_case:
+    if 'kvint8' in model_case:
         cmd += ' --quant-policy 4'
-    if 'w4' in model_case:
+        if 'w4' in model_case or '4bits' not in model_case:
+            cmd += ' --model-format awq'
+        else:
+            cmd += ' --model-format hf'
+    elif 'w4' in model_case or '4bits' not in model_case:
         cmd += ' --model-format awq'
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)

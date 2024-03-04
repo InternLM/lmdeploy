@@ -103,7 +103,7 @@ def test_restful_chat_tp1(config, common_case_config):
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch
-@pytest.mark.gpu_num_1
+@pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=2),

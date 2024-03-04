@@ -44,11 +44,13 @@ def prepare_environment(request, config, worker_id):
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'kvint8' in model and 'w4' not in model:
-        cmd += ' --model-format hf --quant-policy 4'
-    if 'kvint8' in model and 'w4' in model:
+    if 'kvint8' in model:
         cmd += ' --quant-policy 4'
-    if 'w4' in model:
+        if 'w4' in model or '4bits' in model:
+            cmd += ' --model-format awq'
+        else:
+            cmd += ' --model-format hf'
+    if 'w4' in model or '4bits' in model:
         cmd += ' --model-format awq'
 
     start_log = os.path.join(log_path, 'start_restful_' + model + '.log')
