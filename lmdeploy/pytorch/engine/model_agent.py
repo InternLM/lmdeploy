@@ -59,7 +59,7 @@ def _update_cache_config(model_config: ModelConfig,
     gpu_mem = gpu_mem_physical_free * cache_config.cache_max_entry_count
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config) // world_size
+        cache_config.block_size, model_config, world_size)
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
