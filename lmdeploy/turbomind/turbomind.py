@@ -79,6 +79,11 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
 
 
 def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
+    # A workaround to support max token number of each iteration in prefill
+    if src.max_prefill_token_num is not None and src.session_len is not None:
+        dst.num_tokens_per_iter = src.max_prefill_token_num
+        dst.max_prefill_iters = (src.session_len + src.max_prefill_token_num -
+                                 1) // src.max_prefill_token_num
     dst_dict = copy.deepcopy(dst.__dict__)
     src_dict = copy.deepcopy(src.__dict__)
     src_dict['tensor_para_size'] = src_dict['tp']
@@ -561,6 +566,11 @@ class TurboMindInstance:
                                                   sequence_end=True):
             pass
 
+    async def async_end(self, session_id: int):
+        """End the given session."""
+        self.end(session_id)
+        await asyncio.sleep(0.002)
+
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
@@ -572,6 +582,11 @@ class TurboMindInstance:
                                                    sequence_end=False,
                                                    stop=True):
             pass
+
+    async def async_cancel(self, session_id: int):
+        """End the given session."""
+        self.cancel(session_id)
+        await asyncio.sleep(0.002)
 
     def prepare_inputs(self,
                        session_id,

@@ -22,7 +22,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
 
     samp = tl.rand(seed, offset)[:, None]
     acc = tl.zeros((BLOCK, ), dtype=Scores.dtype.element_ty)
-    output = tl.full((BLOCK, ), -1, dtype=tl.int64)
+    output = tl.full((BLOCK, ), -1, dtype=Outputs.dtype.element_ty)
 
     for b_idx in range(0, num_tokens, BLOCK_N):
         s_off = b_idx + n_off
@@ -31,8 +31,8 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
                          s_off[None, :] * stride_st,
                          mask=s_mask,
                          other=0.0)
-        cum_scores = acc[:, None] + tl.cumsum(scores, 1)
-        acc += tl.sum(scores, 1)
+        cum_scores = acc[:, None] + tl.cumsum(scores, 1).to(acc.dtype)
+        acc += tl.sum(scores, 1).to(acc.dtype)
 
         pre_cum_scores = cum_scores - scores
         valid_mask = (samp > pre_cum_scores) & (samp <= cum_scores)
