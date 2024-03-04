@@ -356,50 +356,22 @@ class PatchedFalconModel(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor, ...],
                BaseModelOutputWithPastAndCrossAttentions]:
 
         # history_lengths = self.context.context.history_lengths
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions  # noqa
-        output_hidden_states = (output_hidden_states
-                                if output_hidden_states is not None else
-                                self.config.output_hidden_states)
-        use_cache = use_cache if use_cache is not None else self.config.use_cache  # noqa
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict  # noqa
+        output_attentions = False
+        use_cache = True
         use_alibi = getattr(self, 'use_alibi', getattr(self, 'alibi', False))
-
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                'You cannot specify both input_ids and inputs_embeds at the same time'  # noqa
-            )
-        elif input_ids is not None:
-            batch_size, seq_length = input_ids.shape
-        elif inputs_embeds is not None:
-            batch_size, seq_length, _ = inputs_embeds.shape
-        else:
-            raise ValueError(
-                'You have to specify either input_ids or inputs_embeds')
-
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape batch_size x num_heads x N x N
-        # head_mask has shape n_layer x batch x num_heads x N x N
-        head_mask = self.get_head_mask(head_mask,
-                                       self.config.num_hidden_layers)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
 
-        hidden_states = inputs_embeds
+        head_mask = self.get_head_mask(head_mask,
+                                       self.config.num_hidden_layers)
 
-        # presents = () if use_cache else None
-        all_self_attentions = () if output_attentions else None
-        all_hidden_states = () if output_hidden_states else None
+        hidden_states = inputs_embeds
 
         # Compute alibi tensor: check build_alibi_tensor documentation
         if use_alibi:
@@ -410,9 +382,6 @@ class PatchedFalconModel(nn.Module):
             alibi = None
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
-            if output_hidden_states:
-                all_hidden_states = all_hidden_states + (hidden_states, )
-
             outputs = block(
                 hidden_states,
                 # position_ids=position_ids,
@@ -423,31 +392,17 @@ class PatchedFalconModel(nn.Module):
                 output_attentions=output_attentions,
                 alibi=alibi,
             )
-
             hidden_states = outputs[0]
-
-            if output_attentions:
-                all_self_attentions = all_self_attentions + (
-                    outputs[2 if use_cache else 1], )
 
         # Add last hidden state
 
         hidden_states = self.ln_f(hidden_states)
 
-        if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states, )
-
-        if not return_dict:
-            return tuple(v for v in [
-                hidden_states, past_key_values, all_hidden_states,
-                all_self_attentions
-            ] if v is not None)
-
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attentions,
+            hidden_states=None,
+            attentions=None,
         )
 
     def forward(
@@ -469,9 +424,7 @@ class PatchedFalconModel(nn.Module):
             input_ids=input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict)
+            head_mask=head_mask)
 
 
 class PatchedFalconForCausalLM(nn.Module):
