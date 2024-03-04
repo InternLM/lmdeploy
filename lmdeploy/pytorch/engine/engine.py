@@ -671,13 +671,17 @@ class Engine:
             while idx < batch_size:
                 slen = seq_len[idx]
                 if token_count == 0 and slen > max_prefill_token_num:
+                    import pdb
+                    pdb.set_trace()
                     tmp_out = await __long_context_single_forward(inputs, idx)
                     logits_gather.gather(tmp_out)
+                    del tmp_out
                     idx += 1
                 elif token_count + slen > max_prefill_token_num:
                     tmp_out = await __long_context_batched_forward(
                         inputs, indices[0], idx)
                     logits_gather.gather(tmp_out)
+                    del tmp_out
                     indices = []
                     token_count = 0
                 else:
