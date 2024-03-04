@@ -16,6 +16,7 @@ void invokeProcessKV(void**       blocks,
                      const int*   cu_k_len,
                      const int*   cu_block_num,
                      const float* rope_base,
+                     float        rope_ti_scale,
                      int          stride_b,
                      int          stride_c,  // cumulative len
                      int          stride_h,
@@ -42,6 +43,7 @@ void invokeProcessKV_(const AttentionParams<T>& params)
                     params.cu_k_len,
                     params.cu_block_cnts,
                     params.rope_theta,
+                    params.rope_ti_scale,
                     0,                                     // stride b
                     params.stride / params.size_per_head,  // stride c
                     1,                                     // stride h
@@ -64,6 +66,7 @@ void invokeFlattenKV(T*           k,
                      const int*   cu_k_len,
                      const int*   cu_block_num,
                      const float* rope_base,
+                     float        rope_ti_scale,
                      int          stride_b,
                      int          stride_c,  // cumulative len
                      int          stride_h,
@@ -88,6 +91,7 @@ void invokeFlattenKV_(const AttentionParams<T>& params, int sum_k_len)
                     params.cu_k_len,
                     params.cu_block_cnts,
                     nullptr,  // params.rope_theta,
+                    params.rope_ti_scale,
                     0,
                     1,
                     2 * sum_k_len,

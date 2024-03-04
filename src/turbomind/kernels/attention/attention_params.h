@@ -50,6 +50,7 @@ struct AttentionParams {
     int   rotary_embedding_dim;
     float rotary_embedding_base;
     int   max_position_embeddings;
+    float rope_ti_scale;  // used for linear RoPE scaling
 
     // log(n) attention
     bool use_logn_attn;

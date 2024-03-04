@@ -234,30 +234,18 @@ struct FastRoPE {
 
     Array<float, N / 2> inv_freq_;
 
-    __device__ FastRoPE(int idx, D dims, float base, std::integral_constant<int, N>)
+    __device__ FastRoPE(int idx, D dims, float base, float ti_scale, std::integral_constant<int, N>)
     {
-        // constexpr float inv_dims = 1.f / dims;
-        // PRAGMA_UNROLL
-        // for (int i = 0; i < N; i += 2) {
-        //     inv_freq_[i / 2] = fdividef(1.f, powf(base, (idx + i) * inv_dims));
-        // }
-
-        // const float scale_factor = log2f(base) / dims;
-        // PRAGMA_UNROLL
-        // for (int i = 0; i < N; i += 2) {
-        //     inv_freq_[i / 2] = fdividef(1.f, exp2f((idx + i) * scale_factor));
-        // }
-
         // ! Check compiler CSE
         const float scale_factor = -log2f(base) / dims;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            inv_freq_[i / 2] = exp2f((idx + i) * scale_factor);
+            inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
         }
     }
 
     template<typename T>
-    __device__ void apply(Array<T, N>& x, int timestep)
+    __device__ void apply(Array<T, N>& x, float timestep)
     {
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {

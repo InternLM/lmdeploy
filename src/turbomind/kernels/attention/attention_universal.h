@@ -159,8 +159,11 @@ struct AttentionUniversal {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(
-                di, std::integral_constant<int, kHeadDim>{}, rope_base, std::integral_constant<int, kVecSize>{});
+            FastRoPE  rope(di,
+                          std::integral_constant<int, kHeadDim>{},
+                          rope_base,
+                          params.rope_ti_scale,
+                          std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;

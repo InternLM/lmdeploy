@@ -102,6 +102,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                         cu_seq_lens.data().get(),
                         cu_block_cnts.data().get(),
                         nullptr,
+                        1.,
                         2 * head_num * seq_len,
                         0,
                         seq_len,
@@ -127,6 +128,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                         cu_seq_lens.data().get(),
                         cu_block_cnts.data().get(),
                         nullptr,
+                        1.,
                         2 * head_num * seq_len,
                         0,
                         seq_len,
@@ -206,7 +208,7 @@ int test_attention()
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz = 128;
 
 #endif
 
@@ -371,6 +373,7 @@ int test_attention()
 
     params.rotary_embedding_dim  = kHeadDim;
     params.rotary_embedding_base = kRoPEBase;
+    params.rope_ti_scale         = 1.;
 
     params.split_cnt = split_cnt.data().get();
     params.partial_L = partial_L.data().get();
@@ -470,6 +473,7 @@ int test_attention()
                     cu_kv_lens.data().get(),
                     cu_block_cnts.data().get(),
                     nullptr,  // DECODING ? nullptr : params.rope_theta,
+                    1.,
                     KvHeadNum * kContextLen,
                     0,
                     kContextLen,
