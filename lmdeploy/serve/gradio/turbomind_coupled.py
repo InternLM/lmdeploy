@@ -78,7 +78,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox,
     """
     state_chatbot = []
     # end the session
-    InterFace.async_engine.end_session(session_id)
+    await InterFace.async_engine.end_session(session_id)
     return (state_chatbot, state_chatbot, gr.Textbox.update(value=''))
 
 
@@ -94,12 +94,12 @@ async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button,
         session_id (int): the session id
     """
     yield (state_chatbot, disable_btn, disable_btn)
-    InterFace.async_engine.stop_session(session_id)
+    await InterFace.async_engine.stop_session(session_id)
     # pytorch backend does not support resume chat history now
     if InterFace.async_engine.backend == 'pytorch':
         yield (state_chatbot, disable_btn, enable_btn)
     else:
-        InterFace.async_engine.end_session(session_id)
+        await InterFace.async_engine.end_session(session_id)
         messages = []
         for qa in state_chatbot:
             messages.append(dict(role='user', content=qa[0]))

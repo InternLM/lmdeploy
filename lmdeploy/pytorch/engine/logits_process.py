@@ -12,6 +12,7 @@ def _process_temperature(scores: torch.Tensor,
                          temperature: torch.Tensor,
                          inplace: bool = True):
     """process temperature."""
+    temperature = temperature.to(scores.dtype)
     if not inplace:
         scores = scores / temperature[:, None]
     else:
@@ -42,6 +43,7 @@ def _process_repetition_penalty(scores: torch.Tensor,
                                 inplace: bool = True):
     """process repetition penalty."""
     score = torch.gather(scores, 1, input_ids)
+    penalty = penalty.to(score.dtype)
     score = torch.where(score < 0, score * penalty[:, None],
                         score / penalty[:, None])
     if not inplace:

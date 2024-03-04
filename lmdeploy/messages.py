@@ -158,6 +158,7 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
+        thread_safe (bool): thread safe engine instance.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -176,6 +177,7 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 8192
+    thread_safe: bool = False
     download_dir: str = None
     revision: str = None
 

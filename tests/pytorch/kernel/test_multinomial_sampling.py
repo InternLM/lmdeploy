@@ -19,10 +19,15 @@ class TestMultinomialSampling:
         yield len(select_ids)
 
     @pytest.fixture
-    def scores(self, num_tokens, batch_size, select_ids):
+    def dtype(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def scores(self, num_tokens, batch_size, select_ids, dtype):
         ret = torch.zeros(batch_size, num_tokens).cuda()
         batch_ids = torch.arange(batch_size).cuda()
         ret[batch_ids, select_ids] = 1
+        ret = ret.to(dtype)
         yield ret
 
     @pytest.fixture
@@ -45,6 +50,8 @@ class TestMultinomialSampling:
         batch_ids = torch.arange(batch_size).cuda()
         yield indices[batch_ids, select_ids]
 
+    @pytest.mark.parametrize('dtype',
+                             [torch.float32, torch.half, torch.bfloat16])
     @pytest.mark.parametrize(['num_tokens', 'select_ids'], [
         (8, (4, 2) * 30),
         (200, (50, 150)),
