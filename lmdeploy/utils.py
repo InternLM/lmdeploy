@@ -205,19 +205,28 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
         """inner."""
 
         @functools.wraps(func)
-        def __warpper(*args, **kwargs):
-            """warpper."""
-            if not asyncio.iscoroutinefunction(func):
+        def __func_warpper(*args, **kwargs):
+            """func warpper."""
+            if not logger.isEnabledFor(level):
+                return func(*args, **kwargs)
+            with __timer():
+                return func(*args, **kwargs)
+
+        @functools.wraps(func)
+        def __async_warpper(*args, **kwargs):
+            """async warpper."""
+
+            async def __tmp():
+                if not logger.isEnabledFor(level):
+                    return (await func(*args, **kwargs))
                 with __timer():
-                    return func(*args, **kwargs)
-            else:
+                    return (await func(*args, **kwargs))
 
-                async def __tmp():
-                    with __timer():
-                        return (await func(*args, **kwargs))
+            return __tmp()
 
-                return __tmp()
-
-        return __warpper
+        if asyncio.iscoroutinefunction(func):
+            return __async_warpper
+        else:
+            return __func_warpper
 
     return __inner

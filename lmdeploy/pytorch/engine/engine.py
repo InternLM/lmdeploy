@@ -567,7 +567,8 @@ class Engine:
         with torch.inference_mode(), torch.cuda.stream(self.stream):
             logits = logits_processor(input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
-        self.stream.synchronize()
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
         next_token_ids = next_token_ids.cpu()
 
         return next_token_ids, split_logits
