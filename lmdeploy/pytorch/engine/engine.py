@@ -507,6 +507,8 @@ class Engine:
         """
 
         def _check_stop_word(sampling_param, next_token_id):
+            if sampling_param.ignore_eos:
+                return False
             return (sampling_param.stop_words is not None
                     and next_token_id in sampling_param.stop_words)
 
