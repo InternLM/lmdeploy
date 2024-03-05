@@ -673,11 +673,13 @@ class Engine:
                 if token_count == 0 and slen > max_prefill_token_num:
                     tmp_out = await __long_context_single_forward(inputs, idx)
                     logits_gather.gather(tmp_out)
+                    tmp_out.pop('logits', None)
                     idx += 1
                 elif token_count + slen > max_prefill_token_num:
                     tmp_out = await __long_context_batched_forward(
                         inputs, indices[0], idx)
                     logits_gather.gather(tmp_out)
+                    tmp_out.pop('logits', None)
                     indices = []
                     token_count = 0
                 else:
