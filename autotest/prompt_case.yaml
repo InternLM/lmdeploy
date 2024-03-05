@@ -77,6 +77,9 @@ chinese_poem_case:
         - internlm2-20b:
             - len_g:
                 5
+        - falcon-7b:
+            - len_g:
+                5
 english_poem_case:
     - write a romantic English poem:
         - contain:
@@ -110,6 +113,14 @@ emoji_case:
                 - \u2714
                 - 赞
                 - emoji
+        - baichuan2-7b-chat:
+            - contain:
+                - 👍
+                - 😊
+                - \u2714
+                - 赞
+                - emoji
+                - \!
 traditional_chinese_case:
     - 使用繁體介紹香港維多利亞港:
         - contain:

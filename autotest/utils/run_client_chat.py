@@ -32,6 +32,8 @@ def command_line_test(config,
                 cmd += ' --model-format hf'
         elif 'w4' in model_case or '4bits' in model_case:
             cmd += ' --model-format awq'
+        if 'chat' not in model_case.lower():
+            cmd += ' --cap completion'
     return command_test(config, [cmd], model_case, case, case_info,
                         type == 'turbomind')
 

@@ -44,6 +44,7 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
 
     # run testcases
     gen_config = GenerationConfig(temperature=0.01)
+    gen_config = GenerationConfig()
     for case in cases_info.keys():
         if (case == 'memory_test'
                 or case == 'emoji_case') and 'chat' not in model_case.lower():
