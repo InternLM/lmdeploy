@@ -148,11 +148,11 @@ class PatchedFalconAttention(nn.Module):
         context = self.context.context
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
         block_offsets = context.block_offsets
         position_ids_1d = context.position_ids_1d
+        max_kv_seq_length = context.max_kv_seq_length
 
         def __maybe_rotary_fn(query_states, key_states, value_states):
             scaling_factor = 1.0
@@ -169,10 +169,8 @@ class PatchedFalconAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            kv_seq_len = max_seq_length + max(history_lengths)
-
             cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                       kv_seq_len)
+                                       max_kv_seq_length)
             query_states, key_states = apply_rotary_pos_emb(
                 query_states, key_states, cos, sin, context.position_ids,
                 position_ids_1d)
@@ -202,7 +200,7 @@ class PatchedFalconAttention(nn.Module):
             q_start_loc,
             q_seq_length,
             kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_seq_length,
+            max_q_seq_length=max_q_seq_length,
             block_offsets=block_offsets,
         )
 
@@ -217,7 +215,7 @@ class PatchedFalconAttention(nn.Module):
                                 q_start_loc=q_start_loc,
                                 q_seqlens=q_seq_length,
                                 kv_seqlens=kv_seq_length,
-                                max_seqlen=max_seq_length)
+                                max_seqlen=max_q_seq_length)
 
         else:
             num_heads_full = self.num_heads
@@ -234,7 +232,7 @@ class PatchedFalconAttention(nn.Module):
                                       b_start_loc=q_start_loc,
                                       b_seq_len=q_seq_length,
                                       b_kv_seq_len=kv_seq_length,
-                                      max_input_len=max_seq_length,
+                                      max_input_len=max_q_seq_length,
                                       head_offset=head_offset,
                                       num_heads=num_heads_full,
                                       alibi_scale=self.inv_norm_factor)

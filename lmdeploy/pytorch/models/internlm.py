@@ -49,9 +49,9 @@ class PatchedInternLMAttention(nn.Module):
         q_start_loc = context.q_start_loc
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
-        history_lengths = context.history_lengths
         block_offsets = context.block_offsets
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
+        max_kv_seq_length = context.max_kv_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = num_heads
@@ -68,8 +68,7 @@ class PatchedInternLMAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            kv_seq_len = max_seq_length + max(history_lengths)
-            cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            cos, sin = self.rotary_emb(value_states, seq_len=max_kv_seq_length)
             query_states, key_states = apply_rotary_pos_emb(
                 query_states, key_states, cos, sin, position_ids,
                 context.position_ids_1d)
@@ -92,7 +91,7 @@ class PatchedInternLMAttention(nn.Module):
             q_start_loc,
             q_seq_length,
             kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_seq_length,
+            max_q_seq_length=max_q_seq_length,
             block_offsets=block_offsets,
         )
 
@@ -106,7 +105,7 @@ class PatchedInternLMAttention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_length,
+            max_seqlen=max_q_seq_length,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)

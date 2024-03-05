@@ -184,12 +184,12 @@ class LlamaAttention(nn.Module):
                Optional[Tuple[torch.Tensor]]]:
         """default rewrite."""
         context = self.context.context
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
+        max_kv_seq_length = context.max_kv_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_key_value_heads // world_size
@@ -206,11 +206,10 @@ class LlamaAttention(nn.Module):
 
         def __rotary_emb_fn_old(query_states, key_states, value_states):
             """rotary embedding old."""
-            kv_seq_len = max_seq_length + max(history_lengths)
-            if kv_seq_len >= self.rotary_emb.max_seq_len_cached:
+            if max_kv_seq_length >= self.rotary_emb.max_seq_len_cached:
                 # create larger cache
                 cos, sin = self.rotary_emb(value_states,
-                                           seq_len=kv_seq_len + 128)
+                                           seq_len=max_kv_seq_length + 128)
             cos = self.rotary_emb.cos_cached
             sin = self.rotary_emb.sin_cached
             query_states, key_states = apply_rotary_pos_emb_old(
@@ -284,7 +283,7 @@ class LlamaAttention(nn.Module):
             q_start_loc,
             q_seq_length,
             kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_seq_length,
+            max_q_seq_length=max_q_seq_length,
             block_offsets=block_offsets,
         )
 
@@ -298,7 +297,7 @@ class LlamaAttention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_length,
+            max_seqlen=max_q_seq_length,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)

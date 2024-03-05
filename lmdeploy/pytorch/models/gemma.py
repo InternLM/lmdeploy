@@ -73,7 +73,7 @@ class PatchedGemmaAttention(nn.Module):
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_key_value_heads // world_size
@@ -119,7 +119,7 @@ class PatchedGemmaAttention(nn.Module):
             q_start_loc,
             q_seq_length,
             kv_seq_length=kv_seq_length,
-            max_q_seq_length=max_seq_length,
+            max_q_seq_length=max_q_seq_length,
             block_offsets=block_offsets,
         )
 
@@ -133,7 +133,7 @@ class PatchedGemmaAttention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_length,
+            max_seqlen=max_q_seq_length,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)
