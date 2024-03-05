@@ -404,6 +404,7 @@ class Engine:
         """Add new session."""
         return end(self.req_sender, session_id)
 
+    @logging_timer('CreateModelInputs', logger)
     @torch.inference_mode()
     def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
         """create model inputs from messages.
@@ -702,6 +703,7 @@ class Engine:
         else:
             return await __long_context_forward(inputs)
 
+    @logging_timer('AsyncStep', logger)
     async def async_step(self, is_prefill: bool, return_logits: bool = False):
         """one step inference. Used to perform streaming chat.
 
@@ -717,7 +719,7 @@ class Engine:
         adapters = schedule_output.adapters
         if len(running) == 0:
             return dict()
-        logger.debug(f'Step batch_size: {len(running)}')
+        logger.debug(f'<AsyncStep>: batch_size={len(running)}')
 
         inputs = self.create_model_inputs(running, adapters)
 
@@ -956,7 +958,6 @@ class Engine:
                 await asyncio.sleep(0.01)
                 continue
 
-            logger.debug('async_loop: RequestManager Step.')
             self.req_manager.step()
 
             # forward
@@ -965,8 +966,6 @@ class Engine:
                 is_prefill = not prefill_counter or not has_running
                 if is_prefill:
                     prefill_counter = prefill_interval
-                logger.debug('async_loop: Engine Step - '
-                             f'prefilling: {is_prefill}')
                 with torch.inference_mode():
                     step_tokens: Dict[int,
                                       InferOutput] = await self.async_step(
@@ -974,7 +973,6 @@ class Engine:
                 prefill_counter -= 1
 
                 # send response
-                logger.debug('async_loop: Response.')
                 _send_resp(step_tokens)
 
 

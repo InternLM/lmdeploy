@@ -198,11 +198,11 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
         start = time.perf_counter()
         yield
         end = time.perf_counter()
-        duration = end - start
-        logger.log(level, f'<{op_name}> take time: {duration:.5f}')
+        duration = (end - start) * 1000
+        logger.log(level, f'<{op_name}> take time: {duration:.2f} ms')
 
     def __inner(func):
-        """inner"""
+        """inner."""
 
         @functools.wraps(func)
         def __warpper(*args, **kwargs):
