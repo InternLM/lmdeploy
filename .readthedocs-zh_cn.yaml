@@ -9,7 +9,7 @@ build:
 
 # Build documentation in the "docs/" directory with Sphinx
 sphinx:
-  configuration: docs/en/conf.py
+  configuration: docs/zh_cn/conf.py
 
 python:
   install:
