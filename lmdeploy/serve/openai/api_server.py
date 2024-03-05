@@ -956,24 +956,26 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
-def serve(model_path: str,
-          model_name: Optional[str] = None,
-          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union[PytorchEngineConfig,
-                                         TurbomindEngineConfig]] = None,
-          chat_template_config: Optional[ChatTemplateConfig] = None,
-          server_name: str = '0.0.0.0',
-          server_port: int = 23333,
-          tp: int = 1,
-          allow_origins: List[str] = ['*'],
-          allow_credentials: bool = True,
-          allow_methods: List[str] = ['*'],
-          allow_headers: List[str] = ['*'],
-          log_level: str = 'ERROR',
-          api_keys: Optional[Union[List[str], str]] = None,
-          ssl: bool = False,
-          qos_config_path: str = '',
-          **kwargs):
+def serve(
+        model_path: str,
+        model_name: Optional[str] = None,
+        backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+        backend_config: Optional[Union[PytorchEngineConfig,
+                                       TurbomindEngineConfig]] = None,
+        chat_template_config: Optional[ChatTemplateConfig] = None,
+        server_name: str = '0.0.0.0',
+        server_port: int = 23333,
+        tp: int = 1,
+        allow_origins: List[str] = ['*'],
+        allow_credentials: bool = True,
+        allow_methods: List[str] = ['*'],
+        allow_headers: List[str] = ['*'],
+        log_level: str = 'ERROR',
+        api_keys: Optional[Union[List[str], str]] = None,
+        ssl: bool = False,
+        qos_config_path: str = '',
+        vision_language: bool = True,  # TODO may decide by hf config
+        **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -1035,6 +1037,8 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
+    if vision_language:
+        from lmdeploy.serve.vl_async_engine import VLAsyncEngine as AsyncEngine
     VariableInterface.async_engine = AsyncEngine(
         model_path=model_path,
         model_name=model_name,
