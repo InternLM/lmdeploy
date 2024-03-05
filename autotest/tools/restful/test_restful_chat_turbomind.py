@@ -142,11 +142,11 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
 @pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm2-chat-20b',
+    'model': 'internlm/internlm2-chat-20b',
     'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
     'tp_num': 2
 }, {
-    'model': 'internlm2-chat-20b-inner-w4a16',
+    'model': 'internlm/internlm2-chat-20b-inner-w4a16',
     'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
     'tp_num': 2
 }],

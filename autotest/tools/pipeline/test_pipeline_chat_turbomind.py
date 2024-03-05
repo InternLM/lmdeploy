@@ -46,7 +46,8 @@ def test_pipeline_chat_tp2(config, common_case_config, model, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
 @pytest.mark.parametrize(
-    'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
 def test_pipeline_chat_pr(config, common_case_config, model):
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'turbomind'))

@@ -68,7 +68,8 @@ def test_workspace_chat_tp2(config, cli_case_config, usercase, model,
 @pytest.mark.pr_test
 @pytest.mark.parametrize('usercase', getPromptCaseList())
 @pytest.mark.parametrize(
-    'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
 def test_workspace_chat_pr(config, cli_case_config, usercase, model):
     result, chat_log, msg = command_line_test(
         config,

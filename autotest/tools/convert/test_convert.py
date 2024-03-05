@@ -21,7 +21,8 @@ def test_convert(config, model, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize(
-    'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
 def test_convert_pr(config, model):
     convert(config, model, 'CUDA_VISIBLE_DEVICES=5')
 

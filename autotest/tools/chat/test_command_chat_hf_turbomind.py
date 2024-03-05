@@ -66,7 +66,8 @@ def test_hf_turbomind_chat_tp2(config, model, cli_case_config, usercase,
 @pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize('usercase', getCaseList())
 @pytest.mark.parametrize(
-    'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
 def test_hf_turbomind_chat_pr(config, model, cli_case_config, usercase):
     result, chat_log, msg = hf_command_line_test(
         config,
