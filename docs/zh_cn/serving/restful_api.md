@@ -86,7 +86,7 @@ print(response)
 
 关于其他 openai 接口的调用，也可以如法炮制。详情请参考 openai 官方[文档](https://platform.openai.com/docs/guides/text-generation)
 
-### 使用 lmdeploy 封装好的 APIClient
+### 使用 lmdeploy `APIClient` 接口
 
 如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
 
@@ -131,7 +131,7 @@ for message in messages:
         print(item)
 ```
 
-### Java/Golang/Rust
+### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
 下面是一个使用示例：
@@ -150,7 +150,7 @@ rust/src:
 apis  lib.rs  models
 ```
 
-### cURL
+### 使用 cURL
 
 cURL 也可以用于查看 API 的输出结果
 

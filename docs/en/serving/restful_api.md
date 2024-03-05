@@ -21,7 +21,7 @@ lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333
 
 The arguments of `api_server` can be viewed through the command `lmdeploy serve api_server -h`, for instance, `--tp` to set tensor parallelism, `--session-len` to specify the max length of the context window, `--cache-max-entry-count` to adjust the GPU mem ratio for k/v cache etc.
 
-## Option 2: Deploying with docker
+### Option 2: Deploying with docker
 
 With LMDeploy [official docker image](https://hub.docker.com/r/openmmlab/lmdeploy/tags), you can run OpenAI compatible server as follows:
 
@@ -133,7 +133,7 @@ for message in messages:
         print(item)
 ```
 
-### Java/Golang/Rust
+### Integrate with Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.
 Here is an example:
@@ -152,7 +152,7 @@ rust/src:
 apis  lib.rs  models
 ```
 
-### cURL
+### Integrate with cURL
 
 cURL is a tool for observing the output of the RESTful APIs.
 
