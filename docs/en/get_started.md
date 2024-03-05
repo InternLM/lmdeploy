@@ -35,7 +35,7 @@ LMDeploy offers various serving methods, choosing one that best meet your requir
 
 - [Serving with openai compatible server](https://lmdeploy.readthedocs.io/en/latest/serving/restful_api.html)
 - [Serving with docker](https://lmdeploy.readthedocs.io/en/latest/serving/restful_api.html#option-2-deploying-with-docker)
-- [Serving with gradio](https://lmdeploy.readthedocs.io/en/latest/serving/gradio.md)
+- [Serving with gradio](https://lmdeploy.readthedocs.io/en/latest/serving/gradio.html)
 
 ## Quantization
 
