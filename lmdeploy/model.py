@@ -376,9 +376,8 @@ class InternLM2Chat7B(InternLMChat7B):
 class Baichuan7B(BaseChatTemplate):
     """Generation parameters of Baichuan-7B base model."""
 
-    def __init__(self, repetition_penalty=1.1, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.repetition_penalty = repetition_penalty
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -782,7 +781,7 @@ class Yi(BaseChatTemplate):
 
 
 @MODELS.register_module(name=['mistral-instruct', 'mixtral-instruct'])
-class MistralChat(BaseModel):
+class MistralChat(BaseChatTemplate):
     """Template of Mistral and Mixtral Instruct models.
 
     `https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1`
@@ -816,7 +815,7 @@ class MistralChat(BaseModel):
 
 
 @MODELS.register_module(name=['gemma'])
-class Gemma(BaseModel):
+class Gemma(BaseChatTemplate):
     """Template of Gemma models.
 
     `https://huggingface.co/google/gemma-7b-it`
@@ -846,7 +845,7 @@ class Gemma(BaseModel):
 
 
 @MODELS.register_module(name=['deepseek-chat'])
-class Deepseek(BaseModel):
+class Deepseek(BaseChatTemplate):
 
     def __init__(self,
                  user='User: ',

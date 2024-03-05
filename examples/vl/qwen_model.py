@@ -56,7 +56,7 @@ class QwenVLChatTemplate(Qwen7BChat):
         for message in messages:
             role = message['role']
             content = message['content']
-            if role == 'user' and not isinstance(content):
+            if role == 'user' and not isinstance(content, str):
                 content = [content[0]['text'], len(content) - 1]
                 content = self._concat_image_info(content)
             ret += f'{box_map[role]}{content}{eox_map[role]}'
