@@ -9,7 +9,7 @@ import torch
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger, get_model
+from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..check_env import check_env, check_model
@@ -527,6 +527,7 @@ class Engine:
             return True
         return False
 
+    @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor,
                                     running: SeqList, inputs: ModelInputs):
         """sampling logits."""
@@ -570,6 +571,7 @@ class Engine:
 
         return next_token_ids, split_logits
 
+    @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
                        meta: Any):
         """update scheduler."""
@@ -593,6 +595,7 @@ class Engine:
 
         return True
 
+    @logging_timer('ModelForward', logger)
     async def _async_model_forward(self, inputs: ModelInputs,
                                    swap_in_map: Dict, swap_out_map: Dict):
         """model forward."""
@@ -714,6 +717,7 @@ class Engine:
         adapters = schedule_output.adapters
         if len(running) == 0:
             return dict()
+        logger.debug(f'Step batch_size: {len(running)}')
 
         inputs = self.create_model_inputs(running, adapters)
 

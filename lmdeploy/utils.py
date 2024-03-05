@@ -1,10 +1,38 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
+import functools
 import logging
 import sys
+import time
+from contextlib import contextmanager
 from logging import Logger, LogRecord
 from typing import List, Optional
 
 logger_initialized = {}
+
+
+class ColorFormatter(logging.Formatter):
+
+    _LEVELNAME_COLOR_MAP = dict(CRITICAL='\033[91m',
+                                ERROR='\033[31m',
+                                WARN='\033[33m',
+                                WARNING='\033[33m',
+                                INFO='\033[37m',
+                                DEBUG='\033[32m')
+
+    _RESET_COLOR = '\033[0m'
+
+    def format(self, record: LogRecord):
+        """format."""
+        if sys.platform == 'win32':
+            # windows does not support ASNI color
+            return super().format(record)
+        levelname = record.levelname
+        level_color = self._LEVELNAME_COLOR_MAP.get(levelname,
+                                                    self._RESET_COLOR)
+        levelname = f'{level_color}{levelname}{self._RESET_COLOR}'
+        record.levelname = levelname
+        return super().format(record)
 
 
 class FilterDuplicateWarning(logging.Filter):
@@ -85,7 +113,8 @@ def get_logger(
         file_handler = logging.FileHandler(log_file, file_mode)
         handlers.append(file_handler)
 
-    formatter = logging.Formatter(log_formatter)
+    # formatter = logging.Formatter(log_formatter)
+    formatter = ColorFormatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
         handler.setLevel(log_level)
@@ -158,3 +187,37 @@ def get_model(pretrained_model_name_or_path: str,
     model_path = snapshot_download(pretrained_model_name_or_path,
                                    **download_kwargs)
     return model_path
+
+
+def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
+    """logging timer."""
+
+    @contextmanager
+    def __timer():
+        """timer."""
+        start = time.perf_counter()
+        yield
+        end = time.perf_counter()
+        duration = end - start
+        logger.log(level, f'<{op_name}> take time: {duration:.5f}')
+
+    def __inner(func):
+        """inner"""
+
+        @functools.wraps(func)
+        def __warpper(*args, **kwargs):
+            """warpper."""
+            if not asyncio.iscoroutinefunction(func):
+                with __timer():
+                    return func(*args, **kwargs)
+            else:
+
+                async def __tmp():
+                    with __timer():
+                        return (await func(*args, **kwargs))
+
+                return __tmp()
+
+        return __warpper
+
+    return __inner
