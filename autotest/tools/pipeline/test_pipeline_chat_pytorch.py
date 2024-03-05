@@ -42,7 +42,7 @@ def test_pipeline_chat_pytorch_tp2(config, common_case_config, model,
                                    worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
-                                                                 tp_num=2)
+                                                                     tp_num=2)
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'pytorch'))
     p.start()
