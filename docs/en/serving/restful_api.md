@@ -1,34 +1,29 @@
-# Restful API
+# Serving with openai compatible server
+
+This article primarily discusses the deployment of a single LLM model across multiple GPUs on a single node, providing a service that is compatible with the OpenAI interface, as well as the usage of the service API.
+For the sake of convenience, we refer to this service as `api_server`. Regarding parallel services with multiple models, please refer to the guide about [Request Distribution Server](./proxy_server.md).
+
+In the following sections, we will first introduce two methods for starting the service, choosing the appropriate one based on your application scenario.
+
+Next, we focus on the definition of the service's RESTful API, explore the various ways to interact with the interface, and demonstrate how to try the service through the Swagger UI or LMDeploy CLI tools.
+
+Finally, we showcase how to integrate the service into a WebUI, providing you with a reference to easily set up a demonstration demo.
 
 ## Launch Service
 
-The user can open the http url print by the following command in a browser.
+Take the [internlm2-chat-7b](https://huggingface.co/internlm/internlm2-chat-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
 
-- **Please check the http url for the detailed api usage!!!**
-- **Please check the http url for the detailed api usage!!!**
-- **Please check the http url for the detailed api usage!!!**
+### Option 1: Launching with lmdeploy CLI
 
 ```shell
-lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
+lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333
 ```
 
-The parameters supported by api_server can be viewed through the command line `lmdeploy serve api_server -h`.
+The arguments of `api_server` can be viewed through the command `lmdeploy serve api_server -h`, for instance, `--tp` to set tensor parallelism, `--session-len` to specify the max length of the context window, `--cache-max-entry-count` to adjust the GPU mem ratio for k/v cache etc.
 
-We provide some RESTful APIs. Three of them are in OpenAI format.
+## Option 2: Deploying with docker
 
-- /v1/chat/completions
-- /v1/models
-- /v1/completions
-
-However, we recommend users try
-our own api `/v1/chat/interactive` which provides more arguments for users to modify. The performance is comparatively better.
-
-**Note** please, if you want to launch multiple requests, you'd better set different `session_id` for both
-`/v1/chat/completions` and `/v1/chat/interactive` apis. Or, we will set them random values.
-
-## Deploy http service with docker
-
-LMDeploy offers [official docker image](https://hub.docker.com/r/openmmlab/lmdeploy/tags) for deployment. The image can be used to run OpenAI compatible server.
+With LMDeploy [official docker image](https://hub.docker.com/r/openmmlab/lmdeploy/tags), you can run OpenAI compatible server as follows:
 
 ```shell
 docker run --runtime nvidia --gpus all \
@@ -40,11 +35,60 @@ docker run --runtime nvidia --gpus all \
     lmdeploy serve api_server internlm/internlm2-chat-7b
 ```
 
-Just like the previous section, user can try the Swagger UI with a web browser.
+The parameters of `api_server` are the same with that mentioned in "[option 1](#option-1-launching-with-lmdeploy-cli)" section
 
-## python
+## RESTful API
 
-We have integrated the client-side functionalities of these services into the `APIClient` class. Below are some examples demonstrating how to invoke the `api_server` service on the client side.
+LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
+
+- /v1/chat/completions
+- /v1/models
+- /v1/completions
+
+Additionally, LMDeploy also defines `/v1/chat/interactive` to support interactive inference. The feature of interactive inference is that there's no need to pass the user conversation history as required by `v1/chat/completions`, since the conversation history will be cached on the server side. This method boasts excellent performance during multi-turn long context inference.
+
+You can overview and try out the offered RESTful APIs by the website `http://0.0.0.0:23333` as shown in the below image after launching the service successfully.
+
+![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
+
+Or, you can use the LMDeploy's built-in CLI tool to verify the service correctness right from the console.
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+lmdeploy serve api_client ${api_server_url}
+```
+
+If you need to integrate the service into your own projects or products, we recommend the following approach:
+
+### Integrate with `OpenAI`
+
+Here is an example of interaction with the endpoint `v1/chat/completions` service via the openai package.
+Before running it, please install the openai package by `pip install openai`
+
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key='YOUR_API_KEY',
+    base_url="http://0.0.0.0:23333/v1"
+)
+
+response = client.chat.completions.create(
+  model="internlm2-chat-7b",
+  messages=[
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": " provide three suggestions about time management"},
+  ],
+    temperature=0.8,
+    top_p=0.8
+)
+print(response)
+```
+
+You can invoke other OpenAI interfaces using similar methods. For more detailed information, please refer to the [OpenAI API guide](https://platform.openai.com/docs/guides/text-generation)
+
+### Integrate with lmdeploy `APIClient`
+
+Below are some examples demonstrating how to visit the service through `APIClient`
 
 If you want to use the `/v1/chat/completions` endpoint, you can try the following code:
 
@@ -57,7 +101,7 @@ for item in api_client.chat_completions_v1(model=model_name, messages=messages):
     print(item)
 ```
 
-For the `/v1/completions` endpoint. If you want to use the `/v1/completions` endpoint, you can try:
+For the `/v1/completions` endpoint, you can try:
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
@@ -67,23 +111,29 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
 ```
 
-Lmdeploy supports maintaining session histories on the server for `/v1/chat/interactive` api. We disable the
-feature by default.
+As for `/v1/chat/interactive`，we disable the feature by default. Please open it by setting `interactive_mode = True`. If you don't, it falls back to openai compatible interfaces.
 
-- On interactive mode, the chat history is kept on the server. In a multiple rounds of conversation, you should set
-  `interactive_mode = True` and the same `session_id` (can't be -1, it's the default number) to `/v1/chat/interactive` for requests.
-- On normal mode, no chat history is kept on the server.
-
-The interactive mode can be controlled by the `interactive_mode` boolean parameter. The following is an example of normal mode. If you want to experience the interactive mode, simply pass in `interactive_mode=True`.
+Keep in mind that `session_id` indicates an identical sequence and all requests belonging to the same sequence must share the same `session_id`.
+For instance, in a sequence with 10 rounds of chatting requests, the `session_id` in each request should be the same.
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-for item in api_client.chat_interactive_v1(prompt='hi'):
-    print(item)
+api_client = APIClient(f'http://{server_ip}:{server_port}')
+messages = [
+    "hi, what's your name?",
+    "who developed you?",
+    "Tell me more about your developers",
+    "Summarize the information we've talked so far"
+]
+for message in messages:
+    for item in api_client.chat_interactive_v1(prompt=message,
+                                               session_id=1,
+                                               interactive_mode=True,
+                                               stream=False):
+        print(item)
 ```
 
-## Java/Golang/Rust
+### Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.
 Here is an example:
@@ -102,17 +152,39 @@ rust/src:
 apis  lib.rs  models
 ```
 
-## cURL
+### cURL
 
-cURL is a tool for observing the output of the api.
+cURL is a tool for observing the output of the RESTful APIs.
 
-List Models:
+- list served models `v1/models`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/models
 ```
 
-Interactive Chat:
+- chat `v1/chat/completions`
+
+```bash
+curl http://{server_ip}:{server_port}/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "internlm-chat-7b",
+    "messages": [{"role": "user", "content": "Hello! How are you?"}]
+  }'
+```
+
+- text completions `v1/completions`
+
+```shell
+curl http://{server_ip}:{server_port}/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "model": "llama",
+  "prompt": "two steps to build a house:"
+}'
+```
+
+- interactive chat `v1/chat/interactive`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/chat/interactive \
@@ -124,40 +196,11 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
   }'
 ```
 
-Chat Completions:
+## Integrate with WebUI
 
-```bash
-curl http://{server_ip}:{server_port}/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "internlm-chat-7b",
-    "messages": [{"role": "user", "content": "Hello! How are you?"}]
-  }'
-```
+LMDeploy utilizes `gradio` or [OpenAOE](https://github.com/InternLM/OpenAOE) to integrate a web ui for `api_server`
 
-Text Completions:
-
-```shell
-curl http://{server_ip}:{server_port}/v1/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "model": "llama",
-  "prompt": "two steps to build a house:"
-}'
-```
-
-## CLI client
-
-There is a client script for restful api server.
-
-```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client api_server_url
-```
-
-## webui through gradio
-
-You can also test restful-api through webui.
+### Option 1: gradio
 
 ```shell
 # api_server_url is what printed in api_server.py, e.g. http://localhost:23333
@@ -166,9 +209,7 @@ You can also test restful-api through webui.
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
-## webui through OpenAOE
-
-You can use [OpenAOE](https://github.com/InternLM/OpenAOE) for seamless integration with LMDeploy.
+### Option 2: OpenAOE
 
 ```shell
 pip install -U openaoe
@@ -191,7 +232,3 @@ Please refer to the [guidance](https://github.com/InternLM/OpenAOE/blob/main/doc
 5. If you need to adjust other default parameters of the session, such as the content of fields like system. You can directly pass in the initialization parameters of the [dialogue template](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py). For example, for the internlm-chat-7b model, you can set the `--meta-instruction` parameter when starting the `api_server`.
 
 6. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
-
-## request distribution service
-
-Please refer to our [request distributor server](./proxy_server.md)
