@@ -834,6 +834,20 @@ class Engine:
         output_token_len = [len(token_ids) for token_ids in output_token_ids]
         return (status, output_token_ids, output_token_len)
 
+    def batched_infer(self,
+                      session_ids: List[int],
+                      token_ids: List[List[int]] = None,
+                      gen_config: EngineGenerationConfig = None,
+                      adapter_names: List[str] = None,
+                      keep_cache: bool = False):
+        """batched infer."""
+        coro = self.async_batched_infer(session_ids,
+                                        token_ids,
+                                        gen_config=gen_config,
+                                        adapter_names=adapter_names,
+                                        keep_cache=keep_cache)
+        return self.req_sender.run_until_complete(coro)
+
     def decode(self,
                input_ids,
                steps: List[int] = None,
