@@ -7,8 +7,10 @@ build:
   tools:
     python: "3.8"
 
+
 sphinx:
   configuration: docs/zh_cn/conf.py
+
 
 python:
   install:
