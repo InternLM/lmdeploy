@@ -67,6 +67,7 @@ Welcome to LMDeploy's tutorials!
 
    advance/pytorch_new_model.md
    advance/long_context.md
+   advance/debug_turbomind.md
    serving/qos.md
 
 .. toctree::
