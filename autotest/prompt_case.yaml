@@ -77,7 +77,7 @@ chinese_poem_case:
         - internlm2-20b:
             - len_g:
                 5
-        - falcon-7b:
+        - falcon:
             - len_g:
                 5
 english_poem_case:
