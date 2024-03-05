@@ -681,6 +681,7 @@ pt_qwen1dot5_chat_7b = dict(type=LmdeployPytorchModel,
                             abbr='qwen1.5-7b-chat-pytorch',
                             path='Qwen/Qwen1.5-7B-Chat',
                             engine_config=dict(session_len=2048,
+                                               cache_max_entry_count=0.5,
                                                max_batch_size=16),
                             gen_config=dict(top_k=1,
                                             top_p=0.8,
@@ -695,6 +696,25 @@ pt_qwen1dot5_chat_7b = dict(type=LmdeployPytorchModel,
                             end_str='<|im_end|>')
 
 # ===== Configs for google/gemma-7b-it =====
+hf_gemma_chat_7b = dict(type=HuggingFaceCausalLM,
+                        abbr='gemma-7b-it-pytorch',
+                        path='google/gemma-7b-it',
+                        tokenizer_path='google/gemma-7b-it',
+                        model_kwargs=dict(device_map='auto',
+                                          trust_remote_code=True),
+                        tokenizer_kwargs=dict(
+                            padding_side='left',
+                            truncation_side='left',
+                            trust_remote_code=True,
+                        ),
+                        meta_template=mistral_meta_template,
+                        max_out_len=256,
+                        max_seq_len=2048,
+                        batch_size=16,
+                        batch_padding=False,
+                        run_cfg=dict(num_gpus=1, num_procs=1),
+                        end_str='end_of_turn')
+
 pt_gemma_chat_7b = dict(type=LmdeployPytorchModel,
                         abbr='gemma-7b-it-pytorch',
                         path='google/gemma-7b-it',
