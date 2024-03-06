@@ -7,7 +7,7 @@ on:
         required: false
         description: 'Tested repository organization name. Default is InternLM'
         type: string
-        default: InternLM
+        default: 'InternLM/lmdeploy'
       repo_ref:
         required: false
         description: 'Set branch or tag or commit id. Default is "main"'
@@ -57,7 +57,7 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v3
         with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM' }}'/lmdeploy'
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Install pytorch
         run: |
