@@ -132,7 +132,7 @@ class Session:
         _ = self.response()
         res = ''
         for user, assistant in self.history:
-            res += f'USER: {user}\nASSISTANT: {assistant}\n'
+            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
 
 
@@ -675,7 +675,8 @@ class AsyncEngine:
                         input_ids=input_ids,
                         sequence_start=sequence_start,
                         step=session._step,
-                        gen_config=gen_config):
+                        gen_config=gen_config,
+                        stream_output=True):
                     _, res, tokens = outputs
                     response, state = self.tokenizer.detokenize_incrementally(
                         res,
