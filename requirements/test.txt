@@ -1,10 +1,10 @@
 allure-pytest
 coverage
 pynvml
-pytest
+pytest==8.0.2
 pytest-assume
+pytest-order
 pytest-rerunfailures
 pytest-sugar
-pytest-timeout
 pytest-xdist
 pyyaml

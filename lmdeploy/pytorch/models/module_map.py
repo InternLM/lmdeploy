@@ -30,8 +30,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconAttention',
     'modeling_falcon.FalconModel':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconModel',
-    'modeling_falcon.FalconRotaryEmbedding':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconRotaryEmbedding',
     'modeling_falcon.FalconMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.PatchedFalconMLP',
     'modeling_falcon.FalconForCausalLM':
@@ -59,6 +57,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanAttention',  # noqa
     'modeling_baichuan.MLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',  # noqa
+    'modeling_baichuan.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.PatchedRMSNorm',
 })
 
 # chatglm2
@@ -81,6 +81,8 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
     'modeling_internlm.InternLMMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_internlm.InternLMRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
 # internlm2
@@ -108,6 +110,38 @@ MODULE_MAP.update({
     'transformers.models.mistral.modeling_mistral.MistralMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
     'transformers.models.mistral.modeling_mistral.MistralRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
+})
+
+# gemma
+MODULE_MAP.update({
+    'transformers.models.gemma.modeling_gemma.GemmaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma.modeling_gemma.GemmaFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma.modeling_gemma.GemmaSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaAttention',
+    'transformers.models.gemma.modeling_gemma.GemmaModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaModel',
+    'transformers.models.gemma.modeling_gemma.modeling_mistral.GemmaMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'transformers.models.gemma.modeling_gemma.GemmaRMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.PatchedGemmaRMSNorm',
+})
+
+# deepseek
+MODULE_MAP.update({
+    'modeling_deepseek.DeepseekAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekFlashAttention2':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekSdpaAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.PatchedDeepseekAttention',
+    'modeling_deepseek.DeepseekModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaModel',
+    'modeling_deepseek.DeepseekMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaMLP',
+    'modeling_deepseek.DeepseekRMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 

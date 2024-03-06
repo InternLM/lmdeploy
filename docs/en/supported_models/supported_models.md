@@ -18,16 +18,18 @@
 
 ## Models supported by PyTorch
 
-|   Model   |   Size    | FP16/BF16 | KV INT8 | W8A8 |
-| :-------: | :-------: | :-------: | :-----: | :--: |
-|   Llama   | 7B - 65B  |    Yes    |   No    | Yes  |
-|  Llama2   | 7B - 70B  |    Yes    |   No    | Yes  |
-| InternLM  | 7B - 20B  |    Yes    |   No    | Yes  |
-| InternLM2 | 7B - 20B  |    Yes    |   No    |  -   |
-| Baichuan2 | 7B - 13B  |    Yes    |   No    | Yes  |
-| ChatGLM2  |    6B     |    Yes    |   No    |  No  |
-|  Falcon   | 7B - 180B |    Yes    |   No    |  No  |
-|    YI     | 6B - 34B  |    Yes    |   No    |  No  |
-|  Mistral  |    7B     |    Yes    |   No    |  No  |
-|  Mixtral  |   8x7B    |    Yes    |   No    |  No  |
-|  QWen1.5  | 7B - 72B  |    Yes    |   No    |  No  |
+|    Model     |   Size    | FP16/BF16 | KV INT8 | W8A8 |
+| :----------: | :-------: | :-------: | :-----: | :--: |
+|    Llama     | 7B - 65B  |    Yes    |   No    | Yes  |
+|    Llama2    | 7B - 70B  |    Yes    |   No    | Yes  |
+|   InternLM   | 7B - 20B  |    Yes    |   No    | Yes  |
+|  InternLM2   | 7B - 20B  |    Yes    |   No    |  -   |
+|  Baichuan2   | 7B - 13B  |    Yes    |   No    | Yes  |
+|   ChatGLM2   |    6B     |    Yes    |   No    |  No  |
+|    Falcon    | 7B - 180B |    Yes    |   No    |  No  |
+|      YI      | 6B - 34B  |    Yes    |   No    |  No  |
+|   Mistral    |    7B     |    Yes    |   No    |  No  |
+|   Mixtral    |   8x7B    |    Yes    |   No    |  No  |
+|   QWen1.5    | 7B - 72B  |    Yes    |   No    |  No  |
+| DeepSeek-MoE |    16B    |    Yes    |   No    |  No  |
+|    Gemma     |   2B-7B   |    Yes    |   No    |  No  |

@@ -49,8 +49,8 @@ Welcome to LMDeploy's tutorials!
    :caption: serving
 
    serving/restful_api.md
-   serving/proxy_server.md
    serving/gradio.md
+   serving/proxy_server.md
 
 .. _quantization:
 .. toctree::
@@ -68,6 +68,7 @@ Welcome to LMDeploy's tutorials!
    advance/pytorch_new_model.md
    advance/long_context.md
    advance/chat_template.md
+   advance/debug_turbomind.md
    serving/qos.md
 
 .. toctree::

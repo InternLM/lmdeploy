@@ -2,6 +2,7 @@
 import os
 from typing import List, Literal, Optional, Union
 
+from .archs import autoget_backend_config
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
 
@@ -31,7 +32,7 @@ def pipeline(model_path: str,
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "internlm/internlm-chat-7b",
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
-        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): backend
             config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
@@ -49,8 +50,13 @@ def pipeline(model_path: str,
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
+
+    if type(backend_config) is not PytorchEngineConfig:
+        # set auto backend mode
+        backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
         backend_config) is PytorchEngineConfig else 'turbomind'
+    logger.info(f'Using {backend} engine')
     if 'tp' in kwargs:
         logger.warning(
             'The argument "tp" is deprecated and will be removed soon. '
@@ -101,7 +107,7 @@ def serve(model_path: str,
             "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
         backend (str): either `turbomind` or `pytorch` backend. Default to
             `turbomind` backend.
-        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
+        backend_config (TurbomindEngineConfig | PytorchEngineConfig): backend
             config instance. Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
@@ -126,6 +132,12 @@ def serve(model_path: str,
 
     from lmdeploy.serve.openai.api_client import APIClient
     from lmdeploy.serve.openai.api_server import serve
+
+    if type(backend_config) is not PytorchEngineConfig:
+        # set auto backend mode
+        backend_config = autoget_backend_config(model_path, backend_config)
+    backend = 'pytorch' if type(
+        backend_config) is PytorchEngineConfig else 'turbomind'
     if 'tp' in kwargs:
         tp = kwargs['tp']
         kwargs.pop('tp')
