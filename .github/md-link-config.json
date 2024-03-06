@@ -17,6 +17,9 @@
     },
     {
       "pattern": "^http://localhost"
+    },
+    {
+      "pattern": "^https://twitter.com"
     }
   ],
   "httpHeaders": [
