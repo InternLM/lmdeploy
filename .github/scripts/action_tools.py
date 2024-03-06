@@ -185,6 +185,7 @@ def evaluate(models: List[str], workspace: str):
                 acc = json.load(f)['accuracy']
                 acc = f'{float(acc):.2f}'
                 model_results['crows_pairs'] = acc
+        logging.info(f'\n{hf_model_path}\n{model_results}')
         dataset_names = list(model_results.keys())
         prec = precision if do_lite else '-'
 
