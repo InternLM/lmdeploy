@@ -111,7 +111,7 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
 
 关于 `/v1/chat/interactive` 接口，我们默认是关闭的。在使用时，请设置`interactive_mode = True`打开它。否则，它会退化为 openai 接口。
 
-在交互式推理中，每个对话序列的 id 必须唯一，所有属于该徐立的对话请求，必须使用相同的 id。这里的 id 对应与接口中的 `session_id`。
+在交互式推理中，每个对话序列的 id 必须唯一，所有属于该独立的对话请求，必须使用相同的 id。这里的 id 对应与接口中的 `session_id`。
 比如，一个对话序列中，有 10 轮对话请求，那么每轮对话请求中的 `session_id` 都要相同。
 
 ```python
