@@ -367,7 +367,7 @@ class InternLM2Chat7B(InternLMChat7B):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'internlm2' in path and 'chat' in path:
+        if 'internlm2' in path and ('chat' in path or 'math' in path):
             return 'internlm2-chat'
 
 
