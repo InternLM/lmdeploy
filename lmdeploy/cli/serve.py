@@ -149,7 +149,7 @@ class SubCliServe:
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
-        tb_group._action_groups.append(cache_block_seq_len_act)
+        tb_group._group_actions.append(cache_block_seq_len_act)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
