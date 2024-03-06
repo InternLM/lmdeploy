@@ -110,18 +110,20 @@ class CLI(object):
             'internlm2', 'internlm2-1_8b', 'internlm2-20b', 'internlm2-7b',
             'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
             'llama-2-chat', 'llama2', 'qwen-14b', 'qwen-7b', 'solar-70b',
-            'yi-200k', 'yi-34b', 'yi-chat', 'base'
+            'yi-200k', 'yi-34b', 'yi-chat'
         ]
         model_names = [
-            n for n in model_names if n.lower() not in deprecate_names
+            n for n in model_names
+            if n.lower() not in deprecate_names + ['base']
         ]
         model_names.sort()
         print('Supported model names:')
-        print('\n'.join(model_names))
         yellow = '\033[33m'
         reset = '\033[0m'
+        max_name_width = max([len(name) for name in deprecate_names])
         for name in deprecate_names:
-            print(f'{name} {yellow}Deprecate soon{reset}')
+            print(f'{name:<{max_name_width}}  {yellow}Deprecate soon{reset}')
+        print('\n'.join(model_names))
 
     @staticmethod
     def check_env(args):
