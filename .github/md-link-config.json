@@ -20,6 +20,12 @@
     },
     {
       "pattern": "^https://twitter.com"
+    },
+    {
+      "pattern": "^https://platform.openai.com"
+    },
+    {
+      "pattern": "^http://0.0.0.0"
     }
   ],
   "httpHeaders": [

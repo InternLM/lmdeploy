@@ -1,31 +1,29 @@
-# Restful API
+# 部署类 openai 服务
+
+本文主要介绍单个模型在单机多卡环境下，部署兼容 openai 接口服务的方式，以及服务接口的用法。为行文方便，我们把该服务名称为 `api_server`。对于多模型的并行服务，请阅读[请求分发服务器](./proxy_server.md)一文。
+
+在这篇文章中， 我们首先介绍服务启动的两种方法，你可以根据应用场景，选择合适的。
+
+其次，我们重点介绍服务的 RESTful API 定义，以及接口使用的方式，并展示如何通过 Swagger UI、LMDeploy CLI 工具体验服务功能
+
+最后，向大家演示把服务接入到 WebUI 的方式，你可以参考它简单搭建一个演示 demo。
 
 ## 启动服务
 
-用户将下面命令输出的 http url 复制到浏览器打开，详细查看所有的 API 及其使用方法。
-请一定查看`http://{server_ip}:{server_port}`！！！
-请一定查看`http://{server_ip}:{server_port}`！！！
-请一定查看`http://{server_ip}:{server_port}`！！！
-重要的事情说三遍。
+以 huggingface hub 上的 [internlm2-chat-7b](https://huggingface.co/internlm/internlm2-chat-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
+
+### 方式一：使用 lmdeploy cli 工具
 
 ```shell
-lmdeploy serve api_server ./workspace --server-name 0.0.0.0 --server-port ${server_port} --tp 1
+lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333
 ```
 
-api_server 启动时支持的参数可以通过命令行`lmdeploy serve api_server -h`查看。
+api_server 启动时的参数可以通过命令行`lmdeploy serve api_server -h`查看。
+比如，`--tp` 设置张量并行，`--session-len` 设置推理的最大上下文窗口长度，`--cache-max-entry-count` 调整 k/v cache 的内存使用比例等等。
 
-我们提供的 restful api，其中三个仿照 OpenAI 的形式。
+### 方式二：使用 docker
 
-- /v1/chat/completions
-- /v1/models
-- /v1/completions
-
-不过，我们建议用户用我们提供的另一个 API: `/v1/chat/interactive`。
-它有更好的性能，提供更多的参数让用户自定义修改。
-
-## 用 docker 部署 http 服务
-
-LMDeploy 提供了官方[镜像](https://hub.docker.com/r/openmmlab/lmdeploy/tags)。使用这个镜像，可以运行兼容 OpenAI 的服务。下面是使用示例：
+使用 LMDeploy 官方[镜像](https://hub.docker.com/r/openmmlab/lmdeploy/tags)，可以运行兼容 OpenAI 的服务。下面是使用示例：
 
 ```shell
 docker run --runtime nvidia --gpus all \
@@ -37,16 +35,64 @@ docker run --runtime nvidia --gpus all \
     lmdeploy serve api_server internlm/internlm2-chat-7b
 ```
 
-然后像上面一样使用浏览器试用 Swagger UI 即可。
+在这个例子中，`lmdeploy server api_server` 的命令参数与方式一一致。
 
-## python
+## RESTful API
 
-我们将这些服务的客户端功能集成在 `APIClient` 类中。下面是一些例子，展示如何在客户端调用 `api_server` 服务。
+LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
+
+- /v1/chat/completions
+- /v1/models
+- /v1/completions
+
+此外，LMDeploy 还定义了 `/v1/chat/interactive`，用来支持交互式推理。交互式推理的特点是不用像`v1/chat/completions`传入用户对话历史，因为对话历史会被缓存在服务端。
+这种方式在多轮次的长序列推理时，拥有很好的性能。
+
+服务启动后，你可以在浏览器中打开网页 http://0.0.0.0:23333，通过 Swagger UI 查看接口的详细说明，并且也可以直接在网页上操作，体验每个接口的用法，如下图所示。
+
+![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
+
+也可以使用 LMDeploy 自带的 CLI 工具，在控制台验证服务的正确性。
+
+```shell
+# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
+lmdeploy serve api_client ${api_server_url}
+```
+
+若需要把服务集成到自己的项目或者产品中，我们推荐以下用法：
+
+### 使用 openai 接口
+
+以下代码是通过 openai 包使用 `v1/chat/completions` 服务的例子。运行之前，请先安装 openai 包: `pip install openai`。
+
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key='YOUR_API_KEY',
+    base_url="http://0.0.0.0:23333/v1"
+)
+
+response = client.chat.completions.create(
+  model="internlm2-chat-7b",
+  messages=[
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": " provide three suggestions about time management"},
+  ],
+    temperature=0.8,
+    top_p=0.8
+)
+print(response)
+```
+
+关于其他 openai 接口的调用，也可以如法炮制。详情请参考 openai 官方[文档](https://platform.openai.com/docs/guides/text-generation)
+
+### 使用 lmdeploy `APIClient` 接口
+
 如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
+api_client = APIClient(f'http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 messages = [{"role": "user", "content": "Say this is a test!"}]
 for item in api_client.chat_completions_v1(model=model_name, messages=messages):
@@ -57,28 +103,35 @@ for item in api_client.chat_completions_v1(model=model_name, messages=messages):
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
+api_client = APIClient(f'http://{server_ip}:{server_port}')
 model_name = api_client.available_models[0]
 for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
 ```
 
-LMDeploy 的 `/v1/chat/interactive` api 支持将对话内容管理在服务端，但是我们默认关闭。如果想尝试，请阅读以下介绍：
+关于 `/v1/chat/interactive` 接口，我们默认是关闭的。在使用时，请设置`interactive_mode = True`打开它。否则，它会退化为 openai 接口。
 
-- 交互模式下，对话历史保存在 server。在一次完整的多轮对话中，所有请求设置`interactive_mode = True`, `session_id`保持相同 (不为 -1，这是缺省值)。
-- 非交互模式下，server 不保存历史记录。
-
-交互模式可以通过 `interactive_mode` 布尔量参数控制。下面是一个普通模式的例子，
-如果要体验交互模式，将 `interactive_mode=True` 传入即可。
+在交互式推理中，每个对话序列的 id 必须唯一，所有属于该独立的对话请求，必须使用相同的 id。这里的 id 对应与接口中的 `session_id`。
+比如，一个对话序列中，有 10 轮对话请求，那么每轮对话请求中的 `session_id` 都要相同。
 
 ```python
 from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient('http://{server_ip}:{server_port}')
-for item in api_client.chat_interactive_v1(prompt='hi'):
-    print(item)
+api_client = APIClient(f'http://{server_ip}:{server_port}')
+messages = [
+    "hi, what's your name?",
+    "who developed you?",
+    "Tell me more about your developers",
+    "Summarize the information we've talked so far"
+]
+for message in messages:
+    for item in api_client.chat_interactive_v1(prompt=message,
+                                               session_id=1,
+                                               interactive_mode=True,
+                                               stream=False):
+        print(item)
 ```
 
-## Java/Golang/Rust
+### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。
 下面是一个使用示例：
@@ -97,17 +150,39 @@ rust/src:
 apis  lib.rs  models
 ```
 
-## cURL
+### 使用 cURL
 
 cURL 也可以用于查看 API 的输出结果
 
-查看模型列表：
+- 查看模型列表 `v1/models`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/models
 ```
 
-Interactive Chat:
+- 对话 `v1/chat/completions`
+
+```bash
+curl http://{server_ip}:{server_port}/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "internlm-chat-7b",
+    "messages": [{"role": "user", "content": "Hello! How are you?"}]
+  }'
+```
+
+- 文本补全 `v1/completions`
+
+```shell
+curl http://{server_ip}:{server_port}/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "model": "llama",
+  "prompt": "two steps to build a house:"
+}'
+```
+
+- 交互式对话 `v1/chat/interactive`
 
 ```bash
 curl http://{server_ip}:{server_port}/v1/chat/interactive \
@@ -119,40 +194,11 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
   }'
 ```
 
-Chat Completions:
+## 接入 WebUI
 
-```bash
-curl http://{server_ip}:{server_port}/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "internlm-chat-7b",
-    "messages": [{"role": "user", "content": "Hello! How are you?"}]
-  }'
-```
+LMDeploy 提供 gradio 和 [OpenAOE](https://github.com/InternLM/OpenAOE) 两种方式，为 api_server 接入 WebUI。
 
-Text Completions:
-
-```shell
-curl http://{server_ip}:{server_port}/v1/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "model": "llama",
-  "prompt": "two steps to build a house:"
-}'
-```
-
-## CLI client
-
-restful api 服务可以通过客户端测试，例如
-
-```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client api_server_url
-```
-
-## webui through gradio
-
-也可以直接用 webui 测试使用 restful-api。
+### 方式一：通过 gradio 接入
 
 ```shell
 # api_server_url 就是 api_server 产生的，比如 http://localhost:23333
@@ -161,9 +207,7 @@ lmdeploy serve api_client api_server_url
 lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
-## webui through OpenAOE
-
-可以使用 [OpenAOE](https://github.com/InternLM/OpenAOE) 无缝接入restful api服务.
+### 方式二：通过 OpenAOE 接入
 
 ```shell
 pip install -U openaoe
@@ -185,7 +229,3 @@ openaoe -f /path/to/your/config-template.yaml
 5. 如需调整会话默认的其他参数，比如 system 等字段的内容，可以直接将[对话模板](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/model.py)初始化参数传入。比如 internlm-chat-7b 模型，可以通过启动`api_server`时，设置`--meta-instruction`参数。
 
 6. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
-
-## 多机并行服务
-
-请参考我们的 [请求分发服务器](./proxy_server.md)
