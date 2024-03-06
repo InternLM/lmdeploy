@@ -113,14 +113,7 @@ emoji_case:
                 - \u2714
                 - 赞
                 - emoji
-        - baichuan2-7b-chat:
-            - contain:
-                - 👍
-                - 😊
-                - \u2714
-                - 赞
-                - emoji
-                - \!
+                - '!'
 traditional_chinese_case:
     - 使用繁體介紹香港維多利亞港:
         - contain:
