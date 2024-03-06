@@ -436,6 +436,12 @@ struct AttentionUniversal {
         }
     }
 
+    __device__ bool check_h(int hi)
+    {
+        /// FIXME: for tensor core decoding `CTA_H == 1` fails (currently CTA_H > 2 are used for TC)
+        return CTA_H == 1 || hi < CTA_H;
+    }
+
     __device__ void StoreO(FragO&           frag_O,
                            FragL&           frag_L,
                            int              qi_begin,
@@ -445,7 +451,7 @@ struct AttentionUniversal {
                            SharedStorage&   storage)
     {
         Impl::StoreO<true>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
-            if (qi_begin + qi < qi_end) {
+            if (qi_begin + qi < qi_end && check_h(hi)) {
                 const int offset = (qi_begin + qi) * params.num_heads * kHeadDim + (head_idx + hi) * kHeadDim + di;
                 Store(&params.out[offset], cast<T>(vec));
             }
@@ -462,7 +468,7 @@ struct AttentionUniversal {
             Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float score) {
                 qi += query_idx;
                 si += offset_K;
-                if (qi < params.max_q_len && si < max_context_len) {
+                if (qi < params.max_q_len && si < max_context_len && check_h(hi)) {
                     params.qk[batch_idx * params.num_heads * params.max_q_len * max_context_len
                               + (head_idx + hi) * params.max_q_len * max_context_len + qi * max_context_len + si] =
                         score;
@@ -488,14 +494,14 @@ struct AttentionUniversal {
         };
 
         Impl::StoreO<false>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
-            if (qi_begin + qi < qi_end) {
+            if (qi_begin + qi < qi_end && check_h(hi)) {
                 Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
             }
         });
 
         Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float M, float L) {
             const int index = get_index(hi, qi);
-            if (qi_begin + qi < qi_end && ri == 0) {
+            if (qi_begin + qi < qi_end && ri == 0 && check_h(hi)) {
                 // printf("ML %2d %2d %f %f\n", split_idx, head_idx + hi, M, L);
                 params.partial_M[index] = M;
                 params.partial_L[index] = L;
