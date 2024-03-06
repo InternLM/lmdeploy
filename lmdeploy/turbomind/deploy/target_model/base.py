@@ -65,6 +65,7 @@ class TurbomindModelConfig:
     quant_policy: int = 0
     max_position_embeddings: int = 0
     rope_scaling_factor: float = 0.0
+    use_dynamic_ntk: int = 0
     use_logn_attn: int = 0
 
     @classmethod

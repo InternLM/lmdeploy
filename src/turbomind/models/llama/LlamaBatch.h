@@ -201,8 +201,7 @@ private:
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
     int*       cu_block_counts_{};
-    uintptr_t* k_block_ptrs_{};
-    uintptr_t* v_block_ptrs_{};
+    uintptr_t* block_ptrs_{};
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
@@ -214,13 +213,6 @@ private:
     int* input_length_buf_{};    // input + cache missed length
     int* context_length_buf_{};  // history length + input_length
     int* init_context_length_{};
-    // temp buffers used for block->linear kv-cache conversion
-    T*     tmp_k_cache_buf_{};
-    T*     tmp_v_cache_buf_{};
-    void** tmp_k_ptrs_{};
-    void** tmp_v_ptrs_{};
-    void** h_tmp_k_ptrs_{};
-    void** h_tmp_v_ptrs_{};
 
     T*   decoder_input_buf_{};
     T*   decoder_output_buf_{};
@@ -246,8 +238,7 @@ private:
     int*       h_input_length_buf_{};
     uint32_t*  h_seq_limit_len_{};
     int*       h_cu_block_counts_{};
-    uintptr_t* h_k_block_ptrs_{};
-    uintptr_t* h_v_block_ptrs_{};
+    uintptr_t* h_block_ptrs_{};
 
     int*   h_min_length_{};
     int*   h_runtime_top_k_{};
