@@ -102,37 +102,26 @@ class CLI(object):
     @staticmethod
     def list(args):
         """List the supported model names."""
-        engine = args.engine
-        assert engine in ['turbomind', 'pytorch', None]
-        if engine == 'pytorch':
-            model_names = [
-                'llama', 'llama-2', 'internlm-chat', 'internlm2-chat',
-                'baichuan2-chat', 'chatglm2', 'falcon', 'yi',
-                'mistral-instruct', 'qwen-chat', 'gemma', 'mixtral-instruct'
-            ]
-        elif engine == 'turbomind':
-            model_names = [
-                'llama', 'llama-2', 'internlm-chat', 'internlm2-chat',
-                'baichuan2-chat', 'yi', 'qwen-chat', 'ultracm', 'ultralm',
-                'vicuna', 'wizardlm', 'codellama', 'puyu', 'solar'
-            ]
-        else:
-            from lmdeploy.model import MODELS
-            model_names = list(MODELS.module_dict.keys())
-            hidden_names = [
-                'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm',
-                'internlm-chat-20b', 'internlm-chat-7b', 'internlm-chat-7b-8k',
-                'internlm2', 'internlm2-1_8b', 'internlm2-20b', 'internlm2-7b',
-                'internlm2-chat-1_8b', 'internlm2-chat-20b',
-                'internlm2-chat-7b', 'llama-2-chat', 'llama2', 'qwen-14b',
-                'qwen-7b', 'solar-70b', 'yi-200k', 'yi-34b', 'yi-chat', 'base'
-            ]
-            model_names = [
-                n for n in model_names if n.lower() not in hidden_names
-            ]
+        from lmdeploy.model import MODELS
+        model_names = list(MODELS.module_dict.keys())
+        deprecate_names = [
+            'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm',
+            'internlm-chat-20b', 'internlm-chat-7b', 'internlm-chat-7b-8k',
+            'internlm2', 'internlm2-1_8b', 'internlm2-20b', 'internlm2-7b',
+            'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
+            'llama-2-chat', 'llama2', 'qwen-14b', 'qwen-7b', 'solar-70b',
+            'yi-200k', 'yi-34b', 'yi-chat', 'base'
+        ]
+        model_names = [
+            n for n in model_names if n.lower() not in deprecate_names
+        ]
         model_names.sort()
         print('Supported model names:')
         print('\n'.join(model_names))
+        yellow = '\033[33m'
+        reset = '\033[0m'
+        for name in deprecate_names:
+            print(f'{name} {yellow}Deprecate soon{reset}')
 
     @staticmethod
     def check_env(args):

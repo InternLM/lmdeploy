@@ -1,6 +1,12 @@
-identity_case:
+common_case:
     - 你好，你叫什么名字#hi, what's your name:
-
+    - 介绍相应美食#please introduce some delicious foods:
+        - not_contain:
+            - 成都
+            - chengdu
+        - internlm2-1_8b:
+            - len_g:
+                10
 memory_test:
     - 介绍成都的景点#please introduce attractions in Chengdu:
         - contain:
@@ -12,7 +18,16 @@ memory_test:
             - 宽窄巷子
             - jinli
             - leshan
+            - 历史悠久
         - falcon:
+            - contain:
+                - chengdu
+                - 成都
+        - internlm2-1_8b:
+            - contain:
+                - chengdu
+                - 成都
+        - internlm2-20b:
             - contain:
                 - chengdu
                 - 成都
@@ -20,44 +35,71 @@ memory_test:
         - contain:
             - 成都
             - chengdu
+            - 四川
         - contain:
             - 火锅
             - hotpot
             - hot pot
+            - 夫妻肺片
         - falcon:
             - len_g:
                 10
-new_session_without_memory:
-    - 介绍相应美食#please introduce some delicious foods:
-        - not_contain:
-            - 成都
-            - chengdu
+        - internlm2-1_8b:
+            - contain:
+                - chengdu
+                - 成都
+        - internlm2-20b:
+            - contain:
+                - chengdu
+                - 成都
 chinese_poem_case:
-    - 给我一首中文打油诗，需要添加标点符号。和，Give me a Chinese poem in Chinese:
+    - 给我一首中文打油诗，需要添加标点符号。和，请用中文回答Give me a Chinese poem in Chinese:
         - contain:
             - "，"
-        - contain:
             - "。"
         - len_g:
-            10
-        - llama2:
+            5
+        - llama-2:
             - contain:
-                - chinese poem
-                - chinese poetry
+                - poem
+                - poetry
             - len_g:
-                10
+                5
+        - codellama:
+            - contain:
+                - poem
+                - poetry
+            - len_g:
+                5
+        - internlm2-1_8b:
+            - len_g:
+                5
+        - internlm2-20b:
+            - len_g:
+                5
 english_poem_case:
-    - write a romantic poem:
+    - write a romantic English poem:
         - contain:
             - " "
         - contain:
             - "."
+            - ","
         - contain:
             - love
+            - poem
         - len_g:
             100
+        - internlm2-1_8b:
+            - len_g:
+                100
+        - internlm2-20b:
+            - len_g:
+                100
+        - falcon:
+            - len_g:
+                1
 emoji_case:
-    - 你能输出👍的emoji么#Can you output the emoji of 👍:
+    - 请输出👍赞的emoji#print output the emoji of good👍:
         - contain:
             - 👍
             - 😊
@@ -67,12 +109,32 @@ emoji_case:
                 - 😊
                 - \u2714
                 - 赞
+                - emoji
 traditional_chinese_case:
-    - 請介紹香港維多利亞港，用繁體中文回答:
+    - 使用繁體介紹香港維多利亞港:
         - contain:
+            - victoria
             - 維多利亞港
-        - baichuan2-7b:
+            - 维多利亚港
+        - codellama:
             - contain:
-                - 维多利亚港
+                - victoria
                 - 維多利亞港
-                - 維多利亚港
+                - 维多利亚港
+                - hong kong
+        - internlm2-20b:
+            - contain:
+                - victoria
+                - 維多利亞港
+                - 维多利亚港
+                - hong kong
+                - 香港
+        - llama-2:
+            - contain:
+                - victoria
+                - 維多利亞港
+                - 维多利亚港
+                - apologize
+        - falcon:
+            - len_g:
+                1

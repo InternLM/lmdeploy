@@ -1,43 +1,79 @@
 model_path: /nvme/qa_test_models
 dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
-gradio_log_path: /lmdeploy/autotest/gradiotest
+dataset_path: /nvme/qa_test_models/...dataset
 
-model_map:
-    llama2-chat-7b-w4: llama2
-    internlm-chat-7b: internlm-chat-7b
-    internlm-chat-20b: internlm-chat-20b
-    internlm-chat-20b-inner-w4: internlm-chat-20b
-    internlm2-chat-7b: internlm2-chat-7b
-    internlm2-chat-20b: internlm2-chat-20b
-    internlm2-20b: internlm2-20b
-    internlm2-chat-20b-inner-w4: internlm2-chat-20b
-    internlm2-chat-20b-inner-w8a8: internlm2-chat-20b
-    internlm2-chat-1_8b: internlm2-chat-1_8b
-    internlm2-1_8b: internlm2-1_8b
-    Qwen-7B-Chat: qwen-7b
-    Qwen-7B-Chat-inner-w4: qwen-7b
-    Qwen-14B-Chat: qwen-14b
-    Qwen-14B-Chat-inner-w4: qwen-14b
-    Baichuan2-7B-Chat: baichuan2-7b
-    Baichuan2-7B-Chat-inner-w4: baichuan2-7b
-    Baichuan2-13B-Chat: baichuan2-13b
-    Baichuan2-13B-Chat-inner-w4: baichuan2-13b
-    Yi-6B-Chat: yi-chat
-    CodeLlama-7b-Instruct-hf: codellama
-    CodeLlama-7b-Instruct-hf-inner-w4: codellama
-    Llama-2-7b-chat-hf: llama2
-    Llama-2-7b-chat-hf-inner-w4: llama2
-    llama-2-7b-chat: llama2
-    llama-2-7b-chat-inner-w4: llama2
-    chatglm2-6b: chatglm2-6b
-    falcon-7b: falcon
 
 tp_config:
     internlm-chat-20b: 2
-    internlm-chat-20b-inner-w4: 2
     internlm2-chat-20b: 2
-    internlm2-chat-20b-inner-w4: 2
-    internlm2-chat-20b-inner-w8a8: 2
     Baichuan2-13B-Chat: 2
-    Baichuan2-13B-Chat-inner-w4: 2
+    Mixtral-8x7B-Instruct-v0.1: 2
+    internlm2-20b: 2
+
+
+turbomind_model:
+    - llama-2-7b-chat
+    - internlm2-chat-1_8b
+    - internlm-chat-7b
+    - internlm-chat-20b
+    - internlm2-chat-7b
+    - internlm2-chat-20b
+    - Qwen-7B-Chat
+    - Qwen-14B-Chat
+    - llama2-chat-7b-w4
+    - Baichuan2-7B-Chat
+    - Yi-6B-Chat
+    - internlm2-1_8b
+    - internlm2-20b
+    - CodeLlama-7b-Instruct-hf
+
+
+pytorch_model:
+    - llama-2-7b-chat
+    - internlm-chat-7b
+    - internlm-chat-20b
+    - internlm2-chat-7b
+    - internlm2-chat-20b
+    - Baichuan2-7B-Chat
+    - Baichuan2-13B-Chat
+    - chatglm2-6b
+    - falcon-7b
+    - Yi-6B-Chat
+    - internlm2-1_8b
+    - internlm2-20b
+    - Qwen1.5-7B-Chat
+    - Mistral-7B-Instruct-v0.1
+    - Mixtral-8x7B-Instruct-v0.1
+    - gemma-7b-it
+    - deepseek-moe-16b-chat
+
+
+quatization_case_config:
+    w4a16:
+        - llama-2-7b-chat
+        - internlm-chat-20b
+        - Qwen-7B-Chat
+        - Qwen-14B-Chat
+        - internlm2-chat-20b
+        - Baichuan2-7B-Chat
+        - internlm2-20b
+    kvint8: # more models are supported kvint8 quantization, but the chat response are not good, already removed
+        - llama-2-7b-chat
+        - internlm-chat-20b
+        - internlm2-chat-20b
+    kvint8_w4a16:
+        - llama-2-7b-chat
+        - internlm-chat-20b
+        - internlm2-chat-20b
+        - internlm2-20b
+        - Qwen-7B-Chat
+        - Qwen-14B-Chat
+        - Baichuan2-7B-Chat
+    w8a8:
+        - llama-2-7b-chat
+        - internlm-chat-20b
+        - internlm2-chat-20b
+        - internlm2-chat-7b
+        - Yi-6B-Chat
+        - internlm2-20b

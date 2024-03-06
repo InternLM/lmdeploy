@@ -50,8 +50,8 @@
    :caption: 服务
 
    serving/restful_api.md
-   serving/proxy_server.md
    serving/gradio.md
+   serving/proxy_server.md
 
 
 .. _量化:
@@ -69,6 +69,7 @@
 
    advance/pytorch_new_model.md
    advance/long_context.md
+   advance/debug_turbomind.md
    serving/qos.md
 
 .. toctree::

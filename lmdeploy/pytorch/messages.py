@@ -25,8 +25,8 @@ class SamplingParam:
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
-    stop_words: List[int] = None
-    bad_words: List[int] = None
+    stop_words: List[int] = field(default_factory=list)
+    bad_words: List[int] = field(default_factory=list)
     max_new_tokens: int = 512
     min_new_tokens: int = 0
 
@@ -75,7 +75,7 @@ class SamplingParam:
         if max_new_tokens < 0:
             logger.warning('`max_new_tokens` has to be a strictly'
                            f' positive value, but is {max_new_tokens}')
-            max_new_tokens = 0
+            max_new_tokens = 512
         if min_new_tokens < 0 or min_new_tokens > max_new_tokens:
             logger.warning('`min_new_tokens` has to be '
                            'a int >=0 and <= `max_new_tokens`,'
@@ -126,7 +126,8 @@ class SchedulerSession:
     def add_sequence(self,
                      token_ids: Tensor,
                      sampling_param: SamplingParam = None,
-                     adapter_name: str = None) -> 'SchedulerSequence':
+                     adapter_name: str = None,
+                     return_logits: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
         if not isinstance(token_ids, Tensor):
             token_ids = torch.tensor(token_ids)
@@ -143,7 +144,8 @@ class SchedulerSession:
                                 num_new_tokens=0,
                                 sampling_param=sampling_param,
                                 adapter_name=adapter_name,
-                                arrive_time=time.time())
+                                arrive_time=time.time(),
+                                return_logits=return_logits)
         self.sequences[seq.seq_id] = seq
         return seq
 
@@ -174,6 +176,7 @@ class SchedulerSession:
             adapter_name=seq.adapter_name,
             arrive_time=time.time(),
             meta=deepcopy(seq.meta),
+            return_logits=seq.return_logits,
             random_offsets=seq.random_offsets + 1)
 
         self.sequences[new_msg.seq_id] = new_msg
@@ -198,6 +201,7 @@ class SchedulerSequence:
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
+    return_logits: bool = False
     random_offsets: int = 0
 
     @property

@@ -21,8 +21,8 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
     offset = tl.load(Offsets + off, mask=off_mask).to(tl.int32)
 
     samp = tl.rand(seed, offset)[:, None]
-    acc = tl.zeros((BLOCK, ), dtype=Scores.dtype.element_ty)
-    output = tl.full((BLOCK, ), -1, dtype=tl.int64)
+    acc = tl.zeros((BLOCK, ), dtype=tl.float32)
+    output = tl.load(Indices + off * stride_ib, mask=off_mask)
 
     for b_idx in range(0, num_tokens, BLOCK_N):
         s_off = b_idx + n_off
@@ -30,7 +30,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
         scores = tl.load(Scores + off[:, None] * stride_sb +
                          s_off[None, :] * stride_st,
                          mask=s_mask,
-                         other=0.0)
+                         other=0.0).to(acc.dtype)
         cum_scores = acc[:, None] + tl.cumsum(scores, 1)
         acc += tl.sum(scores, 1)
 
@@ -75,7 +75,7 @@ def multinomial_sampling(scores: torch.Tensor,
     assert indices.dim() == 2
     assert indices.size() == scores.size()
 
-    outputs = indices.new_empty(batch_size)
+    outputs = indices[:, 0].clone()
 
     BLOCK = 32
     BLOCK_N = 64
@@ -96,5 +96,5 @@ def multinomial_sampling(scores: torch.Tensor,
                                        BLOCK=BLOCK,
                                        BLOCK_N=BLOCK_N,
                                        **kernel_meta)
-    torch.cuda.synchronize()
+
     return outputs

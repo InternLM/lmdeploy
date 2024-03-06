@@ -245,7 +245,7 @@ class LlamaAttention(nn.Module):
                 scaling_factor=scaling_factor,
                 out_q=query_states[None],
                 out_k=key_states[None])
-            return query_states, key_states, value_states
+            return query_states[0], key_states[0], value_states
 
         def __rotary_emb_fn_438(query_states, key_states, value_states):
             rotary_name = type(self.rotary_emb).__name__

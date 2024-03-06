@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict
 
 import torch
 
@@ -58,6 +58,7 @@ class ModelConfig:
     multi_query_attention: bool = False
     json_config: dict = field(default_factory=dict)
     hf_config: Any = None
+    init_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     def get_head_size(self):
         """get head size."""
@@ -109,6 +110,7 @@ class ModelConfig:
             bos_token_id = hf_config.bos_token_id
             if bos_token_id is None:
                 bos_token_id = hf_config.pad_token_id
+            init_kwargs = dict(empty_init=False)
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_layers,
@@ -116,7 +118,8 @@ class ModelConfig:
                 num_key_value_heads=hf_config.multi_query_group_num,
                 bos_token_id=bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
-                head_dim=head_dim)
+                head_dim=head_dim,
+                init_kwargs=init_kwargs)
 
         def __build_gemma():
             return ModelConfig(
