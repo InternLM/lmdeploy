@@ -79,7 +79,8 @@ def add_summary(csv_path: str):
 def _load_hf_results(test_results: dict, model_name: str):
     """Read opencompass eval results."""
     lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
-    hf_res_path = os.path.join(lmdeploy_dir, 'opencompass-hf-results.json')
+    hf_res_path = os.path.join(
+        lmdeploy_dir, '.github/resources/opencompass-hf-results.json')
     out = OrderedDict()
     if os.path.exists(hf_res_path):
         with open(hf_res_path, 'r') as f:

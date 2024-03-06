@@ -92,7 +92,6 @@ jobs:
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
-          cp /root/resources/opencompass-hf-results.json ./
           python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Evaluate models
         run: |
