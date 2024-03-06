@@ -18,13 +18,13 @@ target_compile_options(attention PRIVATE -O3
     $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr>)
 
 
-if (BUILD_TEST) 
-    target_compile_options(attention PRIVATE 
+if (BUILD_TEST)
+    target_compile_options(attention PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info>)
 
-    add_executable(test_attention 
-        test_utils.cu 
-        test_attention.cu 
+    add_executable(test_attention
+        test_utils.cu
+        test_attention.cu
         reference.cu)
     target_compile_options(test_attention PRIVATE
         --generate-line-info -O3 -use_fast_math --expt-relaxed-constexpr)
