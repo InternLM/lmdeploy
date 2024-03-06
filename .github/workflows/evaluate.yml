@@ -26,19 +26,19 @@ on:
 
 jobs:
   evaluate:
-    runs-on: [self-hosted, linux-a100-eval]
+    runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
     environment: 'prod'
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
       volumes:
-        - /mnt/142/github-actions/pip-cache:/root/.cache/pip
-        - /mnt/142/github-actions/packages:/root/packages
-        - /mnt/142/github-actions/resources:/root/resources
-        - /mnt/142/github-actions/evaluation-reports:/root/evaluation-reports
-        - /mnt/142/github-actions/opencompass-data:/root/opencompass-data
-        - /mnt/140:/root/models
+        - /mnt/bigdisk/lmdeploy-github-actions/pip-cache:/root/.cache/pip
+        - /mnt/bigdisk/lmdeploy-github-actions/packages:/root/packages
+        - /mnt/bigdisk/lmdeploy-github-actions/resources:/root/resources
+        - /mnt/bigdisk/lmdeploy-github-actions/evaluation-reports:/root/evaluation-reports
+        - /mnt/bigdisk/lmdeploy-github-actions/opencompass-data:/root/opencompass-data
+        - /mnt/bigdisk/qa_test_models:/root/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -92,13 +92,8 @@ jobs:
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
-          ln -s /root/models/InternLM ./internlm
-          mkdir meta-llama
-          ln -s /root/models/llama2/huggingface/llama-2-7b-chat ./meta-llama/Llama-2-7b-chat-hf
-          ln -s /root/models/llama2/huggingface/llama-2-13b-chat ./meta-llama/Llama-2-13b-chat-hf
-          ln -s /root/models/llama2/huggingface/llama-2-70b-chat ./meta-llama/Llama-2-70b-chat-hf
-          ln -s /root/models/Qwen ./Qwen
-          ln -s /root/models/baichuan2 ./baichuan-inc
+          cp /root/resources/opencompass-hf-results.json ./
+          python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Evaluate models
         run: |
           echo ${{github.event.inputs.models}}

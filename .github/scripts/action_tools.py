@@ -79,7 +79,7 @@ def add_summary(csv_path: str):
 def _load_hf_results(test_results: dict, model_name: str):
     """Read opencompass eval results."""
     lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
-    hf_res_path = os.path.join(lmdeploy_dir, 'opencompass_results.json')
+    hf_res_path = os.path.join(lmdeploy_dir, 'opencompass-hf-results.json')
     out = OrderedDict()
     if os.path.exists(hf_res_path):
         with open(hf_res_path, 'r') as f:
@@ -217,6 +217,20 @@ def evaluate(models: List[str], workspace: str):
     _append_summary('## Evaluation Results')
     if os.path.exists(output_csv):
         add_summary(output_csv)
+
+
+def create_model_links(src_dir: str, dst_dir: str):
+    """Create softlinks for models."""
+    paths = glob.glob(os.path.join(src_dir, '*'))
+    model_paths = [os.path.abspath(p) for p in paths if os.path.isdir(p)]
+    os.makedirs(dst_dir, exist_ok=True)
+    for src in model_paths:
+        _, model_name = os.path.split(src)
+        dst = os.path.join(dst_dir, model_name)
+        if not os.path.exists(dst):
+            os.symlink(src, dst)
+        else:
+            logging.warning(f'Model_path exists: {dst}')
 
 
 if __name__ == '__main__':
