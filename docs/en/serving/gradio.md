@@ -15,11 +15,11 @@ For detailed parameters of the command, please turn to `lmdeploy serve gradio -h
 
 If you want to create an online demo project for your model on huggingface, please follow the steps below.
 
-## Step 1: Create space
+### Step 1: Create space
 
 First, register for a Hugging Face account. After successful registration, click on your profile picture in the upper right corner and select “New Space” to create one. Follow the Hugging Face guide to choose the necessary configurations, and you will have a blank demo space ready.
 
-## Step 2: Develop demo's entrypoint `app.py`
+### Step 2: Develop demo's entrypoint `app.py`
 
 Replace the content of `app.py` in your space with the following code:
 

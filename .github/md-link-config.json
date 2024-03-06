@@ -19,6 +19,9 @@
       "pattern": "^http://localhost"
     },
     {
+      "pattern": "^https://twitter.com"
+    },
+    {
       "pattern": "^https://platform.openai.com"
     },
     {
