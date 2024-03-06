@@ -5,6 +5,7 @@ import os
 import random
 from argparse import ArgumentError
 from contextlib import asynccontextmanager
+from itertools import count
 from queue import Empty, Queue
 from threading import Thread
 from typing import Dict, List, Literal, Optional, Union
@@ -71,6 +72,68 @@ class GenOut:
     input_token_len: int
     generate_token_len: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+
+
+class Session:
+    """Session for AsyncEngine.chat."""
+    _ids = count(0)
+
+    def __init__(self):
+        self._id = next(self._ids)
+        self._step = 0
+        self._queue = None
+        self._prompt = None
+        self._response = None
+        self._work_thread = None
+        self._engine = None
+        self.history = []
+
+    def _merge_response(self, resp: Response, step: Response):
+        resp.text += step.text
+        resp.input_token_len = step.input_token_len
+        resp.generate_token_len = step.generate_token_len
+        resp.finish_reason = step.finish_reason
+        return resp
+
+    def response(self) -> Response:
+        if self._response:
+            return self._response
+        elif self._queue is not None:
+            resp = Response('', -1, -1, self._id)
+            while True:
+                step = self._queue.get()
+                resp = self._merge_response(resp, step)
+                if resp.finish_reason is not None:
+                    break
+            self._step += resp.generate_token_len + resp.input_token_len
+            self._response = resp
+            self.history.append((self._prompt, resp.text))
+        return self._response
+
+    def stream_response(self):
+        resp = Response('', -1, -1, self._id)
+        while self._queue is not None:
+            step = self._queue.get()
+            resp = self._merge_response(resp, step)
+            yield step
+            if resp.finish_reason is not None:
+                break
+            self._step += resp.generate_token_len + resp.input_token_len
+            self._response = resp
+            self.history.append((self._prompt, resp.text))
+
+    def close(self):
+        _ = self.response()
+        if self._engine:
+            inst = self._engine.create_instance()
+            inst.end(self._id)
+
+    def __repr__(self) -> str:
+        _ = self.response()
+        res = ''
+        for user, assistant in self.history:
+            res += f'USER: {user}\nASSISTANT: {assistant}\n'
+        return res
 
 
 class AsyncEngine:
@@ -543,3 +606,96 @@ class AsyncEngine:
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
+
+    def chat(self,
+             prompt: str,
+             session=None,
+             gen_config: Optional[Union[GenerationConfig,
+                                        EngineGenerationConfig]] = None,
+             do_preprocess: bool = True,
+             **kwargs):
+        """Chat.
+
+        Args:
+            prompt (str): prompt
+            session (Session): the chat session
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            do_preprocess (bool): whether pre-process the messages. Default to
+                True, which means chat_template will be applied.
+            **kwargs (dict): ad hoc parametrization of `gen_config
+        """
+        if session is None:
+            session = Session()
+            session._engine = self.engine
+
+        # sync & init
+        _ = session.response()
+        session._prompt = prompt
+        session._response = None
+        session._queue = Queue()
+
+        sequence_start = session._step == 0
+
+        if gen_config is None:
+            gen_config = GenerationConfig()
+        if type(gen_config) is GenerationConfig:
+            gen_config = EngineGenerationConfig.From(gen_config,
+                                                     self.tokenizer)
+        if gen_config.stop_words is None:
+            gen_config.stop_words = self.stop_words
+        # set random if it is not set and sequence_start is True
+        if gen_config.random_seed is None and sequence_start:
+            gen_config.random_seed = random.getrandbits(64)
+        for k, v in kwargs.items():
+            if hasattr(gen_config, k):
+                setattr(gen_config, k, v)
+
+        if do_preprocess:
+            prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+
+        def _work_thread():
+            if gen_config.max_new_tokens is None:
+                # for interactive endpoint, will try maximum possible token num
+                gen_config.max_new_tokens = max(
+                    128, self.session_len - session._step - len(input_ids))
+            finish_reason = None
+            if session._id + len(
+                    input_ids) + gen_config.max_new_tokens > self.session_len:
+                finish_reason = 'length'
+                resp = Response('', 0, len(input_ids), session._id,
+                                finish_reason)
+                session._queue.put(resp)
+            else:
+                generator = self.engine.create_instance()
+                state = DetokenizeState()
+                for outputs in generator.stream_infer(
+                        session_id=session._id,
+                        input_ids=input_ids,
+                        sequence_start=sequence_start,
+                        step=session._step,
+                        gen_config=gen_config):
+                    _, res, tokens = outputs
+                    response, state = self.tokenizer.detokenize_incrementally(
+                        res,
+                        state,
+                        skip_special_tokens=gen_config.skip_special_tokens)
+                    resp = Response(response, tokens, len(input_ids),
+                                    session._id, finish_reason)
+                    session._queue.put(resp)
+
+                finish_reason = 'length' \
+                    if tokens >= gen_config.max_new_tokens else 'stop'
+                # utf-8 char at the end means it's a potential unfinished
+                # byte sequence
+                if not response.endswith('�'):
+                    response = ''  # avaid returning the last response twice
+                resp = Response(response, tokens, len(input_ids), session._id,
+                                finish_reason)
+                session._queue.put(resp)
+
+        work_thread = Thread(target=_work_thread)
+        work_thread.start()
+        session._work_thread = work_thread
+        return session
