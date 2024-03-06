@@ -13,9 +13,10 @@ def quantization(config,
     origin_model_path = config.get('model_path') + '/' + origin_model_name
     quantization_model_path = model_path + '/' + quantization_model_name
     quantization_log = os.path.join(
-        log_path,
-        '_'.join(['quantization', quantization_type, quantization_model_name
-                  ]) + '.log')
+        log_path, '_'.join([
+            'quantization', quantization_type,
+            quantization_model_name.split('/')[1]
+        ]) + '.log')
 
     if quantization_type == 'w4a16':
         quantization_cmd = ' '.join([
