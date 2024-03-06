@@ -31,19 +31,11 @@ For more information on inference pipeline parameters, please refer to [here](./
 
 ## Serving
 
-LMDeploy's `api_server` enables models to be easily packed into services with a single command. The provided RESTful APIs are compatible with OpenAI's interfaces. Below are an example of service startup:
+LMDeploy offers various serving methods, choosing one that best meet your requirements.
 
-```shell
-lmdeploy serve api_server internlm/internlm-chat-7b
-```
-
-The default port of `api_server` is `23333`. After the server is launched, you can communicate with server on terminal through `api_client`:
-
-```shell
-lmdeploy serve api_client http://0.0.0.0:23333
-```
-
-You can overview and try out `api_server` APIs online by swagger UI at `http://0.0.0.0:23333`, or you can read the API specification from [here](serving/restful_api.md).
+- [Serving with openai compatible server](https://lmdeploy.readthedocs.io/en/latest/serving/restful_api.html)
+- [Serving with docker](https://lmdeploy.readthedocs.io/en/latest/serving/restful_api.html#option-2-deploying-with-docker)
+- [Serving with gradio](https://lmdeploy.readthedocs.io/en/latest/serving/gradio.html)
 
 ## Quantization
 
