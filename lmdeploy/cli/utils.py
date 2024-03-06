@@ -362,5 +362,5 @@ class ArgumentHelper:
         return parser.add_argument(
             '--cache-block-seq-len',
             type=int,
-            default=128,
+            default=64,
             help='The length of the token sequence in a k/v block')
