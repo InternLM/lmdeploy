@@ -112,7 +112,18 @@ class CLI(object):
         elif engine == 'turbomind':
             from lmdeploy.model import MODELS
             model_names = list(MODELS.module_dict.keys())
-            model_names = [n for n in model_names if n.lower() not in ['base']]
+            hidden_names = [
+                'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm',
+                'internlm-chat-20b', 'internlm-chat-7b', 'internlm-chat-7b-8k',
+                'internlm2', 'internlm2-1_8b', 'internlm2-20b', 'internlm2-7b',
+                'internlm2-chat-1_8b', 'internlm2-chat-20b',
+                'internlm2-chat-7b', 'llama', 'llama-2-chat', 'llama2',
+                'qwen-14b', 'qwen-7b', 'solar-70b', 'yi-200k', 'yi-34b',
+                'yi-chat', 'base'
+            ]
+            model_names = [
+                n for n in model_names if n.lower() not in hidden_names
+            ]
         model_names.sort()
         print('Supported model names:')
         print('\n'.join(model_names))
