@@ -123,10 +123,10 @@ class Session:
             self.history.append((self._prompt, resp.text))
 
     def close(self):
-        _ = self.response()
         if self._engine:
             inst = self._engine.create_instance()
-            inst.end(self._id)
+            inst.cancel(self._id)
+        _ = self.response()
 
     def __repr__(self) -> str:
         _ = self.response()
@@ -678,6 +678,7 @@ class AsyncEngine:
                         gen_config=gen_config,
                         stream_output=True):
                     _, res, tokens = outputs
+                    print(session._id, tokens)
                     response, state = self.tokenizer.detokenize_incrementally(
                         res,
                         state,
