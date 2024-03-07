@@ -37,6 +37,8 @@ class VLAsyncEngine(AsyncEngine):
         if do_preprocess:
             decorated = self.vl_prompt_template.messages2prompt(
                 prompt, sequence_start)
+        else:
+            decorated = prompt
         segs = decorated.split(IMAGE_TOKEN)
 
         results = {}
@@ -63,7 +65,8 @@ class VLAsyncEngine(AsyncEngine):
             results['input_embeddings'] = features
             results['input_embedding_ranges'] = ranges
         else:
-            input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+            input_ids = self.tokenizer.encode(decorated,
+                                              add_bos=sequence_start)
 
         results['input_ids'] = input_ids
         return results
