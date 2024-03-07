@@ -110,11 +110,11 @@ class CLI(object):
             'internlm2', 'internlm2-1_8b', 'internlm2-20b', 'internlm2-7b',
             'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
             'llama-2-chat', 'llama2', 'qwen-14b', 'qwen-7b', 'solar-70b',
-            'yi-200k', 'yi-34b', 'yi-chat'
+            'yi-200k', 'yi-34b', 'yi-chat', 'Mistral-7B-Instruct',
+            'Mixtral-8x7B-Instruct'
         ]
         model_names = [
-            n for n in model_names
-            if n.lower() not in deprecate_names + ['base']
+            n for n in model_names if n not in deprecate_names + ['base']
         ]
         model_names.sort()
         print('Supported model names:')

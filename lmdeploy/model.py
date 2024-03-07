@@ -781,6 +781,7 @@ class Yi(BaseChatTemplate):
 
 
 @MODELS.register_module(name=['mistral-instruct', 'mixtral-instruct'])
+@MODELS.register_module(name=['Mistral-7B-Instruct', 'Mixtral-8x7B-Instruct'])
 class MistralChat(BaseChatTemplate):
     """Template of Mistral and Mixtral Instruct models.
 
