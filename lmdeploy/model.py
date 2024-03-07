@@ -147,9 +147,14 @@ class BaseChatTemplate(BaseModel):
         if self.capability == 'completion':
             return prompt
         if sequence_start:
-            return f'{self.system}{self.meta_instruction}{self.eosys}' \
-                   f'{self.user}{prompt}{self.eoh}' \
-                   f'{self.assistant}'
+            # None is different from ''
+            if self.meta_instruction is not None:
+                return f'{self.system}{self.meta_instruction}{self.eosys}' \
+                    f'{self.user}{prompt}{self.eoh}' \
+                    f'{self.assistant}'
+            else:
+                return f'{self.user}{prompt}{self.eoh}' \
+                       f'{self.assistant}'
         else:
             return f'{self.separator}{self.user}{prompt}{self.eoh}' \
                    f'{self.assistant}'
@@ -702,7 +707,7 @@ class Yi(BaseChatTemplate):
 
     def __init__(self,
                  system='<|im_start|>system\n',
-                 meta_instruction='',
+                 meta_instruction=None,
                  eosys='<|im_end|>\n',
                  user='<|im_start|>user\n',
                  eoh='<|im_end|>\n',
