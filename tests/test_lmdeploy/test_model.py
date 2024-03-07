@@ -43,7 +43,7 @@ def test_model_config(model_name, meta_instruction):
 
 
 def test_base_model():
-    model = MODELS.get('base')()
+    model = MODELS.get('llama')()
     assert model is not None
     assert model.capability == 'chat'
     assert model.get_prompt('test') == 'test'

@@ -57,6 +57,7 @@ class ChatTemplateConfig:
         return model
 
 
+@MODELS.register_module(name='llama')
 @MODELS.register_module(name='base')
 class BaseModel:
     """Base model."""
