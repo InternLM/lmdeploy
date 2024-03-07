@@ -2,23 +2,23 @@ import os
 
 import allure
 import pytest
+from utils.config_utils import get_cuda_prefix_by_workerid
 from utils.quantization_utils import quantization
 
-model_list = [('llama-2-7b-chat', 'CUDA_VISIBLE_DEVICES=1'),
-              ('internlm-chat-20b', 'CUDA_VISIBLE_DEVICES=2'),
-              ('internlm2-chat-20b', 'CUDA_VISIBLE_DEVICES=3'),
-              ('Qwen-7B-Chat', 'CUDA_VISIBLE_DEVICES=4'),
-              ('Qwen-14B-Chat', 'CUDA_VISIBLE_DEVICES=5'),
-              ('internlm2-20b', 'CUDA_VISIBLE_DEVICES=6'),
-              ('Baichuan2-7B-Chat', 'CUDA_VISIBLE_DEVICES=7')]
+model_list = [
+    'meta-llama/Llama-2-7b-chat', 'internlm/internlm-chat-20b',
+    'internlm/internlm2-chat-20b', 'Qwen/Qwen-7B-Chat', 'Qwen/Qwen-14B-Chat',
+    'internlm/internlm2-20b', 'baichuan-inc/Baichuan2-7B-Chat'
+]
 
 
 @pytest.mark.order(1)
 @pytest.mark.quantization_kvint8
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize('model, prefix', model_list)
-def test_quantization_kvint8(config, model, prefix):
-    quantization_kvint8(config, model + '-inner-kvint8', model, prefix)
+@pytest.mark.parametrize('model', model_list)
+def test_quantization_kvint8(config, model, worker_id):
+    quantization_kvint8(config, model + '-inner-kvint8', model,
+                        get_cuda_prefix_by_workerid(worker_id))
 
 
 def quantization_kvint8(config, quantization_model_name, origin_model_name,
@@ -29,9 +29,10 @@ def quantization_kvint8(config, quantization_model_name, origin_model_name,
                                cuda_prefix)
     log_path = config.get('log_path')
     quantization_log = os.path.join(
-        log_path,
-        '_'.join(['quantization', quantization_type, quantization_model_name
-                  ]) + '.log')
+        log_path, '_'.join([
+            'quantization', quantization_type,
+            quantization_model_name.split('/')[1]
+        ]) + '.log')
 
     allure.attach.file(quantization_log,
                        attachment_type=allure.attachment_type.TEXT)
