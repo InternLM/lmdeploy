@@ -1,10 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
 from torch import nn
 from torch.distributed._tensor import DeviceMesh
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
                           rowwise_parallelize_linear_fn)
@@ -151,3 +152,76 @@ class PatchedQWenMLP(nn.Module):
         """Distribution output hook."""
         dist.all_reduce(outputs)
         return outputs
+
+
+class PatchedQWenModel(nn.Module):
+
+    def _continuous_batching_forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+        """Rewrite implementation of LlamaModel.forward."""
+        if inputs_embeds is None:
+            inputs_embeds = self.wte(input_ids)
+
+        # Attention mask is not necessary in continuous batching
+        hidden_states = inputs_embeds
+
+        # decoder layers
+        for idx, decoder_layer in enumerate(self.h):
+            past_key_value = (past_key_values[idx]
+                              if past_key_values is not None else None)
+            layer_outputs = decoder_layer(
+                hidden_states,
+                position_ids,
+                past_key_value=past_key_value,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+            )
+            hidden_states = layer_outputs[0]
+
+        hidden_states = self.ln_f(hidden_states)
+
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_value,
+            hidden_states=None,
+            attentions=None,
+        )
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+        """Rewrite of LlamaModel.forward."""
+        return self._continuous_batching_forward(
+            input_ids,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            use_cache,
+            output_attentions,
+            output_hidden_states,
+            return_dict,
+        )
