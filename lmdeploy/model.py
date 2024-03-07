@@ -186,20 +186,20 @@ class Vicuna(BaseChatTemplate):
 
     def __init__(
             self,
-            meta_instruction="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n""",  # noqa: E501
+            meta_instruction="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.""",  # noqa: E501
+            eosys=' ',
             user='USER: ',
-            eoh='\n',
+            eoh=' ',
             assistant='ASSISTANT: ',
             eoa='</s>',
-            separator='\n',
             stop_words=['</s>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
                          user=user,
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
-                         separator=separator,
                          stop_words=stop_words,
                          **kwargs)
 
