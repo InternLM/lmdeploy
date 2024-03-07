@@ -106,7 +106,6 @@ def test_baichuan():
     assert model.get_prompt(prompt, sequence_start=True) == prompt
     assert model.get_prompt(prompt, sequence_start=False) == prompt
     assert model.stop_words is None
-    assert model.repetition_penalty == 1.1
 
     model = MODELS.get('baichuan-7b')(capability='chat')
     _prompt = model.get_prompt(prompt, sequence_start=True)
