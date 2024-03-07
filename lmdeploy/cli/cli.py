@@ -105,17 +105,19 @@ class CLI(object):
         from lmdeploy.model import MODELS
         model_names = list(MODELS.module_dict.keys())
         deprecate_names = [
-            'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm',
-            'internlm-chat-20b', 'internlm-chat-7b', 'internlm-chat-7b-8k',
-            'internlm2', 'internlm2-1_8b', 'internlm2-20b', 'internlm2-7b',
+            'baichuan-7b', 'baichuan2-7b', 'chatglm2-6b', 'internlm-chat-20b',
+            'internlm-chat-7b', 'internlm-chat-7b-8k', 'internlm2-1_8b',
+            'internlm-20b', 'internlm2-20b', 'internlm2-7b', 'internlm2-chat',
             'internlm2-chat-1_8b', 'internlm2-chat-20b', 'internlm2-chat-7b',
-            'llama-2-chat', 'llama2', 'qwen-14b', 'qwen-7b', 'solar-70b',
+            'llama-2-chat', 'llama-2', 'qwen-14b', 'qwen-7b', 'solar-70b',
             'yi-200k', 'yi-34b', 'yi-chat', 'Mistral-7B-Instruct',
-            'Mixtral-8x7B-Instruct'
+            'Mixtral-8x7B-Instruct', 'baichuan-base', 'deepseek-chat',
+            'internlm-chat'
         ]
         model_names = [
             n for n in model_names if n not in deprecate_names + ['base']
         ]
+        deprecate_names.sort()
         model_names.sort()
         print('Supported model names:')
         yellow = '\033[33m'

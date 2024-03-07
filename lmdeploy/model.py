@@ -57,8 +57,6 @@ class ChatTemplateConfig:
         return model
 
 
-@MODELS.register_module(name='internlm')
-@MODELS.register_module(name='llama')
 @MODELS.register_module(name='base')
 class BaseModel:
     """Base model."""
@@ -220,6 +218,7 @@ class Vicuna(BaseChatTemplate):
 
 @MODELS.register_module(name='internlm-chat')
 @MODELS.register_module(name='internlm-chat-7b')
+@MODELS.register_module(name='internlm')
 class InternLMChat7B(BaseChatTemplate):
     """Chat template of InternLM model."""
 
@@ -259,12 +258,11 @@ class InternLMChat7B(BaseChatTemplate):
         path = model_path.lower()
         if all([c not in path for c in ['internlm2', '8k']]) and \
                 all([c in path for c in ['internlm', 'chat']]):
-            return 'internlm-chat'
+            return 'internlm'
 
 
 @MODELS.register_module(name='internlm-chat-20b')
 @MODELS.register_module(name='internlm-chat-7b-8k')
-@MODELS.register_module(name='internlm-chat-8k')
 class InternLMChat7B8K(InternLMChat7B):
     """Chat template and generation parameters of InternLM-Chat-7B-8K and
     InternLM-Chat-20B models."""
@@ -272,18 +270,6 @@ class InternLMChat7B8K(InternLMChat7B):
     def __init__(self, session_len=8192, **kwargs):
         super(InternLMChat7B8K, self).__init__(**kwargs)
         self.session_len = session_len
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'intenlm' in path and 'internlm2' not in path and 'chat' in path:
-            if '20b' in path or '8k' in path:
-                return 'internlm-chat-8k'
 
 
 @MODELS.register_module(name='internlm-20b')
@@ -295,21 +281,9 @@ class InternLMBaseModel20B(BaseChatTemplate):
                          capability=capability,
                          **kwargs)
 
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'intenlm' in path and 'internlm2' not in path:
-            if '20b' in path and 'chat' not in path:
-                return 'internlm-20b'
-
 
 @MODELS.register_module(
-    name=['internlm2', 'internlm2-1_8b', 'internlm2-7b', 'internlm2-20b'])
+    name=['internlm2-1_8b', 'internlm2-7b', 'internlm2-20b'])
 class InternLM2BaseModel7B(BaseChatTemplate):
     """Generation parameters of InternLM2-7B-Base model."""
 
@@ -318,22 +292,12 @@ class InternLM2BaseModel7B(BaseChatTemplate):
                          capability=capability,
                          **kwargs)
 
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'intenlm2' in path and 'chat' not in path:
-            return 'internlm2'
-
 
 @MODELS.register_module(name=[
     'internlm2-chat', 'internlm2-chat-1_8b', 'internlm2-chat-7b',
     'internlm2-chat-20b'
 ])
+@MODELS.register_module(name='internlm2')
 class InternLM2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM2-Chat-7B."""
 
@@ -368,7 +332,7 @@ class InternLM2Chat7B(InternLMChat7B):
         """
         path = model_path.lower()
         if 'internlm2' in path and ('chat' in path or 'math' in path):
-            return 'internlm2-chat'
+            return 'internlm2'
 
 
 @MODELS.register_module(name='baichuan-7b')
@@ -379,21 +343,9 @@ class Baichuan7B(BaseChatTemplate):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'baichuan' in path and 'chat' not in path \
-                and 'baichuan2' not in path:
-            return 'baichuan-base'
-
 
 @MODELS.register_module(name='baichuan2-7b')
-@MODELS.register_module(name='baichuan2-chat')
+@MODELS.register_module(name='baichuan2')
 class Baichuan2_7B(BaseChatTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
     Baichuan2-7B-Chat models."""
@@ -413,7 +365,7 @@ class Baichuan2_7B(BaseChatTemplate):
         """
         path = model_path.lower()
         if 'baichuan2' in path and 'chat' in path:
-            return 'baichuan2-chat'
+            return 'baichuan2'
 
 
 @MODELS.register_module(name='puyu')
@@ -486,12 +438,12 @@ If a question does not make any sense, or is not factually coherent, explain why
             model_path (str): the model path used for matching.
         """
         if 'llama-2' in model_path.lower() or 'llama2' in model_path.lower():
-            return 'llama-2'
+            return 'llama2'
 
 
 @MODELS.register_module(name='qwen-14b')
 @MODELS.register_module(name='qwen-7b')
-@MODELS.register_module(name='qwen-chat')
+@MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
 
@@ -527,7 +479,7 @@ class Qwen7BChat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         if 'qwen' in model_path.lower():
-            return 'qwen-chat'
+            return 'qwen'
 
 
 @MODELS.register_module(name='codellama')
@@ -602,7 +554,7 @@ class Falcon(BaseModel):
 
 
 @MODELS.register_module(name='chatglm2-6b')
-@MODELS.register_module(name='chatglm2')
+@MODELS.register_module(name='chatglm')
 class ChatGLM2(BaseModel):
 
     def __init__(self,
@@ -654,8 +606,8 @@ class ChatGLM2(BaseModel):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'chatglm2' in model_path.lower():
-            return 'chatglm2'
+        if 'chatglm' in model_path.lower():
+            return 'chatglm'
 
 
 @MODELS.register_module(name=['solar', 'solar-70b'])
@@ -780,7 +732,7 @@ class Yi(BaseChatTemplate):
             return 'yi'
 
 
-@MODELS.register_module(name=['mistral-instruct', 'mixtral-instruct'])
+@MODELS.register_module(name=['mistral', 'mixtral'])
 @MODELS.register_module(name=['Mistral-7B-Instruct', 'Mixtral-8x7B-Instruct'])
 class MistralChat(BaseChatTemplate):
     """Template of Mistral and Mixtral Instruct models.
@@ -810,9 +762,9 @@ class MistralChat(BaseChatTemplate):
         """
         if 'instruct' in model_path.lower():
             if 'mistral' in model_path.lower():
-                return 'mistral-instruct'
+                return 'mistral'
             if 'mixtral' in model_path.lower():
-                return 'mixtral-instruct'
+                return 'mixtral'
 
 
 @MODELS.register_module(name=['gemma'])
@@ -846,6 +798,7 @@ class Gemma(BaseChatTemplate):
 
 
 @MODELS.register_module(name=['deepseek-chat'])
+@MODELS.register_module(name=['deepseek'])
 class Deepseek(BaseChatTemplate):
 
     def __init__(self,
@@ -868,7 +821,7 @@ class Deepseek(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         if 'deepseek' in model_path.lower():
-            return 'deepseek-chat'
+            return 'deepseek'
 
 
 def best_match_model(query: str) -> Optional[str]:

@@ -5,14 +5,13 @@ from lmdeploy.model import MODELS, best_match_model
 
 @pytest.mark.parametrize(
     'model_path_and_name',
-    [('internlm/internlm-chat-7b', ['internlm-chat']),
-     ('models--internlm--internlm-chat-7b/snapshots/1234567',
-      ['internlm-chat']), ('Qwen/Qwen-7B-Chat', ['qwen-chat']),
-     ('baichuan-inc/Baichuan-7B', ['baichuan-base']),
+    [('internlm/internlm-chat-7b', ['internlm']),
+     ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
+     ('Qwen/Qwen-7B-Chat', ['qwen']),
      ('codellama/CodeLlama-7b-hf', ['codellama']),
      ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
-     ('meta-llama/Llama-2-7b-chat-hf', ['llama-2-chat', 'llama-2']),
-     ('THUDM/chatglm2-6b', ['chatglm2']),
+     ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
+     ('THUDM/chatglm2-6b', ['chatglm']),
      ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']), ('01-ai/Yi-34B-Chat', ['yi']),
      ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
@@ -44,7 +43,7 @@ def test_model_config(model_name, meta_instruction):
 
 
 def test_base_model():
-    model = MODELS.get('llama')()
+    model = MODELS.get('base')()
     assert model is not None
     assert model.capability == 'chat'
     assert model.get_prompt('test') == 'test'
