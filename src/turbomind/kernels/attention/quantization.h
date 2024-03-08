@@ -15,9 +15,11 @@ __device__ T Infinity()
         return __ushort_as_half((unsigned short)0x7C00U);
     }
 
+#if __CUDA_ARCH__ >= 800
     if constexpr (std::is_same_v<T, nv_bfloat16>) {
         return __ushort_as_bfloat16((unsigned short)0x7F80U);
     }
+#endif
 
     if constexpr (std::is_same_v<T, float>) {
         return __int_as_float(0x7f800000U);
@@ -103,6 +105,28 @@ inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_u8(const Array<uint8_t, 4>& s
         dst[i] = __float2bfloat16(vec[i] - 32768.f);
     }
     return dst;
+}
+
+inline __device__ Array<float, 4> cvt_f32x4_u8(const Array<uint8_t, 4>& src)
+{
+    // 01234567 01234567 01234567 01234567
+    // SEEEEEEE EMMMMMMM MMMMMMMM MMMMMMMM
+    //      1MM          XXXXXXXX
+    // (1 + x/2^15) * 2^(e-127) -> e-127=15 -> e=142 -> 01000111 -> 0x47
+    static constexpr uint32_t f32_magic = 0x47000000;  // 32768
+
+    Array<uint32_t, 4> tmp;
+    tmp[0] = __byte_perm((uint32_t&)src, f32_magic, 0x7604);
+    tmp[1] = __byte_perm((uint32_t&)src, f32_magic, 0x7614);
+    tmp[2] = __byte_perm((uint32_t&)src, f32_magic, 0x7624);
+    tmp[3] = __byte_perm((uint32_t&)src, f32_magic, 0x7634);
+
+    auto& vec = (Array<float, 4>&)tmp;
+    PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+        vec[i] -= 32768.f;
+    }
+    return vec;
 }
 
 template<class T>
@@ -249,146 +273,81 @@ dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array
     }
 }
 
-template<int D, int S>
-inline __device__ void
-dequantize_K(Array<half, D> (&dst)[S], const Array<uint8_t, D> (&src)[S], const Array<half, 2> (&param)[S])
-{
-    static_assert(D % 4 == 0);
-    PRAGMA_UNROLL
-    for (int s = 0; s < S; ++s) {
+//  floating point -> u8
+template<class T>
+struct ConvertKvCache<T, uint8_t> {
+    T          inv_scale_;
+    T          zero_;
+    __device__ ConvertKvCache(T scale, T zero): zero_{zero}
+    {
+        // NVCC complains if we put this in the member init list
+        inv_scale_ = (T)fdividef(1.f, (float)scale);
+    }
+
+    template<int N>
+    __device__ auto operator()(const Array<T, N>& vi) const
+    {
+        Array<uint8_t, N> vo;
         PRAGMA_UNROLL
-        for (int d = 0; d < D; d += 4) {
-            (Array<half, 4>&)dst[s][d] = cvt_f16x4_u8<false>((Array<uint8_t, 4>&)src[s][d]);
+        for (int i = 0; i < N; ++i) {
+            vo[i] = quant<uint8_t>((vi[i] - zero_) * inv_scale_, std::integral_constant<int, 8>{});
         }
+        return vo;
     }
+};
 
-    PRAGMA_UNROLL
-    for (int s = 0; s < S; ++s) {
-        using namespace ops;
-        dst[s] = dst[s] * param[s][0] + (param[s][1] - half(1024.f) * param[s][0]);
-    }
-}
+// u8 -> f16
+template<>
+struct ConvertKvCache<uint8_t, half> {
+    half       scale_;
+    half       zero_;
+    __device__ ConvertKvCache(half scale, half zero): scale_{scale}, zero_{zero} {}
 
-template<int S, int D>
-__device__ void
-dequantize_V(Array<half, S> (&dst)[D], const Array<uint8_t, S> (&src)[D], const Array<half, 2> (&param)[S])
-{
-    static_assert(S % 4 == 0);
-    PRAGMA_UNROLL
-    for (int d = 0; d < D; ++d) {
+    template<int N>
+    __device__ auto operator()(const Array<uint8_t, N>& vi) const
+    {
+        Array<half, N> vo;
         PRAGMA_UNROLL
-        for (int s = 0; s < S; s += 4) {
-            (Array<half, 4>&)dst[d][s] = cvt_f16x4_u8((Array<uint8_t, 4>&)src[d][s]);
-        }
-    }
-
-    PRAGMA_UNROLL
-    for (int s = 0; s < S; ++s) {
-        PRAGMA_UNROLL
-        for (int d = 0; d < D; ++d) {
+        for (int i = 0; i < N; i += 4) {
             using namespace ops;
-            dst[d][s] = dst[d][s] * param[s][0] + param[s][1];
+            (Array<half, 4>&)vo[i] = cvt_f16x4_u8<true>((Array<uint8_t, 4>&)vi[i]) * scale_ + zero_;
         }
+        return vo;
     }
-}
+};
 
-//        0         1
-//    0123 4567 89ab cdef
-// -> 0189 23ab 45cd 67ef
+// u8 -> f32
+template<class T>
+struct ConvertKvCache<uint8_t, T> {
+    T          scale_;
+    T          zero_;
+    __device__ ConvertKvCache(T scale, T zero): scale_{scale}, zero_{zero} {}
 
-template<int N>
-__device__ void permute_K(Array<uint8_t, N>& x)
-{
-    static_assert(N % 8 == 0);
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; i += 8) {
-        auto u = (Array<uint32_t, 2>&)x[i];
-
-        Array<uint32_t, 2> v;
-
-        v[0] = __shfl_xor_sync(uint32_t(-1), u[0], 1);
-        v[1] = __shfl_xor_sync(uint32_t(-1), u[1], 1);
-
-        Array<uint32_t, 2> w;
-
-        if (threadIdx.x % 2 == 0) {
-            w[0] = __byte_perm(u[0], v[0], 0x5410);
-            w[1] = __byte_perm(u[0], v[0], 0x7632);
-        }
-        else {
-            w[0] = __byte_perm(v[1], u[1], 0x5410);
-            w[1] = __byte_perm(v[1], u[1], 0x7632);
-        }
-
-        (Array<uint32_t, 2>&)x[i] = w;
-    }
-}
-
-// From:
-//  (0,0)(0,1)(0,2)(0,3)(0,4)(0,5)(0,6)(0,7)(0,8)(0,9)(0,a)(0,b)(0,c)(0,d)(0,e)(0,f)
-//  (1,0)(1,1)(1,2)(1,3)(1,4)(1,5)(1,6)(1,7)(1,8)(1,9)(1,a)(1,b)(1,c)(1,d)(1,e)(1,f)
-// To:
-//  (0,0)(1,0)(0,1)(1,1)(0,2)(1,2)(0,3)(1,3)(0,4)(1,4)(0,5)(1,5)(0,6)(1,6)(0,7)(1,7)
-//  (8,0)(9,0)(8,1)(9,1)(8,2)(9,2)(8,3)(9,3)(8,4)(9,4)(8,5)(9,5)(8,6)(9,6)(8,7)(9,7)
-//  (2,0)(3,0)(2,1)(3,1)(2,2)(3,2)(2,3)(3,3)(2,4)(3,4)(2,5)(3,5)(2,6)(3,6)(2,7)(3,7)
-//  (a,0)(b,0)(a,1)(b,1)(a,2)(b,2)(a,3)(b,3)(a,4)(b,4)(a,5)(b,5)(a,6)(b,6)(a,7)(b,7)
-//   4    5
-//   c    d
-//   6    7
-//   e    f
-
-// for (int i = 0; i < 16; ++i) {
-//     for (int j = 0; j < 16; ++j) {
-//         int ii = i % 2 * 8 + i % 8 / 2 * 2 + j % 2;
-//         int jj = i / 8 * 8 + j / 2;
-//         printf("%x%x ", ii, jj);
-//     }
-//     printf("\n");
-// }
-
-template<class Map>
-__device__ void permute_V(Array<uint8_t, Map::kAccessC> (&x)[Map::kIterS][Map::kIterC])
-{
-    // __shared__ __align__(16) uint8_t tmp[Map::kDimS][Map::kDimC];
-
-    __shared__ __align__(16) uint8_t tmp[Map::kDimS / 16][Map::kDimC / 16][16][16];
-
-    const int  warp_id = threadIdx.x / WARP_SIZE;
-    const int  lane_id = threadIdx.x % WARP_SIZE;
-    const int2 offset  = Map::get_offset(warp_id, lane_id);
-
-    constexpr int N = Map::kAccessC;
-    static_assert(N == 8);
-
-    PRAGMA_UNROLL
-    for (int s = 0; s < Map::kIterS; ++s) {
+    template<int N>
+    __device__ auto operator()(const Array<uint8_t, N>& vi) const
+    {
+        Array<T, N> vo;
         PRAGMA_UNROLL
-        for (int c = 0; c < Map::kIterC; ++c) {
-            const int si = offset.y + s * Map::kDeltaS;
-            const int ci = offset.x + c * Map::kDeltaC;
-            //
-            (Array<uint8_t, N>&)tmp[si / 16][ci / 16][si % 16][ci % 16] = x[s][c];
-        }
-    }
+        for (int i = 0; i < N; i += 4) {
+            auto& ui = (const Array<uint8_t, 4>&)vi[i];
+            auto& uo = (Array<T, 4>&)vo[i];
 
-    __syncthreads();
+            if constexpr (std::is_same_v<T, half>) {
+                uo = cvt_f16x4_u8<true>(ui);
+            }
+            else if constexpr (std::is_same_v<T, float>) {
+                uo = cvt_f32x4_u8(ui);
+            }
+            else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+            }
 
-    PRAGMA_UNROLL
-    for (int s = 0; s < Map::kIterS; ++s) {
-        const int si = offset.y + s * Map::kDeltaS;
-        PRAGMA_UNROLL
-        for (int c = 0; c < Map::kIterC; ++c) {
             PRAGMA_UNROLL
-            for (int i = 0; i < N; ++i) {
-                const int ci = offset.x + c * Map::kDeltaC + i;
-                const int ss = si % 16;
-                const int cc = ci % 16;
-                const int sj = ss % 2 * 8 + ss % 8 / 2 * 2 + cc % 2;
-                const int cj = ss / 8 * 8 + cc / 2;
-                x[s][c][i]   = tmp[si / 16][ci / 16][sj][cj];
+            for (int j = 0; j < 4; ++j) {
+                uo[i] = uo[i] * scale_ + zero_;
             }
         }
+        return vo;
     }
-}
+};
 
 }  // namespace turbomind

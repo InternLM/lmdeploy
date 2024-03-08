@@ -34,6 +34,8 @@ struct AttentionParams {
     int*   cu_block_cnts;       // [B+1]
     int    kv_cache_block_size;
 
+    int layer_id;
+
     // batch-level params
     int token_num;
     int batch_size;
