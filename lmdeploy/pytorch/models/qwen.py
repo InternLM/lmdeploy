@@ -20,13 +20,19 @@ def _rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(t, freqs):
-    rot_dim = freqs.shape[-1]
-    t_, t_pass_ = t[..., :rot_dim], t[..., rot_dim:]
-    t_ = t_.float()
-    t_pass_ = t_pass_.float()
-    t_ = (t_ * freqs.cos()) + (_rotate_half(t_) * freqs.sin())
-    return torch.cat((t_, t_pass_), dim=-1).type_as(t)
+def rotate_half(x: torch.Tensor):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., :x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor):
+    """apply rotary."""
+    dtype = t.dtype
+    t_ = t.float()
+    t_ = (t_ * freqs.cos()) + (rotate_half(t_) * freqs.sin())
+    return t_.to(dtype)
 
 
 class PatchedQWenAttention(nn.Module):
@@ -61,7 +67,6 @@ class PatchedQWenAttention(nn.Module):
         hidden_states: torch.Tensor,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
@@ -99,15 +104,14 @@ class PatchedQWenAttention(nn.Module):
                 ntk_alpha = self._ntk_cached
             rotary_pos_emb = self.rotary_emb(
                 kv_seq_len, ntk_alpha=ntk_alpha).to(hidden_states.device)
-            if rotary_pos_emb is not None:
-                if isinstance(rotary_pos_emb, tuple):
-                    rotary_pos_emb = rotary_pos_emb
-                else:
-                    rotary_pos_emb = (rotary_pos_emb, ) * 2
+            if isinstance(rotary_pos_emb, tuple):
+                rotary_pos_emb = rotary_pos_emb
+            else:
+                rotary_pos_emb = (rotary_pos_emb, ) * 2
             q_pos_emb, k_pos_emb = rotary_pos_emb
-            cur_len = query_states.shape[1]
-            q_pos_emb = q_pos_emb[:, -cur_len:, :, :]
-            k_pos_emb = k_pos_emb[:, -cur_len:, :, :]
+            position_ids_1d = self.context.context.position_ids_1d
+            q_pos_emb = q_pos_emb[:, position_ids_1d, :, :]
+            k_pos_emb = k_pos_emb[:, position_ids_1d, :, :]
             query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
             key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
 
@@ -158,11 +162,8 @@ class PatchedQWenAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
+        position_ids: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """forward."""
@@ -171,9 +172,8 @@ class PatchedQWenAttention(nn.Module):
             world_size = dist.get_world_size()
         return self._contiguous_batching_forward_impl(
             hidden_states,
-            position_ids,
-            past_key_value,
-            output_attentions,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
             world_size=world_size,
         )
 
@@ -207,13 +207,6 @@ class PatchedQWenBlock(nn.Module):
         hidden_states: Optional[Tuple[torch.FloatTensor]],
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        layer_past: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = False,
-        output_attentions: Optional[bool] = False,
     ):
         layernorm_output = self.ln_1(hidden_states)
 
@@ -221,8 +214,6 @@ class PatchedQWenBlock(nn.Module):
             layernorm_output,
             position_ids=position_ids,
             past_key_value=past_key_value,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
         )
         attn_output = attn_outputs[0]
 
@@ -236,12 +227,7 @@ class PatchedQWenBlock(nn.Module):
         residual = layernorm_input
         mlp_output = self.mlp(layernorm_output)
         hidden_states = residual + mlp_output
-
-        if use_cache:
-            outputs = (hidden_states, ) + outputs
-        else:
-            outputs = (hidden_states, ) + outputs[1:]
-
+        outputs = (hidden_states, ) + outputs[1:]
         return outputs
 
 
@@ -250,14 +236,9 @@ class PatchedQWenModel(nn.Module):
     def _continuous_batching_forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of LlamaModel.forward."""
         if inputs_embeds is None:
@@ -274,8 +255,6 @@ class PatchedQWenModel(nn.Module):
                 hidden_states,
                 position_ids=position_ids,
                 past_key_value=past_key_value,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
             )
             hidden_states = layer_outputs[0]
 
@@ -307,14 +286,9 @@ class PatchedQWenModel(nn.Module):
         """Rewrite of LlamaModel.forward."""
         return self._continuous_batching_forward(
             input_ids,
-            attention_mask,
-            position_ids,
-            past_key_values,
-            inputs_embeds,
-            use_cache,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
         )
 
 

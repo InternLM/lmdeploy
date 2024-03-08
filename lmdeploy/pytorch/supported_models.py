@@ -35,7 +35,7 @@ _SUPPORTED_ARCHS = dict(
     # Mixtral-8x7B
     MixtralForCausalLM=True,
     # Qwen 7B-72B, Qwen-VL-7B
-    QWenLMHeadModel=False,
+    QWenLMHeadModel=True,
     # Qwen1.5 7B-72B
     Qwen2ForCausalLM=True,
 )
