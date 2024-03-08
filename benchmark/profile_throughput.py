@@ -33,6 +33,9 @@ def sample_requests(
     dataset = [(data['conversations'][0]['value'],
                 data['conversations'][1]['value']) for data in dataset]
 
+    # pre-sample to avoid go through all the dataset
+    dataset = random.sample(dataset, num_requests * 2)
+
     # Tokenize the prompts and completions.
     prompts = [prompt for prompt, _ in dataset]
     prompt_token_ids = tokenizer(prompts).input_ids
