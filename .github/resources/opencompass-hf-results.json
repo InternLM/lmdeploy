@@ -54,6 +54,28 @@
         "race-high": "84.82",
         "crows_pairs": "13.46"
     },
+    "internlm/internlm2-chat-20b": {
+        "ceval": "-",
+        "mmlu": "66.50",
+        "wic": "-",
+        "wsc": "-",
+        "triviaqa": "-",
+        "gsm8k": "79.53",
+        "race-middle": "-",
+        "race-high": "-",
+        "crows_pairs": "-"
+    },
+    "Qwen/Qwen1.5-7B-Chat": {
+        "ceval": "-",
+        "mmlu": "61.44",
+        "wic": "-",
+        "wsc": "-",
+        "triviaqa": "-",
+        "gsm8k": "55.65",
+        "race-middle": "-",
+        "race-high": "-",
+        "crows_pairs": "-"
+    },
     "mistralai/Mistral-7B-Instruct-v0.1": {
         "ceval": "-",
         "mmlu": "52.64",
