@@ -7,16 +7,19 @@ from PIL import Image
 
 
 def encode_image_base64(image: Image.Image):
+    """encode image to base64 format."""
     buffered = BytesIO()
     image.save(buffered, format='PNG')
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 
 def load_image_from_base64(image):
+    """load image from base64 format."""
     return Image.open(BytesIO(base64.b64decode(image)))
 
 
 def load_image_from_url(image_url):
+    """load image from image format of openai GPT4V."""
     headers = {
         'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '

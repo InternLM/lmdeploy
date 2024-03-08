@@ -13,11 +13,13 @@ VLPromptType = Tuple[str, List[PIL.Image.Image]]
 
 
 class VLChatTemplateWrapper:
+    """vl chat template wrapper."""
 
     def __init__(self, chat_template: BaseModel):
         self.chat_template = chat_template
 
     def prompt_to_messages(self, prompt: VLPromptType):
+        """convert prompt to GTP4V format."""
         messages = {
             'role': 'user',
             'content': [{
@@ -44,6 +46,7 @@ class VLChatTemplateWrapper:
 
     async def async_collect_pil_images(
             self, messages: Dict) -> List[PIL.Image.Image]:
+        """collect image from messages."""
         images = []
         for message in messages:
             role = message['role']
@@ -68,9 +71,11 @@ class VLChatTemplateWrapper:
         return images
 
     def append_image_token(self, prompt, num_images: int):
+        """append image token to user prompt."""
         return IMAGE_TOKEN * num_images + '\n' + prompt
 
     def convert_messages(self, messages, sequence_start=True):
+        """convert GPT4V message format to GPT4 text format."""
         new_messages = []
         for message in messages:
             role = message['role']
@@ -90,22 +95,27 @@ class VLChatTemplateWrapper:
             new_messages.append(new_item)
         return new_messages
 
-    def messages2prompt(self, messages, sequence_start=True):
+    def messages2prompt(self, messages, sequence_start=True) -> str:
+        """convert messages to decorated prompt."""
         new_messages = self.convert_messages(messages, sequence_start)
         return self.chat_template.messages2prompt(new_messages, sequence_start)
 
 
 class LlavaVLChatTemplateWrapper(VLChatTemplateWrapper):
+    """Llava vl chat template."""
     pass
 
 
 class YiVLChatTemplateWrapper(VLChatTemplateWrapper):
+    """Yi vl chat template."""
     pass
 
 
 class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
+    """Qwen vl chat template."""
 
     def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
         res = ''
         for i in range(num_images):
             res += f'Picture {str(i)}:{IMAGE_TOKEN}\n'
@@ -115,6 +125,7 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
 
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
+    """get vision language prompt template."""
     if model_name in ['yi-vl-6b', 'yi-vl-34b']:
         return YiVLChatTemplateWrapper(chat_template)
 

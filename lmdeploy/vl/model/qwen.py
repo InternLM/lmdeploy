@@ -11,6 +11,7 @@ from lmdeploy.vl.model.utils import load_model_from_weight_files
 
 
 class QwenVLModelWrapper:
+    """Qwen visual model wrapper."""
 
     def __init__(self, model_path, device='cuda'):
         self.model_path = model_path
@@ -18,6 +19,7 @@ class QwenVLModelWrapper:
         self.build_model()
 
     def build_model(self):
+        """init model and load weight."""
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
@@ -35,7 +37,8 @@ class QwenVLModelWrapper:
         self.model.eval().half()
 
     @torch.no_grad()
-    def forward(self, images: List[Image]):
+    def forward(self, images: List[Image]) -> List[torch.Tensor]:
+        """forward."""
         outputs = [x.convert('RGB') for x in images]
         outputs = [self.model.image_transform(x) for x in outputs]
         outputs = torch.stack(outputs, dim=0)
@@ -46,6 +49,7 @@ class QwenVLModelWrapper:
 
 
 class QwenVLModel:
+    """Qwen visual model."""
 
     def __init__(self, model_path):
         self.model_path = model_path

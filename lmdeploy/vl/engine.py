@@ -13,6 +13,7 @@ logger = get_logger('lmdeploy')
 
 
 class Record:
+    """Batching manager."""
 
     def __init__(self):
         self.number = []
@@ -23,18 +24,21 @@ class Record:
 
     def enqueue(self, images: List[Image], que: Union[queue.Queue,
                                                       asyncio.Queue]):
+        """add ith request to manager."""
         self.number.append(len(images))
         self.waiting.extend(images)
         self.res_que.append(que)
         self.total += len(images)
 
     def dequeue(self, max_batch_size):
+        """try to dequeue max batch size images."""
         inputs = self.waiting[:max_batch_size]
         self.waiting = self.waiting[max_batch_size:]
         self.total -= len(inputs)
         return inputs
 
     def nofify(self):
+        """set result if request i is finished."""
         if len(self.number) == 0 or self.number[0] < len(self.done):
             return False
         num_images = self.number.pop(0)
@@ -58,6 +62,7 @@ class ImageEncoder:
         self.work_thread = self._start_work_thread()
 
     def _start_work_thread(self):
+        """internal thread."""
 
         def _work_thread():
             asyncio.set_event_loop(self.loop)
@@ -69,6 +74,7 @@ class ImageEncoder:
         return thread
 
     async def _forward_loop(self):
+        """working loop to process images."""
         logger.info('start ImageEncoder._forward_loop')
         record = Record()
         while True:

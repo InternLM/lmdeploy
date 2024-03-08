@@ -21,7 +21,7 @@ logger = get_logger('lmdeploy')
 
 
 class LlavaVLModelWrapper(nn.Module):
-    """Llava visual model."""
+    """Llava visual model wrapper, for easy model loading."""
 
     def __init__(self, model_path, device='cuda'):
         super().__init__()
@@ -42,15 +42,18 @@ class LlavaVLModelWrapper(nn.Module):
         self.build_model()
 
     def _build_vision_tower(self):
+        """build visual encoder."""
         from llava.model.multimodal_encoder.builder import build_vision_tower
         return build_vision_tower(self.config)
 
     def _build_vision_projector(self):
+        """build projector."""
         from llava.model.multimodal_projector.builder import \
             build_vision_projector
         return build_vision_projector(self.config)
 
     def build_model(self):
+        """build vision model."""
         cfg = self.config
         vision_tower = getattr(cfg, 'mm_vision_tower',
                                getattr(cfg, 'vision_tower', None))
@@ -88,10 +91,11 @@ class LlavaVLModelWrapper(nn.Module):
         return outputs
 
     @torch.no_grad()
-    def forward(self, images: List[Image]):
+    def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""
         outputs = self.preprocess(images)
         if isinstance(outputs, list):
+            # images may have different size and can't concat
             new_outputs = []
             for output in outputs:
                 new_outputs.append(self._forward(output))
@@ -169,6 +173,7 @@ class LlavaVLModelWrapper(nn.Module):
 
 
 class LlavaVLModel(nn.Module):
+    """Llava visual model."""
 
     def __init__(self, model_path):
         super().__init__()
@@ -177,6 +182,6 @@ class LlavaVLModel(nn.Module):
         self.model.eval().half()
         load_model_from_weight_files(self, self.model_path)
 
-    def forward(self, images: List[Image]):
+    def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""
         return self.model.forward(images)

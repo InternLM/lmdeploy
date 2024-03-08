@@ -8,6 +8,7 @@ from transformers.utils.hub import get_checkpoint_shard_files
 
 
 def load_weight_ckpt(ckpt: str):
+    """load checkpoint."""
     if ckpt.endswith('.safetensors'):
         return load_file(ckpt)
     else:
@@ -15,6 +16,7 @@ def load_weight_ckpt(ckpt: str):
 
 
 def get_used_weight_files(folder, state_dict):
+    """get used checkpoint which contains keys in state_dict."""
     _index_file = os.path.join(folder, WEIGHTS_INDEX_NAME)
     _safe_index_file = os.path.join(folder, SAFE_WEIGHTS_INDEX_NAME)
     if os.path.exists(_index_file):
@@ -32,6 +34,7 @@ def get_used_weight_files(folder, state_dict):
 
 
 def load_model_from_weight_files(model, folder):
+    """load nn.Module weight from folder."""
     valid_files = get_used_weight_files(folder, model.state_dict())
     for file_name in valid_files:
         ckpt = os.path.join(folder, file_name)

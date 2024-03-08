@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
+import torch
 import torch.nn as nn
 from PIL.Image import Image
 
@@ -10,6 +11,8 @@ from .llava import LlavaVLModelWrapper
 
 
 def _build_yi_projector(config):
+    """build yi projector."""
+    # copy from https://github.com/01-ai/Yi/blob/main/VL/llava/model/multimodal_projector/builder.py # noqa: E501
     projector_type = getattr(config, 'mm_projector_type', 'linear')
 
     if projector_type == 'linear':
@@ -48,24 +51,23 @@ def _build_yi_projector(config):
 
 
 class YiVLModelWrapper(LlavaVLModelWrapper):
-    """Yi visual model."""
+    """Yi visual model wrapper."""
 
     def _build_vision_projector(self):
+        """build projector."""
         return _build_yi_projector(self.config)
 
 
 class YiVLModel(nn.Module):
+    """Yi visual model."""
 
     def __init__(self, model_path):
         super().__init__()
         self.model_path = model_path
         self.model = YiVLModelWrapper(model_path)
         self.model.eval().half()
-        self._load_model()
-
-    def _load_model(self):
         load_model_from_weight_files(self, self.model_path)
 
-    def forward(self, images: List[Image]):
+    def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""
         return self.model.forward(images)
