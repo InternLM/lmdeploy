@@ -15,22 +15,9 @@ def pipeline(model_path: str,
              **kwargs):
     """
     Args:
-        model_path (str): the path of a model.
-            It could be one of the following options:
-                - i) A local directory path of a turbomind model which is
-                    converted by `lmdeploy convert` command or download from
-                    ii) and iii).
-                - ii) The model_id of a lmdeploy-quantized model hosted
-                    inside a model repo on huggingface.co, such as
-                    "InternLM/internlm-chat-20b-4bit",
-                    "lmdeploy/llama2-chat-70b-4bit", etc.
-                - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm-chat-7b",
-                    "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
-                    and so on.
-        model_name (str): needed when model_path is a pytorch model on
-            huggingface.co, such as "internlm/internlm-chat-7b",
-            "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat" and so on.
+        model_path (str): the path of a vl model like 'liuhaotian/llava-v1.5-7b'
+            'liuhaotian/llava-v1.6-vicuna-7b', 'Qwen/Qwen-VL-Chat'.
+        model_name (str): deprecated, use chat_template_config instead.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
             config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
@@ -38,9 +25,13 @@ def pipeline(model_path: str,
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Examples:
-        >>> import lmdeploy
-        >>> pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
-        >>> response = pipe(['hi','say this is a test'])
+        >>> from lmdeploy.vl import pipeline, load_image_from_url
+        >>> from lmdeploy import TurbomindEngineConfig, ChatTemplateConfig
+        >>> pipe = pipeline('liuhaotian/llava-v1.5-7b',
+        ...                 backend_config=TurbomindEngineConfig(session_len=8192),
+        ...                 chat_template_config=ChatTemplateConfig(model_name='vicuna'))
+        >>> im = load_image_from_url('https://bkimg.cdn.bcebos.com/pic/b8014a90f603738da97755563251a751f81986184626')
+        >>> response = pipe([('describe this image', [im])])
         >>> print(response)
     """ # noqa E501
     from lmdeploy.serve.vl_async_engine import VLAsyncEngine
@@ -49,20 +40,12 @@ def pipeline(model_path: str,
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
-    backend = 'pytorch' if type(
-        backend_config) is PytorchEngineConfig else 'turbomind'
-    if 'tp' in kwargs:
-        logger.warning(
-            'The argument "tp" is deprecated and will be removed soon. '
-            'Please set "tp" in "backend_config"')
-        tp = kwargs['tp']
-        kwargs.pop('tp')
-    else:
-        tp = 1 if backend_config is None else backend_config.tp
+    assert type(backend_config) is TurbomindEngineConfig, \
+        'Only turbomind backend is supported.'
+    backend = 'turbomind'
     return VLAsyncEngine(model_path,
                          model_name=model_name,
                          backend=backend,
                          backend_config=backend_config,
                          chat_template_config=chat_template_config,
-                         tp=tp,
                          **kwargs)
