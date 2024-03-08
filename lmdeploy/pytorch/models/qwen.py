@@ -12,14 +12,6 @@ from ..dist_utils import (colwise_parallelize_linear_fn,
 from ..kernels import fill_kv_cache, paged_attention_fwd
 
 
-def _rotate_half(x):
-    from einops import rearrange
-
-    x = rearrange(x, '... (j d) -> ... j d', j=2)
-    x1, x2 = x.unbind(dim=-2)
-    return torch.cat((-x2, x1), dim=-1)
-
-
 def rotate_half(x: torch.Tensor):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., :x.shape[-1] // 2]
