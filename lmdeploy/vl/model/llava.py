@@ -164,9 +164,6 @@ class LlavaVLModel(nn.Module):
         self.model_path = model_path
         self.model = LlavaVLModelWrapper(model_path)
         self.model.eval().half()
-        self._load_model()
-
-    def _load_model(self):
         load_model_from_weight_files(self, self.model_path)
 
     def forward(self, images: List[Image]):
