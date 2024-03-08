@@ -67,7 +67,10 @@ def main(model_path: str,
                 new_kwargs[k] = v
         kwargs = new_kwargs
 
-    engine_cfg = TurbomindEngineConfig(**kwargs)
+    engine_cfg = TurbomindEngineConfig(model_name=model_name, tp=tp)
+    for k, v in kwargs.items():
+        if hasattr(engine_cfg, k):
+            setattr(engine_cfg, k, v)
 
     tm_model = tm.TurboMind.from_pretrained(
         model_path,
