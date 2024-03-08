@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import queue
+import time
 from threading import Thread
 from typing import List, Union
 
@@ -29,17 +30,19 @@ class Record:
         self.waiting.extend(images)
         self.res_que.append(que)
         self.total += len(images)
+        self.log('received', len(images))
 
     def dequeue(self, max_batch_size):
         """try to dequeue max batch size images."""
         inputs = self.waiting[:max_batch_size]
         self.waiting = self.waiting[max_batch_size:]
         self.total -= len(inputs)
+        self.log('process', len(inputs))
         return inputs
 
     def nofify(self):
         """set result if request i is finished."""
-        if len(self.number) == 0 or self.number[0] < len(self.done):
+        if len(self.number) == 0 or self.number[0] > len(self.done):
             return False
         num_images = self.number.pop(0)
         outputs = self.done[:num_images]
@@ -49,7 +52,12 @@ class Record:
             que.put(outputs)
         else:
             que._loop.call_soon_threadsafe(que.put_nowait, outputs)
+        self.log('done', num_images)
         return True
+
+    def log(self, task: str, num: int):
+        logger.info(f'ImageEncoder {task} {num} images, '
+                    f'left {self.total} images.')
 
 
 class ImageEncoder:
@@ -83,14 +91,19 @@ class ImageEncoder:
                 item = await self.que.get()
                 record.enqueue(item[0], item[1])
             inputs = record.dequeue(self.max_batch_size)
-            outputs = self.model.forward(inputs)
+            outputs = self.forward(inputs)
             record.done.extend(outputs)
             while record.nofify():
                 pass
 
     def forward(self, inputs: List[Image]):
         """Model forward."""
-        return self.model.forward(inputs)
+        time_start = time.perf_counter()
+        outputs = self.model.forward(inputs)
+        time_end = time.perf_counter()
+        logger.info(f'ImageEncoder forward {len(inputs)} images, '
+                    f'cost {time_end - time_start:.3f}s')
+        return outputs
 
     def infer(self, inputs: List[Image]):
         """infer."""
