@@ -956,26 +956,26 @@ async def chat_interactive_v1(request: GenerateRequest,
         return JSONResponse(ret)
 
 
-def serve(
-        model_path: str,
-        model_name: Optional[str] = None,
-        backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-        backend_config: Optional[Union[PytorchEngineConfig,
-                                       TurbomindEngineConfig]] = None,
-        chat_template_config: Optional[ChatTemplateConfig] = None,
-        server_name: str = '0.0.0.0',
-        server_port: int = 23333,
-        tp: int = 1,
-        allow_origins: List[str] = ['*'],
-        allow_credentials: bool = True,
-        allow_methods: List[str] = ['*'],
-        allow_headers: List[str] = ['*'],
-        log_level: str = 'ERROR',
-        api_keys: Optional[Union[List[str], str]] = None,
-        ssl: bool = False,
-        qos_config_path: str = '',
-        vision_language: bool = True,  # TODO may decide by hf config
-        **kwargs):
+def serve(model_path: str,
+          model_name: Optional[str] = None,
+          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+          backend_config: Optional[Union[PytorchEngineConfig,
+                                         TurbomindEngineConfig]] = None,
+          chat_template_config: Optional[ChatTemplateConfig] = None,
+          server_name: str = '0.0.0.0',
+          server_port: int = 23333,
+          tp: int = 1,
+          allow_origins: List[str] = ['*'],
+          allow_credentials: bool = True,
+          allow_methods: List[str] = ['*'],
+          allow_headers: List[str] = ['*'],
+          log_level: str = 'ERROR',
+          api_keys: Optional[Union[List[str], str]] = None,
+          ssl: bool = False,
+          qos_config_path: str = '',
+          task: Literal['text-generation',
+                        'vision-language'] = 'text-generation',
+          **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -1013,6 +1013,8 @@ def serve(
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
+        task (str): Determine what task pipeline will be applied. Currently supports
+            'text-generation' or 'vision-language'.
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1037,7 +1039,7 @@ def serve(
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
-    if vision_language:
+    if task == 'vision-language':
         from lmdeploy.serve.vl_async_engine import VLAsyncEngine as AsyncEngine
     VariableInterface.async_engine = AsyncEngine(
         model_path=model_path,
