@@ -12,6 +12,11 @@ from PIL.Image import Image
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.utils import load_model_from_weight_files
 
+try:
+    import llava
+except ImportError:
+    llava = None
+
 logger = get_logger('lmdeploy')
 
 
@@ -22,6 +27,12 @@ class LlavaVLModelWrapper(nn.Module):
         super().__init__()
         self.model_path = model_path
         self.device = device
+
+        # check llava install
+        if llava is None:
+            raise ImportError(
+                'To use LlavaVLModel, please install llava by '
+                'pip install git+https://github.com/haotian-liu/LLaVA.git')
 
         # currently, only support llava llama
         from llava.model.language_model.llava_llama import LlavaConfig

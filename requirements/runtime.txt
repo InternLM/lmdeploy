@@ -4,6 +4,7 @@ fuzzywuzzy
 mmengine-lite
 numpy
 peft<=0.8.2
+pillow
 pydantic>2.0.0
 pynvml
 safetensors
