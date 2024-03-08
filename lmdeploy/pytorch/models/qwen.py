@@ -4,12 +4,29 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.distributed._tensor import DeviceMesh
+from torch.distributed._tensor import DeviceMesh, Shard, distribute_tensor
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..dist_utils import (colwise_parallelize_linear_fn,
-                          rowwise_parallelize_linear_fn)
-from ..kernels import apply_rotary_pos_emb, fill_kv_cache, paged_attention_fwd
+                          rowwise_parallelize_linear_fn, try_to_local)
+from ..kernels import fill_kv_cache, paged_attention_fwd
+
+
+def _rotate_half(x):
+    from einops import rearrange
+
+    x = rearrange(x, '... (j d) -> ... j d', j=2)
+    x1, x2 = x.unbind(dim=-2)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(t, freqs):
+    rot_dim = freqs.shape[-1]
+    t_, t_pass_ = t[..., :rot_dim], t[..., rot_dim:]
+    t_ = t_.float()
+    t_pass_ = t_pass_.float()
+    t_ = (t_ * freqs.cos()) + (_rotate_half(t_) * freqs.sin())
+    return torch.cat((t_, t_pass_), dim=-1).type_as(t)
 
 
 class PatchedQWenAttention(nn.Module):
@@ -18,9 +35,16 @@ class PatchedQWenAttention(nn.Module):
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
         if mod_name in ['c_attn']:
-            colwise_parallelize_linear_fn(mod,
-                                          device_mesh=device_mesh,
-                                          to_local=True)
+            for name, param in mod.named_parameters():
+                splited_param = param.split(self.hidden_size, dim=0)
+                updated_param = []
+                for p in splited_param:
+                    dist_tensor = distribute_tensor(p, device_mesh, [Shard(0)])
+                    dist_tensor = try_to_local(dist_tensor)
+                    updated_param.append(dist_tensor)
+                param = torch.cat(updated_param)
+                dist_param = torch.nn.Parameter(param)
+                mod.register_parameter(name, dist_param)
         elif mod_name in ['c_proj']:
             rowwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
@@ -49,23 +73,44 @@ class PatchedQWenAttention(nn.Module):
 
         def __qkv_proj(hidden_states):
             """qkv_proj."""
-            qkv_states = self.wqkv(hidden_states)
-            query_states, key_states, value_states = qkv_states.split(
-                self.hidden_size, dim=2)
-            query_states = query_states.view(-1, self.num_heads, self.head_dim)
-            key_states = key_states.view(-1, self.num_heads, self.head_dim)
-            value_states = value_states.view(-1, self.num_heads, self.head_dim)
+            qkv_states = self.c_attn(hidden_states)
+            b, seq_len, _ = qkv_states.size()
+            query_states, key_states, value_states = qkv_states.chunk(3, dim=2)
+            num_heads = self.num_heads // world_size
+            query_states = query_states.view(b, seq_len, num_heads,
+                                             self.head_dim)
+            key_states = key_states.view(b, seq_len, num_heads, self.head_dim)
+            value_states = value_states.view(b, seq_len, num_heads,
+                                             self.head_dim)
             return query_states, key_states, value_states
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
             max_seq_len = position_ids.size(-1)
             kv_seq_len = max_seq_len + max(history_lengths)
-            cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                       seq_len=kv_seq_len)
-            query_states, key_states = apply_rotary_pos_emb(
-                query_states, key_states, cos, sin, position_ids,
-                getattr(context, 'position_ids_1d', None))
+            if (self.use_dynamic_ntk and kv_seq_len == hidden_states.size()[1]
+                    and not self.training):
+                import math
+                context_value = math.log(kv_seq_len / self.seq_length, 2) + 1
+                ntk_alpha = 2**math.ceil(context_value) - 1
+                ntk_alpha = max(ntk_alpha, 1)
+                self._ntk_cached = ntk_alpha
+            else:
+                ntk_alpha = self._ntk_cached
+            rotary_pos_emb = self.rotary_emb(
+                kv_seq_len, ntk_alpha=ntk_alpha).to(hidden_states.device)
+            if rotary_pos_emb is not None:
+                if isinstance(rotary_pos_emb, tuple):
+                    rotary_pos_emb = rotary_pos_emb
+                else:
+                    rotary_pos_emb = (rotary_pos_emb, ) * 2
+            q_pos_emb, k_pos_emb = rotary_pos_emb
+            cur_len = query_states.shape[1]
+            q_pos_emb = q_pos_emb[:, -cur_len:, :, :]
+            k_pos_emb = k_pos_emb[:, -cur_len:, :, :]
+            query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
+            key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
+
             return query_states, key_states, value_states
 
         context = self.context.context
@@ -73,12 +118,14 @@ class PatchedQWenAttention(nn.Module):
         block_offsets = context.block_offsets
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
-
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
-
+        query_states = query_states.flatten(0, 1)
+        key_states = key_states.flatten(0, 1)
+        value_states = value_states.flatten(0, 1)
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
+
         fill_kv_cache(key_states,
                       value_states,
                       past_key_value[0],
@@ -94,8 +141,8 @@ class PatchedQWenAttention(nn.Module):
         max_seq_len = position_ids.size(-1)
         paged_attention_fwd(
             query_states,
-            past_key_value[0],
-            past_key_value[1],
+            past_key_value[0].type_as(query_states),
+            past_key_value[1].type_as(query_states),
             attn_output,
             block_offsets,
             q_start_loc=q_start_loc,
@@ -103,10 +150,9 @@ class PatchedQWenAttention(nn.Module):
             kv_seqlens=kv_seq_length,
             max_seqlen=max_seq_len,
         )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
-
+        attn_output = attn_output.flatten(1, 2)
         attn_output = self.c_proj(attn_output)
-
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
         return attn_output, None, past_key_value
 
     def forward(
@@ -138,7 +184,7 @@ class PatchedQWenMLP(nn.Module):
     def _distribute_partition_fn(cls, mod_name: str, mod: nn.Module,
                                  device_mesh: DeviceMesh):
         """Distribution partition callback."""
-        if mod_name in ['w1', 'w3']:
+        if mod_name in ['w1', 'w2']:
             colwise_parallelize_linear_fn(mod,
                                           device_mesh=device_mesh,
                                           to_local=True)
@@ -151,6 +197,51 @@ class PatchedQWenMLP(nn.Module):
     def _distribute_output_fn(cls, outputs, device_mesh: DeviceMesh):
         """Distribution output hook."""
         dist.all_reduce(outputs)
+        return outputs
+
+
+class PatchedQWenBlock(nn.Module):
+
+    def forward(
+        self,
+        hidden_states: Optional[Tuple[torch.FloatTensor]],
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        layer_past: Optional[Tuple[torch.Tensor]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
+    ):
+        layernorm_output = self.ln_1(hidden_states)
+
+        attn_outputs = self.attn(
+            layernorm_output,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+        )
+        attn_output = attn_outputs[0]
+
+        outputs = attn_outputs[1:]
+
+        residual = hidden_states
+        layernorm_input = attn_output + residual
+
+        layernorm_output = self.ln_2(layernorm_input)
+
+        residual = layernorm_input
+        mlp_output = self.mlp(layernorm_output)
+        hidden_states = residual + mlp_output
+
+        if use_cache:
+            outputs = (hidden_states, ) + outputs
+        else:
+            outputs = (hidden_states, ) + outputs[1:]
+
         return outputs
 
 
@@ -181,7 +272,7 @@ class PatchedQWenModel(nn.Module):
                               if past_key_values is not None else None)
             layer_outputs = decoder_layer(
                 hidden_states,
-                position_ids,
+                position_ids=position_ids,
                 past_key_value=past_key_value,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
@@ -225,3 +316,16 @@ class PatchedQWenModel(nn.Module):
             output_hidden_states,
             return_dict,
         )
+
+
+class PatchedRMSNorm(nn.Module):
+    """Rewrite RMSNorm."""
+
+    def forward(self, hidden_states):
+        """forward."""
+        # torch.nn.functional.normalize based implementation might leads
+        # to wrong output
+        from ..kernels import rms_norm
+        ret = rms_norm(hidden_states, self.weight, self.eps)
+
+        return ret
