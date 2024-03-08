@@ -93,8 +93,8 @@ class PatchedQWenAttention(nn.Module):
             """rotary embedding func."""
             max_seq_len = position_ids.size(-1)
             kv_seq_len = max_seq_len + max(history_lengths)
-            if (self.use_dynamic_ntk and kv_seq_len == hidden_states.size()[1]
-                    and not self.training):
+            if (self.use_dynamic_ntk
+                    and kv_seq_len == hidden_states.size()[1]):
                 import math
                 context_value = math.log(kv_seq_len / self.seq_length, 2) + 1
                 ntk_alpha = 2**math.ceil(context_value) - 1
@@ -109,7 +109,7 @@ class PatchedQWenAttention(nn.Module):
             else:
                 rotary_pos_emb = (rotary_pos_emb, ) * 2
             q_pos_emb, k_pos_emb = rotary_pos_emb
-            position_ids_1d = self.context.context.position_ids_1d
+
             q_pos_emb = q_pos_emb[:, position_ids_1d, :, :]
             k_pos_emb = k_pos_emb[:, position_ids_1d, :, :]
             query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
@@ -120,6 +120,7 @@ class PatchedQWenAttention(nn.Module):
         context = self.context.context
         history_lengths = context.history_lengths
         block_offsets = context.block_offsets
+        position_ids_1d = context.position_ids_1d
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
         query_states, key_states, value_states = __rotary_emb_fn(
@@ -145,8 +146,8 @@ class PatchedQWenAttention(nn.Module):
         max_seq_len = position_ids.size(-1)
         paged_attention_fwd(
             query_states,
-            past_key_value[0].type_as(query_states),
-            past_key_value[1].type_as(query_states),
+            past_key_value[0],
+            past_key_value[1],
             attn_output,
             block_offsets,
             q_start_loc=q_start_loc,
