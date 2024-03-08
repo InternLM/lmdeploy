@@ -258,7 +258,7 @@ class EncodeResponse(BaseModel):
 
 class GenerateRequest(BaseModel):
     """Generate request."""
-    prompt: Union[str, List[Dict[str, str]]]
+    prompt: Union[str, List[Dict[str, Any]]]
     session_id: int = -1
     interactive_mode: bool = False
     stream: bool = False
