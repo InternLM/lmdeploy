@@ -336,6 +336,26 @@ struct TopK_2 {
     }
 };
 
+template<>
+struct TopK_2<int> {
+    int p = -1;
+    int u = std::numeric_limits<int>::min();
+
+    __device__ __forceinline__ void insert(int elem, int elem_id)
+    {
+        if (elem > u) {
+            u = elem;
+            p = elem_id;
+        }
+    }
+
+    __device__ __forceinline__ void init()
+    {
+        p = -1;
+        u = std::numeric_limits<int>::min();
+    }
+};
+
 template<typename T>
 __device__ __forceinline__ TopK_2<T> reduce_topk_op_2(const TopK_2<T>& a, const TopK_2<T>& b)
 {

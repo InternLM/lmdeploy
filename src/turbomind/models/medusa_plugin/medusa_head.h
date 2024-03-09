@@ -38,6 +38,7 @@ public:
 private:
     void allocate_buffer(size_t batch_size);
     void free_buffer();
+    void top_k(int* h_topk_output_ids, const T* d_input_logits, const size_t batch_size, const int k = 1);
 
 private:
     size_t in_size_;
@@ -47,7 +48,9 @@ private:
     std::unique_ptr<ResBlock<T>>    resblock_;
     std::unique_ptr<LlamaLinear<T>> linear_;
 
-    T* resblock_buf_;
+    T*    resblock_buf_;
+    void* workspace_buf_;
+    T*    medusa_head_logits_buf_;
 
     cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;
