@@ -41,7 +41,7 @@ private:
 
 private:
     size_t in_size_;
-    size_t out_size_;
+    size_t vocab_size_;
     size_t medusa_num_heads_;
 
     std::unique_ptr<ResBlock<T>>    resblock_;

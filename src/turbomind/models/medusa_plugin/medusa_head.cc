@@ -11,7 +11,7 @@ namespace turbomind {
 
 template<typename T>
 MedusaHead<T>::MedusaHead(size_t           in_size,
-                          size_t           out_size,
+                          size_t           vocab_size,
                           size_t           medusa_num_heads,
                           cudaStream_t     stream,
                           cublasMMWrapper* cublas_wrapper,
@@ -19,7 +19,7 @@ MedusaHead<T>::MedusaHead(size_t           in_size,
                           NcclParam        tensor_para,
                           bool             is_free_buffer_after_forward):
     in_size_(in_size),
-    out_size_(out_size),
+    vocab_size_(vocab_size),
     medusa_num_heads_(medusa_num_heads),
     stream_(stream),
     cublas_wrapper_(cublas_wrapper),
@@ -36,12 +36,12 @@ void MedusaHead<T>::forward(TensorMap*             output_tensors,
                             const TensorMap*       input_tensors,
                             const MedusaWeight<T>& medusa_weight)
 {
-    const size_t     batch_size             = input_tensors->at("medusa_head_input").shape[0];
-    const T*         hidden_states          = input_tensors->at("medusa_head_input").getPtr<T>();
-    std::vector<T*>* medusa_head_logits_vec = output_tensors->at("medusa_head_output").getPtr<std::vector<T*>>();
+    const size_t batch_size             = input_tensors->at("medusa_head_input").shape[0];
+    const T*     hidden_states          = input_tensors->at("medusa_head_input").getPtr<T>();
+    T*           medusa_head_logits_ptr = output_tensors->at("medusa_head_output").getPtr<T>();
     // TODO parallelize this loop
     for (int i = 0; i < medusa_num_heads_; i++) {
-        T* medusa_head_logits = (*medusa_head_logits_vec)[i];
+        T* medusa_head_logits = medusa_head_logits_ptr + i * batch_size * vocab_size_;
         forward(medusa_head_logits, hidden_states, batch_size, medusa_weight, i);
     }
 }
@@ -60,7 +60,7 @@ void MedusaHead<T>::forward(T*                     medusa_head_output,
 
     if (tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(medusa_head_output, medusa_head_output, batch_size * out_size_, tensor_para_, stream_);
+        ftNcclAllReduceSum(medusa_head_output, medusa_head_output, batch_size * vocab_size_, tensor_para_, stream_);
         sync_check_cuda_error();
     }
 
