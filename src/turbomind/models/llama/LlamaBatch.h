@@ -15,6 +15,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include <condition_variable>
 #include <mutex>
+#include <ostream>
 #include <type_traits>
 
 namespace turbomind {
@@ -38,6 +39,15 @@ struct BatchState {
     // |<----------- active ----------->|<-- inactive -->|
     int active_size;
     int size;
+};
+
+struct MedusaState {
+    int  index;
+    int  len;
+    int  verified_len;
+    bool inited;
+
+    friend std::ostream& operator<<(std::ostream& os, const MedusaState& medusa_state);
 };
 
 template<typename T>
@@ -95,7 +105,8 @@ public:
                              const std::vector<int>&             lengths,
                              const std::vector<const Sequence*>& sequences);
 
-    explicit LlamaBatch(const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model);
+    explicit LlamaBatch(
+        const EngineParams& params, int cache_block_seq_len, int quant_policy, LlamaV2<T>* model, int medusa_num_heads);
 
     ~LlamaBatch()
     {
@@ -182,6 +193,15 @@ private:
     {
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
+
+    void MedusaCopy(const int mini_batch_size, const int first);
+    void MedusaVerify(const int inited_index);
+    void MedusaGenerate(const int         inited_index,
+                        const int         new_index,
+                        std::vector<int>& new_seq_lm_head_output_ids,
+                        std::vector<int>& new_seq_topk_output_ids,
+                        std::vector<int>& inited_seq_lm_head_output_ids,
+                        std::vector<int>& inited_seq_topk_output_ids);
 
 private:
     const int  max_batch_size_;
@@ -292,6 +312,26 @@ private:
     const int num_tokens_per_iter_;
     const int extra_tokens_per_iter_;
     const int max_prefill_iters_;
+
+    int                      medusa_num_heads_ = 0;
+    bool                     medusa_enable_    = false;
+    std::vector<MedusaState> medusa_state_vec_;
+
+    T* medusa_inited_seq_hidden_states_buf_{};
+    T* medusa_new_seq_last_hidden_state_buf_{};
+    T* medusa_inited_seq_verified_last_hidden_state_buf_{};
+
+    int* medusa_inited_input_ids_buf_{};
+
+    float* medusa_logits_buf_{};
+    float* medusa_local_logits_buf_{};
+
+    int* medusa_output_ids_buf_{};
+    int* medusa_end_ids_buf_{};
+    int* medusa_verified_last_output_ids_buf_{};
+
+    int* max_match_length_buf_{};
+    int* h_max_match_length_buf_{};
 };
 
 }  // namespace turbomind

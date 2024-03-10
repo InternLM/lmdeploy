@@ -12,8 +12,8 @@
 namespace turbomind {
 
 template<typename T>
-MedusaWeight<T>::MedusaWeight(size_t     medusa_num_heads,
-                              size_t     medusa_num_layers,
+MedusaWeight<T>::MedusaWeight(int        medusa_num_heads,
+                              int        medusa_num_layers,
                               size_t     hidden_size,
                               size_t     vocab_size,
                               WeightType weight_type,

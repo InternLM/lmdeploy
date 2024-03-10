@@ -13,7 +13,7 @@ namespace turbomind {
 template<typename T>
 MedusaHead<T>::MedusaHead(size_t           in_size,
                           size_t           vocab_size,
-                          size_t           medusa_num_heads,
+                          int              medusa_num_heads,
                           cudaStream_t     stream,
                           cublasMMWrapper* cublas_wrapper,
                           IAllocator*      allocator,
@@ -96,29 +96,9 @@ template<typename T>
 void MedusaHead<T>::top_k(int* h_topk_output_ids, const T* d_input_logits, const size_t batch_size, const int k)
 {
     size_t workspace_size_now = 0;
-    invokeBatchTopKOnly(nullptr,
-                        workspace_size_now,
-                        d_input_logits,
-                        nullptr,
-                        k,
-                        nullptr,
-                        vocab_size_,
-                        nullptr,
-                        stream_,
-                        batch_size,
-                        nullptr);
+    invokeBatchTopK(nullptr, workspace_size_now, d_input_logits, k, vocab_size_, stream_, batch_size);
     workspace_buf_ = (void*)allocator_->reMalloc(workspace_buf_, workspace_size_now, false);
-    invokeBatchTopKOnly(workspace_buf_,
-                        workspace_size_now,
-                        d_input_logits,
-                        nullptr,
-                        k,
-                        nullptr,
-                        vocab_size_,
-                        nullptr,
-                        stream_,
-                        batch_size,
-                        nullptr);
+    invokeBatchTopK(workspace_buf_, workspace_size_now, d_input_logits, k, vocab_size_, stream_, batch_size);
     int  offset          = (int)(ceil(batch_size * vocab_size_ / 4.)) * 4;
     int  output_size     = (int)(ceil(batch_size * k / 4.)) * 4;
     int* topk_output_ids = (int*)(((T*)workspace_buf_) + offset);

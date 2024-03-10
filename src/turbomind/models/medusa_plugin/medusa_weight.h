@@ -13,8 +13,8 @@ namespace turbomind {
 template<typename T>
 class MedusaWeight {
 public:
-    MedusaWeight(size_t     medusa_num_heads,
-                 size_t     medusa_num_layers,
+    MedusaWeight(int        medusa_num_heads,
+                 int        medusa_num_layers,
                  size_t     hidden_size,
                  size_t     vocab_size,
                  WeightType weight_type,
@@ -38,8 +38,8 @@ private:
     void load_bias(LlamaDenseWeight<T>* weight, const std::string& path, FtCudaDataType model_file_type);
 
 private:
-    size_t     medusa_num_heads_;
-    size_t     medusa_num_layers_;
+    int        medusa_num_heads_;
+    int        medusa_num_layers_;
     size_t     hidden_size_;
     size_t     vocab_size_;
     WeightType weight_type_;

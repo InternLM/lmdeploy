@@ -908,7 +908,6 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
 template<int BLOCK_SIZE_>
 __global__ void medusaBatchedMatchKernel(const int* __restrict__ input_ids,
                                          const int* __restrict__ output_ids,
-                                         int*      match_idx,
                                          int*      match_length,
                                          const int path_num,
                                          int       size)
@@ -943,32 +942,29 @@ __global__ void medusaBatchedMatchKernel(const int* __restrict__ input_ids,
 
     if (tid == 0) {
         const int index     = bid;
-        match_idx[index]    = total.p;
         match_length[index] = total.u;
     }
     __syncthreads();
 }
 
-void invokeMedusaBatchedMatchKernel(const int*   input_ids,
-                                    const int*   output_ids,
-                                    int*         max_match_idx,
-                                    int*         max_match_length,
-                                    int          batch_size,
-                                    int          path_num,
-                                    int          medusa_head_num,
-                                    cudaStream_t stream)
+void invokeMedusaBatchMatch(const int*   input_ids,
+                            const int*   output_ids,
+                            int*         max_match_length,
+                            int          batch_size,
+                            int          path_num,
+                            int          medusa_head_num,
+                            cudaStream_t stream)
 {
     // inputs:
     // input_ids: [batch_size, path_num, 1 + medusa_head_num]
     // output_ids: [batch_size, path_num, 1 + medusa_head_num]
     // outputs:
-    // max_match_idx: [batch_size]
     // max_match_length: [batch_size]
     dim3 grid, block;
     grid.x  = batch_size;
     block.x = 64;
-    medusaBatchedMatchKernel<64><<<grid, block, 0, stream>>>(
-        input_ids, output_ids, max_match_idx, max_match_length, path_num, medusa_head_num);
+    medusaBatchedMatchKernel<64>
+        <<<grid, block, 0, stream>>>(input_ids, output_ids, max_match_length, path_num, medusa_head_num);
 }
 
 }  // namespace turbomind

@@ -204,6 +204,9 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_params_.extra_tokens_per_iter = reader.GetInteger("llama", "extra_tokens_per_iter", 0);
     engine_params_.max_prefill_iters     = reader.GetInteger("llama", "max_prefill_iters", 1);
 
+    medusa_num_heads_  = reader.GetInteger("llama", "medusa_num_heads", 0);
+    medusa_num_layers_ = reader.GetInteger("llama", "medusa_num_layers", 0);
+
     handleMissingParams();
 
     shared_state_          = std::make_shared<typename ft::LlamaV2<T>::SharedState>();
@@ -308,7 +311,9 @@ std::unique_ptr<LlamaTritonSharedModelInstance<T>> LlamaTritonModel<T>::createSh
                                                   cublas_wrapper.get(),
                                                   allocator.get(),
                                                   false,  // is_free_buffer_after_forward,
-                                                  cuda_device_prop_ptr.get());
+                                                  cuda_device_prop_ptr.get(),
+                                                  medusa_num_heads_,
+                                                  medusa_num_layers_);
 
     return std::make_unique<LlamaTritonSharedModelInstance<T>>(
         LlamaTritonSharedModelInstance<T>{std::move(allocator),
@@ -368,7 +373,9 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                       weight_type_,
                                                                       group_size_,
                                                                       tensor_para_size_,
-                                                                      tensor_para_rank);
+                                                                      tensor_para_rank,
+                                                                      medusa_num_heads_,
+                                                                      medusa_num_layers_);
     // model inited with model_dir
     if (model_dir_ != "") {
         shared_weights_[device_id]->loadModel(model_dir_);
@@ -406,7 +413,7 @@ std::string LlamaTritonModel<T>::toString()
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
        << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << quant_policy_ << "\ngroup_size: " << group_size_
-       << std::endl;
+       << "\nmedusa_num_heads: " << medusa_num_heads_ << "\nmedusa_num_layers: " << medusa_num_layers_ << std::endl;
 
     return ss.str();
 }

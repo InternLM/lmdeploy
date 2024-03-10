@@ -40,6 +40,8 @@ struct Sequence {
     explicit Sequence(uint64_t _id): id(_id) {}
 
     friend std::ostream& operator<<(std::ostream& os, const Sequence& seq);
+
+    mutable size_t iter = 0;
 };
 
 using Sequences = std::vector<const Sequence*>;

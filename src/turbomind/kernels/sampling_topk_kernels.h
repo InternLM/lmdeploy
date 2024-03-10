@@ -96,15 +96,11 @@ void invokeTopKTopPSampling(void*          workspace,
                             cudaStream_t   stream);
 
 template<typename T>
-void invokeBatchTopKOnly(void*        workspace,
-                         size_t&      workspace_size,
-                         const T*     log_probs,
-                         bool*        finished,
-                         const int    max_top_k,
-                         const int*   top_ks,
-                         const int    vocab_size_padded,
-                         const int*   end_ids,
-                         cudaStream_t stream,
-                         const int    batch_size,
-                         const bool*  skip_decode);
+void invokeBatchTopK(void*        workspace,
+                     size_t&      workspace_size,
+                     const T*     log_probs,
+                     const int    max_top_k,
+                     const int    vocab_size_padded,
+                     cudaStream_t stream,
+                     const int    batch_size);
 }  // namespace turbomind
