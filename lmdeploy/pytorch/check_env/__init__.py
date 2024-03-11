@@ -140,4 +140,4 @@ def check_model(model_path: str, trust_remote_code: bool = True):
     """check model requirements."""
     logger = get_logger('lmdeploy')
     logger.info('Checking model.')
-    check_transformers_version(model_path)
+    check_transformers_version(model_path, trust_remote_code)
