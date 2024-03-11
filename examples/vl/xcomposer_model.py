@@ -67,6 +67,9 @@ class InternLMXComposerTemplate(BaseChatTemplate):
                        assistant=self.eoa + self.stop_word_suffix,
                        system=self.eosys)
         ret = ''
+        if self.meta_instruction is not None:
+            if len(messages) and messages[0]['role'] != 'system':
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
             content = message['content']
