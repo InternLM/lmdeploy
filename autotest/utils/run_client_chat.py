@@ -10,7 +10,7 @@ def command_line_test(config,
                       case_info,
                       model_case,
                       type,
-                      extra,
+                      extra: str = None,
                       cuda_prefix: str = None):
     dst_path = config.get('dst_path')
 
@@ -24,12 +24,16 @@ def command_line_test(config,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
-        if 'kvint8' in model_case and 'w4' not in model_case:
-            cmd += ' --model-format hf --quant-policy 4'
-        if 'kvint8' in model_case and 'w4' in model_case:
+        if 'kvint8' in model_case:
             cmd += ' --quant-policy 4'
-        if 'w4' in model_case:
+            if 'w4' in model_case or '4bits' in model_case:
+                cmd += ' --model-format awq'
+            else:
+                cmd += ' --model-format hf'
+        elif 'w4' in model_case or '4bits' in model_case:
             cmd += ' --model-format awq'
+        if 'chat' not in model_case.lower():
+            cmd += ' --cap completion'
     return command_test(config, [cmd], model_case, case, case_info,
                         type == 'turbomind')
 
@@ -48,11 +52,13 @@ def hf_command_line_test(config,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if 'kvint8' in model_case and 'w4' not in model_case:
-        cmd += ' --model-format hf --quant-policy 4'
-    if 'kvint8' in model_case and 'w4' in model_case:
+    if 'kvint8' in model_case:
         cmd += ' --quant-policy 4'
-    if 'w4' in model_case:
+        if 'w4' in model_case or '4bits' in model_case:
+            cmd += ' --model-format awq'
+        else:
+            cmd += ' --model-format hf'
+    elif 'w4' in model_case or '4bits' in model_case:
         cmd += ' --model-format awq'
     return command_test(config, [cmd], model_case,
                         '_'.join(['hf', type, case]), case_info, True)
@@ -66,8 +72,12 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
         log_path = config.get('log_path')
         model_name = get_model_name(model)
 
-        chat_log = os.path.join(log_path,
-                                'chat_' + model + '_' + case + '.log')
+        if '/' in model:
+            chat_log = os.path.join(
+                log_path, 'chat_' + model.split('/')[1] + '_' + case + '.log')
+        else:
+            chat_log = os.path.join(log_path,
+                                    'chat_' + model + '_' + case + '.log')
 
         file = open(chat_log, 'w')
 
@@ -78,7 +88,7 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if model == 'CodeLlama-7b-Instruct-hf':
+        if 'CodeLlama-7b-Instruct-hf' in model:
             spliter = '\n!!\n'
         # join prompt together
         prompt = ''
@@ -136,15 +146,13 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
 # 从输出中解析模型输出的对话内容
 def parse_dialogue(inputs: str, model: str):
     dialogues = inputs.strip()
-    if model == 'CodeLlama-7b-Instruct-hf':
+    if 'CodeLlama-7b-Instruct-hf' in model:
         sep = 'enter !! to end the input >>>'
     else:
         sep = 'double enter to end input >>>'
     dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
     dialogues = [d.strip() for d in dialogues]
-    if 'Llama' in model:
-        return dialogues
     return dialogues[1:-1]  # 去除首尾无用字符
 
 

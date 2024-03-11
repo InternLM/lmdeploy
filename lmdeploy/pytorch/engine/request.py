@@ -13,13 +13,12 @@ logger = get_logger('lmdeploy')
 
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
-    msg = ('Engine loop failed!')
     try:
         task.result()
     except asyncio.CancelledError:
         return
-    except Exception as exc:
-        raise RuntimeError(msg) from exc
+    except Exception as e:
+        logger.exception(f'Engine loop failed with error: {e}')
 
 
 def _ignore_exception_on_finish(task: asyncio.Task) -> None:
@@ -158,6 +157,8 @@ class RequestSender:
             except Empty:
                 continue
             except Exception as e:
+                logger.exception(
+                    f'sender[{self.sender_id}] get response failed: {e}')
                 raise e
 
     async def _async_resp_get(self):
@@ -177,6 +178,8 @@ class RequestSender:
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
+                    logger.exception(
+                        f'sender[{self.sender_id}] get response failed: {e}')
                     raise e
 
         if self.is_thread_safe():
