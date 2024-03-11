@@ -7,14 +7,14 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-BASE_HTTP_URL = 'http://10.140.0.187'
+BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2-chat-20b'
 MODEL_NAME = 'internlm2-chat-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
-@pytest.mark.order(7)
+@pytest.mark.order(8)
 @pytest.mark.turbomind
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatCompletions:
@@ -168,8 +168,8 @@ class TestRestfulInterfaceChatCompletions:
         assert len(outputList) == 2
 
 
-@pytest.mark.order(7)
-@pytest.mark.restful_interface_turbomind
+@pytest.mark.order(8)
+@pytest.mark.turbomind
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatInteractive:
 

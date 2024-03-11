@@ -323,4 +323,8 @@ jobs:
       - name: fail notify
         if: contains(needs.*.result, 'failure')
         run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- daily test failed","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test failed！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+      - name: success notify
+        if: needs.test_functions.result=='success' && needs.test_triton.result=='success'
+        run: |
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test success","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}

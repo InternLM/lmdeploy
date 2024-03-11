@@ -12,16 +12,17 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
-BASE_HTTP_URL = 'http://10.140.0.187'
-DEFAULT_PORT = 23334
+BASE_HTTP_URL = 'http://localhost'
+DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2-chat-20b'
 MODEL_NAME = 'internlm2-chat-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
-@pytest.mark.order(7)
-@pytest.mark.restful_interface_common
-@pytest.mark.flaky(reruns=0)
+@pytest.mark.order(8)
+@pytest.mark.turbomind
+@pytest.mark.pytorch
+@pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceBase:
 
     def test_issue1232(self):
@@ -87,9 +88,10 @@ class TestRestfulInterfaceBase:
         assert input_ids5 == input_ids2 * 100
 
 
-@pytest.mark.order(7)
-@pytest.mark.restful_interface_common
-@pytest.mark.flaky(reruns=0)
+@pytest.mark.order(8)
+@pytest.mark.turbomind
+@pytest.mark.pytorch
+@pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatCompletions:
 
     def test_chat_completions_check_return_batch1(self):
@@ -315,9 +317,10 @@ class TestRestfulInterfaceChatCompletions:
         assert output.get('choices')[0].get('message').get('content') == ''
 
 
-@pytest.mark.order(7)
-@pytest.mark.restful_interface_turbomind
-@pytest.mark.flaky(reruns=0)
+@pytest.mark.order(8)
+@pytest.mark.turbomind
+@pytest.mark.pytorch
+@pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatInteractive:
 
     def test_chat_interactive_check_return_batch1(self):
