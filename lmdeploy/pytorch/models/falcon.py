@@ -148,11 +148,11 @@ class PatchedFalconAttention(nn.Module):
         context = self.context.context
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
         block_offsets = context.block_offsets
         position_ids_1d = context.position_ids_1d
+        max_kv_seq_length = context.max_kv_seq_length
 
         def __maybe_rotary_fn(query_states, key_states, value_states):
             scaling_factor = 1.0
@@ -169,10 +169,8 @@ class PatchedFalconAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            kv_seq_len = max_seq_length + max(history_lengths)
-
             cos, sin = self.rotary_emb(value_states.transpose(0, 1),
-                                       kv_seq_len)
+                                       max_kv_seq_length)
             query_states, key_states = apply_rotary_pos_emb(
                 query_states, key_states, cos, sin, context.position_ids,
                 position_ids_1d)
@@ -194,15 +192,17 @@ class PatchedFalconAttention(nn.Module):
                 query_layer, key_layer, value_layer)
 
         past_key, past_value = layer_past
-        fill_kv_cache(key_layer.contiguous(),
-                      value_layer.contiguous(),
-                      past_key,
-                      past_value,
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_layer.contiguous(),
+            value_layer.contiguous(),
+            past_key,
+            past_value,
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_q_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_layer
 
@@ -215,7 +215,7 @@ class PatchedFalconAttention(nn.Module):
                                 q_start_loc=q_start_loc,
                                 q_seqlens=q_seq_length,
                                 kv_seqlens=kv_seq_length,
-                                max_seqlen=max_seq_length)
+                                max_seqlen=max_q_seq_length)
 
         else:
             num_heads_full = self.num_heads
@@ -232,7 +232,7 @@ class PatchedFalconAttention(nn.Module):
                                       b_start_loc=q_start_loc,
                                       b_seq_len=q_seq_length,
                                       b_kv_seq_len=kv_seq_length,
-                                      max_input_len=max_seq_length,
+                                      max_input_len=max_q_seq_length,
                                       head_offset=head_offset,
                                       num_heads=num_heads_full,
                                       alibi_scale=self.inv_norm_factor)
@@ -297,22 +297,17 @@ class PatchedFalconModel(nn.Module):
         use_cache = True
         use_alibi = getattr(self, 'use_alibi', getattr(self, 'alibi', False))
 
-        # Prepare head mask if needed
-        # 1.0 in head_mask indicate we keep the head
-        # attention_probs has shape batch_size x num_heads x N x N
-        # head_mask has shape n_layer x batch x num_heads x N x N
-        head_mask = self.get_head_mask(head_mask,
-                                       self.config.num_hidden_layers)
-
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
+
+        head_mask = self.get_head_mask(head_mask,
+                                       self.config.num_hidden_layers)
 
         hidden_states = inputs_embeds
 
         # Compute alibi tensor: check build_alibi_tensor documentation
 
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
-
             outputs = block(
                 hidden_states,
                 layer_past=layer_past,
@@ -322,7 +317,6 @@ class PatchedFalconModel(nn.Module):
                 output_attentions=output_attentions,
                 alibi=use_alibi,
             )
-
             hidden_states = outputs[0]
 
         # Add last hidden state

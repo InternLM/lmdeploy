@@ -184,11 +184,12 @@ class LlamaAttention(nn.Module):
                Optional[Tuple[torch.Tensor]]]:
         """default rewrite."""
         context = self.context.context
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
+        max_q_seq_length = context.max_q_seq_length
+        max_kv_seq_length = context.max_kv_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_key_value_heads // world_size
@@ -205,12 +206,10 @@ class LlamaAttention(nn.Module):
 
         def __rotary_emb_fn_old(query_states, key_states, value_states):
             """rotary embedding old."""
-            max_seq_len = position_ids.size(-1)
-            kv_seq_len = max_seq_len + max(history_lengths)
-            if kv_seq_len >= self.rotary_emb.max_seq_len_cached:
+            if max_kv_seq_length >= self.rotary_emb.max_seq_len_cached:
                 # create larger cache
                 cos, sin = self.rotary_emb(value_states,
-                                           seq_len=kv_seq_len + 128)
+                                           seq_len=max_kv_seq_length + 128)
             cos = self.rotary_emb.cos_cached
             sin = self.rotary_emb.sin_cached
             query_states, key_states = apply_rotary_pos_emb_old(
@@ -276,18 +275,19 @@ class LlamaAttention(nn.Module):
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_q_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
-        max_seq_len = position_ids.size(-1)
         paged_attention_fwd(
             query_states,
             past_key_value[0],
@@ -297,7 +297,7 @@ class LlamaAttention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_len,
+            max_seqlen=max_q_seq_length,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1],
                                           hidden_size)
@@ -396,32 +396,13 @@ class LlamaModel(nn.Module):
     def _continuous_batching_forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         """Rewrite implementation of LlamaModel.forward."""
-        output_attentions = (output_attentions if output_attentions is not None
-                             else self.config.output_attentions)
-        output_hidden_states = (output_hidden_states
-                                if output_hidden_states is not None else
-                                self.config.output_hidden_states)
-
-        if use_cache is None:
-            use_cache = self.config.use_cache
-
-        return_dict = (return_dict if return_dict is not None else
-                       self.config.use_return_dict)
-
-        assert (
-            position_ids is not None
-        ), 'position_ids can not be none when using continuous batching mode.'
-        assert position_ids.dim() == 2
+        output_attentions = False
+        use_cache = True
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
@@ -431,17 +412,9 @@ class LlamaModel(nn.Module):
 
         hidden_states = inputs_embeds
 
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = () if use_cache else None
-
         for idx, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states, )
 
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
+            past_key_value = past_key_values[idx]
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -452,31 +425,13 @@ class LlamaModel(nn.Module):
             )
             hidden_states = layer_outputs[0]
 
-            if use_cache:
-                next_decoder_cache += (
-                    layer_outputs[2 if output_attentions else 1], )
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1], )
-
         hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states, )
-
-        next_cache = next_decoder_cache if use_cache else None
-        if not return_dict:
-            return tuple(
-                v for v in
-                [hidden_states, next_cache, all_hidden_states, all_self_attns]
-                if v is not None)
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
+            past_key_values=past_key_values,
+            hidden_states=None,
+            attentions=None,
         )
 
     def forward(
@@ -495,12 +450,7 @@ class LlamaModel(nn.Module):
         """Rewrite of LlamaModel.forward."""
         return self._continuous_batching_forward(
             input_ids,
-            attention_mask,
             position_ids,
             past_key_values,
             inputs_embeds,
-            use_cache,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
         )
