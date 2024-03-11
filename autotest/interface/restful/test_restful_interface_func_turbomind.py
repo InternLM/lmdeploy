@@ -108,7 +108,8 @@ class TestRestfulInterfaceChatCompletions:
                                                   MODEL_NAME)
             response += outputList[index].get('choices')[0].get('delta').get(
                 'content')
-        assert 'pls pls ' * 5 in response or 'Hi, pls intro yourself\n' * 5 in response, response
+        assert 'pls pls ' * 5 in response or \
+            'Hi, pls intro yourself\n' * 5 in response
 
     def test_chat_completions_topp_min_batch(self):
         api_client = APIClient(BASE_URL)
