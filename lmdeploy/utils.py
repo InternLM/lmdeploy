@@ -11,14 +11,22 @@ from typing import List, Optional
 logger_initialized = {}
 
 
+class _ASNI_COLOR:
+    BRIGHT_RED = '\033[91m'
+    RED = '\033[31m'
+    YELLOW = '\033[33m'
+    WHITE = '\033[37m'
+    GREEN = '\033[32m'
+
+
 class ColorFormatter(logging.Formatter):
 
-    _LEVELNAME_COLOR_MAP = dict(CRITICAL='\033[91m',
-                                ERROR='\033[31m',
-                                WARN='\033[33m',
-                                WARNING='\033[33m',
-                                INFO='\033[37m',
-                                DEBUG='\033[32m')
+    _LEVELNAME_COLOR_MAP = dict(CRITICAL=_ASNI_COLOR.BRIGHT_RED,
+                                ERROR=_ASNI_COLOR.RED,
+                                WARN=_ASNI_COLOR.YELLOW,
+                                WARNING=_ASNI_COLOR.YELLOW,
+                                INFO=_ASNI_COLOR.WHITE,
+                                DEBUG=_ASNI_COLOR.GREEN)
 
     _RESET_COLOR = '\033[0m'
 
@@ -113,7 +121,6 @@ def get_logger(
         file_handler = logging.FileHandler(log_file, file_mode)
         handlers.append(file_handler)
 
-    # formatter = logging.Formatter(log_formatter)
     formatter = ColorFormatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
