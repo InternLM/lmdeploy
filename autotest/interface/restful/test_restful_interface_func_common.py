@@ -262,7 +262,8 @@ class TestRestfulInterfaceChatCompletions:
             continue
         assert_chat_completions_batch_return(output, MODEL_NAME)
         assert ' is is' * 5 in output.get('choices')[0].get('message').get(
-            'content') or ' a a' * 5 in output.get('choices')[0].get('message').get('content')
+            'content') or ' a a' * 5 in output.get('choices')[0].get(
+                'message').get('content')
 
     def test_chat_completions_topp_min_batch(self):
         api_client = APIClient(BASE_URL)
