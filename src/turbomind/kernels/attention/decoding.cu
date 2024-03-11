@@ -68,11 +68,14 @@ void dispatchDecoding(const AttentionParams<T>& params)
             else if (query_group_sz % 8 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 8, kHeadDim>::Kernel>(params);
             }
+            else if (query_group_sz % 6 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 6, kHeadDim>::Kernel>(params);
+            }
+            else if (query_group_sz % 5 == 0) {
+                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 5, kHeadDim>::Kernel>(params);
+            }
             else if (query_group_sz % 4 == 0) {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 4, kHeadDim>::Kernel>(params);
-            }
-            else if (query_group_sz % 2 == 0) {
-                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 2, kHeadDim>::Kernel>(params);
             }
             else {
                 return invokeDecoding<typename DecodingConfig<arch::Sm80, T, T, 1, kHeadDim>::Kernel>(params);
@@ -128,13 +131,17 @@ void dispatchDecoding(const AttentionParams<nv_bfloat16>& params)
                 return invokeDecoding<
                     typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>::Kernel>(params);
             }
+            else if (query_group_sz % 6 == 0) {
+                return invokeDecoding<
+                    typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 6, kHeadDim>::Kernel>(params);
+            }
+            else if (query_group_sz % 5 == 0) {
+                return invokeDecoding<
+                    typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 5, kHeadDim>::Kernel>(params);
+            }
             else if (query_group_sz % 4 == 0) {
                 return invokeDecoding<
                     typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 4, kHeadDim>::Kernel>(params);
-            }
-            else if (query_group_sz % 2 == 0) {
-                return invokeDecoding<
-                    typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, kHeadDim>::Kernel>(params);
             }
             else {
                 return invokeDecoding<

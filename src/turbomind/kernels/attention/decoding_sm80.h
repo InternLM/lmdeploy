@@ -98,7 +98,6 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     static constexpr int CTA_Q = CTA_Q_;
     static constexpr int CTA_S = CTA_S_;
 
-    static_assert(CTA_H == 8);
     static_assert(CTA_Q == 1);
 
     static constexpr int WARP_H = WARP_H_;
@@ -145,7 +144,9 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using SmemLayoutQ = SmemLayoutV2<CTA_H, HeadDim, CTA_H, HeadDim, Swizzle<3, 3, 4>>;
+    static constexpr int CTA_H1 = (CTA_H + OP_N - 1) / OP_N * OP_N;
+
+    using SmemLayoutQ = SmemLayoutV2<CTA_H1, HeadDim, CTA_H1, HeadDim, Swizzle<3, 3, 4>>;
     using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
     using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
 
@@ -169,12 +170,12 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
             __align__(16) SmemO O;
         };
 
-        __align__(16) float O1[CTA_H][kHeadDim];
+        __align__(16) float O1[CTA_H1][kHeadDim];
 
         T P[1];
     };
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H1, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
 
     static constexpr int kBatchK = ThreadMapKV::kIterS;
@@ -565,7 +566,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
 
         __syncthreads();
 
-        using Map = RakedThreadMap<kHeadDim, CTA_H, 4, kWarpCount>;
+        using Map = RakedThreadMap<kHeadDim, CTA_H1, 4, kWarpCount>;
         Array<float, 4> tmp_O[Map::kIterS][Map::kIterC];
         const int2      offset = Map::get_offset(warp_id, lane_id);
         PRAGMA_UNROLL
