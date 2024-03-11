@@ -629,7 +629,6 @@ class SOLAR(BaseChatTemplate):
                  user='### User:\n',
                  eoh='\n\n',
                  assistant='### Assistant:\n',
-                 eoa='\n\n',
                  meta_instruction='',
                  session_len=2048,
                  **kwargs):
@@ -639,7 +638,6 @@ class SOLAR(BaseChatTemplate):
         self.user = user
         self.eoh = eoh
         self.assistant = assistant
-        self.eoa = eoa
         self.meta_instruction = meta_instruction
         self.session_len = session_len
 
