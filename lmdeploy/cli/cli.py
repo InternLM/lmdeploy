@@ -119,12 +119,9 @@ class CLI(object):
         ]
         deprecate_names.sort()
         model_names.sort()
-        print('Supported model names:')
-        yellow = '\033[33m'
-        reset = '\033[0m'
-        max_name_width = max([len(name) for name in deprecate_names])
-        for name in deprecate_names:
-            print(f'{name:<{max_name_width}}  {yellow}Deprecate soon{reset}')
+        print('The older chat template name like "internlm2-7b", "qwen-7b"'
+              ' and so on are deprecated and will be removed in the future.'
+              ' The supported chat template names are:')
         print('\n'.join(model_names))
 
     @staticmethod
