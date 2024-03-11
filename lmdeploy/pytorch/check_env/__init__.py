@@ -87,7 +87,8 @@ def check_transformers_version(model_path: str,
                 model_path, trust_remote_code=trust_remote_code)
         except Exception as e:
             message = (
-                f'Load model config with transformers=={trans_version} failed. '
+                f'Load model config with transformers=={trans_version}'
+                ' failed. '
                 'Please make sure model can be loaded with transformers API.')
             _handle_exception(e, 'transformers', logger, message=message)
         return config
@@ -117,11 +118,12 @@ def check_transformers_version(model_path: str,
             model_config = ModelConfig.from_hf_config(config,
                                                       model_path=model_path)
             if model_config.dtype == torch.bfloat16:
-                assert torch.cuda.is_bf16_supported(), (
+                assert not torch.cuda.is_bf16_supported(), (
                     'bf16 is not supported on your device')
         except AssertionError as e:
-            message = (f'Your device does not support {model_config.dtype}. '
-                       'Try edit `torch_dtype` in `config.json`.')
+            message = (f'Your device does not support `{model_config.dtype}`. '
+                       'Try edit `torch_dtype` in `config.json`.\n'
+                       'Note that this might have negative effect!')
             _handle_exception(e, 'Model', logger, message=message)
         except Exception as e:
             message = (f'Checking failed with error {e}',
