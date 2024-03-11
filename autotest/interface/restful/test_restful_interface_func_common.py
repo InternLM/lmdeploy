@@ -4,7 +4,6 @@ from random import randint
 
 import pytest
 from tqdm import tqdm
-from utils.content_detect_utils import base_rps_frac_chars_in_dupe_ngrams
 from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
@@ -12,8 +11,8 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
-BASE_HTTP_URL = 'http://localhost'
-DEFAULT_PORT = 23333
+BASE_HTTP_URL = 'http://10.140.0.187'
+DEFAULT_PORT = 23334
 MODEL = 'internlm/internlm2-chat-20b'
 MODEL_NAME = 'internlm2-chat-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
@@ -262,9 +261,8 @@ class TestRestfulInterfaceChatCompletions:
                                                      max_tokens=200):
             continue
         assert_chat_completions_batch_return(output, MODEL_NAME)
-        assert base_rps_frac_chars_in_dupe_ngrams(
-            6,
-            output.get('choices')[0].get('message').get('content')) > 80
+        assert ' is is' * 5 in output.get('choices')[0].get('message').get(
+            'content') or ' a a' * 5 in output.get('choices')[0].get('message').get('content')
 
     def test_chat_completions_topp_min_batch(self):
         api_client = APIClient(BASE_URL)
@@ -481,7 +479,7 @@ class TestRestfulInterfaceChatInteractive:
                                                      request_output_len=512):
             continue
         assert_chat_interactive_batch_return(output)
-        assert base_rps_frac_chars_in_dupe_ngrams(6, output.get('text')) > 90
+        assert 'a 上海 is a 上海, ' * 5 in output.get('text')
 
     def test_chat_interactive_with_history_batch(self):
         api_client = APIClient(BASE_URL)

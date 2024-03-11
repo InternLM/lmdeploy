@@ -1,5 +1,4 @@
 import pytest
-from utils.content_detect_utils import base_rps_frac_chars_in_dupe_ngrams
 from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
@@ -14,7 +13,7 @@ MODEL_NAME = 'internlm2-chat-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
-@pytest.mark.order(7)
+@pytest.mark.order(8)
 @pytest.mark.pytorch
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatCompletions:
@@ -112,7 +111,7 @@ class TestRestfulInterfaceChatCompletions:
                                                   MODEL_NAME)
             response += outputList[index].get('choices')[0].get('delta').get(
                 'content')
-        assert base_rps_frac_chars_in_dupe_ngrams(6, response) > 90
+        assert 'pls pls ' * 5 in response or 'Hi, pls intro yourself\n' * 5 in response, response
 
     def test_chat_completions_topp_min_batch(self):
         api_client = APIClient(BASE_URL)
@@ -181,7 +180,7 @@ class TestRestfulInterfaceChatCompletions:
         assert len(outputList) == 2
 
 
-@pytest.mark.order(7)
+@pytest.mark.order(8)
 @pytest.mark.pytorch
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatInteractive:

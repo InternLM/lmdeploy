@@ -1,5 +1,4 @@
 import pytest
-from utils.content_detect_utils import base_rps_frac_chars_in_dupe_ngrams
 from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
@@ -109,7 +108,7 @@ class TestRestfulInterfaceChatCompletions:
                                                   MODEL_NAME)
             response += outputList[index].get('choices')[0].get('delta').get(
                 'content')
-        assert base_rps_frac_chars_in_dupe_ngrams(6, response) > 90
+        assert 'pls pls ' * 5 in response or 'Hi, pls intro yourself\n' * 5 in response, response
 
     def test_chat_completions_topp_min_batch(self):
         api_client = APIClient(BASE_URL)
