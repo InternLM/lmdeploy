@@ -354,3 +354,12 @@ class ArgumentHelper:
             type=str,
             default='./work_dir',
             help='The working directory to save results')
+
+    @staticmethod
+    def trut_remote_code(parser):
+        """Add argument trust_remote_code to parser."""
+        return parser.add_argument(
+            '--trust-remote-code',
+            action='store_false',
+            default=True,
+            help='Trust remote code for loading hf models')

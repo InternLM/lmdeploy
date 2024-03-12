@@ -70,7 +70,11 @@ class SubCliChat(object):
 
     @staticmethod
     def torch(args):
-        """Chat with PyTorch inference engine through terminal."""
+        """Chat with PyTorch inference engine through terminal.
+
+        Note this command will be deprecated in near future. Please use
+        `lmdeploy chat` command
+        """
         from lmdeploy.messages import PytorchEngineConfig
         from lmdeploy.pytorch.chat import run_chat
         adapters = get_lora_adapters(args.adapters)
@@ -86,7 +90,11 @@ class SubCliChat(object):
 
     @staticmethod
     def turbomind(args):
-        """Chat with TurboMind inference engine through terminal."""
+        """Chat with TurboMind inference engine through terminal.
+
+        Note this command will be deprecated in near future. Please use
+        `lmdeploy chat` command
+        """
         from lmdeploy.turbomind.chat import main
         kwargs = convert_args(args)
         main(**kwargs)
