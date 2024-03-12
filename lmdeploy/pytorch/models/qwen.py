@@ -156,7 +156,6 @@ class PatchedQWenAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        position_ids: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """forward."""
