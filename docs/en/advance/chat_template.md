@@ -4,79 +4,21 @@ The effect of the applied chat template can be observed by **setting log level**
 
 LMDeploy supports two methods of adding chat templates:
 
-- The first approach is to customize a Python dialogue template class like the existing LMDeploy dialogue templates. It can be used directly after successful registration. The advantages are a high degree of customization and strong controllability. Below is an example of registering an LMDeploy dialogue template.
-
-  ```python
-  from typing import Dict, Union
-
-  from lmdeploy import ChatTemplateConfig, serve
-  from lmdeploy.model import MODELS, BaseChatTemplate
-
-
-  @MODELS.register_module(name='customized_model')
-  class CustomizedModel(BaseChatTemplate):
-      """A customized chat template."""
-      def __init__(self, meta_instruction='This is a fake meta instruction.'):
-          super().__init__(meta_instruction=meta_instruction)
-
-      def messages2prompt(self,
-                          messages: Union[str, Dict],
-                          sequence_start: bool = True) -> str:
-          """This func apply chat template for input messages
-          Args:
-              messages (str | Dict): input messages. Could be a str prompt or
-                  OpenAI format chat history. The former is for interactive chat.
-              sequence_start (bool): Only for interactive chatting. Begin of the
-                  prompt token will be removed in interactive chatting when
-                  the sequence_start is False.
-          Returns:
-              string. The return value will be sent to tokenizer.encode directly.
-          """
-          if isinstance(messages, str):
-              return self.get_prompt(messages, sequence_start)
-          box_map = dict(user=self.user,
-                      assistant=self.assistant,
-                      system=self.system)
-          eox_map = dict(user=self.eoh,
-                      assistant=self.eoa + self.separator,
-                      system=self.eosys)
-          ret = ''
-          if self.meta_instruction is not None:
-              ret += f'{self.system}{self.meta_instruction}{self.eosys}'
-          for message in messages:
-              role = message['role']
-              content = message['content']
-              ret += f'{box_map[role]}{content}{eox_map[role]}'
-          ret += f'{self.assistant}'
-          print(f'The applied template result: {ret}')
-          return ret  # just a dummpy conversion.
-
-
-  client = serve('internlm/internlm2-chat-7b',
-                chat_template_config=ChatTemplateConfig('customized_model'))
-  for item in client.chat_completions_v1('customized_model', [{
-          'role': 'user',
-          'content': 'hi'
-  }]):
-      print(item)
-  ```
-
-  In this example, we registered an LMDeploy dialogue template that simply returns the input prompt as is, or converts the dialogue history into a string directly. The user needs to implement the actual dialogue template logic themselves, ideally considering both input scenarios. With such a service started, all interfaces can be used.
-
-- Another approach is to utilize an existing conversation template by directly configuring a JSON file like the following.
+- One approach is to utilize an existing conversation template by directly configuring a JSON file like the following.
 
   ```json
   {
-      "model_name": "internlm2-chat-7b",
-      "system": null,
-      "meta_instruction": "This is a fake meta instruction.",
-      "eosys": null,
-      "user": null,
-      "eoh": null,
-      "assistant": null,
-      "eoa": null,
-      "separator": null,
-      "capability": null
+      "model_name": "your awesome chat template name",
+      "system": "<|im_start|>system\n",
+      "meta_instruction": "You are a robot developed by LMDeploy.",
+      "eosys": "<|im_end|>\n",
+      "user": "<|im_start|>user\n",
+      "eoh": "<|im_end|>\n",
+      "assistant": "<|im_start|>assistant\n",
+      "eoa": "<|im_end|>",
+      "separator": "\n",
+      "capability": "chat",
+      "stop_words": ["<|im_end|>"]
   }
   ```
 
@@ -100,3 +42,46 @@ LMDeploy supports two methods of adding chat templates:
   serve('internlm/internlm2-chat-7b',
         chat_template_config=ChatTemplateConfig.from_json('${JSON_FILE}'))
   ```
+
+- Another approach is to customize a Python dialogue template class like the existing LMDeploy dialogue templates. It can be used directly after successful registration. The advantages are a high degree of customization and strong controllability. Below is an example of registering an LMDeploy dialogue template.
+
+  ```python
+  from typing import Dict, Union
+
+  from lmdeploy import ChatTemplateConfig, serve
+  from lmdeploy.model import MODELS, BaseChatTemplate
+
+
+  @MODELS.register_module(name='customized_model')
+  class CustomizedModel(BaseChatTemplate):
+      """A customized chat template."""
+
+      def __init__(self,
+                   system='<|im_start|>system\n',
+                   meta_instruction='You are a robot developed by LMDeploy.',
+                   user='<|im_start|>user\n',
+                   assistant='<|im_start|>assistant\n',
+                   eosys='<|im_end|>\n',
+                   eoh='<|im_end|>\n',
+                   eoa='<|im_end|>',
+                   separator='\n',
+                   stop_words=['<|im_end|>', '<|action_end|>']):
+          super().__init__(system=system,
+                           meta_instruction=meta_instruction,
+                           eosys=eosys,
+                           user=user,
+                           eoh=eoh,
+                           assistant=assistant,
+                           eoa=eoa,
+                           separator=separator,
+                           stop_words=stop_words)
+
+
+  messages = [{'role': 'user', 'content': 'who are you?'}]
+  client = serve('internlm/internlm2-chat-7b',
+                 chat_template_config=ChatTemplateConfig('customized_model'))
+  for item in client.chat_completions_v1('customized_model', messages):
+      print(item)
+  ```
+
+  In this example, we register a LMDeploy dialogue template that sets the model to be created by LMDeploy, so when the user asks who the model is, the model will answer that it was created by LMDeploy.

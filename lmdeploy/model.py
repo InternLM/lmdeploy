@@ -2,7 +2,7 @@
 import dataclasses
 import json
 from abc import abstractmethod
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from mmengine import Registry
 
@@ -40,6 +40,7 @@ class ChatTemplateConfig:
     separator: Optional[str] = None
     capability: Optional[Literal['completion', 'infilling', 'chat',
                                  'python']] = None
+    stop_words: Optional[List[str]] = None
 
     @property
     def chat_template(self):
