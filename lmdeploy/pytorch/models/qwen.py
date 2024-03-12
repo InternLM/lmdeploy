@@ -82,7 +82,7 @@ class PatchedQWenAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            kv_seq_len = kv_seq_length.item()
+            kv_seq_len = max_kv_seq_length
             if (self.use_dynamic_ntk
                     and kv_seq_len == hidden_states.size()[1]):
                 import math
@@ -112,6 +112,7 @@ class PatchedQWenAttention(nn.Module):
         position_ids_1d = context.position_ids_1d
         max_q_seq_length = context.max_q_seq_length
         kv_seq_length = context.kv_seq_length
+        max_kv_seq_length = context.max_kv_seq_length
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
 
