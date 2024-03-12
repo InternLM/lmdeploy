@@ -88,5 +88,9 @@ def is_supported(model_path: str):
                 # baichuan-13B not supported by pytorch
                 if cfg.num_attention_heads == 40 and cfg.vocab_size == 64000:
                     support_by_torch = False
+            elif arch == 'QWenLMHeadModel':
+                # qwen-vl not supported by pytorch
+                if getattr(cfg, 'visual', None):
+                    support_by_torch = False
 
     return support_by_torch
