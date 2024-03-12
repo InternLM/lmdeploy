@@ -52,7 +52,7 @@ LMDeploy CLI offers the following utilities, helping users experience LLM featur
 ### Inference with Command line Interface
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm-chat-7b
 ```
 
 ### Serving with Web UI

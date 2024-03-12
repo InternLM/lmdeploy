@@ -65,7 +65,7 @@ If OOM occurs when you run CLI tools, please pass `--cache-max-entry-count` to d
 
 ```shell
 # chat command
-lmdeploy chat turbomind internlm/internlm2-chat-7b --cache-max-entry-count 0.2
+lmdeploy chat internlm/internlm2-chat-7b --cache-max-entry-count 0.2
 
 # server command
 lmdeploy serve api_server internlm/internlm2-chat-7b --cache-max-entry-count 0.2
