@@ -121,11 +121,9 @@ class WindowBlockManager(DefaultBlockManager):
             if num_used_blocks > 0:
                 reused_blocks = droped_blocks[:num_used_blocks]
             else:
-                # when num_required_blocks > num_drop_blocks, all blocks in num_drop_blocks is used
                 reused_blocks = droped_blocks
             logical_blocks.append(reused_blocks)
 
-            num_drop_blocks = num_drop_blocks - num_used_blocks
             if num_used_blocks > 0:
                 droped_blocks = droped_blocks[num_used_blocks:]
             else:
