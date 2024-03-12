@@ -75,6 +75,7 @@ LMDeploy supports two methods of adding chat templates:
       "eoh": null,
       "assistant": null,
       "eoa": null,
+      "separator": null,
       "capability": null
   }
   ```

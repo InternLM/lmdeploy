@@ -78,6 +78,7 @@ LMDeploy 支持两种添加对话模板的形式：
       "eoh": null,
       "assistant": null,
       "eoa": null,
+      "separator": null,
       "capability": null
   }
   ```
