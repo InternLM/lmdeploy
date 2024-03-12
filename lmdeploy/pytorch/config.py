@@ -151,9 +151,6 @@ class ModelConfig:
                 sliding_window=sliding_window,
                 head_dim=head_dim)
 
-        def __build_qwen():
-            setattr(hf_config, 'torch_dtype', 'bfloat16')
-
         if 'falcon' in model_path:
             model_config = __build_falcon()
         elif 'chatglm' in model_path:
@@ -164,7 +161,13 @@ class ModelConfig:
             model_config = __build_default()
 
         if hf_config.model_type == 'qwen' and hf_config.torch_dtype is None:
-            setattr(hf_config, 'torch_dtype', 'bfloat16')
+            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+            ) else 'float16'
+            if hf_config.bf16:
+                torch_dtype = 'bfloat16'
+            elif hf_config.fp16:
+                torch_dtype = 'float16'
+            setattr(hf_config, 'torch_dtype', torch_dtype)
 
         model_config.dtype = _get_torch_dtype(hf_config)
 
