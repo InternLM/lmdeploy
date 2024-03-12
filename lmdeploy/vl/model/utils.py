@@ -1,13 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+from typing import Dict, List
 
 import torch
+import torch.nn as nn
 from safetensors.torch import load_file
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, WEIGHTS_INDEX_NAME
 from transformers.utils.hub import get_checkpoint_shard_files
 
 
-def load_weight_ckpt(ckpt: str):
+def load_weight_ckpt(ckpt: str) -> Dict[str, torch.Tensor]:
     """load checkpoint."""
     if ckpt.endswith('.safetensors'):
         return load_file(ckpt)
@@ -15,7 +17,8 @@ def load_weight_ckpt(ckpt: str):
         return torch.load(ckpt)
 
 
-def get_used_weight_files(folder, state_dict):
+def get_used_weight_files(folder: str,
+                          state_dict: Dict[str, torch.Tensor]) -> List[str]:
     """get used checkpoint which contains keys in state_dict."""
     _index_file = os.path.join(folder, WEIGHTS_INDEX_NAME)
     _safe_index_file = os.path.join(folder, SAFE_WEIGHTS_INDEX_NAME)
@@ -33,7 +36,7 @@ def get_used_weight_files(folder, state_dict):
     return valid_files
 
 
-def load_model_from_weight_files(model, folder):
+def load_model_from_weight_files(model: nn.Module, folder: str) -> None:
     """load nn.Module weight from folder."""
     valid_files = get_used_weight_files(folder, model.state_dict())
     for file_name in valid_files:

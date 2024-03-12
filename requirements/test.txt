@@ -1,5 +1,6 @@
 allure-pytest
 coverage
+pillow
 pynvml
 pytest==8.0.2
 pytest-assume

@@ -843,12 +843,14 @@ class YiVL(BaseChatTemplate):
             eoh='\n',
             assistant='### Assistant: ',
             eoa='\n',
+            stop_words=['###'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          user=user,
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         stop_words=stop_words,
                          **kwargs)
 
     @classmethod

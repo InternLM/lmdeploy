@@ -23,4 +23,4 @@ def load_vl_model(model_path: str):
             return YiVLModel(model_path)
         else:
             return LlavaVLModel(model_path)
-    raise ValueError(f'unsupported val model with arch {arch}')
+    raise ValueError(f'unsupported vl model with arch {arch}')
