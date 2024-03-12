@@ -9,7 +9,7 @@ from accelerate import init_empty_weights
 from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from lmdeploy.model import MODELS, BaseModel
+from lmdeploy.model import MODELS, BaseChatTemplate
 
 meta_instruction = """meta instruction
 You are an AI assistant whose name is 浦语.
@@ -20,20 +20,20 @@ conversation
 
 
 @MODELS.register_module(name='internlm-xcomposer-7b')
-class InternLMXComposerTemplate(BaseModel):
+class InternLMXComposerTemplate(BaseChatTemplate):
     """Internlm xcomposer chat template."""
 
     def __init__(self,
-                 system=meta_instruction,
-                 user='<|User|>:',
-                 assistant='<|Bot|>:',
+                 meta_instruction=meta_instruction,
+                 user=' <|User|>: ',
+                 assistant=' <|Bot|>: ',
                  eoh='<TOKENS_UNUSED_0>',
                  eoa='<TOKENS_UNUSED_1>',
                  stop_words=['<TOKENS_UNUSED_0>', '<TOKENS_UNUSED_1>'],
                  image_placeholder='<Img><ImageHere></Img>',
                  **kwargs):
         super().__init__(**kwargs)
-        self.system = system
+        self.meta_instruction = meta_instruction
         self.user = user
         self.assistant = assistant
         self.eoh = eoh
@@ -51,31 +51,35 @@ class InternLMXComposerTemplate(BaseModel):
             prompt = f'{self.image_placeholder}{prompt}'
         return prompt
 
-    def decorate_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt, sequence_start=True):
         """Apply chat template to prompt."""
         prompt = self._concat_image_info(prompt)
-        if sequence_start:
-            return f'{self.system} {self.user} {prompt}{self.eoh} {self.assistant}'  # noqa
-        else:
-            return f' {self.user} {prompt}{self.eoh} {self.assistant}'
+        return super().get_prompt(prompt, sequence_start)
 
     def messages2prompt(self, messages, sequence_start=True):
         """Apply chat template to history."""
         if isinstance(messages, str) or isinstance(messages[0], str):
-            return self.decorate_prompt(messages, sequence_start)
-        system, users, assistants = self._translate_messages(messages)
-        system = self.system if not system else system
-        ret = system
-        for user, assistant in zip(users, assistants):
-            if not isinstance(user, str):
-                assert isinstance(user, Sequence)
-                assert all(isinstance(item, dict) for item in user)
-                user = [user[0]['text'], len(user) - 1]
-            user = self._concat_image_info(user)
-            if assistant:
-                ret += f' {self.user} {user}{self.eoh} {self.assistant} {assistant}{self.eoa}'  # noqa
-            else:
-                ret += f' {self.user} {user}{self.eoh} {self.assistant}'
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa + self.stop_word_suffix,
+                       system=self.eosys)
+        ret = ''
+        if self.meta_instruction is not None:
+            if len(messages) and messages[0]['role'] != 'system':
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role == 'user' and not isinstance(content, str):
+                assert isinstance(content, Sequence)
+                assert all(isinstance(item, dict) for item in content)
+                content = [content[0]['text'], len(content) - 1]
+            content = self._concat_image_info(content)
+            ret += f'{box_map[role]}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
         return ret
 
 
@@ -155,8 +159,7 @@ class InternLMXComposer:
             if len(image_paths) > 1:
                 print('does not support multiple images, use last one.')
                 image_paths = image_paths[-1:]
-        decorate_text = self.decorator.decorate_prompt(
-            (query, len(image_paths)))
+        decorate_text = self.decorator.get_prompt((query, len(image_paths)))
         return self._to_inputs(decorate_text, image_paths, sequence_start)
 
     def prepare_message(self, messages):

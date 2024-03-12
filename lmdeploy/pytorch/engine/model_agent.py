@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Union
@@ -58,7 +59,7 @@ def _update_cache_config(model_config: ModelConfig,
     gpu_mem = gpu_mem_physical_free * cache_config.cache_max_entry_count
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config) // world_size
+        cache_config.block_size, model_config, world_size)
     if cache_config.num_cpu_blocks == 0:
         cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
     if cache_config.num_gpu_blocks == 0:
@@ -189,8 +190,9 @@ class StepContext:
     q_start_loc: torch.LongTensor
     history_lengths: torch.LongTensor
     q_seq_length: torch.LongTensor
-    max_seq_length: int
     kv_seq_length: torch.LongTensor
+    max_q_seq_length: int
+    max_kv_seq_length: int
     kv_caches: List
     is_decoding: bool
     world_size: int = 1
@@ -220,7 +222,7 @@ class StepContext:
         """
 
         position_ids = inputs.position_ids
-        max_seq_length = position_ids.size(-1)
+        max_q_seq_length = position_ids.size(-1)
 
         # seq_len + history_length
         kv_seq_length = position_ids[..., -1] + 1
@@ -230,6 +232,8 @@ class StepContext:
         position_ids_1d = cls.get_position_ids_1d(position_ids, q_seq_length,
                                                   device)
 
+        max_kv_seq_length = max_q_seq_length + max(inputs.history_lengths)
+
         ret = StepContext(inputs=inputs,
                           block_offsets=inputs.block_offsets,
                           position_ids=inputs.position_ids,
@@ -237,8 +241,9 @@ class StepContext:
                           q_start_loc=inputs.q_start_loc,
                           history_lengths=inputs.history_lengths,
                           q_seq_length=inputs.seq_length,
-                          max_seq_length=max_seq_length,
                           kv_seq_length=kv_seq_length,
+                          max_q_seq_length=max_q_seq_length,
+                          max_kv_seq_length=max_kv_seq_length,
                           kv_caches=kv_caches,
                           is_decoding=inputs.is_decoding,
                           world_size=world_size,
@@ -343,7 +348,6 @@ def model_forward(
             use_origin=False,
             context=context,
         )
-    stream.synchronize()
     return dict(logits=output['logits'], custom_outputs=context._outputs)
 
 
@@ -403,6 +407,17 @@ class AutoModelAgent:
 
     def paging_adapters(self, weight_maps: List[AdapterWeightMap]):
         """paging adapter."""
+        raise NotImplementedError('Not implemented.')
+
+    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                            swap_out_map: SwapMap):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+        """
         raise NotImplementedError('Not implemented.')
 
     def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
@@ -478,7 +493,8 @@ class BaseModelAgent(AutoModelAgent):
             hf_model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code)
+                trust_remote_code=trust_remote_code,
+                **self.model_config.init_kwargs)
             hf_model.eval()
             hf_model.config.use_cache = True
 
@@ -506,16 +522,8 @@ class BaseModelAgent(AutoModelAgent):
             weight_map.cache_adapter(lora_linears, cpu_caches)
         update_lora_linears(lora_linears, weight_maps, device='cuda')
 
-    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-
+    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                      swap_out_map: SwapMap):
         cache_swapping(self.cache_engine,
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
@@ -527,6 +535,37 @@ class BaseModelAgent(AutoModelAgent):
             world_size=1,
             stream=self.stream,
         )
+        return output
+
+    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                swap_out_map: SwapMap):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+        """
+        output = self._forward_impl(inputs,
+                                    swap_in_map=swap_in_map,
+                                    swap_out_map=swap_out_map)
+        self.stream.synchronize()
+        return output
+
+    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                            swap_out_map: SwapMap):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+        """
+        output = self._forward_impl(inputs,
+                                    swap_in_map=swap_in_map,
+                                    swap_out_map=swap_out_map)
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
         return output
 
 
@@ -671,7 +710,8 @@ def _tp_build_model(
             model = AutoModelForCausalLM.from_config(
                 config,
                 torch_dtype=torch_dtype,
-                trust_remote_code=trust_remote_code)
+                trust_remote_code=trust_remote_code,
+                **model_config.init_kwargs)
             if rank == 0:
                 device_map = _create_device_map(model, world_size)
             _add_adapters(model, adapters)
@@ -688,7 +728,8 @@ def _tp_build_model(
                     model_path,
                     torch_dtype=torch_dtype,
                     device_map=device_map,
-                    trust_remote_code=trust_remote_code)
+                    trust_remote_code=trust_remote_code,
+                    **model_config.init_kwargs)
                 _load_adapters(param_model, adapters, device_map=device_map)
                 __load_state_dict_assign(param_model, model)
                 param_model = param_model.to('meta')
@@ -883,6 +924,7 @@ def _tp_model_loop(
             world_size=world_size,
             stream=stream,
         )
+        stream.synchronize()
         if rank == 0:
             resp_output = output
             out_que.put(TPResponse(0, None, resp_output))
@@ -919,25 +961,45 @@ def _start_tp_process(rank: int,
         raise e
 
 
+def _check_context_alive(mp_context: mp.ProcessContext):
+    """check context alive."""
+    procs = mp_context.processes
+    for idx, p in enumerate(procs):
+        if not p.is_alive():
+            raise RuntimeError(f'Rank[{idx}] failed.')
+
+
 def _queue_get_response(que: mp.Queue,
                         mp_context: mp.ProcessContext,
                         interval: float = 1.0):
     """get response."""
     from multiprocessing.queues import Empty
-
-    def __check_context_alive():
-        """check context alive."""
-        procs = mp_context.processes
-        for idx, p in enumerate(procs):
-            if not p.is_alive():
-                raise RuntimeError(f'Rank[{idx}] failed.')
-
     while True:
         try:
             return que.get(timeout=interval)
         except Empty:
-            pass
-        __check_context_alive()
+            _check_context_alive(mp_context)
+
+
+async def _async_queue_get_response(que: mp.Queue,
+                                    mp_context: mp.ProcessContext,
+                                    interval: float = 1.0):
+    """get response."""
+    from multiprocessing.queues import Empty
+
+    def __try_que_get():
+        """try que get."""
+        try:
+            return que.get(timeout=interval)
+        except Empty:
+            return None
+
+    while True:
+        ret = await asyncio.get_event_loop().run_in_executor(
+            None, __try_que_get)
+        if ret is not None:
+            return ret
+        _check_context_alive(mp_context)
 
 
 class TPModelAgent(AutoModelAgent):
@@ -1054,6 +1116,24 @@ class TPModelAgent(AutoModelAgent):
         if resp.ret_code != 0:
             raise RuntimeError('tp forward failed.')
 
+        return resp.data
+
+    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                            swap_out_map: SwapMap):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (Dict[int, int]): Cache maps to swap in.
+            swap_out_map (Dict[int, int]): Cache maps to swap out.
+        """
+        with torch.no_grad():
+            self.tp_model_in_que.put((inputs, swap_in_map, swap_out_map))
+
+        resp: TPResponse = await _async_queue_get_response(
+            self.tp_model_out_que, self.mp_context)
+        if resp.ret_code != 0:
+            raise RuntimeError('tp forward failed.')
         return resp.data
 
 

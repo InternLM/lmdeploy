@@ -87,6 +87,7 @@ class EngineGenerationConfig(GenerationConfig):
         return EngineGenerationConfig(
             n=gen_config.n,
             max_new_tokens=gen_config.max_new_tokens,
+            min_new_tokens=gen_config.min_new_tokens,
             top_p=gen_config.top_p,
             top_k=gen_config.top_k,
             temperature=gen_config.temperature,
@@ -116,6 +117,7 @@ class TurbomindEngineConfig:
         use_logn_attn (bool): whether or not to use log attn: default to False
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
+        max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -129,6 +131,7 @@ class TurbomindEngineConfig:
     use_logn_attn: bool = False
     download_dir: Optional[str] = None
     revision: Optional[str] = None
+    max_prefill_token_num: int = 8192
 
 
 @dataclass
@@ -155,6 +158,7 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
+        thread_safe (bool): thread safe engine instance.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -173,6 +177,7 @@ class PytorchEngineConfig:
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 8192
+    thread_safe: bool = False
     download_dir: str = None
     revision: str = None
 

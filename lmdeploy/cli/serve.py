@@ -189,10 +189,17 @@ class SubCliServe:
     @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
+        from lmdeploy.archs import autoget_backend
+        from lmdeploy.messages import (PytorchEngineConfig,
+                                       TurbomindEngineConfig)
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
-        if args.backend == 'pytorch':
-            from lmdeploy.messages import PytorchEngineConfig
+        backend = args.backend
+
+        if backend != 'pytorch' and ':' not in args.model_path_or_server:
+            # set auto backend mode
+            backend = autoget_backend(args.model_path_or_server)
+        if backend == 'pytorch':
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
                 model_name=args.model_name,
@@ -200,7 +207,6 @@ class SubCliServe:
                 cache_max_entry_count=args.cache_max_entry_count,
                 session_len=args.session_len)
         else:
-            from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(
                 model_name=args.model_name,
                 tp=args.tp,
@@ -217,16 +223,22 @@ class SubCliServe:
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
-            backend=args.backend,
+            backend=backend,
             backend_config=backend_config,
             chat_template_config=chat_template_config)
 
     @staticmethod
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
+        from lmdeploy.archs import autoget_backend
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.openai.api_server import serve as run_api_server
-        if args.backend == 'pytorch':
+        backend = args.backend
+        if backend != 'pytorch':
+            # set auto backend mode
+            backend = autoget_backend(args.model_path)
+
+        if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
@@ -250,7 +262,7 @@ class SubCliServe:
             meta_instruction=args.meta_instruction,
             capability=args.cap)
         run_api_server(args.model_path,
-                       backend=args.backend,
+                       backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,
                        server_name=args.server_name,

@@ -1,74 +1,94 @@
 import os
 from subprocess import PIPE, Popen
 
-from utils.get_run_config import get_command_with_extra
+from utils.get_run_config import get_command_with_extra, get_model_name
 from utils.rule_condition_assert import assert_result
 
 
-def command_line_test(config, case, case_info, model_case, type, extra):
+def command_line_test(config,
+                      case,
+                      case_info,
+                      model_case,
+                      type,
+                      extra: str = None,
+                      cuda_prefix: str = None):
     dst_path = config.get('dst_path')
 
     if type == 'api_client':
-        cmd = get_command_with_extra('lmdeploy serve api_client ' + extra,
-                                     config, model_case)
+        cmd = 'lmdeploy serve api_client ' + extra
     elif type == 'triton_client':
-        cmd = get_command_with_extra('lmdeploy serve triton_client ' + extra,
-                                     config, model_case)
+        cmd = 'lmdeploy serve triton_client ' + extra
     else:
-        cmd = get_command_with_extra(
-            'lmdeploy chat turbomind ' + dst_path + '/workspace_' + model_case,
-            config, model_case)
-        if 'w4' in model_case:
+        cmd = get_command_with_extra('lmdeploy chat turbomind ' + dst_path +
+                                     '/workspace_' + model_case,
+                                     config,
+                                     model_case,
+                                     cuda_prefix=cuda_prefix)
+        if 'kvint8' in model_case:
+            cmd += ' --quant-policy 4'
+            if 'w4' in model_case or '4bits' in model_case:
+                cmd += ' --model-format awq'
+            else:
+                cmd += ' --model-format hf'
+        elif 'w4' in model_case or '4bits' in model_case:
             cmd += ' --model-format awq'
-
+        if 'chat' not in model_case.lower():
+            cmd += ' --cap completion'
     return command_test(config, [cmd], model_case, case, case_info,
                         type == 'turbomind')
 
 
-def hf_command_line_test(config, case, case_info, model_case):
-    model_path = config.get('model_path')
+def hf_command_line_test(config,
+                         case,
+                         case_info,
+                         model_case,
+                         type,
+                         cuda_prefix: str = None):
+    model_path = config.get('model_path') + '/' + model_case
 
-    cmd = get_command_with_extra('lmdeploy chat turbomind ' + model_path +
-                                 '/' + model_case,
+    cmd = get_command_with_extra(' '.join(['lmdeploy chat', type, model_path]),
                                  config,
                                  model_case,
-                                 need_tp=True)
+                                 need_tp=True,
+                                 cuda_prefix=cuda_prefix)
 
-    if 'w4' in model_case:
+    if 'kvint8' in model_case:
+        cmd += ' --quant-policy 4'
+        if 'w4' in model_case or '4bits' in model_case:
+            cmd += ' --model-format awq'
+        else:
+            cmd += ' --model-format hf'
+    elif 'w4' in model_case or '4bits' in model_case:
         cmd += ' --model-format awq'
-    return command_test(config, [cmd], model_case, case, case_info, True)
-
-
-def pytorch_command_line_test(config, case, case_info, model_case):
-    model_path = config.get('model_path')
-
-    cmd = get_command_with_extra('lmdeploy chat torch ' + model_path + '/' +
-                                 model_case,
-                                 config,
-                                 model_case,
-                                 need_tp=True)
-
-    return command_test(config, [cmd], model_case, case, case_info, False)
+    return command_test(config, [cmd], model_case,
+                        '_'.join(['hf', type, case]), case_info, True)
 
 
 def command_test(config, cmd, model, case, case_info, need_extract_output):
+    if 'memory_test' in case and 'chat' not in model.lower():
+        return True, None, 'memory case skipped for base model'
+
     try:
         log_path = config.get('log_path')
-        model_map = config.get('model_map')
-        model_name = model_map.get(model)
+        model_name = get_model_name(model)
 
-        chat_log = os.path.join(log_path,
-                                'chat_' + case + '_' + model + '.log')
+        if '/' in model:
+            chat_log = os.path.join(
+                log_path, 'chat_' + model.split('/')[1] + '_' + case + '.log')
+        else:
+            chat_log = os.path.join(log_path,
+                                    'chat_' + model + '_' + case + '.log')
 
         file = open(chat_log, 'w')
 
         returncode = -1
         result = True
 
-        file.writelines('commondLine: ' + ' '.join(cmd) + '\n')
+        print('reproduce command chat: ' + ' '.join(cmd) + '\n')
+        file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if model == 'CodeLlama-7b-Instruct-hf':
+        if 'CodeLlama-7b-Instruct-hf' in model:
             spliter = '\n!!\n'
         # join prompt together
         prompt = ''
@@ -126,23 +146,21 @@ def command_test(config, cmd, model, case, case_info, need_extract_output):
 # 从输出中解析模型输出的对话内容
 def parse_dialogue(inputs: str, model: str):
     dialogues = inputs.strip()
-    if model == 'CodeLlama-7b-Instruct-hf':
+    if 'CodeLlama-7b-Instruct-hf' in model:
         sep = 'enter !! to end the input >>>'
     else:
         sep = 'double enter to end input >>>'
     dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
     dialogues = [d.strip() for d in dialogues]
-    if 'Llama' in model:
-        return dialogues
     return dialogues[1:-1]  # 去除首尾无用字符
 
 
 def extract_output(output: str, model: str):
-    if 'Qwen' in model:
+    if 'Qwen' in model or 'internlm2' in model:
         if len(output.split('<|im_start|>assistant')) >= 2:
             return output.split('<|im_start|>assistant')[1]
-    if 'Baichuan2' in model or 'internlm2' in model:
+    if 'Baichuan2' in model:
         if len(output.split('<reserved_107>')) >= 2:
             return output.split('<reserved_107>')[1]
     if 'internlm' in model:

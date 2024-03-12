@@ -2,8 +2,29 @@ name: daily_ete_test
 
 on:
   workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is InternLM'
+        type: string
+        default: 'InternLM/lmdeploy'
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      backend:
+        required: true
+        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
+      model:
+        required: true
+        description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
+        type: string
+        default: "['quantization','convert','pipeline','restful','chat','interface-pipeline']"
   schedule:
-    - cron:  '00 23 * * *'
+    - cron:  '00 21 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -23,6 +44,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -33,7 +55,10 @@ jobs:
           dpkg -i /root/packages/allure_2.24.1-1_all.deb
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -68,36 +93,91 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Test lmdeploy - quantization
+          rm -rf allure-results
+      - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
-          pytest autotest -m '(quantization or quantization_w8a8) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 8 --alluredir=allure-results --clean-alluredir
+          pytest autotest/tools/quantization/test_quantization_w4a16.py -m 'not pr_test' -n 8 --alluredir=allure-results --clean-alluredir
+      - name: Test lmdeploy - quantization kv int8
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization w8a8
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization kv int8 and w4a16
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8_w4a16.py -n 8 --alluredir=allure-results
       - name: Test lmdeploy - convert
         continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'convert'))
         run: |
-          pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results
-      - name: Test lmdeploy - pipeline
+          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - chat workspace
         continue-on-error: true
-        timeout-minutes: 60
-        run: pytest autotest -m '(pipeline_chat) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results
-      - name: Test lmdeploy - restful
-        continue-on-error: true
-        run: pytest autotest -m restful_api --alluredir=allure-results
-      - name: Test lmdeploy - chat
-        continue-on-error: true
-        timeout-minutes: 60
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        timeout-minutes: 20
         run: |
-          pytest autotest -m '(command_chat or command_chat_hf or command_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 4 --alluredir=allure-results
-      - name: Downgrade transformers
-        run: python3 -m pip install transformers==4.33.0
-      - name: Test lmdeploy - run Baichuan
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
-        timeout-minutes: 50
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        timeout-minutes: 20
         run: |
-          pytest autotest -m '(Baichuan2_7B_Chat or Baichuan2_13B_Chat) and not pipeline_chat_pytorch' --alluredir=allure-results
-      - name: Test lmdeploy - rerun fail cases
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        timeout-minutes: 20
         run: |
-          pytest autotest --alluredir=allure-results --lf
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - pipeline turbomind
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        timeout-minutes: 25
+        run: |
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful turbomind
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        timeout-minutes: 30
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - interface pipeline turbomind case
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
+        timeout-minutes: 20
+        run: |
+          pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - pipeline torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        timeout-minutes: 25
+        run: |
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        timeout-minutes: 40
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - rerun all fail cases
+        timeout-minutes: 30
+        run: |
+          pytest autotest --lf --alluredir=allure-results
       - name: Generate reports
         if: always()
         run: |

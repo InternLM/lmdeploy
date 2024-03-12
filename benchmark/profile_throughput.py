@@ -33,6 +33,9 @@ def sample_requests(
     dataset = [(data['conversations'][0]['value'],
                 data['conversations'][1]['value']) for data in dataset]
 
+    # pre-sample to avoid go through all the dataset
+    dataset = random.sample(dataset, max(int(num_requests * 1.2), 1000))
+
     # Tokenize the prompts and completions.
     prompts = [prompt for prompt, _ in dataset]
     prompt_token_ids = tokenizer(prompts).input_ids
@@ -307,7 +310,8 @@ def main():
             session_len=args.session_len,
             cache_max_entry_count=args.cache_max_entry_count,
             max_batch_size=args.concurrency,
-            tp=args.tp)
+            tp=args.tp,
+            thread_safe=True)
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 

@@ -1,0 +1,100 @@
+name: pr_ete_test
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pr_ete_test.yml"
+      - "cmake/**"
+      - "src/**"
+      - "autotest/**"
+      - "3rdparty/**"
+      - "lmdeploy/**"
+      - "requirements/**"
+      - "requirements.txt"
+      - "CMakeLists.txt"
+      - "setup.py"
+  workflow_dispatch:
+
+
+env:
+  HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
+  HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
+
+
+jobs:
+  pr_functions_test:
+    runs-on: [self-hosted, linux-a100-pr]
+    timeout-minutes: 120
+    env:
+      REPORT_DIR: /nvme/qa_test_models/test-reports
+    container:
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      volumes:
+        - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
+          dpkg -i /root/packages/allure_2.24.1-1_all.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Clone repository
+        uses: actions/checkout@v2
+      - name: Install pytorch
+        run: |
+          python3 -m pip cache dir
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+      - name: Build lmdeploy
+        run: |
+          python3 -m pip install cmake
+          python3 -m pip install -r requirements/build.txt
+          mkdir build
+          cd build
+          cmake .. \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
+              -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
+              -DBUILD_PY_FFI=ON \
+              -DBUILD_MULTI_GPU=ON \
+              -DCMAKE_CUDA_FLAGS="-lineinfo" \
+              -DUSE_NVTX=ON \
+              -DSM=80 \
+              -DCMAKE_CUDA_ARCHITECTURES=80 \
+              -DBUILD_TEST=OFF
+          make -j$(nproc) && make install
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
+          # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install -r requirements.txt -r requirements/test.txt
+          python3 -m pip install .
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
+      - name: Test lmdeploy
+        timeout-minutes: 120
+        run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -v -s --alluredir=allure-results --clean-alluredir
+      - name: Generate reports
+        if: always()
+        run: |
+          export date_today="$(date +'%Y%m%d-%H%M%S')"
+          export report_dir="$REPORT_DIR/$date_today"
+          echo "Save report to $ALLURE_DIR"
+          allure generate -c -o $report_dir
+      - name: Clear workfile
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
