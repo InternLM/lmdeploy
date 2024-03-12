@@ -260,10 +260,13 @@ class ArgumentHelper:
         """Add argument engine to parser."""
 
         return parser.add_argument('--engine',
+                                   '--backend',
                                    type=str,
                                    default='turbomind',
                                    choices=['pytorch', 'turbomind'],
-                                   help='Set the inference backend')
+                                   help='Set the inference backend. '
+                                   '`--engine` will be deprecated '
+                                   'and use `--backend` instead')
 
     @staticmethod
     def stream_output(parser):

@@ -192,7 +192,9 @@ class CLI(object):
                 env_info.pop(req)
 
         # extra important dependencies
-        extra_reqs = ['transformers', 'gradio', 'fastapi', 'pydantic']
+        extra_reqs = [
+            'transformers', 'gradio', 'fastapi', 'pydantic', 'triton'
+        ]
 
         for req in extra_reqs:
             try:
