@@ -86,9 +86,19 @@ class CLI(object):
             description=CLI.chat.__doc__,
             help=CLI.chat.__doc__)
         parser.set_defaults(run=CLI.chat)
-        parser.add_argument('model_path',
-                            type=str,
-                            help='The huggingface model path')
+        parser.add_argument(
+            'model_path',
+            type=str,
+            help='The path of a model. it could be one of the following '
+            'options: - i) a local directory path of a turbomind model'
+            ' which is converted by `lmdeploy convert` command or '
+            'download from ii) and iii). - ii) the model_id of a '
+            'lmdeploy-quantized model hosted inside a model repo on '
+            'huggingface.co, such as "internlm/internlm-chat-20b-4bit",'
+            ' "lmdeploy/llama2-chat-70b-4bit", etc. - iii) the model_id'
+            ' of a model hosted inside a model repo on huggingface.co,'
+            ' such as "internlm/internlm-chat-7b", "qwen/qwen-7b-chat "'
+            ', "baichuan-inc/baichuan2-7b-chat" and so on')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.trut_remote_code(parser)
@@ -227,7 +237,7 @@ class CLI(object):
         else:
             from lmdeploy.turbomind.chat import main as run_chat
             kwargs = convert_args(args)
-            run_chat(kwargs)
+            run_chat(**kwargs)
 
     @staticmethod
     def add_parsers():

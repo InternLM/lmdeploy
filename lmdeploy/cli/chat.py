@@ -72,11 +72,16 @@ class SubCliChat(object):
     def torch(args):
         """Chat with PyTorch inference engine through terminal.
 
-        Note this command will be deprecated in near future. Please use
-        `lmdeploy chat` command
+        Note this sub command will be deprecated in future. Please use command
+        `lmdeploy chat` directly.
         """
         from lmdeploy.messages import PytorchEngineConfig
         from lmdeploy.pytorch.chat import run_chat
+        from lmdeploy.utils import get_logger
+        logger = get_logger('lmdeploy')
+        logger.warning(
+            'The sub command `lmdeploy chat torch` will be deprecated in '
+            'future. Please use `lmdeploy chat` instead.')
         adapters = get_lora_adapters(args.adapters)
         engine_config = PytorchEngineConfig(
             model_name=args.model_name,
@@ -92,10 +97,16 @@ class SubCliChat(object):
     def turbomind(args):
         """Chat with TurboMind inference engine through terminal.
 
-        Note this command will be deprecated in near future. Please use
-        `lmdeploy chat` command
+        Note this sub command will be deprecated in future. Please use command
+        `lmdeploy chat` directly.
         """
         from lmdeploy.turbomind.chat import main
+        from lmdeploy.utils import get_logger
+        logger = get_logger('lmdeploy')
+        logger.warning(
+            'The sub command `lmdeploy chat turbomind` will be deprecated in'
+            ' future. Please use `lmdeploy chat` instead.')
+
         kwargs = convert_args(args)
         main(**kwargs)
 
