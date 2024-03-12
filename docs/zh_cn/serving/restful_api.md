@@ -230,6 +230,4 @@ openaoe -f /path/to/your/config-template.yaml
 
 6. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
 
-## 自定义对话模板
-
-自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
+7. 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
