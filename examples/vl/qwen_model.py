@@ -19,20 +19,12 @@ class QwenVLChatTemplate(Qwen7BChat):
                  top_p=0.3,
                  top_k=None,
                  temperature=1.0,
-                 im_start='<|im_start|>',
-                 im_end='<|im_end|>',
-                 system='You are a helpful assistant.',
-                 stop_words=['<|im_end|>'],
                  **kwargs):
         super().__init__(**kwargs)
         self.session_len = session_len
         self.top_p = top_p
         self.top_k = top_k
         self.temperature = temperature
-        self.im_start = im_start
-        self.im_end = im_end
-        self.system = system
-        self.stop_words = stop_words
 
     def _concat_image_info(self, prompt):
         """Append image placeholder."""
@@ -45,27 +37,33 @@ class QwenVLChatTemplate(Qwen7BChat):
         prompt = res + prompt
         return prompt
 
-    def decorate_prompt(self, prompt, sequence_start=True):
+    def get_prompt(self, prompt, sequence_start=True):
         """Apply chat template to prompt."""
         prompt = self._concat_image_info(prompt)
-        return super().decorate_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)
 
     def messages2prompt(self, messages, sequence_start=True):
         """Apply chat template to history."""
         if isinstance(messages, str) or isinstance(messages[0], str):
-            return self.decorate_prompt(messages, sequence_start)
-        system, users, assistants = self._translate_messages(messages)
-        ret = f'{self.im_start}system\n{system}{self.im_end}'
-        for user, assistant in zip(users, assistants):
-            if not isinstance(user):
-                user = [user[0]['text'], len(user) - 1]
-                user = self._concat_image_info(user)
-            if assistant:
-                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
-                       f'\n{self.im_start}assistant\n{assistant}'
-            else:
-                ret += f'\n{self.im_start}user\n{user}{self.im_end}' \
-                       f'\n{self.im_start}assistant\n'
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa + self.stop_word_suffix,
+                       system=self.eosys)
+        ret = ''
+        if self.meta_instruction is not None:
+            if len(messages) and messages[0]['role'] != 'system':
+                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
+        for message in messages:
+            role = message['role']
+            content = message['content']
+            if role == 'user' and not isinstance(content, str):
+                content = [content[0]['text'], len(content) - 1]
+                content = self._concat_image_info(content)
+            ret += f'{box_map[role]}{content}{eox_map[role]}'
+        ret += f'{self.assistant}'
         return ret
 
 
@@ -134,8 +132,8 @@ class QwenVLChat:
         image_paths = []
         if not isinstance(query, str):
             query, image_paths = query[0], query[1:]
-        decorate_text = self.decorator.decorate_prompt(
-            (query, len(image_paths)), sequence_start)
+        decorate_text = self.decorator.get_prompt((query, len(image_paths)),
+                                                  sequence_start)
         return self._to_inputs(decorate_text, image_paths, sequence_start)
 
     def prepare_message(self, messages):

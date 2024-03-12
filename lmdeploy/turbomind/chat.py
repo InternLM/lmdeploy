@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import dataclasses
 import os
 import random
 
+from lmdeploy.messages import EngineGenerationConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.turbomind.utils import get_gen_param
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -75,6 +74,7 @@ def main(model_path: str,
         **kwargs)
     tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
+    gen_config = EngineGenerationConfig(top_k=40)
 
     nth_round = 1
     step = 0
@@ -110,16 +110,22 @@ def main(model_path: str,
                       ' Please end the session.')
                 continue
 
-            gen_param = get_gen_param(cap, model.sampling_param, nth_round,
-                                      step, request_output_len, **kwargs)
+            sequence_start = (nth_round == 1)
+            sequence_end = False
+            if cap != 'chat':  # not interactive for other capability
+                sequence_start, sequence_end = True, True
+                step = 0
 
             print(f'{prompt} ', end='', flush=True)
             state = DetokenizeState()
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
+                    sequence_start=sequence_start,
+                    sequence_end=sequence_end,
+                    step=step,
                     stream_output=stream_output,
-                    **dataclasses.asdict(gen_param),
+                    gen_config=gen_config,
                     ignore_eos=False,
                     random_seed=seed if nth_round == 1 else None):
                 _, res, tokens = outputs
