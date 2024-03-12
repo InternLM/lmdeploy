@@ -26,12 +26,21 @@ struct BaseGmemIterator {
     int offset_c_;
     int offset_s_;
 
-    __device__ BaseGmemIterator(int warp_id, int lane_id)
+    static constexpr std::integral_constant<bool, Map::kPartialC> partial_c_{};
+
+    std::conditional_t<partial_c_, bool, std::true_type> pred_c_;
+
+    __device__ BaseGmemIterator()
     {
+        int  warp_id = threadIdx.x / WARP_SIZE;
+        int  lane_id = threadIdx.x % WARP_SIZE;
         int2 offsets = Map::get_offset(warp_id, lane_id);
         src_offset_  = offsets.x + offsets.y * Map::kDimC;
         offset_c_    = offsets.x;
         offset_s_    = offsets.y;
+        if constexpr (partial_c_) {
+            pred_c_ = offset_c_ < Map::kDimC;
+        }
     }
 
     __device__ void SetSmem(T* smem)
@@ -39,16 +48,19 @@ struct BaseGmemIterator {
         smem_ = smem;
     }
 
-    template<class Offset>
-    __device__ void ClearSmem(Offset offset)
+    __device__ void ClearSmem(int pipe_iter = 0)
     {
         SmemAccessor<T, SmemLayout> data{smem_};
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&data(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC, offset),
-                      Array<T, Map::kAccessC>{});
+                if (pred_c_) {
+                    Store(&data(offset_s_ + s * Map::kDeltaS,
+                                offset_c_ + c * Map::kDeltaC,
+                                pipe_iter * SmemLayout::kSize),
+                          Array<T, Map::kAccessC>{});
+                }
             }
         }
     }
@@ -64,97 +76,45 @@ struct BaseSmemIterator {
     __device__ explicit BaseSmemIterator(T* smem): smem_{smem} {}
 };
 
-template<class T, int CTA_S, int HeadDim, class BlockSeqLen>
-struct BlockTileIter {
+template<class Iterator0, class Iterator1>
+struct CombinedIterator {
+    Iterator0 iterator0_;
+    Iterator1 iterator1_;
 
-    const int tiles_per_block_;
-    const T** block_ptrs_;
+    // NOTE: can't use reference type here, nvcc does not support variadic templates well in device code
+    // template<typename... Args>
+    // __device__ void Prefetch(Args... args)
+    // {
+    //     iterator0_.Prefetch(args...);
+    //     iterator1_.Prefetch(args...);
+    // }
 
-    int block_id_;
-
-    const T* block;
-    int      local_id;
-
-    Array<int, 2> kv_offset_;
-
-    int local_id_offset_;
-
-    __device__
-    BlockTileIter(const T** block_ptrs, BlockSeqLen block_seqlen, Array<int, 2> kv_offset, int local_id_offset):
-        block_ptrs_{block_ptrs},
-        tiles_per_block_{block_seqlen / CTA_S},
-        kv_offset_{kv_offset},
-        local_id_offset_{local_id_offset}
+    template<class Partial, class TileIter>
+    __device__ void
+    Prefetch(Partial partial, const TileIter& tile_iter, int s_begin, int s_count, int max_s, int pipe_iter)
     {
+        iterator0_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
+        iterator1_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
     }
 
-    __device__ void SetTile(int tile_id)
+    template<class Partial, class TileIter>
+    __device__ void Prefetch(Partial partial, const TileIter& tile_iter, int max_s, int pipe_iter)
     {
-        tile_id += local_id_offset_;
-        if constexpr (std::is_integral_v<BlockSeqLen>) {
-            block_id_ = tile_id >> (31 - __clz(tiles_per_block_));  // this is somehow faster than `__ffs`
-            local_id  = tile_id & (tiles_per_block_ - 1);
-        }
-        else {
-            block_id_ = tile_id / tiles_per_block_;
-            local_id  = tile_id % tiles_per_block_;
-        }
-        block = block_ptrs_[block_id_];
+        iterator0_.Prefetch(partial, tile_iter, max_s, pipe_iter);
+        iterator1_.Prefetch(partial, tile_iter, max_s, pipe_iter);
     }
 
-    __device__ void Advance()
+    __device__ void ClearSmem(int pipe_iter = 0)
     {
-        --local_id;
-        if (local_id < 0) {
-            local_id += tiles_per_block_;
-            block_id_ -= 1;
-        }
-        if (block_id_ >= 0) {
-            block = block_ptrs_[block_id_];
-        }
+        iterator0_.ClearSmem(pipe_iter);
+        iterator1_.ClearSmem(pipe_iter);
     }
 
-    template<int Idx>
-    __device__ const T* OffsetData(int offset) const
+    template<class P0, class P1>
+    __device__ void SetSmem(P0 p0, P1 p1)
     {
-        return block + local_id * CTA_S * HeadDim + kv_offset_[Idx] + offset;
-    }
-};
-
-template<class T, int CTA_S, int HeadDim>
-struct LinearTileIter {
-
-    const T* key_;
-    const T* key_ptr_;
-
-    int tile_id_;
-    int offset_to_val_;
-
-    __device__ LinearTileIter(const T* key, int offset_to_val): key_{key}, offset_to_val_{offset_to_val} {}
-
-    __device__ void SetTile(int tile_id)
-    {
-        key_ptr_ = key_ + tile_id * CTA_S * HeadDim;
-        tile_id_ = tile_id;
-    }
-
-    __device__ void Advance()
-    {
-        --tile_id_;
-        if (tile_id_ >= 0) {
-            key_ptr_ -= CTA_S * HeadDim;
-        }
-    }
-
-    template<int Idx>
-    __device__ const T* OffsetData(int offset) const
-    {
-        if constexpr (Idx == 0) {
-            return key_ptr_ + offset;
-        }
-        else {
-            return key_ptr_ + offset + offset_to_val_;
-        }
+        iterator0_.SetSmem(p0);
+        iterator1_.SetSmem(p1);
     }
 };
 

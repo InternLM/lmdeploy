@@ -58,7 +58,14 @@ void invokeAttention(const typename Kernel::ParamType& params)
     cta_map.set_split_cnt(split_cnt);
     grid = cta_map.get_grid_shape();
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cta_map);
+    // must be `LinearIteratorFactory`
+    using Tkv = typename Kernel::Tkv;
+    typename Kernel::CacheIteratorFactory cache_iter_factory{(const Tkv*)params.linear_iter_params.kv_cache,
+                                                             params.cu_k_len,
+                                                             params.linear_iter_params.stride_h,
+                                                             params.linear_iter_params.key_to_val};
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, cta_map);
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";

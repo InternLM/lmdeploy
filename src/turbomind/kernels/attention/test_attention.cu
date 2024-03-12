@@ -3,8 +3,8 @@
 #include "attention.h"
 #include "block.h"
 #include "decoding.h"
-#include "kv_cache_utils.h"
 #include "kv_cache_utils_v2.h"
+#include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -185,7 +185,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
     cudaDeviceSynchronize();
 
-    if (1) {
+    if (0) {
         std::cout << ">>> Compare\n";
         Compare(
             kv_cache_2.data().get(), kv_cache.data().get(), head_dim, head_dim, batch_size * 2 * head_num * seq_len, 0);
@@ -195,7 +195,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
 #define KV_INT8 1
 
-#define DECODING 0
+#define DECODING 1
 
 template<class T>
 int test_attention()
@@ -209,20 +209,21 @@ int test_attention()
     // constexpr size_t kBatchSize = 64;
     constexpr size_t kHeadNum   = 32;
     constexpr size_t KvHeadNum  = kHeadNum / 1;
-    constexpr size_t kBatchSize = 1;
+    constexpr size_t kBatchSize = 64;
     constexpr size_t kInputLen  = 1;
-    // constexpr size_t kSequenceLen = 8191;
+    // constexpr size_t kSequenceLen = 1023;
+    constexpr size_t kSequenceLen = 2047;
     // constexpr size_t kSequenceLen = 16383;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
-    constexpr size_t kSequenceLen = 262143;
+    // constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
     // constexpr int kSequenceLen = 2047;
     constexpr int kBlockSz   = 128;
-    constexpr int kMaxSplitK = 32;
+    constexpr int kMaxSplitK = 1;
 #else
 
     // append
@@ -248,7 +249,7 @@ int test_attention()
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz = 128;
 
 #endif
 
@@ -264,7 +265,7 @@ int test_attention()
 
     constexpr size_t kContextLen = kSequenceLen + kInputLen;
     constexpr size_t kTokenNum   = kBatchSize * kInputLen;
-    constexpr int    kTestIter   = 20;
+    constexpr int    kTestIter   = 100;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;
@@ -330,13 +331,6 @@ int test_attention()
     thrust::universal_vector<char*> k_ptrs;
     thrust::universal_vector<int>   cu_block_cnts;
 
-    static constexpr float kKeyScale = 0.0175;
-    static constexpr float kKeyZero  = 0;
-    static constexpr float kValScale = 0.0175;
-    static constexpr float kValZero  = 0;
-
-    constexpr std::array<float, 4> quant_params_kv{kKeyScale, kKeyZero, kValScale, kValZero};
-
     TestBlocks<Tkv>(
         k_cache, v_cache, blocks, k_ptrs, cu_block_cnts, KvHeadNum, kHeadDim, kBlockSz, kBatchSize, kQuantPolicy);
 
@@ -371,29 +365,28 @@ int test_attention()
 
     params.stride = (kHeadNum + 2 * KvHeadNum) * kHeadDim;
 
-    params.kv = kv_cache.data().get();
-
     params.token_num  = kTokenNum;
     params.batch_size = kBatchSize;
     params.max_q_len  = kInputLen;
     params.max_k_len  = kContextLen;
 
-    params.k_cache_block_ptrs  = (void**)k_ptrs.data().get();
-    params.cu_block_cnts       = cu_block_cnts.data().get();
-    params.kv_cache_block_size = kBlockSz;
+    params.block_iter_params = BlockIteratorParams{k_ptrs.data().get(),  //
+                                                   cu_block_cnts.data().get(),
+                                                   0,
+                                                   kBlockSz};
+
+    params.linear_iter_params = LinearIteratorParams{kv_cache.data().get(),  //
+                                                     int(2 * kBatchSize * kContextLen * kHeadDim),
+                                                     int(kBatchSize * kContextLen * kHeadDim)};
 
     params.quant_policy = kQuantPolicy;
 
-    std::copy_n(quant_params_kv.data(), 4, &params.kv_quant_params[0]);
+    // std::copy_n(quant_params_kv.data(), 4, &params.kv_quant_params[0]);
 
     params.finished   = finished.data().get();
     params.rope_theta = rope_base.data().get();
     params.cu_q_len   = cu_seqlens.data().get();
     params.cu_k_len   = cu_kv_lens.data().get();
-
-    // [L, 2, H, s, D]
-    params.key_offset = 0;
-    params.val_offset = params.key_offset + KvHeadNum * kBlockSz * kHeadDim;
 
     params.num_heads     = kHeadNum;
     params.num_kv_heads  = KvHeadNum;

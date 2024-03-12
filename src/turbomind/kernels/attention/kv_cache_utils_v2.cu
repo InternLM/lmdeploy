@@ -161,9 +161,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
-
         if (qi < q_len) {
-
             const int ti = history_len + qi;  // timestep
             block_head.with((char**)blocks, ti, [&](Tkv* k_cache, Tkv* v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
@@ -173,8 +171,13 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                     Store(&v_cache[di], out_V[s][c]);
                 }
                 if constexpr (!std::is_same_v<T, Tkv>) {
-                    Store(k_param, param_K[s]);
-                    Store(v_param, param_V[s]);
+                    if (offset.x == 0) {
+                        Store(k_param, param_K[s]);
+                        Store(v_param, param_V[s]);
+                        // if (ti == history_len) {
+                        //     printf("ref %f %f\n", (float)param_K[0][0], (float)param_K[0][1]);
+                        // }
+                    }
                 }
             });
         }

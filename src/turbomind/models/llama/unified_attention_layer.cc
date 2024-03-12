@@ -22,7 +22,7 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
-#include "src/turbomind/kernels/attention/kv_cache_utils.h"
+#include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -152,7 +152,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     auto CreateParams = [&](int offset, int batch_size, cudaStream_t stream) {
         AttentionParams<T> params{};
-
+#if 0
         params.out    = qkv_buf_3_;
         params.q      = (T*)qkv_buf_;
         params.k      = params.q + local_head_num_ * size_per_head_;
@@ -208,7 +208,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.quant_policy = quant_policy_;
         FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
         std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
-
+#endif
         return params;
     };
 
@@ -226,8 +226,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         const int sum_k_len = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
         auto      params    = CreateParams(offset, pf_batch_size, pf_stream);
         if constexpr (sizeof(T) == 2) {
-            invokeProcessKV_(params);
-            invokeFlattenKV_(params, sum_k_len);
+            // invokeProcessKV_(params);
+            // invokeFlattenKV_(params, sum_k_len);
             dispatchAttention(params);
         }
     }

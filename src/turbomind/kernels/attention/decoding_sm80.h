@@ -180,9 +180,6 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     static constexpr int kBatchK = ThreadMapKV::kIterS;
     static constexpr int kBatchV = ThreadMapKV::kIterS;
 
-    using TransformK = float2;
-    using TransformV = float2;
-
     static constexpr bool kDeferReduceL = true;
 
     __device__ static void Sync() {}
@@ -202,7 +199,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     for (int q = 0; q < 2; ++q) {
                         const int si = m * OP_M + lane_id / 4 * 1 + s * 8 + warp_id * WARP_S;
                         const int hi = n * OP_N + lane_id % 4 * 2 + q * 1;
-                        ((Func &&) func)(hi, /*qi*/ 0, si, /*ri*/ 0, S[m][n][s * 2 + q]);
+                        ((Func&&)func)(hi, /*qi*/ 0, si, /*ri*/ 0, S[m][n][s * 2 + q]);
                     }
                 }
             }
@@ -219,7 +216,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
             for (int q = 0; q < 2; ++q) {
                 const int hi = lane_id % 4 * 2 + n * OP_N + q * 1;
                 const int ri = lane_id / 4 * 1;
-                ((Func &&) func)(hi, /*qi*/ 0, ri, frag_M[n][q], frag_L[n][q]);
+                ((Func&&)func)(hi, /*qi*/ 0, ri, frag_M[n][q], frag_L[n][q]);
             }
         }
     }
@@ -241,15 +238,14 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     }
 
     template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&      smem_Q,
-                                     SmemK&      smem_K,
-                                     FragQ&      frag_Q,
-                                     FragK&      frag_K,
-                                     FragS&      frag_S,
-                                     TransformK& transform,
-                                     int         offset,
-                                     Prefetch&&  prefetch,
-                                     Preload&&   preload)
+    __device__ static void ComputeQK(SmemQ&     smem_Q,
+                                     SmemK&     smem_K,
+                                     FragQ&     frag_Q,
+                                     FragK&     frag_K,
+                                     FragS&     frag_S,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
@@ -257,7 +253,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
             }
             else {
-                ((Preload &&) preload)();
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -267,24 +263,23 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 }
             }
             if (k < K_K - 1) {
-                ((Prefetch &&) prefetch)(k);
+                ((Prefetch&&)prefetch)(k);
             }
             if (k == K_K - 2) {
-                ((Prefetch &&) prefetch)(K_K - 1);
+                ((Prefetch&&)prefetch)(K_K - 1);
             }
         }
     }
 
     template<class SmemP, class SmemV, class Prefetch, class Preload>
     __device__ static void ComputePV(SmemP&,
-                                     SmemV&      smem_V,
-                                     FragP&      frag_P,
-                                     FragV&      frag_V,
-                                     FragO&      frag_O,
-                                     TransformV& transform,
-                                     int         offset,
-                                     Prefetch&&  prefetch,
-                                     Preload&&   preload)
+                                     SmemV&     smem_V,
+                                     FragP&     frag_P,
+                                     FragV&     frag_V,
+                                     FragO&     frag_O,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
         PRAGMA_UNROLL
         for (int m = 0; m < V_M; ++m) {
@@ -292,7 +287,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 smem_V.Load(frag_V[m + 1], m + 1, offset);
             }
             else {
-                ((Preload &&) preload)();
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int k = 0; k < V_K; ++k) {
@@ -302,10 +297,10 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 }
             }
             if (m < V_M - 1) {
-                ((Prefetch &&) prefetch)(m);
+                ((Prefetch&&)prefetch)(m);
             }
             if (m == V_M - 2) {
-                ((Prefetch &&) prefetch)(V_M - 1);
+                ((Prefetch&&)prefetch)(V_M - 1);
             }
         }
     }
@@ -575,7 +570,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 const int hi = offset.y + s * Map::kDeltaS;
                 const int di = offset.x + c * Map::kDeltaC;
                 Load(tmp_O[s][c], &storage.O1[hi][di]);
-                ((Func &&) func)(hi, 0, di, tmp_O[s][c]);
+                ((Func&&)func)(hi, 0, di, tmp_O[s][c]);
             }
         }
     }

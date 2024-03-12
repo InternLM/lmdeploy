@@ -296,27 +296,8 @@ struct ConvertKvCache<T, uint8_t> {
     }
 };
 
-// u8 -> f16
-template<>
-struct ConvertKvCache<uint8_t, half> {
-    half       scale_;
-    half       zero_;
-    __device__ ConvertKvCache(half scale, half zero): scale_{scale}, zero_{zero} {}
 
-    template<int N>
-    __device__ auto operator()(const Array<uint8_t, N>& vi) const
-    {
-        Array<half, N> vo;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 4) {
-            using namespace ops;
-            (Array<half, 4>&)vo[i] = cvt_f16x4_u8<true>((Array<uint8_t, 4>&)vi[i]) * scale_ + zero_;
-        }
-        return vo;
-    }
-};
-
-// u8 -> f32
+// u8 -> f32/f16/bf16
 template<class T>
 struct ConvertKvCache<uint8_t, T> {
     T          scale_;
@@ -328,9 +309,9 @@ struct ConvertKvCache<uint8_t, T> {
     {
         Array<T, N> vo;
         PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 4) {
-            auto& ui = (const Array<uint8_t, 4>&)vi[i];
-            auto& uo = (Array<T, 4>&)vo[i];
+        for (int n = 0; n < N; n += 4) {
+            auto& ui = (const Array<uint8_t, 4>&)vi[n];
+            auto& uo = (Array<T, 4>&)vo[n];
 
             if constexpr (std::is_same_v<T, half>) {
                 uo = cvt_f16x4_u8<true>(ui);
@@ -342,8 +323,8 @@ struct ConvertKvCache<uint8_t, T> {
             }
 
             PRAGMA_UNROLL
-            for (int j = 0; j < 4; ++j) {
-                uo[i] = uo[i] * scale_ + zero_;
+            for (int c = 0; c < 4; ++c) {
+                uo[c] = uo[c] * scale_ + zero_;
             }
         }
         return vo;

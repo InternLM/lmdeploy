@@ -33,6 +33,11 @@ void invokeDecoding(const typename Kernel::ParamType& params)
     auto kernel_func = &attention_kernel<Kernel>;
 
     thread_local const int2 caps = [&] {
+        auto err = cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
+        if (err) {
+            std::cout << cudaGetErrorString(err) << "\n";
+            std::abort();
+        }
         int device_id{};
         cudaGetDevice(&device_id);
         int sm_count{};
@@ -55,7 +60,20 @@ void invokeDecoding(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, CtaMap{});
+    // Print(typename Kernel::Impl::ThreadMapKVp{});
+
+    using CacheIterFactory = typename Kernel::CacheIteratorFactory;
+    using BlockLayout      = typename CacheIterFactory::BlockLayout;
+    using BlockConfig      = typename BlockLayout::Config;
+
+    CacheIterFactory cache_iter_factory{
+        BlockLayout{BlockConfig{params.num_kv_heads, params.block_iter_params.block_len}},
+        params.block_iter_params.block_ptrs,
+        params.block_iter_params.cu_block_nums,
+        params.block_iter_params.layer_id,
+    };
+
+    kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, CtaMap{});
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
         std::cout << cudaGetErrorString(err) << "\n";

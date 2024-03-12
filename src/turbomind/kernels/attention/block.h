@@ -80,34 +80,39 @@ public:
     {
     }
 
-    TM_HOST_DEVICE Tkv* k_data(char* block, int ti)
+    TM_HOST_DEVICE Tkv* k_data(char* block, int ti) const
     {
         return reinterpret_cast<Tkv*>(block + layout_.k_data(layer_id_, head_id_, ti));
     }
 
-    TM_HOST_DEVICE Tkv* v_data(char* block, int ti)
+    TM_HOST_DEVICE Tkv* v_data(char* block, int ti) const
     {
         return reinterpret_cast<Tkv*>(block + layout_.v_data(layer_id_, head_id_, ti));
     }
 
-    TM_HOST_DEVICE T* k_param(char* block, int ti)
+    TM_HOST_DEVICE T* k_param(char* block, int ti) const
     {
         return reinterpret_cast<T*>(block + layout_.k_param(layer_id_, head_id_, ti));
     }
 
-    TM_HOST_DEVICE T* v_param(char* block, int ti)
+    TM_HOST_DEVICE T* v_param(char* block, int ti) const
     {
         return reinterpret_cast<T*>(block + layout_.v_param(layer_id_, head_id_, ti));
     }
 
     TM_HOST_DEVICE void get_block_coord(int seq_ti, int& block_idx, int& block_ti) const
     {
-        block_idx = seq_ti / layout_.config().block_len();
-        block_ti  = seq_ti % layout_.config().block_len();
+        block_idx = seq_ti / block_len();
+        block_ti  = seq_ti % block_len();
+    }
+
+    TM_HOST_DEVICE auto block_len() const
+    {
+        return layout_.config().block_len();
     }
 
     template<class Func>
-    TM_HOST_DEVICE auto with(char** block_ptrs, int ti, Func&& func)
+    TM_HOST_DEVICE auto with(char** block_ptrs, int ti, Func&& func) const
     {
         int block_id;
         int block_ti;
@@ -127,8 +132,11 @@ private:
 };
 
 // L(H2SDQ+H2S2T)
-template<class Config>
+template<class Config_>
 struct Layout {
+
+    using Config = Config_;
+
     Config config_;
 
     // This trivial ctor is defined for CTAD

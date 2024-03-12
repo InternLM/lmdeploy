@@ -24,7 +24,7 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     template<bool is_residue, class TileIter>
     __device__ void Load(const TileIter& tile_iter, Fragment& rmem, int max_s)
     {
-        auto src_data = tile_iter.OffsetData<Idx>(src_offset_);
+        auto src_data = tile_iter.OffsetPtr<Idx>(src_offset_);
         int  offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {

@@ -245,9 +245,6 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>;
 
-    using TransformK = float2;
-    using TransformV = float2;
-
     static constexpr bool kDeferReduceL = true;
 
     __device__ static void Sync()
@@ -282,7 +279,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
                         for (int s0 = 0; s0 < 2; ++s0) {
                             const int qi = m * OP_M + (lane_id & 8) + (lane_id & 1) + lane_id / 16 * 4 + q * 2;
                             const int si = n * OP_N + (lane_id & 4) * 2 + (lane_id & 2) + s1 * 4 + s0;
-                            ((Func &&) func)(0, warp_id * WARP_Q + qi, si, /*ri*/ 0, S[m][n][s1 * 4 + q * 2 + s0]);
+                            ((Func&&)func)(0, warp_id * WARP_Q + qi, si, /*ri*/ 0, S[m][n][s1 * 4 + q * 2 + s0]);
                         }
                     }
                 }
@@ -308,15 +305,14 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
     }
 
     template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&      smem_Q,
-                                     SmemK&      smem_K,
-                                     FragQ&      frag_Q,
-                                     FragK&      frag_K,
-                                     FragS&      frag_S,
-                                     TransformV& transform,
-                                     int         offset,
-                                     Prefetch&&  prefetch,
-                                     Preload&&   preload)
+    __device__ static void ComputeQK(SmemQ&     smem_Q,
+                                     SmemK&     smem_K,
+                                     FragQ&     frag_Q,
+                                     FragK&     frag_K,
+                                     FragS&     frag_S,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
         // smem_K.Load(frag_K[0], 0);
         // if constexpr (kUseSmemQ) {
@@ -332,7 +328,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
                 // }
             }
             else {
-                ((Preload &&) preload)();
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -346,15 +342,14 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
     }
 
     template<class SmemP, class SmemV, class Prefetch, class Preload>
-    __device__ static void ComputePV(SmemP&      smem_P,
-                                     SmemV&      smem_V,
-                                     FragP&      frag_P,
-                                     FragV&      frag_V,
-                                     FragO&      frag_O,
-                                     TransformV& transform,
-                                     int         offset,
-                                     Prefetch&&  prefetch,
-                                     Preload&&   preload)
+    __device__ static void ComputePV(SmemP&     smem_P,
+                                     SmemV&     smem_V,
+                                     FragP&     frag_P,
+                                     FragV&     frag_V,
+                                     FragO&     frag_O,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
         // FragV frag_V;
 
@@ -372,7 +367,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
                 // }
             }
             else {
-                ((Preload &&) preload)();
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {
@@ -529,7 +524,7 @@ struct Impl<Sm70_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, H
                                 frag_O[m][n][d1 * 4 + q * 2 + d0] *= inv_L[m][q];
                             }
                         }
-                        ((Func &&) func)(0, qi, di, (Array<float, 2>&)frag_O[m][n][d1 * 4 + q * 2]);
+                        ((Func&&)func)(0, qi, di, (Array<float, 2>&)frag_O[m][n][d1 * 4 + q * 2]);
                     }
                 }
             }

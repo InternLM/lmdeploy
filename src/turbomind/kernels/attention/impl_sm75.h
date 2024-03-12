@@ -135,9 +135,6 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q * CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
 
-    using TransformK = float2;
-    using TransformV = float2;
-
     __device__ static T* GetSmemK(SharedStorage& storage)
     {
         return storage.K;
@@ -179,15 +176,14 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
     }
 
     template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&      smem_Q,
-                                     SmemK&      smem_K,
-                                     FragQ&      frag_Q,
-                                     FragK&      frag_K,
-                                     FragS&      frag_S,
-                                     TransformV& transform,
-                                     int         offset,
-                                     Prefetch&&  prefetch,
-                                     Preload&&   preload)
+    __device__ static void ComputeQK(SmemQ&     smem_Q,
+                                     SmemK&     smem_K,
+                                     FragQ&     frag_Q,
+                                     FragK&     frag_K,
+                                     FragS&     frag_S,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
@@ -195,7 +191,7 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
             }
             else {
-                ((Preload &&) preload)();
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -209,15 +205,14 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
     }
 
     template<class SmemP, class SmemV, class Prefetch, class Preload>
-    __device__ static void ComputePV(SmemP&      smem_P,
-                                     SmemV&      smem_V,
-                                     FragP&      frag_P,
-                                     FragV&      frag_V,
-                                     FragO&      frag_O,
-                                     TransformV& transform,
-                                     int         offset,
-                                     Prefetch&&  prefetch,
-                                     Preload&&   preload)
+    __device__ static void ComputePV(SmemP&     smem_P,
+                                     SmemV&     smem_V,
+                                     FragP&     frag_P,
+                                     FragV&     frag_V,
+                                     FragO&     frag_O,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
 
         PRAGMA_UNROLL
@@ -226,7 +221,7 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
                 smem_V.Load(frag_V[k + 1], k + 1, offset);
             }
             else {
-                ((Preload &&) preload)();
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {

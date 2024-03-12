@@ -34,22 +34,22 @@ void invokeProcessKV_v2(char**       blocks,
 template<class T>
 void invokeProcessKV_v2_(const AttentionParams<T>& params)
 {
-    invokeProcessKV_v2((char**)params.k_cache_block_ptrs,
+    invokeProcessKV_v2((char**)params.block_iter_params.block_ptrs,
                        params.k,
                        params.v,
                        params.k_bias,
                        params.v_bias,
                        params.cu_q_len,
                        params.cu_k_len,
-                       params.cu_block_cnts,
+                       params.block_iter_params.cu_block_nums,
                        params.rope_theta,
                        params.rope_ti_scale,
                        0,                                     // stride b
                        params.stride / params.size_per_head,  // stride c
                        1,                                     // stride h
                        params.stride / params.size_per_head,  // stride s
-                       params.kv_cache_block_size,
-                       params.layer_id,
+                       params.block_iter_params.block_len,
+                       params.block_iter_params.layer_id,
                        params.max_q_len,
                        params.num_kv_heads,
                        params.size_per_head,
@@ -79,23 +79,24 @@ void invokeFlattenKV_v2(T*           k,
                         int          quant_policy,
                         cudaStream_t stream = {});
 
+/// TODO: remove `sum_k_len`
 template<class T>
 void invokeFlattenKV_v2_(const AttentionParams<T>& params, int sum_k_len)
 {
     // blocks -> [H, 2, sum_k_len, D]
-    invokeFlattenKV_v2((T*)params.kv,
-                       (T*)params.kv + sum_k_len * params.size_per_head,
-                       (char**)params.k_cache_block_ptrs,
+    invokeFlattenKV_v2((T*)params.linear_iter_params.kv_cache,
+                       (T*)params.linear_iter_params.kv_cache + sum_k_len * params.size_per_head,
+                       (char**)params.block_iter_params.block_ptrs,
                        params.cu_k_len,
-                       params.cu_block_cnts,
+                       params.block_iter_params.cu_block_nums,
                        nullptr,  // params.rope_theta,
                        params.rope_ti_scale,
                        0,
                        1,
                        2 * sum_k_len,
                        1,
-                       params.kv_cache_block_size,
-                       params.layer_id,
+                       params.block_iter_params.block_len,
+                       params.block_iter_params.layer_id,
                        params.max_k_len,
                        params.num_kv_heads,
                        params.size_per_head,
@@ -104,6 +105,7 @@ void invokeFlattenKV_v2_(const AttentionParams<T>& params, int sum_k_len)
                        params.stream);
 }
 
-size_t get_cache_block_size(DataType dtype, DataType kvtype, int layer_num, int head_num, int head_dim, int block_seq_len);
+size_t
+get_cache_block_size(DataType dtype, DataType kvtype, int layer_num, int head_num, int head_dim, int block_seq_len);
 
 }  // namespace turbomind
