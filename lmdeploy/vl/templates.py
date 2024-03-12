@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 import PIL
 
@@ -9,7 +9,7 @@ from lmdeploy.turbomind.utils import get_hf_config_content
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image_from_url
 
-VLPromptType = Tuple[str, List[PIL.Image.Image]]
+VLPromptType = Union[str, Tuple[str, List[PIL.Image.Image]]]
 
 
 class VLChatTemplateWrapper:
@@ -126,7 +126,7 @@ class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
 def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
                            model_name: str) -> VLChatTemplateWrapper:
     """get vision language prompt template."""
-    if model_name in ['yi-vl-6b', 'yi-vl-34b']:
+    if model_name == 'yi-vl':
         return YiVLChatTemplateWrapper(chat_template)
 
     config = get_hf_config_content(model_path)

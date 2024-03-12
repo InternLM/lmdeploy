@@ -18,9 +18,10 @@ class VLAsyncEngine(AsyncEngine):
         self.vl_prompt_template = get_vl_prompt_template(
             model_path, self.chat_template, self.model_name)
 
-    def __call__(self, prompts: Union[str, VLPromptType, List[Dict],
-                                      List[Union[str, VLPromptType]],
-                                      List[List[Dict]]], **kwargs):
+    def _convert_prompts(self,
+                         prompts: Union[VLPromptType, List[Dict],
+                                        List[VLPromptType], List[List[Dict]]]):
+        """convert prompts to openai format."""
         if isinstance(prompts, str) or isinstance(prompts, tuple):
             _prompts = self.vl_prompt_template.prompt_to_messages(prompts)
         elif isinstance(prompts[0], tuple) or isinstance(prompts[0], str):
@@ -29,11 +30,11 @@ class VLAsyncEngine(AsyncEngine):
             ]
         else:
             _prompts = prompts
-
-        return super().__call__(_prompts, **kwargs)
+        return _prompts
 
     async def _get_prompt_input(self, prompt: Dict, do_preprocess: bool,
                                 sequence_start: bool):
+        """get input_ids, embeddings and offsets."""
         if do_preprocess:
             decorated = self.vl_prompt_template.messages2prompt(
                 prompt, sequence_start)
@@ -70,3 +71,24 @@ class VLAsyncEngine(AsyncEngine):
 
         results['input_ids'] = input_ids
         return results
+
+    def batch_infer(self, prompts: Union[VLPromptType, List[Dict],
+                                         List[VLPromptType], List[List[Dict]]],
+                    **kwargs):
+        """Inference a batch of prompts."""
+        prompts = self._convert_prompts(prompts)
+        return super().batch_infer(prompts, **kwargs)
+
+    def stream_infer(self, prompts: Union[VLPromptType, List[Dict],
+                                          List[VLPromptType],
+                                          List[List[Dict]]], **kwargs):
+        """Inference a batch of prompts with stream mode."""
+        prompts = self._convert_prompts(prompts)
+        return super().stream_infer(prompts, **kwargs)
+
+    def __call__(self, prompts: Union[VLPromptType, List[Dict],
+                                      List[VLPromptType], List[List[Dict]]],
+                 **kwargs):
+        """Inference a batch of prompts."""
+        prompts = self._convert_prompts(prompts)
+        return super().__call__(prompts, **kwargs)

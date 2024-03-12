@@ -861,7 +861,7 @@ class YiVL(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'yi' in path and 'vl' in path:
+        if 'yi-vl' in path:
             return 'yi-vl'
 
 
