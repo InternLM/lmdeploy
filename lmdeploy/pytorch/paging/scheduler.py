@@ -4,7 +4,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List, Set, Union
 
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
@@ -116,6 +116,7 @@ class Scheduler:
             adapter) - self.block_manager.num_gpu_blocks
         return adapter.build_weight_map(block_table)
 
+    @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
         """Schedule for prefilling."""
 
@@ -206,6 +207,7 @@ class Scheduler:
         self.running += running
         return running, swap_in_map, swap_out_map, copy_map
 
+    @logging_timer('ScheduleDecoding', logger)
     def _schedule_decoding(self):
         """schedule decoding."""
         assert len(self.running) != 0

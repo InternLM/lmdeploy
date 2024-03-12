@@ -52,7 +52,7 @@ class LoRALinear(torch.nn.Module):
                                rank_page_table=context.adapter_offsets,
                                rank_page_start=block_starts,
                                ranks=ranks,
-                               max_seq_len=context.max_seq_length,
+                               max_seq_len=context.max_q_seq_length,
                                max_rank=context.max_rank,
                                is_decoding=context.is_decoding)
 

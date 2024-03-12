@@ -1,7 +1,8 @@
 import allure
 import conftest
 import pytest
-from utils.config_utils import get_turbomind_model_list
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_turbomind_model_list)
 from utils.run_client_chat import hf_command_line_test
 
 conftest._init_cli_case_list()
@@ -15,12 +16,41 @@ def getCaseList():
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_1
 @pytest.mark.parametrize('usercase', getCaseList())
-@pytest.mark.parametrize('model', get_turbomind_model_list())
-def test_hf_turbomind_chat(config, model, cli_case_config, usercase):
-    result, chat_log, msg = hf_command_line_test(config, usercase,
-                                                 cli_case_config.get(usercase),
-                                                 model, 'turbomind')
+@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
+def test_hf_turbomind_chat_tp1(config, model, cli_case_config, usercase,
+                               worker_id):
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id))
+
+    if chat_log is not None:
+        allure.attach.file(chat_log,
+                           attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('usercase', getCaseList())
+@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=2))
+def test_hf_turbomind_chat_tp2(config, model, cli_case_config, usercase,
+                               worker_id):
+    result, chat_log, msg = hf_command_line_test(
+        config,
+        usercase,
+        cli_case_config.get(usercase),
+        model,
+        'turbomind',
+        cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2))
 
     if chat_log is not None:
         allure.attach.file(chat_log,
@@ -36,7 +66,8 @@ def test_hf_turbomind_chat(config, model, cli_case_config, usercase):
 @pytest.mark.xdist_group(name='pr_test')
 @pytest.mark.parametrize('usercase', getCaseList())
 @pytest.mark.parametrize(
-    'model', ['internlm2-chat-20b', 'internlm2-chat-20b-inner-w4a16'])
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-w4a16'])
 def test_hf_turbomind_chat_pr(config, model, cli_case_config, usercase):
     result, chat_log, msg = hf_command_line_test(
         config,

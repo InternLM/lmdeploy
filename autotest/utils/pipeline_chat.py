@@ -27,7 +27,8 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
     if 'pytorch' == type:
         backend_config = PytorchEngineConfig(tp=tp)
     else:
-        if 'kvint8' in model_case and 'w4' in model_case:
+        if 'kvint8' in model_case and ('w4' in model_case
+                                       or '4bits' in model_case):
             backend_config = TurbomindEngineConfig(tp=tp,
                                                    model_format='awq',
                                                    quant_policy=4)
@@ -35,7 +36,7 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
             backend_config = TurbomindEngineConfig(tp=tp,
                                                    model_format='hf',
                                                    quant_policy=4)
-        elif 'w4' in model_case:
+        elif 'w4' in model_case or '4bits' in model_case:
             backend_config = TurbomindEngineConfig(tp=tp, model_format='awq')
         else:
             backend_config = TurbomindEngineConfig(tp=tp)
@@ -43,6 +44,7 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
 
     # run testcases
     gen_config = GenerationConfig(temperature=0.01)
+    gen_config = GenerationConfig()
     for case in cases_info.keys():
         if (case == 'memory_test'
                 or case == 'emoji_case') and 'chat' not in model_case.lower():
@@ -50,7 +52,8 @@ def run_pipeline_chat_test(config, cases_info, model_case, type):
 
         case_info = cases_info.get(case)
         pipeline_chat_log = os.path.join(
-            log_path, 'pipeline_chat_' + model_case + '_' + case + '.log')
+            log_path,
+            'pipeline_chat_' + model_case.split('/')[1] + '_' + case + '.log')
 
         file = open(pipeline_chat_log, 'w')
 
@@ -94,7 +97,8 @@ def assert_pipeline_chat_log(config, cases_info, model_case):
         result = False
         with allure.step('case - ' + case):
             pipeline_chat_log = os.path.join(
-                log_path, 'pipeline_chat_' + model_case + '_' + case + '.log')
+                log_path, 'pipeline_chat_' + model_case.split('/')[1] + '_' +
+                case + '.log')
 
             with open(pipeline_chat_log, 'r') as f:
                 lines = f.readlines()

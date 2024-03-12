@@ -49,8 +49,8 @@ Welcome to LMDeploy's tutorials!
    :caption: serving
 
    serving/restful_api.md
-   serving/proxy_server.md
    serving/gradio.md
+   serving/proxy_server.md
 
 .. _quantization:
 .. toctree::

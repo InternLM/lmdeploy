@@ -163,8 +163,7 @@ class PatchedSelfAttention(nn.Module):
             world_size = dist.get_world_size()
 
         context = self.context.context
-        history_lengths = context.history_lengths
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
         kv_seq_length = context.kv_seq_length
@@ -212,15 +211,17 @@ class PatchedSelfAttention(nn.Module):
 
         # adjust key and value for inference
         cache_k, cache_v = kv_cache
-        fill_kv_cache(key_layer[0],
-                      value_layer[0],
-                      cache_k,
-                      cache_v,
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_layer[0],
+            value_layer[0],
+            cache_k,
+            cache_v,
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_q_seq_length,
+            block_offsets=block_offsets,
+        )
 
         # ==================================
         # core attention computation
@@ -235,7 +236,7 @@ class PatchedSelfAttention(nn.Module):
                             q_start_loc=q_start_loc,
                             q_seqlens=q_seq_length,
                             kv_seqlens=kv_seq_length,
-                            max_seqlen=max_seq_length)
+                            max_seqlen=max_q_seq_length)
 
         context_layer = context_layer.transpose(1, 0).flatten(-2)
 

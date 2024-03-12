@@ -122,12 +122,12 @@ class Attention(nn.Module):
         """
         assert not output_attentions
         context = self.context.context
-        history_lengths = context.history_lengths
+        max_kv_seq_length = context.max_kv_seq_length
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_heads // world_size
@@ -140,8 +140,8 @@ class Attention(nn.Module):
 
         def _rotary_emb_fn(query_states, key_states, value_states):
             if hasattr(self, 'rotary_emb'):
-                kv_seq_len = max_seq_length + max(history_lengths)
-                cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+                cos, sin = self.rotary_emb(value_states,
+                                           seq_len=max_kv_seq_length)
                 query_states, key_states = apply_rotary_pos_emb(
                     query_states, key_states, cos, sin, position_ids,
                     context.position_ids_1d)
@@ -156,15 +156,17 @@ class Attention(nn.Module):
         query_states, key_states, value_states = _rotary_emb_fn(
             query_states, key_states, value_states)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_q_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
         paged_attention_fwd(
@@ -176,7 +178,7 @@ class Attention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_length,
+            max_seqlen=max_q_seq_length,
         )
 
         hidden_size = num_heads * head_dim
@@ -238,12 +240,11 @@ class BaichuanAttention(nn.Module):
         """
         assert not output_attentions
         context = self.context.context
-        history_lengths = context.history_lengths
         kv_seq_length = context.kv_seq_length
         q_seq_length = context.q_seq_length
         q_start_loc = context.q_start_loc
         block_offsets = context.block_offsets
-        max_seq_length = context.max_seq_length
+        max_q_seq_length = context.max_q_seq_length
 
         num_heads = self.num_heads // world_size
         num_kv_heads = self.num_heads // world_size
@@ -258,15 +259,17 @@ class BaichuanAttention(nn.Module):
         key_states = key_states.view(-1, num_kv_heads, head_dim)
         value_states = value_states.view(-1, num_kv_heads, head_dim)
 
-        fill_kv_cache(key_states,
-                      value_states,
-                      past_key_value[0],
-                      past_key_value[1],
-                      q_start_loc,
-                      q_seq_length,
-                      block_offsets=block_offsets,
-                      history_lengths=history_lengths,
-                      context=context)
+        fill_kv_cache(
+            key_states,
+            value_states,
+            past_key_value[0],
+            past_key_value[1],
+            q_start_loc,
+            q_seq_length,
+            kv_seq_length=kv_seq_length,
+            max_q_seq_length=max_q_seq_length,
+            block_offsets=block_offsets,
+        )
 
         attn_output = query_states
 
@@ -285,7 +288,7 @@ class BaichuanAttention(nn.Module):
                                   b_start_loc=q_start_loc,
                                   b_seq_len=q_seq_length,
                                   b_kv_seq_len=kv_seq_length,
-                                  max_input_len=max_seq_length,
+                                  max_input_len=max_q_seq_length,
                                   head_offset=head_offset,
                                   num_heads=num_heads_full)
 

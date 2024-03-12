@@ -9,7 +9,7 @@ import torch
 from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
                                ResponseType)
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger, get_model
+from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..check_env import check_env, check_model
@@ -404,6 +404,7 @@ class Engine:
         """Add new session."""
         return end(self.req_sender, session_id)
 
+    @logging_timer('CreateModelInputs', logger)
     @torch.inference_mode()
     def create_model_inputs(self, messages: SeqList, adapters: AdapterList):
         """create model inputs from messages.
@@ -506,6 +507,8 @@ class Engine:
         """
 
         def _check_stop_word(sampling_param, next_token_id):
+            if sampling_param.ignore_eos:
+                return False
             return (sampling_param.stop_words is not None
                     and next_token_id in sampling_param.stop_words)
 
@@ -527,6 +530,7 @@ class Engine:
             return True
         return False
 
+    @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor,
                                     running: SeqList, inputs: ModelInputs):
         """sampling logits."""
@@ -565,11 +569,13 @@ class Engine:
         with torch.inference_mode(), torch.cuda.stream(self.stream):
             logits = logits_processor(input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
-        self.stream.synchronize()
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
         next_token_ids = next_token_ids.cpu()
 
         return next_token_ids, split_logits
 
+    @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
                        meta: Any):
         """update scheduler."""
@@ -593,6 +599,7 @@ class Engine:
 
         return True
 
+    @logging_timer('ModelForward', logger)
     async def _async_model_forward(self, inputs: ModelInputs,
                                    swap_in_map: Dict, swap_out_map: Dict):
         """model forward."""
@@ -699,6 +706,7 @@ class Engine:
         else:
             return await __long_context_forward(inputs)
 
+    @logging_timer('AsyncStep', logger)
     async def async_step(self, is_prefill: bool, return_logits: bool = False):
         """one step inference. Used to perform streaming chat.
 
@@ -714,6 +722,7 @@ class Engine:
         adapters = schedule_output.adapters
         if len(running) == 0:
             return dict()
+        logger.debug(f'<AsyncStep>: batch_size={len(running)}')
 
         inputs = self.create_model_inputs(running, adapters)
 
@@ -952,7 +961,6 @@ class Engine:
                 await asyncio.sleep(0.01)
                 continue
 
-            logger.debug('async_loop: RequestManager Step.')
             self.req_manager.step()
 
             # forward
@@ -961,8 +969,6 @@ class Engine:
                 is_prefill = not prefill_counter or not has_running
                 if is_prefill:
                     prefill_counter = prefill_interval
-                logger.debug('async_loop: Engine Step - '
-                             f'prefilling: {is_prefill}')
                 with torch.inference_mode():
                     step_tokens: Dict[int,
                                       InferOutput] = await self.async_step(
@@ -970,7 +976,6 @@ class Engine:
                 prefill_counter -= 1
 
                 # send response
-                logger.debug('async_loop: Response.')
                 _send_resp(step_tokens)
 
 
