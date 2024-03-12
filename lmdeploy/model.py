@@ -48,6 +48,7 @@ class ChatTemplateConfig:
             for key, value in dataclasses.asdict(self).items()
             if value is not None
         }
+        attrs.pop('model_name', None)
         if self.model_name in MODELS.module_dict.keys():
             model: BaseModel = MODELS.get(self.model_name)(**attrs)
         else:
@@ -85,6 +86,8 @@ class ChatTemplateConfig:
         json_data = json.loads(json_data)
         assert json_data.get('model_name', None) is not None, \
             'model_name is a must for json chat template.'
+        MODELS.register_module(json_data['model_name'],
+                               module=BaseChatTemplate)
         return cls(**json_data)
 
 
