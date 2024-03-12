@@ -41,6 +41,8 @@ LMDeploy supports two methods of adding chat templates:
                       assistant=self.eoa + self.separator,
                       system=self.eosys)
           ret = ''
+          if self.meta_instruction is not None:
+              ret += f'{self.system}{self.meta_instruction}{self.eosys}'
           for message in messages:
               role = message['role']
               content = message['content']

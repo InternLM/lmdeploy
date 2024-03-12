@@ -42,6 +42,8 @@ LMDeploy 支持两种添加对话模板的形式：
                       assistant=self.eoa + self.separator,
                       system=self.eosys)
           ret = ''
+          if self.meta_instruction is not None:
+              ret += f'{self.system}{self.meta_instruction}{self.eosys}'
           for message in messages:
               role = message['role']
               content = message['content']
