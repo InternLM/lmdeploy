@@ -57,7 +57,6 @@ class PatchedQWenAttention(nn.Module):
     def _contiguous_batching_forward_impl(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
@@ -83,8 +82,7 @@ class PatchedQWenAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            max_seq_len = position_ids.size(-1)
-            kv_seq_len = max_seq_len + max(history_lengths)
+            kv_seq_len = max_q_seq_length
             if (self.use_dynamic_ntk
                     and kv_seq_len == hidden_states.size()[1]):
                 import math
@@ -110,18 +108,20 @@ class PatchedQWenAttention(nn.Module):
             return query_states, key_states, value_states
 
         context = self.context.context
-        history_lengths = context.history_lengths
         block_offsets = context.block_offsets
         position_ids_1d = context.position_ids_1d
+        max_q_seq_length = context.max_q_seq_length
+        kv_seq_length = context.kv_seq_length
+        q_start_loc = context.q_start_loc
+        q_seq_length = context.q_seq_length
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
+
         query_states = query_states.flatten(0, 1)
         key_states = key_states.flatten(0, 1)
         value_states = value_states.flatten(0, 1)
-        q_start_loc = context.q_start_loc
-        q_seq_length = context.q_seq_length
 
         fill_kv_cache(key_states,
                       value_states,
@@ -129,13 +129,13 @@ class PatchedQWenAttention(nn.Module):
                       past_key_value[1],
                       q_start_loc,
                       q_seq_length,
+                      kv_seq_length=kv_seq_length,
+                      max_q_seq_length=max_q_seq_length,
                       block_offsets=block_offsets,
-                      history_lengths=history_lengths,
                       context=context)
 
         attn_output = query_states
-        kv_seq_length = context.kv_seq_length
-        max_seq_len = position_ids.size(-1)
+
         paged_attention_fwd(
             query_states,
             past_key_value[0],
@@ -145,7 +145,7 @@ class PatchedQWenAttention(nn.Module):
             q_start_loc=q_start_loc,
             q_seqlens=q_seq_length,
             kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_len,
+            max_seqlen=max_q_seq_length,
         )
         attn_output = attn_output.flatten(1, 2)
         attn_output = self.c_proj(attn_output)
@@ -165,7 +165,6 @@ class PatchedQWenAttention(nn.Module):
             world_size = dist.get_world_size()
         return self._contiguous_batching_forward_impl(
             hidden_states,
-            position_ids=position_ids,
             past_key_value=past_key_value,
             world_size=world_size,
         )
@@ -198,14 +197,12 @@ class PatchedQWenBlock(nn.Module):
     def forward(
         self,
         hidden_states: Optional[Tuple[torch.FloatTensor]],
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
     ):
         layernorm_output = self.ln_1(hidden_states)
 
         attn_outputs = self.attn(
             layernorm_output,
-            position_ids=position_ids,
             past_key_value=past_key_value,
         )
         attn_output = attn_outputs[0]
@@ -229,7 +226,6 @@ class PatchedQWenModel(nn.Module):
     def _continuous_batching_forward(
         self,
         input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
@@ -246,7 +242,6 @@ class PatchedQWenModel(nn.Module):
                               if past_key_values is not None else None)
             layer_outputs = decoder_layer(
                 hidden_states,
-                position_ids=position_ids,
                 past_key_value=past_key_value,
             )
             hidden_states = layer_outputs[0]
@@ -279,7 +274,6 @@ class PatchedQWenModel(nn.Module):
         """Rewrite of LlamaModel.forward."""
         return self._continuous_batching_forward(
             input_ids,
-            position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
         )
