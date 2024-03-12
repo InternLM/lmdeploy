@@ -64,7 +64,7 @@ class InternLMXComposerTemplate(BaseChatTemplate):
                        assistant=self.assistant,
                        system=self.system)
         eox_map = dict(user=self.eoh,
-                       assistant=self.eoa + self.stop_word_suffix,
+                       assistant=self.eoa + self.separator,
                        system=self.eosys)
         ret = ''
         if self.meta_instruction is not None:
