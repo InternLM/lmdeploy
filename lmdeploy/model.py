@@ -86,8 +86,9 @@ class ChatTemplateConfig:
         json_data = json.loads(json_data)
         assert json_data.get('model_name', None) is not None, \
             'model_name is a must for json chat template.'
-        MODELS.register_module(json_data['model_name'],
-                               module=BaseChatTemplate)
+        if json_data['model_name'] not in MODELS.module_dict.keys():
+            MODELS.register_module(json_data['model_name'],
+                                   module=BaseChatTemplate)
         return cls(**json_data)
 
 
