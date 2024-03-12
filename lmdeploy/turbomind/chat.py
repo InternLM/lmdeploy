@@ -2,8 +2,7 @@
 import os
 import random
 
-from lmdeploy.messages import EngineGenerationConfig
-from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy.messages import EngineGenerationConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.tokenizer import DetokenizeState
 
