@@ -82,27 +82,27 @@ struct CombinedIterator {
     Iterator1 iterator1_;
 
     // NOTE: can't use reference type here, nvcc does not support variadic templates well in device code
-    // template<typename... Args>
-    // __device__ void Prefetch(Args... args)
+    template<typename... Args>
+    __device__ void Prefetch(Args... args)
+    {
+        iterator0_.Prefetch(args...);
+        iterator1_.Prefetch(args...);
+    }
+
+    // template<class Partial, class TileIter>
+    // __device__ void
+    // Prefetch(Partial partial, const TileIter& tile_iter, int s_begin, int s_count, int max_s, int pipe_iter)
     // {
-    //     iterator0_.Prefetch(args...);
-    //     iterator1_.Prefetch(args...);
+    //     iterator0_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
+    //     iterator1_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
     // }
 
-    template<class Partial, class TileIter>
-    __device__ void
-    Prefetch(Partial partial, const TileIter& tile_iter, int s_begin, int s_count, int max_s, int pipe_iter)
-    {
-        iterator0_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
-        iterator1_.Prefetch(partial, tile_iter, s_begin, s_count, max_s, pipe_iter);
-    }
-
-    template<class Partial, class TileIter>
-    __device__ void Prefetch(Partial partial, const TileIter& tile_iter, int max_s, int pipe_iter)
-    {
-        iterator0_.Prefetch(partial, tile_iter, max_s, pipe_iter);
-        iterator1_.Prefetch(partial, tile_iter, max_s, pipe_iter);
-    }
+    // template<class Partial, class TileIter>
+    // __device__ void Prefetch(Partial partial, const TileIter& tile_iter, int max_s, int pipe_iter)
+    // {
+    //     iterator0_.Prefetch(partial, tile_iter, max_s, pipe_iter);
+    //     iterator1_.Prefetch(partial, tile_iter, max_s, pipe_iter);
+    // }
 
     __device__ void ClearSmem(int pipe_iter = 0)
     {
