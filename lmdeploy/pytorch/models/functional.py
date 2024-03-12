@@ -6,11 +6,8 @@ import numpy as np
 import torch
 # import torch.nn.functional as F
 from torch import Tensor
-from torch import distributed as dist
 
-from ..kernels import (alibi_paged_attention_fwd, apply_rotary_pos_emb,
-                       fill_kv_cache, paged_attention_fwd,
-                       rerope_attention_fwd)
+from ..kernels import apply_rotary_pos_emb, fill_kv_cache, rerope_attention_fwd
 
 __all__ = ['apply_rotary_pos_emb']
 
@@ -86,129 +83,6 @@ def get_alibi_biases(n_heads: int, mask: torch.Tensor):
     m = torch.tensor(get_slopes(n_heads)).to(mask.device)
     distance = mask.cumsum(dim=-1) - 1
     return distance * m[None, :, None, None]
-
-
-@torch.inference_mode()
-def attention_forward_with_paged_attention(
-    hidden_states: Tensor,
-    history_lengths: Sequence,
-    block_offsets: Tensor,
-    num_heads: int,
-    num_kv_heads: int,
-    head_dim: int,
-    position_ids: torch.LongTensor,
-    past_key_value: Tuple[Tensor],
-    context: Any = None,
-    q_proj: Optional[Callable] = None,
-    k_proj: Optional[Callable] = None,
-    v_proj: Optional[Callable] = None,
-    qkv_proj: Optional[Callable] = None,
-    o_proj: Optional[Callable] = None,
-    rotary_emb_fn: Optional[Callable] = None,
-    bias_type: str = 'default',
-) -> Tensor:
-    """Attention module forward with paced attention.
-
-    Args:
-        hidden_states (Tensor): Input of attention layer.
-        history_lengths (Sequence): Cache lengths of each data in batch.
-        block_offsets (Tensor): Block table of the key/value caches,
-            used by paged attention.
-        num_heads (int): numbers of query heads.
-        num_kv_heads (int): numbers of key/value heads.
-        head_dim (int): Feature dimension of heads.
-        position_ids (LongTensor): position ids of the input.
-        past_key_value (Tuple[Tensor]): key value cache.
-        q_proj (Callable): query project module/function.
-        k_proj (Callable): key project module/function.
-        v_proj (Callable): value project module/function.
-        qkv_proj (Callable): query/key/value project module/function.
-        o_proj (Callable): output project module/function.
-        rotary_emb_fn (Callable): rotary embedding callback.
-        bias_type (str): type of attention bias. support ['default', 'alibi'].
-    """
-    max_seq_len = position_ids.size(-1)
-
-    if qkv_proj is not None:
-        assert q_proj is None
-        assert k_proj is None
-        assert v_proj is None
-        query_states, key_states, value_states = qkv_proj(hidden_states)
-    else:
-        assert qkv_proj is None
-        assert q_proj is not None
-        assert k_proj is not None
-        assert v_proj is not None
-
-        query_states = q_proj(hidden_states)
-        key_states = k_proj(hidden_states)
-        value_states = v_proj(hidden_states)
-
-    query_states = query_states.view(-1, num_heads, head_dim)
-    key_states = key_states.view(-1, num_kv_heads, head_dim)
-    value_states = value_states.view(-1, num_kv_heads, head_dim)
-
-    if rotary_emb_fn is not None:
-        query_states, key_states, value_states = rotary_emb_fn(
-            query_states, key_states, value_states)
-
-    kv_seq_length = context.kv_seq_length
-    q_seq_length = context.q_seq_length
-    q_start_loc = context.q_start_loc
-
-    fill_kv_cache(key_states,
-                  value_states,
-                  past_key_value[0],
-                  past_key_value[1],
-                  q_start_loc,
-                  q_seq_length,
-                  block_offsets=block_offsets,
-                  history_lengths=history_lengths,
-                  context=context)
-
-    attn_output = query_states
-
-    bias_type = bias_type.lower()
-    if bias_type == 'default':
-        paged_attention_fwd(
-            query_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_output,
-            block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seq_length,
-            kv_seqlens=kv_seq_length,
-            max_seqlen=max_seq_len,
-        )
-    else:
-        if bias_type == 'alibi':
-            num_heads_full = num_heads
-            head_offset = 0
-            if dist.is_initialized():
-                world_size = dist.get_world_size()
-                rank = dist.get_rank()
-                num_heads_full = num_heads * world_size
-                head_offset = num_heads * rank
-            alibi_paged_attention_fwd(query_states,
-                                      past_key_value[0],
-                                      past_key_value[1],
-                                      attn_output,
-                                      block_offsets,
-                                      b_start_loc=q_start_loc,
-                                      b_seq_len=q_seq_length,
-                                      b_kv_seq_len=kv_seq_length,
-                                      max_input_len=max_seq_len,
-                                      head_offset=head_offset,
-                                      num_heads=num_heads_full)
-        else:
-            raise ValueError(f'Unknown bias type: {bias_type}')
-    hidden_size = num_heads * head_dim
-    attn_output = attn_output.reshape(*hidden_states.shape[:-1], hidden_size)
-
-    if o_proj is not None:
-        attn_output = o_proj(attn_output)
-    return attn_output
 
 
 def quant_kv(key: torch.Tensor, value: torch.Tensor, out_type: torch.dtype):

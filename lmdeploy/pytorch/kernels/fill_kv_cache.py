@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Sequence
-
 import torch
 import triton
 import triton.language as tl
@@ -9,219 +7,101 @@ from triton.runtime.jit import get_cuda_stream
 
 
 @triton.jit
+def _div_up(val, other):
+    return (val + other - 1) // other
+
+
+@triton.jit
 def _fill_kv_cache_kernel(
-    k_states,
-    v_states,
-    k_caches,
-    v_caches,
-    state_start,
-    state_len,
-    cache_start,
-    block_offsets1d,
-    stride_kss,  # stride of key state token
-    stride_vss,  # stride of value state token
-    stride_kcs: tl.constexpr,  # stride of key cache token
-    stride_vcs: tl.constexpr,  # stride of value cache token
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
+    KStates,
+    VStates,
+    KCaches,
+    VCaches,
+    QStartLoc,
+    QSeqLens,
+    KVSeqLens,
+    BlockOffsets,
+    num_heads: tl.constexpr,
+    head_dim: tl.constexpr,
+    stride_kss,
+    stride_ksh,
+    stride_ksd,
+    stride_vss,
+    stride_vsh,
+    stride_vsd,
+    stride_kcn: tl.constexpr,
+    stride_kcb: tl.constexpr,
+    stride_kch: tl.constexpr,
+    stride_kcd: tl.constexpr,
+    stride_vcn: tl.constexpr,
+    stride_vcb: tl.constexpr,
+    stride_vch: tl.constexpr,
+    stride_vcd: tl.constexpr,
+    stride_boff,
+    BLOCK: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    BLOCK_H: tl.constexpr,
 ):
     """fill kv cache kernel."""
-    prog_id = tl.program_id(0)
+    batch_id = tl.program_id(0)
+    block_id = tl.program_id(1)
 
-    stride_kb = stride_kcs * BLOCK_M
-    stride_vb = stride_vcs * BLOCK_M
+    # initialize
+    h_off = tl.arange(0, BLOCK_H)
+    d_off = tl.arange(0, BLOCK_D)
 
-    sstart = tl.load(state_start + prog_id)
-    slen = tl.load(state_len + prog_id)
-    cstart = tl.load(cache_start + prog_id)
-    boffset = tl.load(block_offsets1d + prog_id)
+    q_startloc = tl.load(QStartLoc + batch_id)
+    q_seqlen = tl.load(QSeqLens + batch_id)
+    kv_seqlen = tl.load(KVSeqLens + batch_id)
+    history_seqlen = kv_seqlen - q_seqlen
 
-    off_m = tl.arange(0, BLOCK_M)
-    off_n = tl.arange(0, BLOCK_N)
+    block0_first_tokenloc = history_seqlen % BLOCK
 
-    ks_ptrs = k_states + (sstart +
-                          off_m[:, None]) * stride_kss + off_n[None, :]
-    vs_ptrs = v_states + (sstart +
-                          off_m[:, None]) * stride_vss + off_n[None, :]
-    kc_ptrs = k_caches + boffset * stride_kb + (
-        cstart + off_m[:, None]) * stride_kcs + off_n[None, :]
-    vc_ptrs = v_caches + boffset * stride_vb + (
-        cstart + off_m[:, None]) * stride_vcs + off_n[None, :]
+    state_token_offset = tl.maximum(block_id * BLOCK - block0_first_tokenloc,
+                                    0)
+    kv_block_id = _div_up(history_seqlen + 1, BLOCK) - 1 + block_id
+    kv_block_id = min(kv_block_id, stride_boff - 1)
+    block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
 
-    mask = off_m[:, None] < slen
+    cur_startloc = q_startloc + state_token_offset
+    ks_ptr = KStates + cur_startloc * stride_kss
+    vs_ptr = VStates + cur_startloc * stride_vss
 
-    for idx in range(0, stride_kcs, BLOCK_N):
-        ks = tl.load(ks_ptrs + idx, mask=mask)
-        tl.store(kc_ptrs + idx, ks, mask=mask)
+    kc_ptr = KCaches + block_off * stride_kcn
+    vc_ptr = VCaches + block_off * stride_vcn
 
-    for idx in range(0, stride_vcs, BLOCK_N):
-        vs = tl.load(vs_ptrs + idx, mask=mask)
-        tl.store(vc_ptrs + idx, vs, mask=mask)
+    c_first_tokenloc = block0_first_tokenloc
+    if block_id != 0:
+        c_first_tokenloc *= 0
+    c_last_tokenloc = tl.minimum(
+        BLOCK, q_seqlen + block0_first_tokenloc - block_id * BLOCK)
 
+    for bidx in range(c_first_tokenloc, c_last_tokenloc):
+        sidx = bidx - c_first_tokenloc
+        mask = (h_off[:, None] < num_heads) & (d_off[None, :] < head_dim)
+        k = tl.load(ks_ptr + sidx * stride_kss + h_off[:, None] * stride_ksh +
+                    d_off[None, :] * stride_ksd,
+                    mask=mask)
+        tl.store(kc_ptr + bidx * stride_kcb + h_off[:, None] * stride_kch +
+                 d_off[None, :] * stride_kcd,
+                 k,
+                 mask=mask)
 
-def _prefilling_cache_info(block_size: int, seq_length: Tensor,
-                           block_offsets: Tensor, history_lengths: Sequence,
-                           device: torch.device):
-    # make sure history lengths is a tensor
-    if not isinstance(history_lengths, Tensor):
-        history_lengths = torch.tensor(history_lengths, device=device)
-
-    def _unified_cache_info():
-        total_blocks = seq_length.sum().item()
-
-        # cache start
-        cache_start = torch.zeros((total_blocks, ),
-                                  dtype=torch.long,
-                                  device=device)
-
-        state_len = torch.ones((total_blocks, ),
-                               dtype=torch.long,
-                               device=device)
-
-        # state_start (0~cumed state len)
-        cum_state_len = state_len.cumsum(0)
-        state_start = torch.cat(
-            [state_len.new_zeros((1, )), cum_state_len[:-1]])
-
-        # block offsets
-        block_offsets1d = [
-            offs[first:last]
-            for offs, first, last in zip(block_offsets, history_lengths.cpu(),
-                                         (seq_length + history_lengths).cpu())
-        ]
-        block_offsets1d = torch.cat(block_offsets1d)
-        return dict(state_start=state_start,
-                    state_len=state_len,
-                    cache_start=cache_start,
-                    block_offsets1d=block_offsets1d)
-
-    def _default_cache_info():
-        first_block_ids = history_lengths // block_size
-        token_ids_start = history_lengths % block_size
-
-        # initialize
-        kv_seq_length = history_lengths + seq_length
-        last_block_ids = (kv_seq_length + block_size - 1) // block_size
-        num_blocks = last_block_ids - first_block_ids
-        cum_num_blocks = num_blocks.cumsum(0)
-
-        head_idx = torch.cat(
-            [cum_num_blocks.new_zeros((1, )), cum_num_blocks[:-1]])
-        tail_idx = head_idx + num_blocks - 1
-        total_blocks = num_blocks.sum().item()
-
-        # cache start
-        cache_start = torch.zeros((total_blocks, ),
-                                  dtype=torch.long,
-                                  device=device)
-        cache_start.index_put_((head_idx, ), token_ids_start)
-
-        # state_len (cache_end - cache_start)
-        cache_end = torch.full_like(cache_start, block_size)
-        tail_len = (seq_length + token_ids_start + block_size) % block_size
-        tail_len = torch.where(tail_len == 0,
-                               tail_len.new_tensor([block_size]), tail_len)
-        cache_end.index_put_((tail_idx, ), tail_len)
-        state_len = cache_end - cache_start
-
-        # state_start (0~cumed state len)
-        cum_state_len = state_len.cumsum(0)
-        state_start = torch.cat(
-            [state_len.new_zeros((1, )), cum_state_len[:-1]])
-
-        # block offsets
-        block_offsets1d = [
-            offs[first:last] for offs, first, last in zip(
-                block_offsets, first_block_ids.cpu(), last_block_ids.cpu())
-        ]
-        block_offsets1d = torch.cat(block_offsets1d)
-        return dict(state_start=state_start,
-                    state_len=state_len,
-                    cache_start=cache_start,
-                    block_offsets1d=block_offsets1d)
-
-    if block_size == 1:
-        return _unified_cache_info()
-    else:
-        return _default_cache_info()
-
-
-def _decoding_cache_info(block_size: int, start_loc: Tensor,
-                         seq_length: Tensor, block_offsets: Tensor,
-                         history_lengths: Sequence, device: torch.device):
-    batch_size = block_offsets.size(0)
-
-    # make sure history lengths is a tensor
-    if not isinstance(history_lengths, Tensor):
-        history_lengths = torch.tensor(history_lengths, device=device)
-
-    first_block_ids = history_lengths // block_size
-    token_ids_start = history_lengths % block_size
-
-    batch_ids = torch.arange(batch_size, device=device)
-    return dict(state_start=start_loc,
-                state_len=seq_length,
-                cache_start=token_ids_start,
-                block_offsets1d=block_offsets[batch_ids, first_block_ids])
-
-
-def _create_fill_cache_info(is_decoding: bool, block_size: int,
-                            start_loc: Tensor, seq_length: Tensor,
-                            block_offsets: Tensor, history_lengths: Sequence,
-                            device: torch.device):
-    """create information for cache filling.
-
-    There are 4 tensor that we need to generate. Each one has shape (N) where
-    N is the number of blocks that need to fill data.
-    1. state_start: the token offset where we copy data from.
-    2. cache_start: the token offset in block that we want to copy to.
-    3. state_len: how many data (tokens) we want to copy
-    4. block_offset1d: which block we want to perform the filling.
-    """
-    if not is_decoding:
-        cache_info = _prefilling_cache_info(block_size, seq_length,
-                                            block_offsets, history_lengths,
-                                            device)
-    else:
-        cache_info = _decoding_cache_info(block_size, start_loc, seq_length,
-                                          block_offsets, history_lengths,
-                                          device)
-
-    state_len = cache_info['state_len']
-    block_offsets1d = cache_info['block_offsets1d']
-    assert state_len.size(0) == block_offsets1d.size(0), (
-        f'len(state_len)=={state_len.size(0)} not equal to '
-        f'len(block_offsets1d)=={block_offsets1d.size(0)}')
-    return cache_info
+        v = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh +
+                    d_off[None, :] * stride_vsd,
+                    mask=mask)
+        tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
+                 d_off[None, :] * stride_vcd,
+                 v,
+                 mask=mask)
 
 
 @torch.inference_mode()
-def fill_kv_cache(k_states: Tensor,
-                  v_states: Tensor,
-                  k_caches: Tensor,
-                  v_caches: Tensor,
-                  start_loc: Tensor,
-                  seq_length: Tensor,
-                  block_offsets: Tensor,
-                  history_lengths: Sequence,
-                  context: Any = None):
-    """fill key/value state to cache for paged attention.
-
-    Paged attention required blocked layout key/value caches. This kernel
-    fill states to cache blocks according to the block offsets.
-    read https://vllm.ai/ for more detail.
-
-    Args:
-        k_states (Tensor): The key state in continuous batching layout.
-        v_states (Tensor): The value state in continuous batching layout.
-        k_caches (Tensor): The key cache in blocked layout.
-        v_caches (Tensor): The value cache in blocked layout.
-        start_loc (Tensor): The batch start sequence offset.
-        seq_length (Tensor): The sequence of each data in batch.
-        block_offsets (Tensor): The block offsets of kv caches.
-        history_lengths (Sequence): The history lengths of each data in batch.
-        context (Any): Context object of current step.
-    """
+def fill_kv_cache(k_states: Tensor, v_states: Tensor, k_caches: Tensor,
+                  v_caches: Tensor, q_start_loc: Tensor, q_seq_length: Tensor,
+                  kv_seq_length: Tensor, max_q_seq_length: int,
+                  block_offsets: Tensor):
+    """fill key/value state to cache for paged attention."""
 
     def _kernel_meta():
         device = k_states.device
@@ -230,49 +110,44 @@ def fill_kv_cache(k_states: Tensor,
         stream = get_cuda_stream(device_idx)
         return dict(device=device, device_type=device_type, stream=stream)
 
-    k_states = k_states.contiguous()
-    v_states = v_states.contiguous()
+    block_offsets = block_offsets.contiguous()
+    batch_size = block_offsets.size(0)
+    block_size, num_heads, head_dim = k_caches.size()[1:]
+    max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
-    fill_cache_info = getattr(context, 'fill_cache_info', None)
-
-    if fill_cache_info is None:
-        is_decoding = k_states.size(-3) == seq_length.size(0)
-        block_size = k_caches.size(1)
-        fill_cache_info = _create_fill_cache_info(
-            is_decoding,
-            block_size,
-            start_loc=start_loc,
-            seq_length=seq_length,
-            block_offsets=block_offsets,
-            history_lengths=history_lengths,
-            device=k_states.device)
-        if context is not None:
-            context.fill_cache_info = fill_cache_info
-
-    state_start = fill_cache_info['state_start']
-    state_len = fill_cache_info['state_len']
-    cache_start = fill_cache_info['cache_start']
-    block_offsets1d = fill_cache_info['block_offsets1d']
-
-    grid = (state_start.size(0), )
-    BLOCK_M = k_caches.size(-3)
-    BLOCK_N = min(128, k_caches.stride(-3), v_caches.stride(-3))
-
+    BLOCK = block_size
+    BLOCK_H = triton.next_power_of_2(num_heads)
+    BLOCK_D = triton.next_power_of_2(head_dim)
+    grid = [batch_size, max_num_blocks]
     kernel_meta = _kernel_meta()
-    _fill_kv_cache_kernel[grid](k_states,
-                                v_states,
-                                k_caches,
-                                v_caches,
-                                state_start=state_start,
-                                state_len=state_len,
-                                cache_start=cache_start,
-                                block_offsets1d=block_offsets1d,
-                                stride_kss=k_states.stride(-3),
-                                stride_vss=v_states.stride(-3),
-                                stride_kcs=k_caches.stride(-3),
-                                stride_vcs=v_caches.stride(-3),
-                                BLOCK_M=BLOCK_M,
-                                BLOCK_N=BLOCK_N,
-                                num_warps=4,
-                                num_stages=1,
-                                **kernel_meta)
+    _fill_kv_cache_kernel[grid](
+        k_states,
+        v_states,
+        k_caches,
+        v_caches,
+        q_start_loc,
+        q_seq_length,
+        kv_seq_length,
+        block_offsets,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        stride_kss=k_states.stride(-3),
+        stride_ksh=k_states.stride(-2),
+        stride_ksd=k_states.stride(-1),
+        stride_vss=v_states.stride(-3),
+        stride_vsh=v_states.stride(-2),
+        stride_vsd=v_states.stride(-1),
+        stride_kcn=k_caches.stride(0),
+        stride_kcb=k_caches.stride(1),
+        stride_kch=k_caches.stride(2),
+        stride_kcd=k_caches.stride(3),
+        stride_vcn=v_caches.stride(0),
+        stride_vcb=v_caches.stride(1),
+        stride_vch=v_caches.stride(2),
+        stride_vcd=v_caches.stride(3),
+        stride_boff=block_offsets.stride(0),
+        BLOCK=BLOCK,
+        BLOCK_D=BLOCK_D,
+        BLOCK_H=BLOCK_H,
+        **kernel_meta,
+    )
