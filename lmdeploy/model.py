@@ -82,7 +82,10 @@ class ChatTemplateConfig:
             # If it's not a file path and not a valid JSON string, raise error
             raise ValueError(
                 'Invalid input. Must be a file path or a valid JSON string.')
-        return cls(**json.loads(json_data))
+        json_data = json.loads(json_data)
+        assert json_data.get('model_name', None) is not None, \
+            'model_name is a must for json chat template.'
+        return cls(**json_data)
 
 
 @MODELS.register_module(name='llama')

@@ -11,12 +11,14 @@ LMDeploy 支持两种添加对话模板的形式：
   from typing import Dict, Union
 
   from lmdeploy import ChatTemplateConfig, serve
-  from lmdeploy.model import MODELS, BaseModel
+  from lmdeploy.model import MODELS, BaseChatTemplate
 
 
   @MODELS.register_module(name='customized_model')
-  class CustomizedModel(BaseModel):
+  class CustomizedModel(BaseChatTemplate):
       """A customized chat template."""
+      def __init__(self, meta_instruction='This is a fake meta instruction.'):
+          super().__init__(meta_instruction=meta_instruction)
 
       def messages2prompt(self,
                           messages: Union[str, Dict],
@@ -31,8 +33,22 @@ LMDeploy 支持两种添加对话模板的形式：
           Returns:
               string. The return value will be sent to tokenizer.encode directly.
           """
-          print(f'Any modification can be done for {messages}')
-          return str(messages)  # just a dummpy conversion.
+          if isinstance(messages, str):
+              return self.get_prompt(messages, sequence_start)
+          box_map = dict(user=self.user,
+                      assistant=self.assistant,
+                      system=self.system)
+          eox_map = dict(user=self.eoh,
+                      assistant=self.eoa + self.separator,
+                      system=self.eosys)
+          ret = ''
+          for message in messages:
+              role = message['role']
+              content = message['content']
+              ret += f'{box_map[role]}{content}{eox_map[role]}'
+          ret += f'{self.assistant}'
+          print(f'The applied template result: {ret}')
+          return ret  # just a dummpy conversion.
 
 
   client = serve('internlm/internlm2-chat-7b',
@@ -48,7 +64,7 @@ LMDeploy 支持两种添加对话模板的形式：
   将对话历史直接转成了一个字符串。用户真正需要的对话模板逻辑，需要用户自己做填充，最好对两种输入情况都考虑到。
   这样启动的服务，各个接口都可以使用。
 
-- 另一种是利用现有对话模板，直接配置一个如下的 json 文件使用。其中 null 值将采用 default 方式赋值。
+- 另一种是利用现有对话模板，直接配置一个如下的 json 文件使用。
 
   ```json
   {
@@ -64,7 +80,15 @@ LMDeploy 支持两种添加对话模板的形式：
   }
   ```
 
-  然后可以通过命令行将文件路径传入。
+  其中 null 值将采用对话模板的 default 赋值。而 model_name 是必须要传入的，可以是已有的对话模板名（通过`lmdeploy list`获取），也可以是新的名字。
+  新名字会将`BaseChatTemplate`直接注册成新的对话模板。其具体定义可以参考[BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188)。
+  这样一个模板将会以下面的形式进行拼接。
+
+  ```
+  {system}{meta_instruction}{eosys}{user}{user_content}{eoh}{assistant}{assistant_content}{eoa}{separator}{user}...
+  ```
+
+  可以通过命令行将json文件路径传入。
 
   ```shell
   lmdeploy serve api_server internlm/internlm2-chat-7b --chat-template ${JSON_FILE}
