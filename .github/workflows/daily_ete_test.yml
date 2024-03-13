@@ -29,7 +29,8 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-
+  http_proxy: ${{secrets.PROXY}}
+  http_proxys: ${{secrets.PROXY}}
 
 jobs:
   test_functions:
