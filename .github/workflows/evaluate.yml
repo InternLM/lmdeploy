@@ -28,7 +28,6 @@ jobs:
   evaluate:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 4320 # 72hours
-    environment: 'prod'
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
