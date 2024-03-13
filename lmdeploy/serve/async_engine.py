@@ -480,6 +480,7 @@ class AsyncEngine:
         prompt = messages
         if do_preprocess:
             prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+        logger.info(f'Prompt with applied chat template:\n{prompt}')
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
