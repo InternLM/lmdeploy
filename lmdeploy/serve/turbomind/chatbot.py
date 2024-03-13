@@ -15,6 +15,7 @@ import numpy as np
 import tritonclient.grpc as grpcclient
 from tritonclient.grpc.service_pb2 import ModelInferResponse
 
+from lmdeploy.messages import GenerationConfig
 from lmdeploy.model import MODELS
 from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
                                             prepare_tensor)
@@ -68,6 +69,7 @@ class Chatbot:
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
+                 gen_cfg: GenerationConfig = GenerationConfig(),
                  **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
@@ -82,7 +84,8 @@ class Chatbot:
         self.postprocess = Postprocessor(tritonserver_addr)
         self.bos_id = self._get_bos()
         self.eos_id = self._get_eos()
-        stop_words = self._stop_words(self.model.stop_words)
+        stop_words = self._stop_words(self.model.stop_words
+                                      or gen_cfg.stop_words)
         bad_words = None
         if ignore_eos:
             stop_words = None
@@ -90,10 +93,10 @@ class Chatbot:
             self.eos_id = -1
         self.cfg = mmengine.Config(
             dict(session_len=self.model.session_len,
-                 top_p=self.model.top_p,
-                 top_k=self.model.top_k,
-                 temperature=self.model.temperature,
-                 repetition_penalty=self.model.repetition_penalty,
+                 top_p=gen_cfg.top_p,
+                 top_k=gen_cfg.top_k,
+                 temperature=gen_cfg.temperature,
+                 repetition_penalty=gen_cfg.repetition_penalty,
                  stop_words=stop_words,
                  bad_words=bad_words))
         self.log_level = log_level
