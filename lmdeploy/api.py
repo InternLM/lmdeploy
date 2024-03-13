@@ -5,6 +5,7 @@ from typing import List, Literal, Optional, Union
 from .archs import autoget_backend_config
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
+from .task import get_task
 
 
 def pipeline(model_path: str,
@@ -39,19 +40,33 @@ def pipeline(model_path: str,
         log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
 
     Examples:
+        >>> # LLM
         >>> import lmdeploy
         >>> pipe = lmdeploy.pipeline('internlm/internlm-chat-7b')
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
+        >>>
+        >>> # VL-LLM
+        >>> from lmdeploy.vl import load_image_from_url
+        >>> from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
+        >>> pipe = pipeline('liuhaotian/llava-v1.5-7b',
+        ...                 backend_config=TurbomindEngineConfig(session_len=8192),
+        ...                 chat_template_config=ChatTemplateConfig(model_name='vicuna'))
+        >>> im = load_image_from_url('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
+        >>> response = pipe([('describe this image', [im])])
+        >>> print(response)
     """ # noqa E501
-    from lmdeploy.serve.async_engine import AsyncEngine
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
-    if type(backend_config) is not PytorchEngineConfig:
+    task, pipeline_class = get_task(model_path)
+    if task == 'vl-llm':
+        assert type(backend_config) is TurbomindEngineConfig
+
+    if task == 'llm' and type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
@@ -65,13 +80,14 @@ def pipeline(model_path: str,
         kwargs.pop('tp')
     else:
         tp = 1 if backend_config is None else backend_config.tp
-    return AsyncEngine(model_path,
-                       model_name=model_name,
-                       backend=backend,
-                       backend_config=backend_config,
-                       chat_template_config=chat_template_config,
-                       tp=tp,
-                       **kwargs)
+
+    return pipeline_class(model_path,
+                          model_name=model_name,
+                          backend=backend,
+                          backend_config=backend_config,
+                          chat_template_config=chat_template_config,
+                          tp=tp,
+                          **kwargs)
 
 
 def serve(model_path: str,
