@@ -1,8 +1,8 @@
 # VL-LLM Offline Inference Pipeline
 
-In this tutorial, We will present a list of examples to introduce the usage of `lmdeploy.vl.pipeline`.
+In this tutorial, we will present a list of examples to introduce the usage of `lmdeploy.vl.pipeline`.
 
-The usage of `lmdeploy.vl.pipeline` is similar to `lmdeploy.pipeline`. You can find the detailed parameter description in [this](https://lmdeploy.readthedocs.io/en/latest/api/pipeline.html) guide.
+The usage of `lmdeploy.vl.pipeline` is similar to `lmdeploy.pipeline`. You can find the detailed parameter description in [this](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py).
 
 ## Usage
 

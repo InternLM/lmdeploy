@@ -1,6 +1,6 @@
 # VL-LLM 离线推理 pipeline
 
-视觉推理 pipeline 与 文本推理 pipeline 的用法大体相同，输入略有区别。下面通过一些例子展示其用法，具体参数设置可参考[文本推理 pipeline](https://lmdeploy.readthedocs.io/zh-cn/latest/api/pipeline.html)
+视觉推理 pipeline 与 文本推理 pipeline 的用法大体相同，输入略有区别。下面通过一些例子展示其用法，具体参数说明可参考[这里](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py)
 
 ## 使用方法
 
