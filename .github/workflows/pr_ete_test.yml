@@ -15,6 +15,10 @@ on:
       - "setup.py"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache

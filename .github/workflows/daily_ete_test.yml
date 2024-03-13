@@ -34,7 +34,7 @@ env:
 jobs:
   test_functions:
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 240
+    timeout-minutes: 300
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -157,9 +157,9 @@ jobs:
       - name: Test lmdeploy - interface pipeline turbomind case
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
-        timeout-minutes: 20
+        timeout-minutes: 75
         run: |
-          pytest autotest/interface/pipeline/test_pipeline_turbomind_func.py -m 'not pr_test' --alluredir=allure-results
+          pytest autotest/interface/pipeline -m 'not pr_test' --alluredir=allure-results
       - name: Test lmdeploy - pipeline torch
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
@@ -323,4 +323,8 @@ jobs:
       - name: fail notify
         if: contains(needs.*.result, 'failure')
         run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- daily test failed","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test failed！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+      - name: success notify
+        if: needs.test_functions.result=='success' && needs.test_triton.result=='success'
+        run: |
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test success","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
