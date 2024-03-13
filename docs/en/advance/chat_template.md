@@ -22,20 +22,24 @@ LMDeploy supports two methods of adding chat templates:
   }
   ```
 
-  The null values will be assigned using the default method. `model_name` is a must for the json file. It could be in registered model list (check through `lmdeploy list`). Or, it could be a
-  new name. The new name will be registered using `BaseChatTemplate`. The detailed definition is [here](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188). The new chat template would be like this:
+  `model_name` is a required field and can be either the name of an LMDeploy built-in dialogue template (which can be viewed through `lmdeploy list`), or a new name. Other fields are optional.
+
+  1. When `model_name` is the name of a built-in dialogue template, the non-null fields in the JSON file will override the corresponding attributes of the original dialogue template.
+  2. However, when `model_name` is a new name, it will register `BaseChatTemplate` directly as a new dialogue template. The specific definition can be referred to [BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188).
+
+  The new chat template would be like this:
 
   ```
   {system}{meta_instruction}{eosys}{user}{user_content}{eoh}{assistant}{assistant_content}{eoa}{separator}{user}...
   ```
 
-  You can then pass the file path through the command line.
+  When using the CLI tool, you can pass in a custom dialogue template with `--chat-template`, for example.
 
   ```shell
   lmdeploy serve api_server internlm/internlm2-chat-7b --chat-template ${JSON_FILE}
   ```
 
-  It can also be started through a Python script:
+  You can also pass it in through the interface function, for example.
 
   ```python
   from lmdeploy import ChatTemplateConfig, serve

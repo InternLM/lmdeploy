@@ -22,21 +22,23 @@ LMDeploy 支持两种添加对话模板的形式：
   }
   ```
 
-  其中 null 值将采用对话模板的 default 赋值。而 model_name 是必须要传入的，可以是已有的对话模板名（通过`lmdeploy list`获取），也可以是新的名字。
-  新名字会将`BaseChatTemplate`直接注册成新的对话模板。其具体定义可以参考[BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188)。
+  model_name 为必填项，可以是 LMDeploy 内置对话模板名（通过 `lmdeploy list` 可查阅），也可以是新名字。其他字段可选填。
+  当 model_name 是内置对话模板名时，json文件中各非 null 字段会覆盖原有对话模板的对应属性。
+  而当 model_name 是新名字时，它会把将`BaseChatTemplate`直接注册成新的对话模板。其具体定义可以参考[BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188)。
+
   这样一个模板将会以下面的形式进行拼接。
 
   ```
   {system}{meta_instruction}{eosys}{user}{user_content}{eoh}{assistant}{assistant_content}{eoa}{separator}{user}...
   ```
 
-  可以通过命令行将json文件路径传入。
+  在使用 CLI 工具时，可以通过 `--chat-template` 传入自定义对话模板，比如：
 
   ```shell
   lmdeploy serve api_server internlm/internlm2-chat-7b --chat-template ${JSON_FILE}
   ```
 
-  也可以通过 python 脚本启动：
+  也可以在通过接口函数传入，比如：
 
   ```python
   from lmdeploy import ChatTemplateConfig, serve
