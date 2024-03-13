@@ -22,10 +22,10 @@ LMDeploy supports two methods of adding chat templates:
   }
   ```
 
-  `model_name` is a required field and can be either the name of an LMDeploy built-in dialogue template (which can be viewed through `lmdeploy list`), or a new name. Other fields are optional.
+  `model_name` is a required field and can be either the name of an LMDeploy built-in chat template (which can be viewed through `lmdeploy list`), or a new name. Other fields are optional.
 
-  1. When `model_name` is the name of a built-in dialogue template, the non-null fields in the JSON file will override the corresponding attributes of the original dialogue template.
-  2. However, when `model_name` is a new name, it will register `BaseChatTemplate` directly as a new dialogue template. The specific definition can be referred to [BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188).
+  1. When `model_name` is the name of a built-in chat template, the non-null fields in the JSON file will override the corresponding attributes of the original chat template.
+  2. However, when `model_name` is a new name, it will register `BaseChatTemplate` directly as a new chat template. The specific definition can be referred to [BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188).
 
   The new chat template would be like this:
 
@@ -33,7 +33,7 @@ LMDeploy supports two methods of adding chat templates:
   {system}{meta_instruction}{eosys}{user}{user_content}{eoh}{assistant}{assistant_content}{eoa}{separator}{user}...
   ```
 
-  When using the CLI tool, you can pass in a custom dialogue template with `--chat-template`, for example.
+  When using the CLI tool, you can pass in a custom chat template with `--chat-template`, for example.
 
   ```shell
   lmdeploy serve api_server internlm/internlm2-chat-7b --chat-template ${JSON_FILE}
@@ -47,7 +47,7 @@ LMDeploy supports two methods of adding chat templates:
         chat_template_config=ChatTemplateConfig.from_json('${JSON_FILE}'))
   ```
 
-- Another approach is to customize a Python dialogue template class like the existing LMDeploy dialogue templates. It can be used directly after successful registration. The advantages are a high degree of customization and strong controllability. Below is an example of registering an LMDeploy dialogue template.
+- Another approach is to customize a Python chat template class like the existing LMDeploy chat templates. It can be used directly after successful registration. The advantages are a high degree of customization and strong controllability. Below is an example of registering an LMDeploy chat template.
 
   ```python
   from lmdeploy.model import MODELS, BaseChatTemplate
@@ -87,4 +87,4 @@ LMDeploy supports two methods of adding chat templates:
       print(response.text, end='')
   ```
 
-  In this example, we register a LMDeploy dialogue template that sets the model to be created by LMDeploy, so when the user asks who the model is, the model will answer that it was created by LMDeploy.
+  In this example, we register a LMDeploy chat template that sets the model to be created by LMDeploy, so when the user asks who the model is, the model will answer that it was created by LMDeploy.
