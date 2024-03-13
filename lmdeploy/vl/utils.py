@@ -1,24 +1,25 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import base64
 from io import BytesIO
+from typing import Union
 
 import requests
 from PIL import Image
 
 
-def encode_image_base64(image: Image.Image):
+def encode_image_base64(image: Image.Image) -> str:
     """encode image to base64 format."""
     buffered = BytesIO()
     image.save(buffered, format='PNG')
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 
-def load_image_from_base64(image):
+def load_image_from_base64(image: Union[bytes, str]) -> Image.Image:
     """load image from base64 format."""
     return Image.open(BytesIO(base64.b64decode(image)))
 
 
-def load_image_from_url(image_url):
+def load_image_from_url(image_url: str) -> Image.Image:
     """load image from image format of openai GPT4V."""
     headers = {
         'User-Agent':
