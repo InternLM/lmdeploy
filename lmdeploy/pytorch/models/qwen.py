@@ -120,6 +120,14 @@ class PatchedQWenAttention(nn.Module):
         query_states, key_states, value_states = __rotary_emb_fn(
             query_states, key_states, value_states)
 
+        if self.use_logn_attn:
+            if self.logn_tensor.device != query_states.device or \
+                    self.logn_tensor.dtype != query_states.dtype:
+                self.logn_tensor = self.logn_tensor.to(
+                    query_states.device).type_as(query_states)
+            logn_tensor = self.logn_tensor[:, position_ids_1d, :, :]
+            query_states = query_states * logn_tensor.expand_as(query_states)
+
         query_states = query_states.flatten(0, 1)
         key_states = key_states.flatten(0, 1)
         value_states = value_states.flatten(0, 1)
