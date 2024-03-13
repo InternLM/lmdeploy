@@ -204,7 +204,10 @@ jobs:
       GRPC_PORT: 33337
     steps:
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Create test container
         run: |
           export CONTAINER_ID=$(docker create \
