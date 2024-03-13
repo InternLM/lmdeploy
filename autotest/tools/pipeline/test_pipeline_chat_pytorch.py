@@ -22,7 +22,8 @@ def getModelList(tp_num):
 @pytest.mark.parametrize('model', getModelList(tp_num=1))
 def test_pipeline_chat_pytorch_tp1(config, common_case_config, model,
                                    worker_id):
-    os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
     p = Process(target=run_pipeline_chat_test,
                 args=(config, common_case_config, model, 'pytorch'))
     p.start()
