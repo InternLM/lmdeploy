@@ -49,9 +49,6 @@ LMDeploy 支持两种添加对话模板的形式：
   下面是一个注册 LMDeploy 对话模板的例子：
 
   ```python
-  from typing import Dict, Union
-
-  from lmdeploy import ChatTemplateConfig, serve
   from lmdeploy.model import MODELS, BaseChatTemplate
 
 
@@ -80,11 +77,13 @@ LMDeploy 支持两种添加对话模板的形式：
                            stop_words=stop_words)
 
 
+  from lmdeploy import ChatTemplateConfig, pipeline
+
   messages = [{'role': 'user', 'content': 'who are you?'}]
-  client = serve('internlm/internlm2-chat-7b',
-                 chat_template_config=ChatTemplateConfig('customized_model'))
-  for item in client.chat_completions_v1('customized_model', messages):
-      print(item)
+  pipe = pipeline('internlm/internlm2-chat-7b',
+                  chat_template_config=ChatTemplateConfig('customized_model'))
+  for response in pipe.stream_infer(messages):
+      print(response.text, end='')
   ```
 
   在这个例子中，我们注册了一个 LMDeploy 的对话模板，该模板将模型设置为由 LMDeploy 创造，所以当用户提问模型是谁的时候，模型就会回答由 LMDeploy 所创。

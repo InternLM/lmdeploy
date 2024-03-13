@@ -46,9 +46,6 @@ LMDeploy supports two methods of adding chat templates:
 - Another approach is to customize a Python dialogue template class like the existing LMDeploy dialogue templates. It can be used directly after successful registration. The advantages are a high degree of customization and strong controllability. Below is an example of registering an LMDeploy dialogue template.
 
   ```python
-  from typing import Dict, Union
-
-  from lmdeploy import ChatTemplateConfig, serve
   from lmdeploy.model import MODELS, BaseChatTemplate
 
 
@@ -77,11 +74,13 @@ LMDeploy supports two methods of adding chat templates:
                            stop_words=stop_words)
 
 
+  from lmdeploy import ChatTemplateConfig, pipeline
+
   messages = [{'role': 'user', 'content': 'who are you?'}]
-  client = serve('internlm/internlm2-chat-7b',
-                 chat_template_config=ChatTemplateConfig('customized_model'))
-  for item in client.chat_completions_v1('customized_model', messages):
-      print(item)
+  pipe = pipeline('internlm/internlm2-chat-7b',
+                  chat_template_config=ChatTemplateConfig('customized_model'))
+  for response in pipe.stream_infer(messages):
+      print(response.text, end='')
   ```
 
   In this example, we register a LMDeploy dialogue template that sets the model to be created by LMDeploy, so when the user asks who the model is, the model will answer that it was created by LMDeploy.
