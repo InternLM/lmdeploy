@@ -29,8 +29,6 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  http_proxy: ${{secrets.PROXY}}
-  http_proxys: ${{secrets.PROXY}}
 
 jobs:
   test_functions:
@@ -204,10 +202,6 @@ jobs:
       TB_MODEL: internlm-chat-20b-fp16-tp2
       GRPC_PORT: 33337
     steps:
-      - name: Enable proxy
-        run: |
-          export http_proxy=${{secrets.PROXY}}
-          export https_proxy=${{secrets.PROXY}}
       - name: Clone repository
         uses: actions/checkout@v3
         with:
