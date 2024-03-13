@@ -63,8 +63,8 @@ def _update_cache_config(model_config: ModelConfig,
                      f' {gpu_mem_physical_free>>20} mb')
         vocal_size = model_config.vocab_size
         max_prefill_token_num = cache_config.max_prefill_token_num
-        # lm_head input and output(half and float)
-        intermediate_cache_size = int(max_prefill_token_num * vocal_size * 6)
+        # lm_head output(2) + to float(4) + estimated misc(1) = 7
+        intermediate_cache_size = int(max_prefill_token_num * vocal_size * 7)
         logger.debug('estimated max runtime memory:'
                      f' {intermediate_cache_size>>20} mb')
         gpu_mem_physical_free -= intermediate_cache_size

@@ -723,9 +723,10 @@ class Engine:
         adapters = schedule_output.adapters
         if len(running) == 0:
             return dict()
-        logger.debug(f'<AsyncStep>: batch_size={len(running)}')
 
         inputs = self.create_model_inputs(running, adapters)
+        logger.debug(f'<AsyncStep>: batch_size={len(running)} '
+                     f'num_tokens={inputs.input_ids.size(-1)}')
 
         # inference
         output = await self._async_model_forward(inputs,
