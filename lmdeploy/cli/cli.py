@@ -74,8 +74,6 @@ class CLI(object):
             description=CLI.list.__doc__,
             help=CLI.list.__doc__)
         parser.set_defaults(run=CLI.list)
-        # define arguments
-        ArgumentHelper.engine(parser)
 
     @staticmethod
     def add_parser_chat():
