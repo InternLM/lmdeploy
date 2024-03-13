@@ -210,8 +210,8 @@ class ArgumentHelper:
             type=str,
             default='chat',
             choices=['completion', 'infilling', 'chat', 'python'],
-            help='The capability of a model. For example, codellama has the '
-            'ability among ["completion", "infilling", "chat", "python"]')
+            help='The capability of a model. '
+            'Deprecated. Please use --chat-template instead')
 
     @staticmethod
     def log_level(parser):
@@ -321,7 +321,7 @@ class ArgumentHelper:
             type=str,
             default=None,
             help='System prompt for ChatTemplateConfig. Deprecated. '
-            'Please use --chat-template instead.')
+            'Please use --chat-template instead')
 
     @staticmethod
     def chat_template(parser):
@@ -333,7 +333,7 @@ class ArgumentHelper:
             default=None,
             help=\
             'A JSON file or string that specifies the chat template configuration. '  # noqa
-            'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification.'  # noqa
+            'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification'  # noqa
         )
 
     @staticmethod
