@@ -2,10 +2,9 @@
 import os
 from typing import List, Literal, Optional, Union
 
-from .archs import autoget_backend_config
+from .archs import autoget_backend_config, get_task
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
-from .task import get_task
 
 
 def pipeline(model_path: str,
@@ -46,7 +45,7 @@ def pipeline(model_path: str,
         >>> response = pipe(['hi','say this is a test'])
         >>> print(response)
         >>>
-        >>> # VL-LLM
+        >>> # VLM
         >>> from lmdeploy.vl import load_image_from_url
         >>> from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
         >>> pipe = pipeline('liuhaotian/llava-v1.5-7b',
@@ -62,11 +61,13 @@ def pipeline(model_path: str,
     logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
-    task, pipeline_class = get_task(model_path)
-    if task == 'vl-llm':
-        assert type(backend_config) is TurbomindEngineConfig
+    pipeline_type, pipeline_class = get_task(model_path)
+    if pipeline_type == 'vlm':
+        assert type(backend_config) is TurbomindEngineConfig or None, \
+            f'{pipeline_type} model only support turbomind backend.'
 
-    if task == 'llm' and type(backend_config) is not PytorchEngineConfig:
+    if pipeline_type == 'llm' and type(
+            backend_config) is not PytorchEngineConfig:
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
     backend = 'pytorch' if type(
