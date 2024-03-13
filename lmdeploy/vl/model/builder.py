@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 
-from lmdeploy.turbomind.utils import get_hf_config_content
-from lmdeploy.utils import get_model
+from lmdeploy.utils import get_hf_config_content, get_model
 
 from .llava import LlavaVisionModel
 from .qwen import QwenVisionModel

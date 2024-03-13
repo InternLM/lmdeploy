@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple, Union
 import PIL
 
 from lmdeploy.model import BaseModel
-from lmdeploy.turbomind.utils import get_hf_config_content
+from lmdeploy.utils import get_hf_config_content
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64, load_image_from_url
 
