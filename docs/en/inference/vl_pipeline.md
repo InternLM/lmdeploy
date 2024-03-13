@@ -1,16 +1,16 @@
-# VL-LLM Offline Inference Pipeline
+# VLM Offline Inference Pipeline
 
-In this tutorial, we will present a list of examples to introduce the usage of `lmdeploy.vl.pipeline`.
+In this tutorial, we will present a list of examples to introduce the usage of vision language model.
 
-The usage of `lmdeploy.vl.pipeline` is similar to `lmdeploy.pipeline`. You can find the detailed parameter description in [this](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py).
+The usage of vision language model is similar to [language model](./pipeline.md). You can find the detailed parameter description in [this](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py) file.
 
 ## Usage
 
 - **An example using default parameters:**
 
 ```python
-from lmdeploy.vl import pipeline, load_image_from_url
-from lmdeploy import TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy.vl import load_image_from_url
+from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
 
 pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
     backend_config=TurbomindEngineConfig(session_len=8192),
@@ -24,8 +24,7 @@ print(response)
 - **An example for OpenAI format prompt input:**
 
 ```python
-from lmdeploy.vl import pipeline
-from lmdeploy import TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
 
 pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
     backend_config=TurbomindEngineConfig(session_len=8192),
@@ -49,8 +48,7 @@ print(response)
 - **An example for streaming mode:**
 
 ```python
-from lmdeploy.vl import pipeline
-from lmdeploy import  GenerationConfig, TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig, ChatTemplateConfig
 
 backend_config = TurbomindEngineConfig(session_len=8192)
 gen_config = GenerationConfig(top_p=0.8,

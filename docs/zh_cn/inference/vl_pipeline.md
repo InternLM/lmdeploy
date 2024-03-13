@@ -1,14 +1,14 @@
-# VL-LLM 离线推理 pipeline
+# VLM 离线推理 pipeline
 
-视觉推理 pipeline 与 文本推理 pipeline 的用法大体相同，输入略有区别。下面通过一些例子展示其用法，具体参数说明可参考[这里](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py)
+视觉推理 pipeline 与 [文本推理 pipeline](./pipeline.md) 的用法大体相同，输入略有区别。下面通过一些例子展示其用法，具体参数说明可参考[这里](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py)
 
 ## 使用方法
 
 - **使用默认参数的例子:**
 
 ```python
-from lmdeploy.vl import pipeline, load_image_from_url
-from lmdeploy import TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy.vl import load_image_from_url
+from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
 
 pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
     backend_config=TurbomindEngineConfig(session_len=8192),
@@ -22,8 +22,7 @@ print(response)
 - **如何设置 OpenAI 格式输入:**
 
 ```python
-from lmdeploy.vl import pipeline
-from lmdeploy import TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
 
 pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
     backend_config=TurbomindEngineConfig(session_len=8192),
@@ -47,7 +46,6 @@ print(response)
 - **流式返回处理结果：**
 
 ```python
-from lmdeploy.vl import pipeline
 from lmdeploy import  GenerationConfig, TurbomindEngineConfig, ChatTemplateConfig
 
 backend_config = TurbomindEngineConfig(session_len=8192)
