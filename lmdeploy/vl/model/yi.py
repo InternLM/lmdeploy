@@ -7,7 +7,7 @@ from PIL.Image import Image
 
 from lmdeploy.vl.model.utils import load_model_from_weight_files
 
-from .llava import LlavaVLModelWrapper
+from .llava import LlavaVisionPretrainedModel
 
 
 def _build_yi_projector(config):
@@ -50,21 +50,21 @@ def _build_yi_projector(config):
     raise ValueError(f'Unknown projector type: {projector_type}')
 
 
-class YiVLModelWrapper(LlavaVLModelWrapper):
-    """Yi visual model wrapper."""
+class YiVisionPretrainedModel(LlavaVisionPretrainedModel):
+    """Yi visual pretrained model."""
 
     def _build_vision_projector(self):
         """build projector."""
         return _build_yi_projector(self.config)
 
 
-class YiVLModel(nn.Module):
+class YiVisionModel(nn.Module):
     """Yi visual model."""
 
     def __init__(self, model_path):
         super().__init__()
         self.model_path = model_path
-        self.model = YiVLModelWrapper(model_path)
+        self.model = YiVisionPretrainedModel(model_path)
         self.model.eval().half()
         load_model_from_weight_files(self, self.model_path)
 

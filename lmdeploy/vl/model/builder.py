@@ -4,9 +4,9 @@ import os
 from lmdeploy.turbomind.utils import get_hf_config_content
 from lmdeploy.utils import get_model
 
-from .llava import LlavaVLModel
-from .qwen import QwenVLModel
-from .yi import YiVLModel
+from .llava import LlavaVisionModel
+from .qwen import QwenVisionModel
+from .yi import YiVisionModel
 
 
 def load_vl_model(model_path: str):
@@ -16,11 +16,11 @@ def load_vl_model(model_path: str):
         model_path = get_model(model_path)
     arch = config['architectures'][0]
     if arch == 'QWenLMHeadModel':
-        return QwenVLModel(model_path)
+        return QwenVisionModel(model_path)
     elif arch == 'LlavaLlamaForCausalLM':
         projector_type = config.get('mm_projector_type', 'linear')
         if '_Norm' in projector_type:
-            return YiVLModel(model_path)
+            return YiVisionModel(model_path)
         else:
-            return LlavaVLModel(model_path)
+            return LlavaVisionModel(model_path)
     raise ValueError(f'unsupported vl model with arch {arch}')

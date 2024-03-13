@@ -7,11 +7,12 @@ from accelerate import init_empty_weights
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
+from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import load_model_from_weight_files
 
 
-class QwenVLModelWrapper:
-    """Qwen visual model wrapper."""
+class QwenVisionModel(VisonModel):
+    """Qwen vision model."""
 
     def __init__(self, model_path, device='cuda'):
         self.model_path = model_path
@@ -19,7 +20,6 @@ class QwenVLModelWrapper:
         self.build_model()
 
     def build_model(self):
-        """init model and load weight."""
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
@@ -46,15 +46,3 @@ class QwenVLModelWrapper:
         outputs = torch.split(outputs, 1, dim=0)
         outputs = [x.squeeze() for x in outputs]
         return outputs
-
-
-class QwenVLModel:
-    """Qwen visual model."""
-
-    def __init__(self, model_path):
-        self.model_path = model_path
-        self.model = QwenVLModelWrapper(model_path)
-
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
-        """forward."""
-        return self.model.forward(images)

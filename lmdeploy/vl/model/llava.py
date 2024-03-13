@@ -10,6 +10,7 @@ import torch.nn as nn
 from PIL.Image import Image
 
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.model.base import VisonModel
 from lmdeploy.vl.model.utils import load_model_from_weight_files
 
 try:
@@ -20,8 +21,8 @@ except ImportError:
 logger = get_logger('lmdeploy')
 
 
-class LlavaVLModelWrapper(nn.Module):
-    """Llava visual model wrapper, for easy model loading."""
+class LlavaVisionPretrainedModel(nn.Module):
+    """Llava visual pretrained model, for easy model loading."""
 
     def __init__(self, model_path, device='cuda'):
         super().__init__()
@@ -172,13 +173,13 @@ class LlavaVLModelWrapper(nn.Module):
         return outputs
 
 
-class LlavaVLModel(nn.Module):
+class LlavaVisionModel(nn.Module, VisonModel):
     """Llava visual model."""
 
     def __init__(self, model_path):
         super().__init__()
         self.model_path = model_path
-        self.model = LlavaVLModelWrapper(model_path)
+        self.model = LlavaVisionPretrainedModel(model_path)
         self.model.eval().half()
         load_model_from_weight_files(self, self.model_path)
 
