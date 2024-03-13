@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
+import json
 from abc import abstractmethod
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from mmengine import Registry
 
@@ -39,6 +40,7 @@ class ChatTemplateConfig:
     separator: Optional[str] = None
     capability: Optional[Literal['completion', 'infilling', 'chat',
                                  'python']] = None
+    stop_words: Optional[List[str]] = None
 
     @property
     def chat_template(self):
@@ -47,6 +49,7 @@ class ChatTemplateConfig:
             for key, value in dataclasses.asdict(self).items()
             if value is not None
         }
+        attrs.pop('model_name', None)
         if self.model_name in MODELS.module_dict.keys():
             model: BaseModel = MODELS.get(self.model_name)(**attrs)
         else:
@@ -55,6 +58,39 @@ class ChatTemplateConfig:
                 f'Register {self.model_name} using the BaseChatTemplate.')
             model = BaseChatTemplate(**attrs)
         return model
+
+    def to_json(self, file_path=None):
+        """Convert the dataclass instance to a JSON formatted string and
+        optionally save to a file."""
+        json_str = json.dumps(dataclasses.asdict(self),
+                              ensure_ascii=False,
+                              indent=4)
+        if file_path:
+            with open(file_path, 'w', encoding='utf-8') as file:
+                file.write(json_str)
+        return json_str
+
+    @classmethod
+    def from_json(cls, file_or_string):
+        """Construct a dataclass instance from a JSON file or JSON string."""
+        try:
+            # Try to open the input_data as a file path
+            with open(file_or_string, 'r', encoding='utf-8') as file:
+                json_data = file.read()
+        except FileNotFoundError:
+            # If it's not a file path, assume it's a JSON string
+            json_data = file_or_string
+        except IOError:
+            # If it's not a file path and not a valid JSON string, raise error
+            raise ValueError(
+                'Invalid input. Must be a file path or a valid JSON string.')
+        json_data = json.loads(json_data)
+        assert json_data.get('model_name', None) is not None, \
+            'model_name is a must for json chat template.'
+        if json_data['model_name'] not in MODELS.module_dict.keys():
+            MODELS.register_module(json_data['model_name'],
+                                   module=BaseChatTemplate)
+        return cls(**json_data)
 
 
 @MODELS.register_module(name='llama')

@@ -154,3 +154,5 @@ print(response)
   ```
 
   Generally, in the context of multi-threading or multi-processing, it might be necessary to ensure that initialization code is executed only once. In this case, `if __name__ == '__main__':` can help to ensure that these initialization codes are run only in the main program, and not repeated in each newly created process or thread.
+
+- To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).

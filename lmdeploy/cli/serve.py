@@ -43,8 +43,8 @@ class SubCliServe:
         ArgumentHelper.backend(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)
-        ArgumentHelper.cap(parser)
+        ArgumentHelper.meta_instruction(parser)  # TODO remove
+        ArgumentHelper.chat_template(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -126,7 +126,8 @@ class SubCliServe:
         ArgumentHelper.ssl(parser)
 
         # chat template args
-        ArgumentHelper.meta_instruction(parser)
+        ArgumentHelper.meta_instruction(parser)  # TODO remove
+        ArgumentHelper.chat_template(parser)
         ArgumentHelper.cap(parser)
 
         # pytorch engine args
@@ -220,6 +221,9 @@ class SubCliServe:
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
             capability=args.cap)
+        if args.chat_template:
+            chat_template_config = ChatTemplateConfig.from_json(
+                args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
             server_port=args.server_port,
@@ -261,6 +265,9 @@ class SubCliServe:
             model_name=args.model_name,
             meta_instruction=args.meta_instruction,
             capability=args.cap)
+        if args.chat_template:
+            chat_template_config = ChatTemplateConfig.from_json(
+                args.chat_template)
         run_api_server(args.model_path,
                        backend=backend,
                        backend_config=backend_config,

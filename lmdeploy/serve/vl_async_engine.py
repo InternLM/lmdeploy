@@ -70,6 +70,7 @@ class VLAsyncEngine(AsyncEngine):
                                               add_bos=sequence_start)
 
         results['input_ids'] = input_ids
+        results['prompt'] = decorated
         return results
 
     def batch_infer(self, prompts: Union[VLPromptType, List[Dict],
