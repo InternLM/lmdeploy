@@ -621,6 +621,7 @@ class Chatbot:
         """
         status, res, n_token = None, '', 0
         output_ids = np.zeros((1, 1, 0), dtype=np.uint32)
+        text = ''
         while True:
             result = res_queue.get()
             if result is None:
