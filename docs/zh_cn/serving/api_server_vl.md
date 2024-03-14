@@ -10,12 +10,12 @@
 
 ## 启动服务
 
-以 huggingface hub 上的 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
+以 huggingface hub 上的 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
 
 ### 方式一：使用 lmdeploy cli 工具
 
 ```shell
-lmdeploy serve api_server liuhaotian/llava-v1.5-7b --server-port 23333 --task vision-language
+lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b --server-port 23333
 ```
 
 api_server 启动时的参数可以通过命令行`lmdeploy serve api_server -h`查看。
@@ -32,7 +32,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    lmdeploy serve api_server liuhaotian/llava-v1.5-7b --task vision-language
+    lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b
 ```
 
 在这个例子中，`lmdeploy server api_server` 的命令参数与方式一一致。
@@ -62,7 +62,7 @@ from openai import OpenAI
 client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:23333/v1')
 
 response = client.chat.completions.create(
-    model='llama-2',
+    model='vicuna',
     messages=[{
         'role':
         'user',
@@ -73,7 +73,7 @@ response = client.chat.completions.create(
             'type': 'image_url',
             'image_url': {
                 'url':
-                'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing.jpeg',
+                'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
             },
         }],
     }],
@@ -101,7 +101,7 @@ messages = [{
         'type': 'image_url',
         'image_url': {
             'url':
-            'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing.jpeg',
+            'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
         },
     }]
 }]

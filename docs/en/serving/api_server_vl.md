@@ -1,4 +1,4 @@
-# Serving vision language models with OpenAI Compatible Server
+# Serving VLMs with OpenAI Compatible Server
 
 This article primarily discusses the deployment of a single large vision language model across multiple GPUs on a single node, providing a service that is compatible with the OpenAI interface, as well as the usage of the service API.
 For the sake of convenience, we refer to this service as `api_server`. Regarding parallel services with multiple models, please refer to the guide about [Request Distribution Server](./proxy_server.md).
@@ -11,12 +11,12 @@ Finally, we showcase how to integrate the service into a WebUI, providing you wi
 
 ## Launch Service
 
-Take the [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
+Take the [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
 
 ### Option 1: Launching with lmdeploy CLI
 
 ```shell
-lmdeploy serve api_server liuhaotian/llava-v1.5-7b --server-port 23333 --task vision-language
+lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b --server-port 23333
 ```
 
 The arguments of `api_server` can be viewed through the command `lmdeploy serve api_server -h`, for instance, `--tp` to set tensor parallelism, `--session-len` to specify the max length of the context window, `--cache-max-entry-count` to adjust the GPU mem ratio for k/v cache etc.
@@ -32,7 +32,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    lmdeploy serve api_server liuhaotian/llava-v1.5-7b --task vision-language
+    lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b
 ```
 
 The parameters of `api_server` are the same with that mentioned in "[option 1](#option-1-launching-with-lmdeploy-cli)" section
@@ -64,7 +64,7 @@ from openai import OpenAI
 client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:23333/v1')
 
 response = client.chat.completions.create(
-    model='llama-2',
+    model='vicuna',
     messages=[{
         'role':
         'user',
@@ -75,7 +75,7 @@ response = client.chat.completions.create(
             'type': 'image_url',
             'image_url': {
                 'url':
-                'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing.jpeg',
+                'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
             },
         }],
     }],
@@ -83,8 +83,6 @@ response = client.chat.completions.create(
     top_p=0.8)
 print(response)
 ```
-
-You can invoke other OpenAI interfaces using similar methods. For more detailed information, please refer to the [OpenAI API guide](https://platform.openai.com/docs/guides/text-generation)
 
 ### Integrate with lmdeploy `APIClient`
 
@@ -107,7 +105,7 @@ messages = [{
         'type': 'image_url',
         'image_url': {
             'url':
-            'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing.jpeg',
+            'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
         },
     }]
 }]

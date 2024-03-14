@@ -50,6 +50,7 @@
    :caption: 服务
 
    serving/restful_api.md
+   serving/api_server_vl.md
    serving/gradio.md
    serving/proxy_server.md
 
