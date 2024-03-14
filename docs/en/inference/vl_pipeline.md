@@ -1,74 +1,146 @@
 # VLM Offline Inference Pipeline
 
-In this tutorial, we will present a list of examples to introduce the usage of vision language model.
+LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the the Large Language Model (LLM) inference [pipeline](./pipeline.md). ​
+In this article, we will take the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as an example, exhibiting the powerful capabilities of the VLM pipeline through various examples.​
+First, we will demonstrate the most basic utilization of the pipeline and progressively unveil additional functionalities by configuring the engine parameters and generation arguments, such as tensor parallelism, setting context window size, and random sampling, customizing chat template and so on. Next, we will provide inference examples for scenarios involving multiple images, batch prompts etc.
 
-The usage of vision language model is similar to [language model](./pipeline.md). You can find the detailed parameter description in [this](https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/messages.py) file.
-
-## Usage
-
-- **An example using default parameters:**
+## A 'Hello, world' example
 
 ```python
-from lmdeploy.vl import load_image_from_url
-from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy import pipeline
+from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
-    backend_config=TurbomindEngineConfig(session_len=8192),
-    chat_template_config=ChatTemplateConfig(model_name='vicuna'))
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
 
-image = load_image_from_url('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
-response = pipe(('describe this image', [image]))
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
 print(response)
 ```
 
-- **An example for OpenAI format prompt input:**
+If `ImportError` occurs while executing this case, please install the required dependency packages as prompted.​
+​
+In the above example, the inference prompt is a tuple structure consisting of (prompt, image). Besides this structure, the pipeline also supports prompts in the OpenAI format:
 
 ```python
-from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy import pipeline
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
-    backend_config=TurbomindEngineConfig(session_len=8192),
-    chat_template_config=ChatTemplateConfig(model_name='vicuna'))
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
 
 prompts = [
     {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "describe this image"},
-            {"type": "image_url", "image_url": {"url": "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg"}}
+        'role': 'user',
+        'content': [
+            {'type': 'text', 'text': 'describe this image'},
+            {'type': 'image_url', 'image_url': {'url': 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'}}
         ]
     }
 ]
-
-
 response = pipe(prompts)
 print(response)
 ```
 
-- **An example for streaming mode:**
+### Set tensor parallelism
+
+Tensor paramllelism can be activated by setting the engine parameter `tp`
 
 ```python
-from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig, ChatTemplateConfig
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
 
-backend_config = TurbomindEngineConfig(session_len=8192)
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-chat_template_config=ChatTemplateConfig(model_name='vicuna')
 pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
-                backend_config=backend_config,
-                chat_template_config=chat_template_config)
-prompts = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "describe this image"},
-            {"type": "image_url", "image_url": {"url": "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg"}}
-        ]
-    }
+                backend_config=TurbomindEngineConfig(tp=2))
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
+
+### Set context window size
+
+When creating the pipeline, you can customize the size of the context window by setting the engine parameter `session_len`.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(session_len=8192))
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
+
+### Set sampling parameters
+
+The default sampling method adopted by pipeline is greedy search. To enable random sampling, please set `top_k`, `top_p`, and `temperature` in GenerationConfig​
+
+```python
+from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(tp=2, session_len=8192))
+gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.6)
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image), gen_config=gen_config)
+print(response)
+```
+
+### Set chat template
+
+While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, liuhaotian/llava-v1.5-7b employs the 'vicuna' chat template, but the name 'vicuna' cannot be ascertained from the model's path. We can specify it by setting 'vicuna' to `ChatTemplateConfig` as follows:
+
+```python
+from lmdeploy import pipeline, ChatTemplateConfig
+from lmdeploy.vl import load_image
+pipe = pipeline('liuhaotian/llava-v1.5-7b',
+                chat_template_config=ChatTemplateConfig(model_name='vicuna'))
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
+```
+
+For more information about customizing a chat template, please refer to [this](../advance/chat_template.md) guide
+
+## Multi-images inference
+
+When dealing with multiple images, you can put them all in one list. Keep in mind that multiple images will lead to a higher number of input tokens, and as a result, the size of the [context window](#set-context-window-size) typically needs to be increased.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(session_len=8192))
+
+image_urls=[
+    'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg',
+    'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/det.jpg'
 ]
 
-for item in pipe.stream_infer(prompts, gen_config=gen_config):
-    print(item.text, end='', flush=True)
+images = [load_image(img_url) for img_url in image_urls]
+response = pipe(('describe these images', images))
+print(response)
+```
+
+## Batch prompts inference
+
+Conducting inference with batch prompts is quite straightforward; just place them within a list structure:
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(session_len=8192))
+
+image_urls=[
+    "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg",
+    "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/det.jpg"
+]
+prompts = [('describe this image', load_image(img_url)) for img_url in image_urls]
+response = pipe(prompts)
+print(response)
 ```
