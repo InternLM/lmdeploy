@@ -7,9 +7,10 @@ import PIL
 from lmdeploy.model import BaseModel
 from lmdeploy.utils import get_hf_config_content
 from lmdeploy.vl.constants import IMAGE_TOKEN
-from lmdeploy.vl.utils import encode_image_base64, load_image_from_url
+from lmdeploy.vl.utils import encode_image_base64, load_image
 
-VLPromptType = Union[str, Tuple[str, List[PIL.Image.Image]]]
+VLPromptType = Union[str, Tuple[str, PIL.Image.Image],
+                     Tuple[str, List[PIL.Image.Image]]]
 
 
 class VLChatTemplateWrapper:
@@ -31,8 +32,12 @@ class VLChatTemplateWrapper:
             messages['content'][0]['text'] = prompt
         else:
             prompt, images = prompt
+            if not isinstance(images, list):
+                images = [images]
             messages['content'][0]['text'] = prompt
             for image in images:
+                if isinstance(image, str):
+                    image = load_image(image)
                 image_base64_data = encode_image_base64(image)
                 item = {
                     'type': 'image_url',
@@ -61,7 +66,7 @@ class VLChatTemplateWrapper:
 
         def _inner_call(i, images):
             url = images[i]
-            images[i] = load_image_from_url(url)
+            images[i] = load_image(url)
 
         await asyncio.gather(*[
             asyncio.get_event_loop().run_in_executor(

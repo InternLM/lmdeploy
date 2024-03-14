@@ -46,12 +46,12 @@ def pipeline(model_path: str,
         >>> print(response)
         >>>
         >>> # VLM
-        >>> from lmdeploy.vl import load_image_from_url
+        >>> from lmdeploy.vl import load_image
         >>> from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
         >>> pipe = pipeline('liuhaotian/llava-v1.5-7b',
         ...                 backend_config=TurbomindEngineConfig(session_len=8192),
         ...                 chat_template_config=ChatTemplateConfig(model_name='vicuna'))
-        >>> im = load_image_from_url('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
+        >>> im = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
         >>> response = pipe([('describe this image', [im])])
         >>> print(response)
     """ # noqa E501
@@ -63,7 +63,8 @@ def pipeline(model_path: str,
 
     pipeline_type, pipeline_class = get_task(model_path)
     if pipeline_type == 'vlm':
-        assert type(backend_config) is TurbomindEngineConfig or None, \
+        assert (type(backend_config) is TurbomindEngineConfig) or \
+            (backend_config is None), \
             f'{pipeline_type} model only support turbomind backend.'
 
     if pipeline_type == 'llm' and type(

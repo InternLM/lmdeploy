@@ -19,8 +19,9 @@ def load_image_from_base64(image: Union[bytes, str]) -> Image.Image:
     return Image.open(BytesIO(base64.b64decode(image)))
 
 
-def load_image_from_url(image_url: str) -> Image.Image:
-    """load image from image format of openai GPT4V."""
+def load_image(image_url: str) -> Image.Image:
+    """load image from url, local path or openai GPT4V."""
+
     headers = {
         'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -34,5 +35,7 @@ def load_image_from_url(image_url: str) -> Image.Image:
         img = Image.open(BytesIO(response.content))
     elif image_url.startswith('data:image'):
         img = load_image_from_base64(image_url.split(',')[1])
+    else:
+        img = Image.open(image_url)
 
     return img
