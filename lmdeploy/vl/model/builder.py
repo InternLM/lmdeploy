@@ -10,9 +10,9 @@ from .yi import YiVisionModel
 
 def load_vl_model(model_path: str):
     """load visual model."""
-    config = get_hf_config_content(model_path)
     if not os.path.exists(model_path):
         model_path = get_model(model_path)
+    config = get_hf_config_content(model_path)
     arch = config['architectures'][0]
     if arch == 'QWenLMHeadModel':
         return QwenVisionModel(model_path)

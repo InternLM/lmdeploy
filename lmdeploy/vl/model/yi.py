@@ -1,16 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
+import os
+from contextlib import contextmanager
+from typing import MutableSequence
 
-import torch
 import torch.nn as nn
-from PIL.Image import Image
 
-from lmdeploy.vl.model.utils import load_model_from_weight_files
+from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install
 
-from .llava import LlavaVisionPretrainedModel
+_model_path = None
 
 
-def _build_yi_projector(config):
+def _build_vision_projector(config, delay_load=False, **kwargs):
     """build yi projector."""
     # copy from https://github.com/01-ai/Yi/blob/main/VL/llava/model/multimodal_projector/builder.py # noqa: E501
     projector_type = getattr(config, 'mm_projector_type', 'linear')
@@ -50,24 +50,77 @@ def _build_yi_projector(config):
     raise ValueError(f'Unknown projector type: {projector_type}')
 
 
-class YiVisionPretrainedModel(LlavaVisionPretrainedModel):
-    """Yi visual pretrained model."""
+def _build_vision_tower(vision_tower_cfg, **kwargs):
+    """build yi vision tower."""
+    cfg = vision_tower_cfg
+    vision_tower = getattr(cfg, 'mm_vision_tower',
+                           getattr(cfg, 'vision_tower', None))
+    if os.path.exists(os.path.join(_model_path, vision_tower)):
+        vision_tower = os.path.join(_model_path, vision_tower)
 
-    def _build_vision_projector(self):
-        """build projector."""
-        return _build_yi_projector(self.config)
+    from llava.model.multimodal_encoder.clip_encoder import CLIPVisionTower
+    is_absolute_path_exists = os.path.exists(vision_tower)
+    if is_absolute_path_exists or vision_tower.startswith(
+            'openai') or vision_tower.startswith(
+                'laion') or 'ShareGPT4V' in vision_tower:
+        return CLIPVisionTower(vision_tower, args=vision_tower_cfg, **kwargs)
+
+    raise ValueError(f'Unknown vision tower: {vision_tower}')
 
 
-class YiVisionModel(nn.Module):
+def _set_function(old_func, new_func):
+    import gc
+    refs = gc.get_referrers(old_func)
+    obj_id = id(old_func)
+    for ref in refs:
+        if isinstance(ref, dict):
+            for x, y in ref.items():
+                if id(y) == obj_id:
+                    ref[x] = new_func
+        elif isinstance(ref, MutableSequence):
+            for i, v in enumerate(ref):
+                if id(v) == obj_id:
+                    ref[i] = new_func
+
+
+@contextmanager
+def init_yi_model():
+    import llava  # noqa: F401
+    old_projector = eval(
+        'llava.model.multimodal_projector.builder.build_vision_projector')
+    _set_function(old_projector, _build_vision_projector)
+    old_vision_tower = eval(
+        'llava.model.multimodal_encoder.builder.build_vision_tower')
+    _set_function(old_vision_tower, _build_vision_tower)
+    yield
+    _set_function(_build_vision_projector, old_projector)
+    _set_function(_build_vision_tower, old_vision_tower)
+
+
+@contextmanager
+def disable_transformers_logging():
+    import transformers
+    from transformers.utils import logging
+    previous_level = logging.get_verbosity()
+    logging.set_verbosity(transformers.logging.ERROR)
+    yield
+    logging.set_verbosity(previous_level)
+
+
+class YiVisionModel(LlavaVisionModel):
     """Yi visual model."""
 
-    def __init__(self, model_path):
-        super().__init__()
+    def __init__(self, model_path, device='cuda'):
         self.model_path = model_path
-        self.model = YiVisionPretrainedModel(model_path)
-        self.model.eval().half()
-        load_model_from_weight_files(self, self.model_path)
+        self.device = device
+        self.build_model()
 
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
-        """forward."""
-        return self.model.forward(images)
+    def build_model(self):
+        """build model & load weights."""
+        check_llava_install()
+
+        global _model_path
+        _model_path = self.model_path
+
+        with init_yi_model(), disable_transformers_logging():
+            super().build_model()
