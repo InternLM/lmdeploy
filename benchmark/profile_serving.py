@@ -83,7 +83,6 @@ class Engine:
 
         chatbot = Chatbot(self.server_addr,
                           ignore_eos=True,
-                          profile_serving=True,
                           top_k=self.top_k,
                           top_p=self.top_p,
                           temperature=self.temperature,

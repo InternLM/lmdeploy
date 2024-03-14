@@ -68,6 +68,10 @@ class Chatbot:
                  ignore_eos: bool = False,
                  log_level: int = logging.INFO,
                  display: bool = False,
+                 top_p: float = 1.0,
+                 top_k: int = 1,
+                 temperature: float = 0.8,
+                 repetition_penalty: float = 1.0,
                  **model_kwargs):
         self.tritonserver_addr = tritonserver_addr
         self.model_name = model_name
@@ -90,10 +94,10 @@ class Chatbot:
             self.eos_id = -1
         self.cfg = mmengine.Config(
             dict(session_len=self.model.session_len,
-                 top_p=self.model.top_p,
-                 top_k=self.model.top_k,
-                 temperature=self.model.temperature,
-                 repetition_penalty=self.model.repetition_penalty,
+                 top_p=top_p,
+                 top_k=top_k,
+                 temperature=temperature,
+                 repetition_penalty=repetition_penalty,
                  stop_words=stop_words,
                  bad_words=bad_words))
         self.log_level = log_level
