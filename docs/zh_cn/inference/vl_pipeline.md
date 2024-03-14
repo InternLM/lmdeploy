@@ -72,7 +72,7 @@ print(response)
 
 ### 设置随机采样参数
 
-pipeline 的生成接口，默认使用 greedy search 采样方式。需要引入随机采样时，可传入 `top_k`、`top_p` 和 `temperature` 等参数
+可通过传入 `GenerationConfig` 修改 pipeline 的生成接口中的默认采样参数。
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig

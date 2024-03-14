@@ -73,7 +73,7 @@ print(response)
 
 ### Set sampling parameters
 
-The default sampling method adopted by pipeline is greedy search. To enable random sampling, please set `top_k`, `top_p`, and `temperature` in GenerationConfig
+You can change the default sampling parameters of pipeline by passing `GenerationConfig`
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
