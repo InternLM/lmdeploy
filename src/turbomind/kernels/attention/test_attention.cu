@@ -185,7 +185,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
     cudaDeviceSynchronize();
 
-    if (1) {
+    if (0) {
         std::cout << ">>> Compare\n";
         Compare(
             kv_cache_2.data().get(), kv_cache.data().get(), head_dim, head_dim, batch_size * 2 * head_num * seq_len, 0);
@@ -211,7 +211,7 @@ int test_attention()
     // constexpr size_t kBatchSize = 64;
     constexpr size_t kHeadNum   = 32;
     constexpr size_t KvHeadNum  = kHeadNum / 1;
-    constexpr size_t kBatchSize = 64;
+    constexpr size_t kBatchSize = 128;
     constexpr size_t kInputLen  = 1;
     constexpr size_t kSequenceLen = 2047;
     // constexpr size_t kSequenceLen = 511;

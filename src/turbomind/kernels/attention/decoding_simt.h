@@ -127,12 +127,12 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using Tpv = T;
 
     using FragQ = Array<T, 8>[K_K][K_M];      // (q4, d8), (Dk, Qm), (d8)
-                                              //   0   8    64   1     1
+                                              //   0  16     8   1     1
     template<class Tk>                        //
-    using FragK_ = Array<Tk, 8>[K_K][K_N];    // (s4, d8), (Dk, Sn), (d8)
-                                              //   1   8    64   4     1
+    using FragK_ = Array<Tk, 8>[K_N][K_K];    // (s4, d8), (Sn, Dk), (d8)
+                                              //   1  16     4   8     1
     using FragS = Array<float, 1>[K_M][K_N];  // (s4, d8), (Qm, Sn)
-                                              //   1   8     1   4
+                                              //   1  16     1   4
                                               // (s4, _8), (Qm, Sn)       [after redsum]
                                               //   1   0     1   4
     using FragM = Array<float, 1>[K_M];       // (s4, _8), (Qm)
@@ -141,9 +141,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                                               //   1   0     1   4     1
     template<class Tv>                        //
     using FragV_ = Array<Tv, 8>[V_K][V_N];    // (s4, d8), (Sk, Dn), (d8)
-                                              //   1   8     4  64     1
+                                              //   1  16     4   8     1
     using FragO = Array<float, 8>[V_M][V_N];  // (s4, d8), (Qm, Dn), (d8)
-                                              //   1   8     1  64     1
+                                              //   1  16     1   8     1
     using ParamK = Array<T, 2>[K_N];          // (s4, x8), (Sn)
                                               //   1   0     4
     using ParamV = Array<T, 2>[V_K];          // (s4, x8), (Sk)
@@ -194,9 +194,10 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using ThreadMapQ   = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
-    using ThreadMapKV  = RakedThreadMap<HeadDim, CTA_S, 128 / bitsof<Tkv>, kWarpCount>;
-    using ThreadMapKVp = RakedThreadMap<2, CTA_S, 2, kWarpCount, ThreadMapKV::kWarpThreadC>;
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
+    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 128 / bitsof<Tkv>, kWarpCount>;
+    // `WARP_SIZE / WARP_S` is chosen to achieve minimum kIterS w/o introducing partial S iter
+    using ThreadMapKVp = RakedThreadMap<2, CTA_S, 2, kWarpCount, WARP_SIZE / WARP_S>;
 
     static constexpr int kBatchK = ThreadMapKV::kIterS;
     static constexpr int kBatchV = ThreadMapKV::kIterS;
@@ -269,7 +270,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
                 const int hi = m + warp_id_h * WARP_H;
-                const int di = k * 64 + lane_id % 8 * 8;
+                const int di = k * 8 + lane_id % 8 * 16;
                 Lds(frag_Q[k][m], &sQ(hi, di));
             }
         }
@@ -298,6 +299,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             }
         }
 
+#if 0
         __device__ void Load(int k, int pipe_iter)
         {
             const int warp_id = threadIdx.x / WARP_SIZE;
@@ -314,23 +316,73 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
 
             {
                 const int offset_s = lane_id / 8 + warp_id * WARP_S;
-                const int offset_c = lane_id % 8 * 8;
-                PRAGMA_UNROLL
-                for (int n = 0; n < K_N; ++n) {
-                    const int si = n * 4 + offset_s;
-                    const int di = k * 64 + offset_c;
-                    Lds(data_K[k][n], &smem_K[pipe_iter * SmemLayoutK::kSize + SmemLayoutK::apply(si, di)]);
+                const int offset_c = lane_id % 8 * 16;
+                if constexpr (bitsof<Tkv> != 4) {
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < K_N; ++n) {
+                        const int si = n * 4 + offset_s;
+                        const int di = k * 8 + offset_c;
+                        Lds(data_K[n][k], &smem_K[pipe_iter * SmemLayoutK::kSize + SmemLayoutK::apply(si, di)]);
+                    }
+                }
+                else {
+                    if (k % 2 == 0) {
+                        PRAGMA_UNROLL
+                        for (int n = 0; n < K_N; ++n) {
+                            const int si = n * 4 + offset_s;
+                            const int di = k * 8 + offset_c;
+                            Lds((Array<Tkv, 16>&)data_K[n][k],
+                                &smem_K[pipe_iter * SmemLayoutK::kSize + SmemLayoutK::apply(si, di)]);
+                        }
+                    }
                 }
             }
         }
+#else
+        __device__ void Load(int n, int pipe_iter)
+        {
+            const int warp_id = threadIdx.x / WARP_SIZE;
+            const int lane_id = threadIdx.x % WARP_SIZE;
 
-        __device__ void Transform(int k)
+            if (!std::is_same_v<T, Tkv>) {
+                const int offset_s = lane_id / 8 + warp_id * WARP_S;
+                PRAGMA_UNROLL
+                for (int n = 0; n < K_N; ++n) {
+                    const int si = n * 4 + offset_s;
+                    Lds(param_K[n], &smem_K_param[pipe_iter * SmemLayoutKVp::kSize + SmemLayoutKVp::apply(si, 0)]);
+                }
+            }
+
+            {
+                const int offset_s = lane_id / 8 + warp_id * WARP_S;
+                const int offset_c = lane_id % 8 * 16;
+                if constexpr (bitsof<Tkv> != 4) {
+                    PRAGMA_UNROLL
+                    for (int k = 0; k < K_K; ++k) {
+                        const int si = n * 4 + offset_s;
+                        const int di = k * 8 + offset_c;
+                        Lds(data_K[n][k], &smem_K[pipe_iter * SmemLayoutK::kSize + SmemLayoutK::apply(si, di)]);
+                    }
+                }
+                else {
+                    PRAGMA_UNROLL
+                    for (int k = 0; k < K_K; k += 2) {
+                        const int si = n * 4 + offset_s;
+                        const int di = k * 8 + offset_c;
+                        Lds((Array<Tkv, 16>&)data_K[n][k],
+                            &smem_K[pipe_iter * SmemLayoutK::kSize + SmemLayoutK::apply(si, di)]);
+                    }
+                }
+            }
+        }
+#endif
+
+        __device__ void Transform(int n)
         {
             PRAGMA_UNROLL
-            for (int n = 0; n < K_N; ++n) {
+            for (int k = 0; k < K_K; ++k) {
                 ConvertKvCache<Tkv, Tqk> convert(param_K[n][0], param_K[n][1]);
-                frag_K[k][n] = convert(data_K[k][n]);
-                // frag_K[k][n] = cast<Tqk>(data_K[k][n]);
+                frag_K[n][k] = convert(data_K[n][k]);
             }
         }
     };
@@ -339,6 +391,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     __device__ static void
     ComputeQK(StateQK state_QK, FragS& frag_S, int offset, Prefetch&& prefetch, Preload&& preload)
     {
+#if 0
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
@@ -356,7 +409,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 for (int n = 0; n < K_N; ++n) {
                     PRAGMA_UNROLL
                     for (int c = 0; c < 8; ++c) {
-                        frag_S[m][n][0] += static_cast<float>((Tqk)state_QK.frag_Q[k][m][c] * state_QK.frag_K[k][n][c]);
+                        frag_S[m][n][0] += static_cast<float>((Tqk)state_QK.frag_Q[k][m][c] * state_QK.frag_K[n][k][c]);
                     }
                 }
             }
@@ -368,6 +421,37 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
                 ((Prefetch&&)prefetch)(K_K - 1);
             }
         }
+#else
+        PRAGMA_UNROLL
+        for (int n = 0; n < K_N; ++n) {
+            if (n < K_N - 1) {
+                state_QK.Load(n + 1, offset);
+            }
+            else {
+                ((Preload&&)preload)();
+            }
+
+            state_QK.Transform(n);
+
+            PRAGMA_UNROLL
+            for (int m = 0; m < K_M; ++m) {
+                PRAGMA_UNROLL
+                for (int k = 0; k < K_K; ++k) {
+                    PRAGMA_UNROLL
+                    for (int c = 0; c < 8; ++c) {
+                        frag_S[m][n][0] += static_cast<float>((Tqk)state_QK.frag_Q[k][m][c] * state_QK.frag_K[n][k][c]);
+                    }
+                }
+            }
+
+            if (n < K_N - 1) {
+                ((Prefetch&&)prefetch)(n);
+            }
+            if (n == K_N - 2) {
+                ((Prefetch&&)prefetch)(K_N - 1);
+            }
+        }
+#endif
 
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
@@ -399,7 +483,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
 
-            if (!std::is_same_v<T, Tkv> && k == 0) {
+            if (!std::is_same_v<T, Tkv>) {
                 const int offset_s = lane_id / 8 + warp_id * WARP_S;
                 PRAGMA_UNROLL
                 for (int k = 0; k < V_K; ++k) {
@@ -410,12 +494,23 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
 
             {
                 const int offset_s = lane_id / 8 + warp_id * WARP_S;
-                const int offset_c = lane_id % 8 * 8;
-                PRAGMA_UNROLL
-                for (int n = 0; n < V_N; ++n) {
-                    const int si = k * 4 + offset_s;
-                    const int di = n * 64 + offset_c;
-                    Lds(data_V[k][n], &smem_V[pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(si, di)]);
+                const int offset_c = lane_id % 8 * 16;
+                if constexpr (bitsof<Tkv> != 4) {
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < V_N; ++n) {
+                        const int si = k * 4 + offset_s;
+                        const int di = n * 8 + offset_c;
+                        Lds(data_V[k][n], &smem_V[pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(si, di)]);
+                    }
+                }
+                else {
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < V_N; n += 2) {
+                        const int si = k * 4 + offset_s;
+                        const int di = n * 8 + offset_c;
+                        Lds((Array<Tkv, 16>&)data_V[k][n],
+                            &smem_V[pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(si, di)]);
+                    }
                 }
             }
         }
@@ -659,7 +754,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
 
                 if (lane_id < 8) {
                     const int hi = m * OP_H + warp_id_h * WARP_H;
-                    const int di = n * OP_D + lane_id % 8 * 8;
+                    const int di = n * 8 + lane_id % 8 * 16;
                     // for (int i = 0; i < 8; ++i) {
                     //     printf("O %4d %4d %f\n", hi + blockIdx.x * CTA_H, di + i, frag_O[m][n][i]);
                     // }

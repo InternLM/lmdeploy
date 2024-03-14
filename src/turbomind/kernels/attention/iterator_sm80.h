@@ -39,7 +39,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
         SmemAccessor<T, SmemLayout> dst_data{smem_};
 
         PRAGMA_UNROLL
-        for (int s = s_begin; s < s_begin + s_count; ++s) {
+        for (int s = s_begin; s < s_begin + s_count && s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 auto dst = cast_smem_ptr_to_uint(&dst_data(offset_s_ + s * Map::kDeltaS,  //
