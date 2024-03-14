@@ -177,8 +177,7 @@ class Engine:
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
             eviction_type=engine_config.eviction_type,
-            prefill_interval=engine_config.prefill_interval,
-            max_prefill_token_num=engine_config.max_prefill_token_num)
+            prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -186,7 +185,8 @@ class Engine:
             block_size=engine_config.block_size,
             num_cpu_blocks=engine_config.num_cpu_blocks,
             num_gpu_blocks=engine_config.num_gpu_blocks,
-            cache_max_entry_count=engine_config.cache_max_entry_count)
+            cache_max_entry_count=engine_config.cache_max_entry_count,
+            max_prefill_token_num=engine_config.max_prefill_token_num)
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
@@ -605,7 +605,7 @@ class Engine:
     async def _async_model_forward(self, inputs: ModelInputs,
                                    swap_in_map: Dict, swap_out_map: Dict):
         """model forward."""
-        max_prefill_token_num = self.scheduler_config.max_prefill_token_num
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
         class _LogitsGather:
@@ -724,9 +724,10 @@ class Engine:
         adapters = schedule_output.adapters
         if len(running) == 0:
             return dict()
-        logger.debug(f'<AsyncStep>: batch_size={len(running)}')
 
         inputs = self.create_model_inputs(running, adapters)
+        logger.debug(f'<AsyncStep>: batch_size={len(running)} '
+                     f'num_tokens={inputs.input_ids.size(-1)}')
 
         # inference
         output = await self._async_model_forward(inputs,
