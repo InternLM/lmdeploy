@@ -49,7 +49,7 @@ Welcome to LMDeploy's tutorials!
    :maxdepth: 1
    :caption: serving
 
-   serving/restful_api.md
+   serving/api_server.md
    serving/gradio.md
    serving/proxy_server.md
 
