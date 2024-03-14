@@ -175,8 +175,7 @@ class Engine:
             max_batches=engine_config.max_batch_size,
             max_session_len=engine_config.session_len,
             eviction_type=engine_config.eviction_type,
-            prefill_interval=engine_config.prefill_interval,
-            max_prefill_token_num=engine_config.max_prefill_token_num)
+            prefill_interval=engine_config.prefill_interval)
 
         # block_size = 1 to enable unified paging
         adapters = engine_config.adapters
@@ -604,7 +603,7 @@ class Engine:
     async def _async_model_forward(self, inputs: ModelInputs,
                                    swap_in_map: Dict, swap_out_map: Dict):
         """model forward."""
-        max_prefill_token_num = self.scheduler_config.max_prefill_token_num
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
         class _LogitsGather:

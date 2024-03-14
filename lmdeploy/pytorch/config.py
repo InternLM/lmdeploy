@@ -28,7 +28,6 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    max_prefill_token_num: int = 8192
 
 
 @dataclass
@@ -40,7 +39,7 @@ class CacheConfig:
     num_gpu_blocks: int
     window_size: int = -1
     cache_max_entry_count: float = 0.8
-    max_prefill_token_num: int = 8192
+    max_prefill_token_num: int = 4096
 
 
 @dataclass
