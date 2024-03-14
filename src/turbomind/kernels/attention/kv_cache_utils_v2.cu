@@ -1,7 +1,7 @@
 
 #include "array_ops.h"
 #include "block.h"
-#include "kv_cache_utils.h"
+#include "kv_cache_utils_v2.h"
 #include "quantization.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -163,7 +163,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
         if (qi < q_len) {
             const int ti = history_len + qi;  // timestep
-            block_head.with((char**)blocks, ti, [&](Tkv* k_cache, Tkv* v_cache, T* k_param, T* v_param) {
+            block_head.with((char**)blocks, ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
@@ -175,7 +175,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                         Store(k_param, param_K[s]);
                         Store(v_param, param_V[s]);
                         // if (ti == history_len) {
-                        //     printf("ref %f %f\n", (float)param_K[0][0], (float)param_K[0][1]);
+                        // printf("src %d %f %f\n", ti, (float)param_K[s][0], (float)param_K[s][1]);
                         // }
                     }
                 }
@@ -242,6 +242,9 @@ void invokeProcessKV_v2(char**       blocks,
 
     if (quant_policy & QuantPolicy::kCacheKVInt8) {
         invoke(uint8_t{});
+    }
+    else if (quant_policy & QuantPolicy::kCacheKVInt4) {
+        invoke(uint4_t{});
     }
     else {
         invoke(T{});
@@ -329,7 +332,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
     for (int s = 0; s < ITER_S; ++s) {
         const int si = offset.y + s * Map::kDeltaS + token_idx;
         if (si < seq_len) {
-            block_head.with((char**)blocks, si, [&](Tkv* k_cache, Tkv* v_cache, T* k_param, T* v_param) {
+            block_head.with((char**)blocks, si, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
@@ -339,6 +342,9 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     Ldg(param_K[s], k_param);
                     Ldg(param_V[s], v_param);
+                    // if (offset.x == 0) {
+                    //     printf("dst %d %f %f\n", si, (float)param_K[s][0], (float)param_K[s][1]);
+                    // }
                 }
             });
         }
@@ -439,7 +445,15 @@ void invokeFlattenKV_v2(T*           k,
                                                                             block_layout);
     };
 
-    (quant_policy & QuantPolicy::kCacheKVInt8) ? invoke(uint8_t{}) : invoke(T{});
+    if (quant_policy & QuantPolicy::kCacheKVInt8) {
+        invoke(uint8_t{});
+    }
+    else if (quant_policy & QuantPolicy::kCacheKVInt4) {
+        invoke(uint4_t{});
+    }
+    else {
+        invoke(T{});
+    }
 }
 
 template void invokeFlattenKV_v2(half*        k,

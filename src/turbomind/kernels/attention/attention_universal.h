@@ -214,7 +214,7 @@ struct AttentionUniversal {
             }
 
             iterator.block_head_.with(
-                iterator.block_ptrs_, ti, [&](Tkv* k_cache, Tkv* v_cache, T* k_param, T* v_param) {
+                iterator.block_ptrs_, ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                     PRAGMA_UNROLL
                     for (int c = 0; c < ITER_C; ++c) {
                         const int di = offset.x + c * Map::kDeltaC;

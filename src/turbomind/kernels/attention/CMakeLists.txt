@@ -38,4 +38,8 @@ if (BUILD_TEST)
         logger
         tensor
         cublas)
+
+    add_executable(test_quant test_quant.cu test_utils.cu)
+    target_compile_options(test_quant PRIVATE
+        --generate-line-info -O3 -use_fast_math --expt-relaxed-constexpr)
 endif ()

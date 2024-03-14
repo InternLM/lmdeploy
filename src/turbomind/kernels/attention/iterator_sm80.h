@@ -33,7 +33,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     __device__ void
     Prefetch(PartialS partial_s, const TileIter& tile_iter, int s_begin, int s_count, int max_s, int pipe_iter)
     {
-
+        // `src_data` may be `SubBytePtr`
         auto src_data = tile_iter.OffsetPtr<Idx>(src_offset_);
 
         SmemAccessor<T, SmemLayout> dst_data{smem_};

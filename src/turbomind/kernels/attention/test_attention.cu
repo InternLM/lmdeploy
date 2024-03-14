@@ -185,7 +185,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
     cudaDeviceSynchronize();
 
-    if (0) {
+    if (1) {
         std::cout << ">>> Compare\n";
         Compare(
             kv_cache_2.data().get(), kv_cache.data().get(), head_dim, head_dim, batch_size * 2 * head_num * seq_len, 0);
@@ -193,7 +193,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
-#define KV_INT8 1
+#define KV_INT8 0
+
+#define KV_INT4 1
 
 #define DECODING 1
 
@@ -211,8 +213,8 @@ int test_attention()
     constexpr size_t KvHeadNum  = kHeadNum / 1;
     constexpr size_t kBatchSize = 64;
     constexpr size_t kInputLen  = 1;
-    // constexpr size_t kSequenceLen = 1023;
     constexpr size_t kSequenceLen = 2047;
+    // constexpr size_t kSequenceLen = 511;
     // constexpr size_t kSequenceLen = 16383;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
@@ -242,11 +244,11 @@ int test_attention()
     // constexpr int    kMaxSplitK   = 1;
 
     // prefill
-    constexpr size_t kHeadNum     = 32;
+    constexpr size_t kHeadNum     = 1;
     constexpr size_t KvHeadNum    = kHeadNum;
     constexpr size_t kBatchSize   = 1;
-    constexpr size_t kInputLen    = 16384;
-    constexpr size_t kSequenceLen = 0;
+    constexpr size_t kInputLen    = 1;
+    constexpr size_t kSequenceLen = 127;
     constexpr int    kMaxSplitK   = 1;
 
     constexpr int kBlockSz = 128;
@@ -256,6 +258,9 @@ int test_attention()
 #if KV_INT8
     using Tkv                  = uint8_t;
     constexpr int kQuantPolicy = QuantPolicy::kCacheKVInt8;
+#elif KV_INT4
+    using Tkv                  = uint4_t;
+    constexpr int kQuantPolicy = QuantPolicy::kCacheKVInt4;
 #else
     using Tkv                  = T;
     constexpr int kQuantPolicy = 0;
@@ -265,7 +270,7 @@ int test_attention()
 
     constexpr size_t kContextLen = kSequenceLen + kInputLen;
     constexpr size_t kTokenNum   = kBatchSize * kInputLen;
-    constexpr int    kTestIter   = 100;
+    constexpr int    kTestIter   = 10;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;
@@ -333,8 +338,6 @@ int test_attention()
 
     TestBlocks<Tkv>(
         k_cache, v_cache, blocks, k_ptrs, cu_block_cnts, KvHeadNum, kHeadDim, kBlockSz, kBatchSize, kQuantPolicy);
-
-    // return 0;
 
     thrust::universal_vector<T>     output_ref = output;
     thrust::universal_vector<void*> k_cache_ref_ptrs(kBatchSize);

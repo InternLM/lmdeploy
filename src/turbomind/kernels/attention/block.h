@@ -1,5 +1,7 @@
 #pragma once
 
+#include "data_type.h"
+#include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <iostream>
 #include <type_traits>
 
@@ -14,23 +16,6 @@
 #endif
 
 namespace turbomind {
-
-struct uint4_t {};
-struct uint5_t {};
-struct uint6_t {};
-
-template<class T>
-struct bitsof_t: std::integral_constant<int, sizeof(T) * 8> {};
-
-template<>
-struct bitsof_t<uint4_t>: std::integral_constant<int, 4> {};
-template<>
-struct bitsof_t<uint5_t>: std::integral_constant<int, 5> {};
-template<>
-struct bitsof_t<uint6_t>: std::integral_constant<int, 6> {};
-
-template<class T>
-inline constexpr bitsof_t<T> bitsof{};
 
 namespace block {
 
@@ -80,14 +65,24 @@ public:
     {
     }
 
-    TM_HOST_DEVICE Tkv* k_data(char* block, int ti) const
+    TM_HOST_DEVICE auto k_data(char* block, int ti) const
     {
-        return reinterpret_cast<Tkv*>(block + layout_.k_data(layer_id_, head_id_, ti));
+        if constexpr (std::is_same_v<Tkv, uint4_t>) {
+            return SubBytePtr<Tkv>{block + layout_.k_data(layer_id_, head_id_, ti)};
+        }
+        else {
+            return reinterpret_cast<Tkv*>(block + layout_.k_data(layer_id_, head_id_, ti));
+        }
     }
 
-    TM_HOST_DEVICE Tkv* v_data(char* block, int ti) const
+    TM_HOST_DEVICE auto v_data(char* block, int ti) const
     {
-        return reinterpret_cast<Tkv*>(block + layout_.v_data(layer_id_, head_id_, ti));
+        if constexpr (std::is_same_v<Tkv, uint4_t>) {
+            return SubBytePtr<Tkv>{block + layout_.v_data(layer_id_, head_id_, ti)};
+        }
+        else {
+            return reinterpret_cast<Tkv*>(block + layout_.v_data(layer_id_, head_id_, ti));
+        }
     }
 
     TM_HOST_DEVICE T* k_param(char* block, int ti) const

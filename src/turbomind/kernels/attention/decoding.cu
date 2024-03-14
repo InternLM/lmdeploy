@@ -32,6 +32,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
     constexpr int kHeadDim = 128;
 
     const bool is_kv_int8     = params.quant_policy & QuantPolicy::kCacheKVInt8;
+    const bool is_kv_int4     = params.quant_policy & QuantPolicy::kCacheKVInt4;
     const int  query_group_sz = params.num_heads / params.num_kv_heads;
 
     using namespace attention;
@@ -61,6 +62,9 @@ void dispatchDecoding(const AttentionParams<T>& params)
             //     return invokeDecoding<typename DecodingConfig<arch::Sm70, T, int8_t, 1, kHeadDim>::Kernel>(params);
             // }
         }
+    }
+    else if (is_kv_int4) {
+        return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint4_t, 1, kHeadDim>::Kernel>(params);
     }
     else {
         if (params.arch >= 80) {  // tensor core & async copy

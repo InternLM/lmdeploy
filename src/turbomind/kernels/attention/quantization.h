@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/attention/array_ops.h"
+#include "src/turbomind/kernels/attention/data_type.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 
 #include <cuda_bf16.h>
@@ -296,6 +297,184 @@ struct ConvertKvCache<T, uint8_t> {
     }
 };
 
+template<class T>
+struct ConvertKvCache<T, uint4_t> {
+    T          inv_scale_;
+    T          zero_;
+    __device__ ConvertKvCache(T scale, T zero): zero_{zero}
+    {
+        // NVCC complains if we put this in the member init list
+        inv_scale_ = (T)fdividef(1.f, (float)scale);
+    }
+
+    static __device__ Array<uint4_t, 8> pack(const Array<uint8_t, 8>& vi)
+    {
+        Array<uint32_t, 2> ui = (Array<uint32_t, 2>&)vi;
+
+        ui[0] |= (ui[0] >> 12);
+        ui[1] |= (ui[1] >> 12);
+
+        //  7 6 5 4 3 2 1 0
+        // _7_67564_3_23120
+        uint32_t uo = __byte_perm(ui[0], ui[1], 0x5140);
+
+        return (Array<uint4_t, 8>&)uo;
+    }
+
+    /// TODO: try cvt.pack.sat.u4
+    template<int N>
+    __device__ auto operator()(const Array<T, N>& vi) const
+    {
+        static_assert(N % 8 == 0);
+        Array<uint8_t, N> tmp;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            tmp[i] = quant<uint8_t>((vi[i] - zero_) * inv_scale_, std::integral_constant<int, 4>{});
+        }
+        Array<uint4_t, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 8) {
+            (Array<uint4_t, 8>&)vo[i] = pack((Array<uint8_t, 8>&)tmp[i]);
+        }
+        return vo;
+    }
+};
+
+template<>
+struct ConvertKvCache<uint4_t, half> {
+    // half scale_;
+    // half zero_;
+
+    // __device__ ConvertKvCache(half scale, half zero): scale_{scale}, zero_{zero} {}
+
+    half           scale_;
+    // Array<half, 2> zero_;
+    half zero_;
+
+    __device__ ConvertKvCache(half scale, half zero)
+    {
+        scale_   = scale;
+        // zero_[0] = zero - scale * __ushort_as_half(0x6400);
+        // zero_[1] = zero - scale * __ushort_as_half(0x5400);
+        zero_ = zero - scale * __ushort_as_half(0x5400);
+    }
+
+    static __device__ Array<half, 8> cvt_f16x8_u4(const Array<uint4_t, 8>& vi)
+    {
+        Array<half, 8>            result;
+        uint32_t*                 h           = reinterpret_cast<uint32_t*>(&result);
+        uint32_t const&           i4s         = reinterpret_cast<uint32_t const&>(vi);
+        static constexpr uint32_t immLut      = (0xf0 & 0xcc) | 0xaa;
+        static constexpr uint32_t BOT_MASK    = 0x000f000f;
+        static constexpr uint32_t TOP_MASK    = 0x00f000f0;
+        static constexpr uint32_t MAGIC_NUM_0 = 0x64006400;  // `1024`
+        static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;  // `64`
+        const uint32_t            top_i4s     = i4s >> 8;
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_0), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_0), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[3]) : "r"(top_i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
+        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[0]) : "r"(h[0]), "r"(MAGIC_NUM_0));
+        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[1]) : "r"(h[1]), "r"(MAGIC_NUM_1));
+        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[2]) : "r"(h[2]), "r"(MAGIC_NUM_0));
+        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[3]) : "r"(h[3]), "r"(MAGIC_NUM_1));
+        return result;
+    }
+
+    static __device__ Array<half, 8> cvt_f16x8_u4_biased(const Array<uint4_t, 8>& vi)
+    {
+        Array<half, 8>            result;
+        uint32_t*                 h           = reinterpret_cast<uint32_t*>(&result);
+        uint32_t const&           i4s         = reinterpret_cast<uint32_t const&>(vi);
+        static constexpr uint32_t immLut      = (0xf0 & 0xcc) | 0xaa;
+        static constexpr uint32_t BOT_MASK    = 0x000f000f;
+        static constexpr uint32_t TOP_MASK    = 0x00f000f0;
+        static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;        // `64`
+        static constexpr uint32_t MAGIC_NUM_2 = MAGIC_NUM_1 >> 4;  // `64` >> 4
+        const uint32_t            top_i4s     = i4s >> 8;
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[3]) : "r"(top_i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
+        h[0] <<= 4;
+        h[2] <<= 4;
+        return result;
+    }
+
+    template<int N>
+    __device__ auto operator()(const Array<uint4_t, N>& vi) const
+    {
+        Array<half, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 8) {
+            auto& v = (Array<half, 8>&)vo[i];
+            v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
+            // v[0]    = v[0] * scale_ + zero_[0];
+            // v[1]    = v[1] * scale_ + zero_[0];
+            // v[2]    = v[2] * scale_ + zero_[1];
+            // v[3]    = v[3] * scale_ + zero_[1];
+            // v[4]    = v[4] * scale_ + zero_[0];
+            // v[5]    = v[5] * scale_ + zero_[0];
+            // v[6]    = v[6] * scale_ + zero_[1];
+            // v[7]    = v[7] * scale_ + zero_[1];
+            {
+                using namespace ops;
+                v = v * scale_ + zero_;
+            }
+        }
+        return vo;
+    }
+};
+
+template<>
+struct ConvertKvCache<uint4_t, float> {
+
+#if 1
+    ConvertKvCache<uint4_t, half> impl_;
+
+    __device__ ConvertKvCache(float scale, float zero): impl_{scale, zero} {}
+
+    template<int N>
+    __device__ auto operator()(const Array<uint4_t, N>& vi) const
+    {
+        return cast<float>(impl_(vi));
+    }
+#else
+    static __device__ Array<half, 8> cvt_f16x8_u4_biased(const Array<uint4_t, 8>& vi)
+    {
+        Array<half, 8>            result;
+        uint32_t*                 h           = reinterpret_cast<uint32_t*>(&result);
+        uint32_t const&           i4s         = reinterpret_cast<uint32_t const&>(vi);
+        static constexpr uint32_t immLut      = (0xf0 & 0xcc) | 0xaa;
+        static constexpr uint32_t BOT_MASK    = 0x000f000f;
+        static constexpr uint32_t TOP_MASK    = 0x00f000f0;
+        static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;        // `64`
+        static constexpr uint32_t MAGIC_NUM_2 = MAGIC_NUM_1 >> 4;  // `64` >> 4
+        const uint32_t            top_i4s     = i4s >> 8;
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
+        asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[3]) : "r"(top_i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
+        h[0] <<= 4;
+        h[2] <<= 4;
+        return result;
+    }
+    float      scale_;
+    float      zero_;
+    __device__ ConvertKvCache(float scale, float zero)
+    {
+        scale_ = scale;
+        zero_  = zero - scale * 64.f;
+    }
+    template<int N>
+    __device__ auto operator()(const Array<uint4_t, N>& vi) const
+    {
+        auto vo = cast<float>(cvt_f16x8_u4_biased(vi));
+        using namespace ops;
+        return vo * scale_ + zero_;
+    }
+#endif
+};
 
 // u8 -> f32/f16/bf16
 template<class T>

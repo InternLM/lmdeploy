@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "../attention/data_type.h"
 #include "src/turbomind/macro.h"
 #include <cassert>
 #include <cstdint>
@@ -352,6 +353,50 @@ struct Array {
         return {};
     }
 };
+
+template<int N>
+struct Array<uint4_t, N> {
+    using value_type      = detail::__uint4_t;
+    using size_type       = int;
+    using difference_type = int;
+    using reference       = value_type&;
+    using const_reference = const value_type&;
+    using pointer         = SubBytePtr<uint4_t>;
+    using const_pointer   = SubBytePtr<const uint4_t>;
+
+    static_assert(N % 8 == 0);
+
+    detail::__uint4_t __a[N / 8];
+
+    __device__ __host__ constexpr reference operator[](size_type i) noexcept
+    {
+        return __a[i / 8];
+    }
+    __device__ __host__ constexpr const_reference operator[](size_type i) const noexcept
+    {
+        return __a[i / 8];
+    }
+
+    __device__ __host__ constexpr std::integral_constant<int, N> size() const noexcept
+    {
+        return {};
+    }
+
+    __device__ __host__ constexpr std::false_type empty() const noexcept
+    {
+        return {};
+    }
+
+    __device__ __host__ constexpr pointer data() noexcept
+    {
+        return {(char*)&__a[0]};
+    }
+};
+
+static_assert(sizeof(Array<uint4_t, 8>) == 4);
+static_assert(sizeof(Array<uint4_t, 16>) == 8);
+static_assert(sizeof(Array<uint4_t, 24>) == 12);
+static_assert(sizeof(Array<uint4_t, 32>) == 16);
 
 template<int... Ns>
 struct Shape {

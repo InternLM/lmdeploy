@@ -328,6 +328,7 @@ inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
         *(uint1*)dst = (const uint1&)src;
     }
     else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
+        static_assert(!std::is_same_v<T, uint4_t>, "pointer arithmetic of sub-byte u4 type");
         constexpr int M = sizeof(Array<T, N>) / sizeof(uint4);
         PRAGMA_UNROLL
         for (int i = 0; i < M; ++i) {

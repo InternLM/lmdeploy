@@ -5,6 +5,7 @@
 #include "../gemm_s_f16/common.h"
 #include "array_ops.h"
 #include "smem_layout.h"
+#include "src/turbomind/kernels/attention/data_type.h"
 #include <type_traits>
 
 namespace turbomind {
@@ -13,6 +14,7 @@ template<class T, class Map, class SmemLayout>
 struct BaseGmemIterator {
     using ElementType = T;
     using AccessType  = Array<T, Map::kAccessC>;
+    using Pointer     = get_pointer_type<T>;
 
     static constexpr int kElementSize = sizeof(ElementType);
     static constexpr int kAccessSize  = sizeof(AccessType);
@@ -20,7 +22,7 @@ struct BaseGmemIterator {
 
     using Fragment = Array<T, Map::kAccessC>[Map::kIterS][Map::kIterC];
 
-    T* smem_;
+    Pointer smem_;
 
     int src_offset_;
     int offset_c_;
@@ -43,7 +45,7 @@ struct BaseGmemIterator {
         }
     }
 
-    __device__ void SetSmem(T* smem)
+    __device__ void SetSmem(Pointer smem)
     {
         smem_ = smem;
     }

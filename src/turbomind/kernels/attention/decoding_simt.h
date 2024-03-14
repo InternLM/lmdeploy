@@ -5,6 +5,7 @@
 #include "array_ops.h"
 #include "impl.h"
 #include "iterator.h"
+#include "src/turbomind/kernels/attention/data_type.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "thread_map.h"
 #include <limits>
@@ -122,32 +123,34 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     static constexpr int V_N = HeadDim / OP_D;  // 2
     static constexpr int V_K = WARP_S / OP_S;   // 4
 
-    using Tqk = float;
-    using Tpv = float;
+    using Tqk = T;
+    using Tpv = T;
 
-    using FragQ = Array<T, 8>[K_K][K_M];    // (q4, d8), (Dk, Qm), (d8)
-                                            //   0   8    64   1     1
-    template<class Tk>                      //
-    using FragK_ = Array<Tk, 8>[K_K][K_N];  // (s4, d8), (Dk, Sn), (d8)
-                                            //   1   8    64   4     1
-    using FragS = Array<Tqk, 1>[K_M][K_N];  // (s4, d8), (Qm, Sn)
-                                            //   1   8     1   4
-                                            // (s4, _8), (Qm, Sn)       [after redsum]
-                                            //   1   0     1   4
-    using FragM = Array<Tqk, 1>[K_M];       // (s4, _8), (Qm)
-                                            //   1   0     1
-    using FragP = Array<T, 1>[V_M][V_K];    // (s4, _8), (Qm, Sk), (s1)
-                                            //   1   0     1   4     1
-    template<class Tv>                      //
-    using FragV_ = Array<Tv, 8>[V_K][V_N];  // (s4, d8), (Sk, Dn), (d8)
-                                            //   1   8     4  64     1
-    using FragO = Array<Tpv, 8>[V_M][V_N];  // (s4, d8), (Qm, Dn), (d8)
-                                            //   1   8     1  64     1
-    using ParamK = Array<T, 2>[K_N];        // (s4, x8), (Sn)
-                                            //   1   0     4
-    using ParamV = Array<T, 2>[V_K];        // (s4, x8), (Sk)
-                                            //   1   0     4
-    using FragSp = Array<T, 1>[K_M][K_N];
+    using FragQ = Array<T, 8>[K_K][K_M];      // (q4, d8), (Dk, Qm), (d8)
+                                              //   0   8    64   1     1
+    template<class Tk>                        //
+    using FragK_ = Array<Tk, 8>[K_K][K_N];    // (s4, d8), (Dk, Sn), (d8)
+                                              //   1   8    64   4     1
+    using FragS = Array<float, 1>[K_M][K_N];  // (s4, d8), (Qm, Sn)
+                                              //   1   8     1   4
+                                              // (s4, _8), (Qm, Sn)       [after redsum]
+                                              //   1   0     1   4
+    using FragM = Array<float, 1>[K_M];       // (s4, _8), (Qm)
+                                              //   1   0     1
+    using FragP = Array<Tpv, 1>[V_M][V_K];    // (s4, _8), (Qm, Sk), (s1)
+                                              //   1   0     1   4     1
+    template<class Tv>                        //
+    using FragV_ = Array<Tv, 8>[V_K][V_N];    // (s4, d8), (Sk, Dn), (d8)
+                                              //   1   8     4  64     1
+    using FragO = Array<float, 8>[V_M][V_N];  // (s4, d8), (Qm, Dn), (d8)
+                                              //   1   8     1  64     1
+    using ParamK = Array<T, 2>[K_N];          // (s4, x8), (Sn)
+                                              //   1   0     4
+    using ParamV = Array<T, 2>[V_K];          // (s4, x8), (Sk)
+                                              //   1   0     4
+    using FragSp = Array<Tpv, 1>[K_M][K_N];
+
+    static_assert(sizeof(FragP) == sizeof(FragSp));
 
     using DataK = FragK_<Tkv>;
     using DataV = FragV_<Tkv>;
@@ -169,11 +172,14 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using SmemO = Array<float, 4>[V_M][V_N][2][kWarpCntH][kWarpCntS][8];  // (Qm, Dn, d2, Hw, Sw, d8), (d4)
                                                                           //   1  64   4  WH  WS   8     1
 
+    using PointerKV = get_pointer_type<Tkv>;
+
     union SharedStorage {
         __align__(16) T Q[SmemLayoutQ::kSize];
 
         struct {
-            __align__(16) Tkv KV[Stages * SmemLayoutK::kSize];
+            // __align__(16) Tkv KV[Stages * SmemLayoutK::kSize];
+            __align__(16) Array<Tkv, Stages * SmemLayoutK::kSize> KV;
             __align__(16) T KVp[Stages * SmemLayoutKVp::kSize];
         };
 
@@ -189,7 +195,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     static constexpr bool kUseSmemP = false;
 
     using ThreadMapQ   = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
-    using ThreadMapKV  = RakedThreadMap<HeadDim, CTA_S, 16 / sizeof(Tkv), kWarpCount>;
+    using ThreadMapKV  = RakedThreadMap<HeadDim, CTA_S, 128 / bitsof<Tkv>, kWarpCount>;
     using ThreadMapKVp = RakedThreadMap<2, CTA_S, 2, kWarpCount, ThreadMapKV::kWarpThreadC>;
 
     static constexpr int kBatchK = ThreadMapKV::kIterS;
@@ -208,12 +214,12 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     {
         int pred = offset_kv;
         if constexpr (std::is_same_v<T, Tkv>) {
-            gmem_K.SetSmem(storage.KV);
-            gmem_V.SetSmem(storage.KV + pred * SmemLayoutK::kSize);
+            gmem_K.SetSmem(storage.KV.data());
+            gmem_V.SetSmem(storage.KV.data() + pred * SmemLayoutK::kSize);
         }
         else {
-            gmem_K.SetSmem(storage.KV, storage.KVp);
-            gmem_V.SetSmem(storage.KV + pred * SmemLayoutK::kSize, storage.KVp + pred * SmemLayoutKVp::kSize);
+            gmem_K.SetSmem(storage.KV.data(), storage.KVp);
+            gmem_V.SetSmem(storage.KV.data() + pred * SmemLayoutK::kSize, storage.KVp + pred * SmemLayoutKVp::kSize);
         }
     }
 
@@ -270,16 +276,16 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     }
 
     struct StateQK {
-        Tkv*   smem_K;
-        T*     smem_K_param;
-        FragQ  frag_Q;
-        FragK  frag_K;
-        DataK  data_K;
-        ParamK param_K;
+        PointerKV smem_K;
+        T*        smem_K_param;
+        FragQ     frag_Q;
+        FragK     frag_K;
+        DataK     data_K;
+        ParamK    param_K;
 
         __device__ StateQK(SharedStorage& storage, FragQ frag_Q_)
         {
-            smem_K       = storage.KV;
+            smem_K       = storage.KV.data();
             smem_K_param = storage.KVp;
             if constexpr (!kUseSmemQ) {
                 PRAGMA_UNROLL
@@ -375,16 +381,16 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     }
 
     struct StatePV {
-        Tkv*   smem_V;
-        T*     smem_V_param;
-        FragP  frag_P;
-        FragV  frag_V;
-        DataV  data_V;
-        ParamV param_V;
+        PointerKV smem_V;
+        T*        smem_V_param;
+        FragP     frag_P;
+        FragV     frag_V;
+        DataV     data_V;
+        ParamV    param_V;
 
         __device__ StatePV(SharedStorage& storage)
         {
-            smem_V       = storage.KV;
+            smem_V       = storage.KV.data();
             smem_V_param = storage.KVp;
         }
 
