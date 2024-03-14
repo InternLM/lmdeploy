@@ -93,7 +93,7 @@ jobs:
 
   test_tools:
     needs: linux-build
-    if: github.event_name == 'schedule' || ${{github.event.inputs.tools_regression}}
+    if: github.event_name == 'schedule' || ${{inputs.tools_regression}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 300
     env:
@@ -235,7 +235,7 @@ jobs:
 
 
   test_triton:
-    if: github.event_name == 'schedule' || (always() && ${{github.event.inputs.triton_regression}})
+    if: github.event_name == 'schedule' || (${{ always() }} && ${{inputs.triton_regression}})
     runs-on: [self-hosted, linux-a100-2]
     needs: test_tools
     timeout-minutes: 30
@@ -361,7 +361,7 @@ jobs:
 
 
   test_restful:
-    if: github.event_name == 'schedule' || (always() && ${{github.event.inputs.restful_regression}})
+    if: github.event_name == 'schedule' || (${{ always() }} && ${{inputs.restful_regression}})
     runs-on: [self-hosted, linux-a100]
     needs: test_tools
     strategy:
