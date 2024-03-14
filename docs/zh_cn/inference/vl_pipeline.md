@@ -54,7 +54,7 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### 设置上下文长度​
+### 设置上下文长度
 
 创建 pipeline 时，通过设置引擎参数 `session_len`，可以定制上下文窗口的最大长度
 
@@ -70,7 +70,7 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### 设置随机采样参数​
+### 设置随机采样参数
 
 pipeline 的生成接口，默认使用 greedy search 采样方式。需要引入随机采样时，可传入 `top_k`、`top_p` 和 `temperature` 等参数
 
@@ -101,9 +101,9 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-对话模版的使用，请参考[这里](../advance/chat_template.md)
+关于如何自定义对话模版，请参考[这里](../advance/chat_template.md)
 
-## 多图推理​
+## 多图推理
 
 对于多图的场景，在推理时，只要把它们放在一个列表中即可。不过，多图意味着输入 token 数更多，所以通常需要[增大推理的上下文长度](#设置上下文长度​)。
 
