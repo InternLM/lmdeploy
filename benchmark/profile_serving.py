@@ -152,7 +152,8 @@ class Engine:
             session_id, _stats = res_queue.get()
             # print(f'\n{"-" * 50}\n'
             #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
-            stats.append(np.array(_stats))
+            if len(_stats) != 0:
+                stats.append(np.array(_stats))
 
         stats = np.concatenate(stats).reshape(-1, 5)
 
