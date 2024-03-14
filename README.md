@@ -155,8 +155,8 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - [Serving](docs/en/serving/api_server.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide
-  - Add chat template
-  - Add a new model
+  - [Customize chat templates](docs/en/advance/chat_template.md)
+  - [Add a new model](docs/en/advance/pytorch_new_model.md)
   - gemm tuning
   - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)

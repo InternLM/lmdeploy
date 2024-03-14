@@ -156,8 +156,8 @@ print(response)
   - [推理服务](./docs/zh_cn/serving/api_server.md)
   - [模型量化](./docs/zh_cn/quantization)
 - 进阶指南
-  - 增加对话模板
-  - 支持新模型
+  - [自定义对话模板](./docs/zh_cn/advance/chat_template.md)
+  - [支持新模型](./docs/zh_cn/advance/pytorch_new_model.md)
   - gemm tuning
   - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](./docs/zh_cn/serving/proxy_server.md)
