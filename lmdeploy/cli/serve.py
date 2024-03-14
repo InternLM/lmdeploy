@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .cli import CLI
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args
+from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
+                    convert_args, get_lora_adapters)
 
 
 class SubCliServe:
@@ -132,6 +133,7 @@ class SubCliServe:
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
+        ArgumentHelper.adapters(pt_group)
         # common engine args
         tp_act = ArgumentHelper.tp(pt_group)
         model_name_act = ArgumentHelper.model_name(pt_group)
@@ -244,12 +246,14 @@ class SubCliServe:
 
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
+            adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(
                 tp=args.tp,
                 model_name=args.model_name,
                 max_batch_size=args.max_batch_size,
                 cache_max_entry_count=args.cache_max_entry_count,
-                session_len=args.session_len)
+                session_len=args.session_len,
+                adapters=adapters)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(

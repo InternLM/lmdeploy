@@ -73,7 +73,12 @@ def get_model_list():
 
     Only provided one now.
     """
-    return [VariableInterface.async_engine.model_name]
+    model_names = [VariableInterface.async_engine.model_name]
+    cfg = VariableInterface.async_engine.backend_config
+    if hasattr(cfg, 'adapters'):
+        if cfg.adapters:
+            model_names += cfg.adapters.keys()
+    return model_names
 
 
 @app.get('/v1/models', dependencies=[Depends(check_api_key)])

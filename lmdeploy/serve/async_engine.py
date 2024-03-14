@@ -12,7 +12,7 @@ from typing import Dict, List, Literal, Optional, Union
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
                                TurbomindEngineConfig)
-from lmdeploy.model import ChatTemplateConfig, best_match_model
+from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _stop_words, get_logger
 
@@ -304,6 +304,7 @@ class AsyncEngine:
                     gen_config: Optional[Union[GenerationConfig,
                                                EngineGenerationConfig]] = None,
                     do_preprocess: bool = True,
+                    adapter_name: Optional[str] = None,
                     **kwargs):
         """Inference a batch of prompts.
 
@@ -342,6 +343,7 @@ class AsyncEngine:
                                   sequence_start=True,
                                   sequence_end=True,
                                   do_preprocess=do_preprocess,
+                                  adapter_name=adapter_name,
                                   **kwargs))
 
             async def _inner_call(i, generator):
@@ -367,6 +369,7 @@ class AsyncEngine:
             gen_config: Optional[Union[GenerationConfig,
                                        EngineGenerationConfig]] = None,
             do_preprocess: bool = True,
+            adapter_name: Optional[str] = None,
             **kwargs):
         """Inference a batch of prompts with stream mode.
 
@@ -406,6 +409,7 @@ class AsyncEngine:
                                   sequence_start=True,
                                   sequence_end=True,
                                   do_preprocess=do_preprocess,
+                                  adapter_name=adapter_name,
                                   **kwargs))
 
             async def _inner_call(i, generator):
@@ -448,6 +452,7 @@ class AsyncEngine:
             sequence_end: bool = True,  # no interactive mode by default
             step: int = 0,
             do_preprocess: bool = True,
+            adapter_name: Optional[str] = None,
             **kwargs):
         """Generate responses.
 
@@ -479,7 +484,11 @@ class AsyncEngine:
             gen_config.random_seed = random.getrandbits(64)
         prompt = messages
         if do_preprocess:
-            prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+            # use adapter's chat template if possible
+            chat_template = self.chat_template
+            if adapter_name in MODELS.module_dict:
+                chat_template = MODELS.module_dict[adapter_name]()
+            prompt = chat_template.messages2prompt(prompt, sequence_start)
         logger.info(f'Prompt with applied chat template:\n{prompt}')
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         if gen_config.max_new_tokens is None:
@@ -503,6 +512,7 @@ class AsyncEngine:
                         session_id=session_id,
                         input_ids=input_ids,
                         gen_config=gen_config,
+                        adapter_name=adapter_name,
                         stream_output=stream_response,
                         sequence_start=(sequence_start),
                         sequence_end=sequence_end,
