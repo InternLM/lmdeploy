@@ -69,6 +69,9 @@ jobs:
           swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Build
         run: |
           echo ${PYTHON_VERSION}
@@ -105,13 +108,13 @@ jobs:
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
       - name: Clone repository
         uses: actions/checkout@v3
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
