@@ -12,7 +12,7 @@ from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_model, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
-from ..check_env import check_env, check_model
+from ..check_env import check_adapters, check_env, check_model
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SamplingParam, SchedulerSequence
 from ..paging import Scheduler
@@ -160,6 +160,8 @@ class Engine:
                  trust_remote_code: bool = True) -> None:
         check_env()
         check_model(model_path, trust_remote_code)
+        if engine_config.adapters is not None:
+            check_adapters(list(engine_config.adapters.values()))
 
         if engine_config is None:
             engine_config = PytorchEngineConfig()
