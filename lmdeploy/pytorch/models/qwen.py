@@ -163,7 +163,8 @@ class PatchedQWenAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        layer_past: Optional[Tuple[torch.Tensor]] = None,
+        **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
         """forward."""
@@ -172,7 +173,7 @@ class PatchedQWenAttention(nn.Module):
             world_size = dist.get_world_size()
         return self._contiguous_batching_forward_impl(
             hidden_states,
-            past_key_value=past_key_value,
+            past_key_value=layer_past,
             world_size=world_size,
         )
 
@@ -199,35 +200,6 @@ class PatchedQWenMLP(nn.Module):
         return outputs
 
 
-class PatchedQWenBlock(nn.Module):
-
-    def forward(
-        self,
-        hidden_states: Optional[Tuple[torch.FloatTensor]],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-    ):
-        layernorm_output = self.ln_1(hidden_states)
-
-        attn_outputs = self.attn(
-            layernorm_output,
-            past_key_value=past_key_value,
-        )
-        attn_output = attn_outputs[0]
-
-        outputs = attn_outputs[1:]
-
-        residual = hidden_states
-        layernorm_input = attn_output + residual
-
-        layernorm_output = self.ln_2(layernorm_input)
-
-        residual = layernorm_input
-        mlp_output = self.mlp(layernorm_output)
-        hidden_states = residual + mlp_output
-        outputs = (hidden_states, ) + outputs[1:]
-        return outputs
-
-
 class PatchedQWenModel(nn.Module):
 
     def _continuous_batching_forward(
@@ -249,7 +221,7 @@ class PatchedQWenModel(nn.Module):
                               if past_key_values is not None else None)
             layer_outputs = decoder_layer(
                 hidden_states,
-                past_key_value=past_key_value,
+                layer_past=past_key_value,
             )
             hidden_states = layer_outputs[0]
 

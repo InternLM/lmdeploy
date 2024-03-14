@@ -153,8 +153,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenModel',
     'modeling_qwen.QWenMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenMLP',
-    'modeling_qwen.QWenBlock':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenBlock',
     'modeling_qwen.RMSNorm':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedRMSNorm',
 })
