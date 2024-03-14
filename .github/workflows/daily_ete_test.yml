@@ -91,9 +91,9 @@ jobs:
           name: my-artifact-${{ github.run_id }}
 
 
-  test_functions:
+  test_tools:
     needs: linux-build
-    if: github.event_name == 'schedule' || github.event.inputs.tools_regression
+    if: github.event_name == 'schedule' || ${{github.event.inputs.tools_regression}}
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 300
     env:
@@ -121,7 +121,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets matplotlib
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
@@ -235,9 +235,9 @@ jobs:
 
 
   test_triton:
-    if: github.event_name == 'schedule' || (always() && github.event.inputs.triton_regression)
-    runs-on: [self-hosted, linux-a100]
-    needs: test_functions
+    if: github.event_name == 'schedule' || (always() && ${{github.event.inputs.triton_regression}})
+    runs-on: [self-hosted, linux-a100-2]
+    needs: test_tools
     timeout-minutes: 30
     env:
       HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
@@ -361,12 +361,12 @@ jobs:
 
 
   test_restful:
-    if: github.event_name == 'schedule' || (always() && github.event.inputs.restful_regression)
-    runs-on: [self-hosted, linux-a100-2]
-    needs: test_functions
+    if: github.event_name == 'schedule' || (always() && ${{github.event.inputs.restful_regression}})
+    runs-on: [self-hosted, linux-a100]
+    needs: test_tools
     strategy:
       matrix:
-        backend: ${{github.event.inputs.backend}}
+        backend: ${{fromJSON(github.event.inputs.backend)}}
     timeout-minutes: 300
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
@@ -448,7 +448,7 @@ jobs:
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
-    needs: [test_functions, test_triton, test_restful]
+    needs: [test_tools, test_triton, test_restful]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:
