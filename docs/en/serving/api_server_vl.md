@@ -11,7 +11,7 @@ Finally, we showcase how to integrate the service into a WebUI, providing you wi
 
 ## Launch Service
 
-Take the [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
+Take the [llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
 
 ### Option 1: Launching with lmdeploy CLI
 

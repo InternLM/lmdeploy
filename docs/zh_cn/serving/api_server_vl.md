@@ -10,7 +10,7 @@
 
 ## 启动服务
 
-以 huggingface hub 上的 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
+以 huggingface hub 上的 [llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
 
 ### 方式一：使用 lmdeploy cli 工具
 
