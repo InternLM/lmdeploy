@@ -1,7 +1,7 @@
 # VLM Offline Inference Pipeline
 
-LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the the Large Language Model (LLM) inference [pipeline](./pipeline.md). ​
-In this article, we will take the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as an example, exhibiting the powerful capabilities of the VLM pipeline through various examples.​
+LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the the Large Language Model (LLM) inference [pipeline](./pipeline.md).
+In this article, we will take the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as an example, exhibiting the powerful capabilities of the VLM pipeline through various examples.
 First, we will demonstrate the most basic utilization of the pipeline and progressively unveil additional functionalities by configuring the engine parameters and generation arguments, such as tensor parallelism, setting context window size, and random sampling, customizing chat template and so on. Next, we will provide inference examples for scenarios involving multiple images, batch prompts etc.
 
 ## A 'Hello, world' example
@@ -17,8 +17,8 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-If `ImportError` occurs while executing this case, please install the required dependency packages as prompted.​
-​
+If `ImportError` occurs while executing this case, please install the required dependency packages as prompted.
+
 In the above example, the inference prompt is a tuple structure consisting of (prompt, image). Besides this structure, the pipeline also supports prompts in the OpenAI format:
 
 ```python
@@ -73,7 +73,7 @@ print(response)
 
 ### Set sampling parameters
 
-The default sampling method adopted by pipeline is greedy search. To enable random sampling, please set `top_k`, `top_p`, and `temperature` in GenerationConfig​
+The default sampling method adopted by pipeline is greedy search. To enable random sampling, please set `top_k`, `top_p`, and `temperature` in GenerationConfig
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig

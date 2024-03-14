@@ -1,6 +1,6 @@
 # VLM 离线推理 pipeline
 
-LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](./pipeline.md) 类似。本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，通过若干示例，展示 VLM pipeline 的强大能力。​
+LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](./pipeline.md) 类似。本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，通过若干示例，展示 VLM pipeline 的强大能力。
 首先，我们会展示 pipeline 最基础的用法，并在此基础上，通过引擎的配置和生成条件配置，逐步引出更多能力，比如模型并行、自定义上下文长度、随机采样等等。然后，针对多图、批量提示词等场景，给出对应的推理示例。
 
 ## "Hello, world" 示例
@@ -16,8 +16,8 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-如果在执行这个用例时，出现 `ImportError` 的错误，请按照提示安装相关的依赖包。​
-​
+如果在执行这个用例时，出现 `ImportError` 的错误，请按照提示安装相关的依赖包。
+
 上面的例子中，推理时的提示词是 (prompt, image) 的 tuple 结构。除了这种结构外，pipeline 支持 openai 格式的提示词：
 
 ```python
@@ -105,7 +105,7 @@ print(response)
 
 ## 多图推理
 
-对于多图的场景，在推理时，只要把它们放在一个列表中即可。不过，多图意味着输入 token 数更多，所以通常需要[增大推理的上下文长度](#设置上下文长度​)。
+对于多图的场景，在推理时，只要把它们放在一个列表中即可。不过，多图意味着输入 token 数更多，所以通常需要[增大推理的上下文长度](#设置上下文长度)
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
