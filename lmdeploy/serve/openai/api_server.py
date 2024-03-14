@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
+from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
@@ -973,8 +974,6 @@ def serve(model_path: str,
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           qos_config_path: str = '',
-          task: Literal['text-generation',
-                        'vision-language'] = 'text-generation',
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1013,8 +1012,6 @@ def serve(model_path: str,
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
-        task (str): Determine what task pipeline will be applied. Currently supports
-            'text-generation' or 'vision-language'.
     """ # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1039,9 +1036,9 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
-    if task == 'vision-language':
-        from lmdeploy.serve.vl_async_engine import VLAsyncEngine as AsyncEngine
-    VariableInterface.async_engine = AsyncEngine(
+    pipeline_type, pipeline_class = get_task(model_path)
+
+    VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
         backend=backend,
