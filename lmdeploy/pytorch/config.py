@@ -28,7 +28,6 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    max_prefill_token_num: int = 8192
 
 
 @dataclass
@@ -40,6 +39,7 @@ class CacheConfig:
     num_gpu_blocks: int
     window_size: int = -1
     cache_max_entry_count: float = 0.8
+    max_prefill_token_num: int = 4096
 
 
 @dataclass
@@ -56,6 +56,7 @@ class ModelConfig:
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
+    vocab_size: int = 40000
     json_config: dict = field(default_factory=dict)
     hf_config: Any = None
     init_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -102,6 +103,7 @@ class ModelConfig:
                 eos_token_id=hf_config.eos_token_id,
                 head_dim=head_dim,
                 multi_query_attention=hf_config.multi_query,
+                vocab_size=hf_config.vocab_size,
             )
 
         def __build_chatglm():
@@ -119,6 +121,7 @@ class ModelConfig:
                 bos_token_id=bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 head_dim=head_dim,
+                vocab_size=hf_config.padded_vocab_size,
                 init_kwargs=init_kwargs)
 
         def __build_gemma():
@@ -129,7 +132,8 @@ class ModelConfig:
                 num_key_value_heads=hf_config.num_key_value_heads,
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
-                head_dim=hf_config.head_dim)
+                head_dim=hf_config.head_dim,
+                vocab_size=hf_config.vocab_size)
 
         def __build_default():
             head_dim = hf_config.hidden_size // hf_config.num_attention_heads
@@ -149,7 +153,8 @@ class ModelConfig:
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
                 sliding_window=sliding_window,
-                head_dim=head_dim)
+                head_dim=head_dim,
+                vocab_size=hf_config.vocab_size)
 
         if 'falcon' in model_path:
             model_config = __build_falcon()

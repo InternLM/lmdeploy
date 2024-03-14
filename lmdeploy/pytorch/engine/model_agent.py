@@ -54,9 +54,23 @@ def _update_cache_config(model_config: ModelConfig,
         cache_config (CacheConfig): The config of the cache info.
         gpu_id (int): The GPU id to use.
     """
-    torch.cuda.empty_cache()
-    gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
-    gpu_mem = gpu_mem_physical_free * cache_config.cache_max_entry_count
+
+    def __get_free_gpu_mem_size():
+        """get free gpu memory size."""
+        torch.cuda.empty_cache()
+        gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
+        logger.debug(f'device<{gpu_id}> free gpu memory:'
+                     f' {gpu_mem_physical_free>>20} mb')
+        vocal_size = model_config.vocab_size
+        max_prefill_token_num = cache_config.max_prefill_token_num
+        # lm_head output(2) + to float(4) + estimated misc(1) = 7
+        intermediate_cache_size = int(max_prefill_token_num * vocal_size * 7)
+        logger.debug('estimated max runtime memory:'
+                     f' {intermediate_cache_size>>20} mb')
+        gpu_mem_physical_free -= intermediate_cache_size
+        return gpu_mem_physical_free * cache_config.cache_max_entry_count
+
+    gpu_mem = __get_free_gpu_mem_size()
     cpu_mem = host_mem_size
     cache_block_size = CacheEngine.get_cache_block_size(
         cache_config.block_size, model_config, world_size)

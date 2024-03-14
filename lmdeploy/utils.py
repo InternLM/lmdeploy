@@ -232,7 +232,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
         @functools.wraps(func)
         def __func_warpper(*args, **kwargs):
             """func warpper."""
-            if not logger.isEnabledFor(level):
+            if logger.level > level:
                 return func(*args, **kwargs)
             with __timer():
                 return func(*args, **kwargs)
@@ -242,7 +242,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
             """async warpper."""
 
             async def __tmp():
-                if not logger.isEnabledFor(level):
+                if logger.level > level:
                     return (await func(*args, **kwargs))
                 with __timer():
                     return (await func(*args, **kwargs))
