@@ -394,8 +394,8 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt -r requirements/test.txt
-          python3 -m pip install my-artifact-${{ github.run_id }}/lmdeploy-*.whl
+          python3 -m pip install my-artifact-${{ github.run_id }}/*.whl
+          python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
           python3 -m pip list
