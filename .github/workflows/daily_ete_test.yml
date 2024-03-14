@@ -23,16 +23,77 @@ on:
         description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
         type: string
         default: "['quantization','convert','pipeline','restful','chat','interface-pipeline']"
+      tools_regression:
+        required: true
+        description: 'Whether start a tool regression'
+        type: boolean
+        default: true
+      restful_regression:
+        required: true
+        description: 'Whether start a restful api regression'
+        type: boolean
+        default: true
+      triton_regression:
+        required: true
+        description: 'Whether start a triton server api regression'
+        type: boolean
+        default: true
   schedule:
     - cron:  '00 21 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
+  OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
 
 
 jobs:
+  linux-build:
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: py38
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda11.8
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          echo ${GITHUB_RUN_ID}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}
+
+
   test_functions:
+    needs: linux-build
+    if: github.event_name == 'schedule' || github.event.inputs.tools_regression
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 300
     env:
@@ -47,48 +108,25 @@ jobs:
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Setup systems
-        run: |
-          rm /etc/apt/sources.list.d/cuda*.list
-          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
-          dpkg -i /root/packages/allure_2.24.1-1_all.deb
-          rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v3
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
-      - name: Build lmdeploy
-        run: |
-          python3 -m pip install cmake
-          python3 -m pip install -r requirements/build.txt
-          mkdir build
-          cd build
-          cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
-              -DBUILD_PY_FFI=ON \
-              -DBUILD_MULTI_GPU=ON \
-              -DCMAKE_CUDA_FLAGS="-lineinfo" \
-              -DUSE_NVTX=ON \
-              -DSM=80 \
-              -DCMAKE_CUDA_ARCHITECTURES=80 \
-              -DBUILD_TEST=OFF
-          make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
           python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt -r requirements/test.txt
-          python3 -m pip install .
+          python3 -m pip install my-artifact-${{ github.run_id }}/lmdeploy-*.whl
+          python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
           python3 -m pip list
@@ -176,6 +214,7 @@ jobs:
           pytest autotest/tools/restful/test_restful_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
       - name: Test lmdeploy - rerun all fail cases
         timeout-minutes: 30
+        if: github.event_name == 'schedule' || (github.event.inputs.backend != '' && github.event.inputs.model != '')
         run: |
           pytest autotest --lf --alluredir=allure-results
       - name: Generate reports
@@ -194,8 +233,11 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
+
   test_triton:
+    if: github.event_name == 'schedule' || (always() && github.event.inputs.triton_regression)
     runs-on: [self-hosted, linux-a100]
+    needs: test_functions
     timeout-minutes: 30
     env:
       HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
@@ -203,10 +245,6 @@ jobs:
       TB_MODEL: internlm-chat-20b-fp16-tp2
       GRPC_PORT: 33337
     steps:
-      - name: Enable proxy
-        run: |
-          export http_proxy=${{secrets.PROXY}}
-          export https_proxy=${{secrets.PROXY}}
       - name: Clone repository
         uses: actions/checkout@v3
         with:
@@ -321,9 +359,96 @@ jobs:
           docker stop $CONTAINER_ID
 
 
+
+  test_restful:
+    if: github.event_name == 'schedule' || (always() && github.event.inputs.restful_regression)
+    runs-on: [self-hosted, linux-a100-2]
+    needs: test_functions
+    strategy:
+      matrix:
+        backend: ${{github.event.inputs.backend}}
+    timeout-minutes: 300
+    env:
+      REPORT_DIR: /nvme/qa_test_models/test-reports
+    container:
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+      - name: Install pytorch
+        run: |
+          python3 -m pip cache dir
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
+          # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install my-artifact-${{ github.run_id }}/lmdeploy-*.whl
+          python3 -m pip install -r requirements/test.txt
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
+          rm -rf allure-results
+      - name: Start restful api turbomind
+        if: ${{ matrix.backend }} == 'turbomind'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Test lmdeploy restful api turbomind
+        if: ${{ matrix.backend }} == 'turbomind'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -m turbomind -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -m turbomind -n 20 --alluredir=allure-results
+          kill -9 "$restful_pid"
+      - name: Start restful api pytorch
+        if: ${{ matrix.backend }} == 'pytorch'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Test lmdeploy - restful api pytorch
+        if: ${{ matrix.backend }} == 'pytorch'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -m turbomind -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -m turbomind -n 20 --alluredir=allure-results
+          kill -9 "$restful_pid"
+      - name: Generate reports
+        if: always()
+        run: |
+          export date_today="$(date +'%Y%m%d-%H%M%S')"
+          export report_dir="$REPORT_DIR/$date_today"
+          echo "Save report to $ALLURE_DIR"
+          allure generate -c -o $report_dir
+      - name: Clear workfile
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
+
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
-    needs: [test_functions, test_triton]
+    needs: [test_functions, test_triton, test_restful]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:
