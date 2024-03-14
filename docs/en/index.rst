@@ -39,6 +39,7 @@ Welcome to LMDeploy's tutorials!
    :caption: Inference
 
    inference/pipeline.md
+   inference/vl_pipeline.md
    inference/turbomind.md
    inference/turbomind_config.md
    inference/pytorch.md
