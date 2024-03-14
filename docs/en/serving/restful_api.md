@@ -1,4 +1,4 @@
-# Serving with OpenAI Compatible Server
+# Serving LLMs with OpenAI Compatible Server
 
 This article primarily discusses the deployment of a single LLM model across multiple GPUs on a single node, providing a service that is compatible with the OpenAI interface, as well as the usage of the service API.
 For the sake of convenience, we refer to this service as `api_server`. Regarding parallel services with multiple models, please refer to the guide about [Request Distribution Server](./proxy_server.md).
