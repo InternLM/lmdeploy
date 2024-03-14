@@ -88,7 +88,8 @@ def autoget_backend_config(
     return config
 
 
-def check_vl_llm(config: dict):
+def check_vl_llm(config: dict) -> bool:
+    """check if the model is a vl model from model config."""
     arch = config['architectures'][0]
     if arch == 'LlavaLlamaForCausalLM':
         return True
@@ -98,6 +99,7 @@ def check_vl_llm(config: dict):
 
 
 def get_task(model_path: str):
+    """get pipeline type and pipeline class from model config."""
     config = get_hf_config_content(model_path)
     if check_vl_llm(config):
         return 'vlm', VLAsyncEngine
