@@ -198,6 +198,7 @@ class SubCliServe:
         from lmdeploy.serve.gradio.app import run
         backend = args.backend
 
+        pipeline_type = 'llm'
         if ':' not in args.model_path_or_server:
             pipeline_type, _ = get_task(args.model_path_or_server)
             if pipeline_type == 'vlm':
