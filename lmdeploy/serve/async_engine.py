@@ -99,7 +99,7 @@ class Session:
     def close(self):
         if self._engine:
             inst = self._engine.create_instance()
-            inst.cancel(self._id)
+            inst.end(self._id)
 
     def __repr__(self) -> str:
         res = ''
