@@ -302,6 +302,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         return error_check_ret
 
     model_name = request.model
+    adapter_name = None
+    if model_name != VariableInterface.async_engine.model_name:
+        adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
 
@@ -327,6 +330,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         sequence_end=True,
         do_preprocess=not isinstance(request.messages,
                                      str),  # text completion for string input
+        adapter_name=adapter_name,
     )
 
     def create_stream_response_json(
@@ -611,6 +615,9 @@ async def completions_v1(request: CompletionRequest,
         return error_check_ret
 
     model_name = request.model
+    adapter_name = None
+    if model_name != VariableInterface.async_engine.model_name:
+        adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
     if isinstance(request.prompt, str):
@@ -635,7 +642,8 @@ async def completions_v1(request: CompletionRequest,
             stream_response=True,  # always use stream to enable batching
             sequence_start=True,
             sequence_end=True,
-            do_preprocess=False)
+            do_preprocess=False,
+            adapter_name=adapter_name)
         generators.append(result_generator)
 
     def create_stream_response_json(
@@ -878,6 +886,8 @@ async def chat_interactive_v1(request: GenerateRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - adapter_name (str): For slora inference. Choose which lora to do the
+        inference.
     """
     if request.cancel:
         if request.session_id != -1:
@@ -919,7 +929,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=sequence_start,
-        sequence_end=sequence_end)
+        sequence_end=sequence_end,
+        adapter_name=request.adapter_name)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
