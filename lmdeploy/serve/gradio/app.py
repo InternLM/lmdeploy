@@ -50,7 +50,8 @@ def run(model_path_or_server: str,
         if pipeline_type == 'vlm':
             from lmdeploy.serve.gradio.vl import run_local
             assert backend == 'turbomind', 'vlm only support turbomind backend'
-            if backend_config is not None and backend_config.session_len is None:
+            if backend_config is not None and \
+                    backend_config.session_len is None:
                 backend_config.session_len = 8192
         else:
             from lmdeploy.serve.gradio.turbomind_coupled import run_local

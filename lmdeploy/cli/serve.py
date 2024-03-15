@@ -191,7 +191,7 @@ class SubCliServe:
     @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
-        from lmdeploy.archs import autoget_backend, get_task
+        from lmdeploy.archs import autoget_backend
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
         from lmdeploy.model import ChatTemplateConfig
