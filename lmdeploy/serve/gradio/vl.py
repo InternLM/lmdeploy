@@ -66,7 +66,7 @@ def run_local(model_path: str,
                                              TurbomindEngineConfig]] = None,
               chat_template_config: Optional[ChatTemplateConfig] = None,
               server_name: str = '0.0.0.0',
-              server_port: int = 7006,
+              server_port: int = 6006,
               tp: int = 1,
               **kwargs):
 
