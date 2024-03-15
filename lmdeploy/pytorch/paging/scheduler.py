@@ -130,11 +130,14 @@ class Scheduler:
         required_adapters = set(seq.adapter_name for seq in self.running)
         max_adapters = self.scheduler_config.max_active_adapters - len(
             required_adapters)
+        token_count = 0
 
         def _to_running(seq: SchedulerSequence):
             """to running."""
             self._set_message_status(seq, MessageStatus.RUNNING)
             running.append(seq)
+            nonlocal token_count
+            token_count += seq.num_token_ids
 
         def _evict_until_can_append(seq: SchedulerSequence):
             """evict until can append."""
@@ -180,6 +183,10 @@ class Scheduler:
         while len(self.waiting) > 0 and len(running) < max_batches:
             seq = self.waiting[0]
 
+            if (len(running) > 0 and token_count + seq.num_token_ids >
+                    self.cache_config.max_prefill_token_num):
+                break
+
             # limit number of adapters
             if len(required_adapters) >= max_adapters:
                 if seq.adapter_name not in required_adapters:
@@ -208,7 +215,7 @@ class Scheduler:
         return running, swap_in_map, swap_out_map, copy_map
 
     @logging_timer('ScheduleDecoding', logger)
-    def _schedule_decoding(self):
+    def _schedule_decoding(self, prealloc_size: int = 0):
         """schedule decoding."""
         assert len(self.running) != 0
 
@@ -226,11 +233,11 @@ class Scheduler:
 
         def _try_append_slot(seq):
             """try append slot."""
-            if self.block_manager.num_required_blocks(seq) == 0:
+            if self.block_manager.num_required_blocks(seq, prealloc_size) == 0:
                 _to_running(seq)
                 return True
-            if block_manager.can_append_slot(seq):
-                block_manager.append_slot(seq)
+            if block_manager.can_append_slot(seq, prealloc_size):
+                block_manager.append_slot(seq, prealloc_size)
                 _to_running(seq)
                 return True
             return False
@@ -240,13 +247,13 @@ class Scheduler:
             while eviction_helper.try_swap_out_unused(self.hanging,
                                                       self.waiting,
                                                       swap_out_map):
-                if block_manager.can_append_slot(seq):
+                if block_manager.can_append_slot(seq, prealloc_size):
                     return True
             return False
 
         # 1. running
         for seq in self.running:
-            # token + 1
+            # token + n
 
             if len(seq.logical_blocks) > self.block_manager.num_gpu_blocks:
                 # Reach max gpu cache size.
@@ -275,12 +282,12 @@ class Scheduler:
         ]
         return adapters
 
-    def schedule(self, is_prefill: bool):
+    def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
             output = self._schedule_prefill()
         else:
-            output = self._schedule_decoding()
+            output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
 
         adapters = self._get_adapter_list(self.actived_adapters)

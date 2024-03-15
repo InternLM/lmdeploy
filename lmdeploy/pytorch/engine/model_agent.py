@@ -100,35 +100,15 @@ class ModelInputs:
     max_rank: int = 0
     meta: Any = None
 
-    def slice(self, start: int, end: int):
-        """select by indices."""
-        sli = slice(start, end)
-
-        start_loc = self.q_start_loc[sli]
-        seq_length = self.seq_length[sli]
-        end_loc = start_loc[-1] + seq_length[-1]
-        input_ids = self.input_ids[:, start_loc[0]:end_loc]
-        start_loc = start_loc - start_loc[0]
-
-        history_lengths = self.history_lengths[sli]
-
-        local_adapter_ids = self.local_adapter_ids
-        if local_adapter_ids is not None:
-            local_adapter_ids = local_adapter_ids[sli]
-
-        return ModelInputs(input_ids=input_ids,
-                           seq_length=seq_length,
-                           attention_mask=self.attention_mask[sli],
-                           block_offsets=self.block_offsets[sli],
-                           position_ids=self.position_ids[sli],
-                           q_start_loc=start_loc,
-                           history_lengths=history_lengths,
-                           is_decoding=self.is_decoding,
-                           local_adapter_ids=local_adapter_ids,
-                           global_adapter_ids=self.global_adapter_ids,
-                           adapter_offsets=self.adapter_offsets,
-                           max_rank=self.max_rank,
-                           meta=self.meta)
+    def update(self, input_ids: torch.LongTensor):
+        """update input ids."""
+        assert self.is_decoding
+        self.position_ids = self.position_ids + 1
+        self.history_lengths = [h + 1 for h in self.history_lengths]
+        if input_ids.dim() == 1:
+            input_ids = input_ids[None, :]
+        self.input_ids = input_ids
+        return self
 
     def split(self, split_size: int, block_size: int):
         """split inputs."""

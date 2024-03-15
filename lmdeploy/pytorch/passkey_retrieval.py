@@ -140,7 +140,7 @@ def main(args):
 
     all_accuries = {}
     # This is a rough ratio to control the number of texts and tokens
-    for val in range(4096, args.max_tokens, args.interval):
+    for val in range(20000, args.max_tokens, args.interval):
         n_garbage = int(3.75 * val // 1024 * 1024)
         assert n_garbage > 0
         passed_tests = 0
