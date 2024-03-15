@@ -41,7 +41,7 @@ In this section, we take [internlm/internlm-7b](https://huggingface.co/internlm/
 lmdeploy serve api_server internlm/internlm-7b
 ```
 
-If you would like to change the server's port or other parameters, such as inference engine, max batch size and etc., please run `lmdeploy serve api_server -h` or read [this](../serving/restful_api.md) guide to get the detailed explanation.
+If you would like to change the server's port or other parameters, such as inference engine, max batch size and etc., please run `lmdeploy serve api_server -h` or read [this](../serving/api_server.md) guide to get the detailed explanation.
 
 ### Profile
 
