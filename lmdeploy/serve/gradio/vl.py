@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import time
 from dataclasses import dataclass, field
 from itertools import count
 from typing import List, Literal, Optional, Tuple, Union
@@ -8,11 +8,11 @@ from typing import List, Literal, Optional, Tuple, Union
 import gradio as gr
 from packaging.version import Version, parse
 from PIL import Image
-import time
 
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch.engine.request import _run_until_complete
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import get_logger
@@ -83,11 +83,12 @@ def run_local(model_path: str,
         """Append image to query."""
         chatbot = chatbot + [((file.name, ), None)]
         history = session._message
-        # [([user, url, url], assistant), ...]
+        img = Image.open(file.name).convert('RGB')
+        # [([user, img, img], assistant), ...]
         if len(history) == 0 or history[-1][-1] is not None:
-            history.append([[file.name], None])
+            history.append([[img], None])
         else:
-            history[-1][0].append(file.name)
+            history[-1][0].append(img)
         return chatbot, session
 
     def add_text(chatbot, session, text):
@@ -111,16 +112,15 @@ def run_local(model_path: str,
         else:
             prompt = history[-1][0][0]
             images = history[-1][0][1:]
-            images = [Image.open(x) for x in images]
             prompt = (prompt, images)
 
         logger.info('prompt: ' + str(prompt))
         prompt = engine.vl_prompt_template.prompt_to_messages(prompt)
         t0 = time.perf_counter()
-        with ThreadPoolExecutor() as executor:
-            future = executor.submit(preprocess, engine, prompt,
-                                     sequence_start)
-            inputs = future.result()
+        inputs = _run_until_complete(
+            engine._get_prompt_input(prompt,
+                                     True,
+                                     sequence_start=sequence_start))
         t1 = time.perf_counter()
         logger.info('preprocess cost %.3fs' % (t1 - t0))
 
