@@ -225,9 +225,8 @@ struct AttentionUniversal {
                     }
                     if constexpr (!std::is_same_v<T, Tkv>) {
                         if (qi < CTA_Q && offset.x == 0) {
-                            Store(k_param, param_K[0]);
-                            Store(v_param, param_V[0]);
-                            // printf("ans %f %f\n", (float)param_K[0][0], (float)param_K[0][1]);
+                            StoreQuantParam<Tkv>(k_param, param_K[0]);
+                            StoreQuantParam<Tkv>(v_param, param_V[0]);
                         }
                     }
                 });

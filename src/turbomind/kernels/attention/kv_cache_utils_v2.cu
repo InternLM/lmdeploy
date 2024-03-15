@@ -172,8 +172,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                 }
                 if constexpr (!std::is_same_v<T, Tkv>) {
                     if (offset.x == 0) {
-                        Store(k_param, param_K[s]);
-                        Store(v_param, param_V[s]);
+                        StoreQuantParam<Tkv>(k_param, param_K[s]);
+                        StoreQuantParam<Tkv>(v_param, param_V[s]);
                         // if (ti == history_len) {
                         // printf("src %d %f %f\n", ti, (float)param_K[s][0], (float)param_K[s][1]);
                         // }

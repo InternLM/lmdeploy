@@ -347,16 +347,18 @@ struct ConvertKvCache<uint4_t, half> {
 
     // __device__ ConvertKvCache(half scale, half zero): scale_{scale}, zero_{zero} {}
 
-    half           scale_;
+    half scale_;
     // Array<half, 2> zero_;
     half zero_;
 
     __device__ ConvertKvCache(half scale, half zero)
     {
-        scale_   = scale;
+        scale_ = scale;
         // zero_[0] = zero - scale * __ushort_as_half(0x6400);
         // zero_[1] = zero - scale * __ushort_as_half(0x5400);
-        zero_ = zero - scale * __ushort_as_half(0x5400);
+
+        // zero_ = zero - scale * __ushort_as_half(0x5400);
+        zero_ = zero;
     }
 
     static __device__ Array<half, 8> cvt_f16x8_u4(const Array<uint4_t, 8>& vi)
@@ -509,5 +511,18 @@ struct ConvertKvCache<uint8_t, T> {
         return vo;
     }
 };
+
+template<class Q, class T>
+inline __device__ void StoreQuantParam(T* dst, Array<T, 2> src)
+{
+    Store(dst, src);
+}
+
+template<>
+inline __device__ void StoreQuantParam<uint4_t, half>(half* dst, Array<half, 2> src)
+{
+    src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
+    Store(dst, src);
+}
 
 }  // namespace turbomind
