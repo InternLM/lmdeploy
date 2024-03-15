@@ -104,6 +104,8 @@ class Session:
     def __repr__(self) -> str:
         res = ''
         for user, assistant in self.history:
+            if isinstance(user, list):
+                user = user[0]['content'][0]['text']
             res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
 
@@ -621,9 +623,11 @@ class AsyncEngine:
             if hasattr(gen_config, k):
                 setattr(gen_config, k, v)
 
-        if do_preprocess:
-            prompt = self.chat_template.messages2prompt(prompt, sequence_start)
-        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+        from lmdeploy.pytorch.engine.request import _run_until_complete
+        prompt_input = _run_until_complete(
+            self._get_prompt_input(prompt, do_preprocess, sequence_start))
+        prompt = prompt_input['prompt']
+        input_ids = prompt_input['input_ids']
 
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
@@ -640,7 +644,7 @@ class AsyncEngine:
             resp = Response('', -1, -1, session._id)
             for outputs in generator.stream_infer(
                     session_id=session._id,
-                    input_ids=input_ids,
+                    **prompt_input,
                     sequence_start=sequence_start,
                     step=session._step,
                     gen_config=gen_config,
