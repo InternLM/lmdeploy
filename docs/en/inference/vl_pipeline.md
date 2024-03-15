@@ -144,3 +144,22 @@ prompts = [('describe this image', load_image(img_url)) for img_url in image_url
 response = pipe(prompts)
 print(response)
 ```
+
+## Multi-turn conversation
+
+There are two ways to do the multi-turn conversations with the pipeline. One is to construct messages according to the format of OpenAI and use above introduced method, the other is to use the `pipeline.chat` interface.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(session_len=8192))
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
+gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.8)
+sess = pipe.chat(('describe this image', image), gen_config=gen_config)
+print(sess.response().text)
+sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)
+print(sess.response().text)
+```
