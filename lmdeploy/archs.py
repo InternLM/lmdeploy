@@ -1,8 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal, Optional, Union
 
+from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.serve.vl_async_engine import VLAsyncEngine
+from lmdeploy.utils import get_hf_config_content
+
 from .messages import PytorchEngineConfig, TurbomindEngineConfig
 from .utils import get_logger
+
+SUPPORTED_TASKS = {'llm': AsyncEngine, 'vlm': VLAsyncEngine}
 
 logger = get_logger('lmdeploy')
 
@@ -80,3 +86,23 @@ def autoget_backend_config(
             if v and hasattr(config, k):
                 setattr(config, k, v)
     return config
+
+
+def check_vl_llm(config: dict) -> bool:
+    """check if the model is a vl model from model config."""
+    arch = config['architectures'][0]
+    if arch == 'LlavaLlamaForCausalLM':
+        return True
+    elif arch == 'QWenLMHeadModel' and 'visual' in config:
+        return True
+    return False
+
+
+def get_task(model_path: str):
+    """get pipeline type and pipeline class from model config."""
+    config = get_hf_config_content(model_path)
+    if check_vl_llm(config):
+        return 'vlm', VLAsyncEngine
+
+    # default task, pipeline_class
+    return 'llm', AsyncEngine
