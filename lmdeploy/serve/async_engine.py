@@ -437,6 +437,13 @@ class AsyncEngine:
 
             proc.join()
 
+    async def _get_prompt_input(self, prompt: str, do_preprocess: bool,
+                                sequence_start: bool):
+        if do_preprocess:
+            prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+        return {'prompt': prompt, 'input_ids': input_ids}
+
     async def generate(
             self,
             messages,
@@ -478,10 +485,12 @@ class AsyncEngine:
         if gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         prompt = messages
-        if do_preprocess:
-            prompt = self.chat_template.messages2prompt(prompt, sequence_start)
+
+        prompt_input = await self._get_prompt_input(prompt, do_preprocess,
+                                                    sequence_start)
+        prompt = prompt_input['prompt']
         logger.info(f'Prompt with applied chat template:\n{prompt}')
-        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
+        input_ids = prompt_input['input_ids']
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
             gen_config.max_new_tokens = max(
@@ -501,7 +510,7 @@ class AsyncEngine:
                 state = DetokenizeState()
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
-                        input_ids=input_ids,
+                        **prompt_input,
                         gen_config=gen_config,
                         stream_output=stream_response,
                         sequence_start=(sequence_start),
