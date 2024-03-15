@@ -1,4 +1,5 @@
 mmengine-lite
+pillow
 pydantic
 torch
 transformers
