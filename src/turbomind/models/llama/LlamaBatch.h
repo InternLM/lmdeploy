@@ -194,6 +194,11 @@ private:
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
+    void MedusaInit(std::vector<MedusaState>& medusa_state_vec,
+                    int&                      inited_index,
+                    int&                      new_index,
+                    const int                 index,
+                    const Sequence&           seq);
     void MedusaCopy(const int mini_batch_size, const int first);
     void MedusaVerify(const int inited_index);
     void MedusaGenerate(const int         inited_index,

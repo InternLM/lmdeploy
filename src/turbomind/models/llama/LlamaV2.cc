@@ -520,7 +520,7 @@ void LlamaV2<T>::medusaForward(int* topk_output_ids, const T* input_buf, const s
 
     turbomind::TensorMap outputs{
         {"medusa_head_output",
-         {turbomind::MEMORY_GPU, dtype, {(size_t)medusa_num_heads_, batch_size, 1}, topk_output_ids}},
+         {turbomind::MEMORY_GPU, dtype, {batch_size, (size_t)medusa_num_heads_, 1}, topk_output_ids}},
     };
 
     medusa_head_->forward(&outputs, &inputs, weights_->get_medusa_weight());

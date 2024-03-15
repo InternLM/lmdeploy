@@ -51,6 +51,7 @@ private:
     T*    resblock_buf_;
     void* workspace_buf_;
     T*    medusa_head_logits_buf_;
+    int*  topk_output_ids_t_;
 
     cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;

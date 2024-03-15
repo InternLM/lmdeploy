@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
+#include "SequenceManager.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/macro.h"
@@ -1511,18 +1512,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
                 pf_offset = i;
             }
             if (medusa_enable_) {
-                auto& medusa_state = medusa_state_vec_[i];
-                medusa_state.len   = seq.input_length;
-                if (seq.iter == 0) {
-                    medusa_state.verified_len = seq.input_length;
-                    medusa_state.inited       = false;
-                    medusa_state.index        = new_index++;
-                }
-                else {
-                    medusa_state.verified_len = 0;
-                    medusa_state.inited       = true;
-                    medusa_state.index        = inited_index++;
-                }
+                MedusaInit(medusa_state_vec_, inited_index, new_index, i, seq);
             }
         }
         if (pf_offset < 0) {
@@ -1594,12 +1584,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 
         batched_copy.Submit(stream_);
 
-        int dc_batch_size = p ? 0 : pf_offset;
-        int pf_batch_size = mini_batch_size - dc_batch_size;
-        if (medusa_enable_) {
-            dc_batch_size = 0;
-            pf_batch_size = mini_batch_size;
-        }
+        const int dc_batch_size = p ? 0 : pf_offset;
+        const int pf_batch_size = mini_batch_size - dc_batch_size;
 
         if (rank_ == 0) {
             if (pf_batch_size) {
@@ -1732,6 +1718,24 @@ std::ostream& operator<<(std::ostream& os, const MedusaState& medusa_state)
     os << "index=" << medusa_state.index << " len=" << medusa_state.len << " verified_len=" << medusa_state.verified_len
        << " inited=" << medusa_state.inited;
     return os;
+}
+
+template<typename T>
+void LlamaBatch<T>::MedusaInit(
+    std::vector<MedusaState>& medusa_state_vec, int& inited_index, int& new_index, const int index, const Sequence& seq)
+{
+    auto& medusa_state = medusa_state_vec[index];
+    medusa_state.len   = seq.input_length;
+    if (seq.iter == 0) {
+        medusa_state.verified_len = seq.input_length;
+        medusa_state.inited       = false;
+        medusa_state.index        = new_index++;
+    }
+    else {
+        medusa_state.verified_len = 0;
+        medusa_state.inited       = true;
+        medusa_state.index        = inited_index++;
+    }
 }
 
 template<typename T>

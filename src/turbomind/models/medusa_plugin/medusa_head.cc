@@ -3,6 +3,7 @@
 // Zhiwei Bao <zwbao@foxmail.com>
 
 #include "src/turbomind/models/medusa_plugin/medusa_head.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/utils/Tensor.h"
@@ -78,6 +79,8 @@ void MedusaHead<T>::allocate_buffer(size_t batch_size)
         (T*)allocator_->reMalloc(resblock_buf_, sizeof(T) * batch_size * in_size_ / tensor_para_.world_size_, false);
     medusa_head_logits_buf_ = (T*)allocator_->reMalloc(
         medusa_head_logits_buf_, medusa_num_heads_ * sizeof(T) * batch_size * vocab_size_, false);
+    topk_output_ids_t_ =
+        (int*)allocator_->reMalloc(topk_output_ids_t_, sizeof(int) * batch_size * medusa_num_heads_, false);
     is_allocated_buffer_ = true;
 }
 
@@ -88,6 +91,7 @@ void MedusaHead<T>::free_buffer()
         allocator_->free((void**)&resblock_buf_);
         allocator_->free((void**)&workspace_buf_);
         allocator_->free((void**)&medusa_head_logits_buf_);
+        allocator_->free((void**)&topk_output_ids_t_);
         is_allocated_buffer_ = false;
     }
 }
@@ -102,7 +106,10 @@ void MedusaHead<T>::top_k(int* h_topk_output_ids, const T* d_input_logits, const
     int  offset          = (int)(ceil(batch_size * vocab_size_ / 4.)) * 4;
     int  output_size     = (int)(ceil(batch_size * k / 4.)) * 4;
     int* topk_output_ids = (int*)(((T*)workspace_buf_) + offset);
-    cudaMemcpy(h_topk_output_ids, topk_output_ids, sizeof(int) * output_size, cudaMemcpyDeviceToHost);
+    invokeTransposeAxis01(
+        topk_output_ids_t_, topk_output_ids, medusa_num_heads_, batch_size / medusa_num_heads_, 1, stream_);
+    cudaMemcpyAsync(h_topk_output_ids, topk_output_ids_t_, sizeof(int) * output_size, cudaMemcpyDeviceToHost, stream_);
+    cudaStreamSynchronize(stream_);
 }
 
 template class MedusaHead<float>;

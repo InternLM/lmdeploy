@@ -122,13 +122,13 @@ void MedusaWeight<T>::load_bias(LlamaDenseWeight<T>* weight, const std::string& 
 template<typename T>
 void MedusaWeight<T>::load_model(const std::string& dir_path, FtCudaDataType model_file_type)
 {
-    auto ends_with = [](std::string& text, const std::string& suffix) noexcept {
+    auto ends_with = [](const std::string& text, const std::string& suffix) noexcept {
         return suffix.empty()
                || (text.size() >= suffix.size()
                    && std::memcmp(text.data() + (text.size() - suffix.size()), suffix.data(), suffix.size()) == 0);
     };
     std::string weight_path = dir_path;
-    if (!ends_with(weight_path, "/")) {
+    if (!ends_with(dir_path, "/")) {
         weight_path.append("/");
     }
     std::string prefix = "medusa.";

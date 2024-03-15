@@ -106,7 +106,7 @@ public:
         // top 1
         turbomind::TensorMap outputs{
             {"medusa_head_output",
-             {turbomind::MEMORY_GPU, dtype, {medusa_num_heads_, batch_size_, 1}, topk_output_ids_}},
+             {turbomind::MEMORY_GPU, dtype, {batch_size_, medusa_num_heads_, 1}, topk_output_ids_}},
         };
 
         model_.forward(&outputs, &inputs, *weights_.get());
@@ -258,7 +258,7 @@ void fire(int    tp,
 int main(int argc, char** argv)
 {
     std::vector<int>         seed_vec{7};
-    std::vector<int>         batch_vec{1};
+    std::vector<int>         batch_vec{2};
     std::vector<std::string> type_vec{"bf16", "fp16"};
     std::vector<int>         tp_vec{1, 2};
     for (const int seed : seed_vec) {
