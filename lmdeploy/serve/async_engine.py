@@ -75,7 +75,16 @@ class GenOut:
 
 
 class Session:
-    """Session for AsyncEngine.chat."""
+    """Session for AsyncEngine.chat.
+
+    Args:
+        _id (int): session_id for internal use.
+        _step (int): the offset of the k/v cache for internal use.
+        _prompt (str): input prompt for internal use.
+        _response (Reaponse): model output for prompt.
+        _engine (AsyncEngine): engine for internal use.
+        history (List[any, str]): chat history.
+    """
     _ids = count(0)
 
     def __init__(self):
@@ -86,17 +95,20 @@ class Session:
         self._engine = None
         self.history = []
 
-    def _merge_response(self, resp: Response, step: Response):
-        resp.text += step.text
+    def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
+        """merge response."""
+        resp.text += step.text if isinstance(step, Response) else step.response
         resp.input_token_len = step.input_token_len
         resp.generate_token_len = step.generate_token_len
         resp.finish_reason = step.finish_reason
         return resp
 
     def response(self) -> Response:
+        """return response."""
         return self._response
 
     def close(self):
+        """release engine storage for this session."""
         if self._engine:
             inst = self._engine.create_instance()
             inst.end(self._id)
@@ -557,7 +569,7 @@ class AsyncEngine:
                         **prompt_input,
                         gen_config=gen_config,
                         stream_output=stream_response,
-                        sequence_start=(sequence_start),
+                        sequence_start=sequence_start,
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     _, res, tokens = outputs
@@ -594,7 +606,7 @@ class AsyncEngine:
              gen_config: Optional[Union[GenerationConfig,
                                         EngineGenerationConfig]] = None,
              do_preprocess: bool = True,
-             **kwargs):
+             **kwargs) -> Session:
         """Chat.
 
         Args:
@@ -616,64 +628,32 @@ class AsyncEngine:
 
         sequence_start = session._step == 0
 
-        if gen_config is None:
-            gen_config = GenerationConfig()
-        if type(gen_config) is GenerationConfig:
-            gen_config = EngineGenerationConfig.From(gen_config,
-                                                     self.tokenizer)
-        if gen_config.stop_words is None:
-            gen_config.stop_words = self.stop_words
-        # set random if it is not set and sequence_start is True
-        if gen_config.random_seed is None and sequence_start:
-            gen_config.random_seed = random.getrandbits(64)
-        for k, v in kwargs.items():
-            if hasattr(gen_config, k):
-                setattr(gen_config, k, v)
+        def _work():
+            """run innfer in thread to enable parallel."""
 
-        from lmdeploy.pytorch.engine.request import _run_until_complete
-        prompt_input = _run_until_complete(
-            self._get_prompt_input(prompt, do_preprocess, sequence_start))
-        prompt = prompt_input['prompt']
-        input_ids = prompt_input['input_ids']
+            async def _inner():
+                resp = Response('', -1, -1, session._id)
+                async for output in self.generate(
+                        prompt,
+                        session_id=session._id,
+                        gen_config=gen_config,
+                        stream_response=False,
+                        sequence_start=sequence_start,
+                        sequence_end=False,
+                        step=session._step,
+                        do_preprocess=do_preprocess,
+                        **kwargs):
+                    resp = session._merge_response(resp, output)
+                return resp
 
-        if gen_config.max_new_tokens is None:
-            # for interactive endpoint, will try maximum possible token num
-            gen_config.max_new_tokens = max(
-                128, self.session_len - session._step - len(input_ids))
-        finish_reason = None
-        if session._id + len(
-                input_ids) + gen_config.max_new_tokens > self.session_len:
-            finish_reason = 'length'
-            resp = Response('', 0, len(input_ids), session._id, finish_reason)
-        else:
-            generator = self.engine.create_instance()
-            state = DetokenizeState()
-            resp = Response('', -1, -1, session._id)
-            for outputs in generator.stream_infer(
-                    session_id=session._id,
-                    **prompt_input,
-                    sequence_start=sequence_start,
-                    step=session._step,
-                    gen_config=gen_config,
-                    stream_output=False):
-                _, res, tokens = outputs
-                response, state = self.tokenizer.detokenize_incrementally(
-                    res,
-                    state,
-                    skip_special_tokens=gen_config.skip_special_tokens)
-                _resp = Response(response, tokens, len(input_ids), session._id,
-                                 finish_reason)
-                resp = session._merge_response(resp, _resp)
+            from lmdeploy.pytorch.engine.request import _run_until_complete
+            resp = _run_until_complete(_inner())
+            return resp
 
-            finish_reason = 'length' \
-                if tokens >= gen_config.max_new_tokens else 'stop'
-            # utf-8 char at the end means it's a potential unfinished
-            # byte sequence
-            if not response.endswith('�'):
-                response = ''  # avaid returning the last response twice
-            _resp = Response(response, tokens, len(input_ids), session._id,
-                             finish_reason)
-            resp = session._merge_response(resp, _resp)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor() as executor:
+            future = executor.submit(_work)
+            resp = future.result()
 
         session._response = resp
         session._step += resp.generate_token_len + resp.input_token_len
