@@ -49,9 +49,12 @@ env:
 
 jobs:
   linux-build:
+    strategy:
+      matrix:
+        pyver: [py38, py310]
     runs-on: ubuntu-latest
     env:
-      PYTHON_VERSION: py38
+      PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
       DOCKER_TAG: cuda11.8
     steps:
