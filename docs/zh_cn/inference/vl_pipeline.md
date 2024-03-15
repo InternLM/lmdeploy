@@ -143,3 +143,22 @@ prompts = [('describe this image', load_image(img_url)) for img_url in image_url
 response = pipe(prompts)
 print(response)
 ```
+
+## 多轮对话
+
+pipeline 进行多轮对话有两种方式，一种是按照 openai 的格式来构造 messages，另外一种是使用 `pipeline.chat` 接口。
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(session_len=8192))
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
+gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.6)
+sess = pipe.chat(('describe this image', image), gen_config=gen_config)
+print(sess.response().text)
+sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)
+print(sess.response().text)
+```
