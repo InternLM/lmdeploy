@@ -913,3 +913,11 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
+    try:
+        from transformers import AutoTokenizer
+        tokenizer_config = AutoTokenizer.from_pretrained(
+            query, trust_remote_code=True)
+        if tokenizer_config.chat_template is None:
+            return 'base'
+    except Exception as e:
+        assert type(e) == OSError
