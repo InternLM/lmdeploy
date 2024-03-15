@@ -41,9 +41,7 @@
 
    inference/pipeline.md
    inference/vl_pipeline.md
-   inference/turbomind.md
-   inference/turbomind_config.md
-   inference/pytorch.md
+
 
 .. _服务:
 .. toctree::
@@ -68,6 +66,8 @@
    :maxdepth: 1
    :caption: 进阶指南
 
+   inference/turbomind.md
+   inference/pytorch.md
    advance/pytorch_new_model.md
    advance/long_context.md
    advance/chat_template.md
