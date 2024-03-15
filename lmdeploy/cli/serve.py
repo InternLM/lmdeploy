@@ -45,6 +45,7 @@ class SubCliServe:
         # chat template args
         ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
+        ArgumentHelper.cap(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
@@ -190,14 +191,22 @@ class SubCliServe:
     @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
-        from lmdeploy.archs import autoget_backend
+        from lmdeploy.archs import autoget_backend, get_task
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
         from lmdeploy.model import ChatTemplateConfig
         from lmdeploy.serve.gradio.app import run
         backend = args.backend
 
-        if backend != 'pytorch' and ':' not in args.model_path_or_server:
+        if ':' not in args.model_path_or_server:
+            pipeline_type, _ = get_task(args.model_path_or_server)
+            if pipeline_type == 'vlm':
+                assert backend == 'turbomind' or backend is None
+                if args.session_len is None:
+                    args.session_len = 8192
+
+        if backend != 'pytorch' and ':' not in args.model_path_or_server and \
+                pipeline_type != 'vlm':
             # set auto backend mode
             backend = autoget_backend(args.model_path_or_server)
         if backend == 'pytorch':
