@@ -87,6 +87,7 @@ class VLChatTemplateWrapper:
             content = message['content']
             if role != 'user' or isinstance(content, str):
                 new_messages.append(message)
+                continue
             num_images = 0
             for item in content:
                 if item['type'] == 'image_url':
@@ -102,6 +103,8 @@ class VLChatTemplateWrapper:
 
     def messages2prompt(self, messages, sequence_start=True) -> str:
         """convert messages to decorated prompt."""
+        if isinstance(messages, str):
+            return self.chat_template.messages2prompt(messages, sequence_start)
         new_messages = self.convert_messages(messages, sequence_start)
         return self.chat_template.messages2prompt(new_messages, sequence_start)
 
