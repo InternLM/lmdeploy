@@ -46,9 +46,12 @@ def run(model_path_or_server: str,
                 run_triton_server
             run_triton_server(model_path_or_server, server_name, server_port)
     else:
-        pipeline_type, pipeline_class = get_task(model_path_or_server)
+        pipeline_type, _ = get_task(model_path_or_server)
         if pipeline_type == 'vlm':
             from lmdeploy.serve.gradio.vl import run_local
+            assert backend == 'turbomind', 'vlm only support turbomind backend'
+            if backend_config is not None and backend_config.session_len is None:
+                backend_config.session_len = 8192
         else:
             from lmdeploy.serve.gradio.turbomind_coupled import run_local
         run_local(model_path_or_server,

@@ -198,16 +198,7 @@ class SubCliServe:
         from lmdeploy.serve.gradio.app import run
         backend = args.backend
 
-        pipeline_type = 'llm'
-        if ':' not in args.model_path_or_server:
-            pipeline_type, _ = get_task(args.model_path_or_server)
-            if pipeline_type == 'vlm':
-                assert backend == 'turbomind' or backend is None
-                if args.session_len is None:
-                    args.session_len = 8192
-
-        if backend != 'pytorch' and ':' not in args.model_path_or_server and \
-                pipeline_type != 'vlm':
+        if backend != 'pytorch' and ':' not in args.model_path_or_server:
             # set auto backend mode
             backend = autoget_backend(args.model_path_or_server)
         if backend == 'pytorch':
