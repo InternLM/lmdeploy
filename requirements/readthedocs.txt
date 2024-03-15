@@ -1,3 +1,4 @@
+accelerate
 mmengine-lite
 pillow
 pydantic
