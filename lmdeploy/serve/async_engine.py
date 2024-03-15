@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from itertools import count
 from queue import Empty, Queue
 from threading import Thread
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
@@ -80,20 +80,20 @@ class Session:
     Args:
         _id (int): session_id for internal use.
         _step (int): the offset of the k/v cache for internal use.
-        _prompt (str): input prompt for internal use.
+        _prompt (Any): input prompt for internal use.
         _response (Reaponse): model output for prompt.
-        _engine (AsyncEngine): engine for internal use.
-        history (List[any, str]): chat history.
+        _engine (Any): engine for internal use.
+        history (List[Any, str]): chat history.
     """
     _ids = count(0)
 
     def __init__(self):
-        self._id = next(self._ids)
-        self._step = 0
-        self._prompt = None
-        self._response = None
-        self._engine = None
-        self.history = []
+        self._id: int = next(self._ids)
+        self._step: int = 0
+        self._prompt: Any = None
+        self._response: Response = None
+        self._engine: Any = None
+        self.history: List[Tuple[Any, str]] = []
 
     def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
         """merge response."""
@@ -117,7 +117,7 @@ class Session:
         res = ''
         for user, assistant in self.history:
             if isinstance(user, list):
-                user = user[0]['content'][0]['text']
+                user = str(user)
             res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
 

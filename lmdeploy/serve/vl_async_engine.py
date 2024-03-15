@@ -96,5 +96,11 @@ class VLAsyncEngine(AsyncEngine):
 
     def chat(self, prompts: VLPromptType, **kwargs):
         """chat."""
-        prompts = self._convert_prompts(prompts)
-        return super().chat(prompts, **kwargs)
+        _prompts = self._convert_prompts(prompts)
+        sess = super().chat(_prompts, **kwargs)
+
+        # recover prompts & history
+        sess._prompt = prompts
+        last_round = sess.history[-1]
+        sess.history[-1] = (prompts, last_round[-1])
+        return sess
