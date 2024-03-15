@@ -48,6 +48,7 @@ Welcome to LMDeploy's tutorials!
    :caption: serving
 
    serving/api_server.md
+   serving/api_server_vl.md
    serving/gradio.md
    serving/proxy_server.md
 
