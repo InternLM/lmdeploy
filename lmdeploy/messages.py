@@ -176,7 +176,7 @@ class PytorchEngineConfig:
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
-    max_prefill_token_num: int = 8192
+    max_prefill_token_num: int = 4096
     thread_safe: bool = False
     download_dir: str = None
     revision: str = None

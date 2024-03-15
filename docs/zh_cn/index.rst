@@ -40,6 +40,7 @@
    :caption: 推理
 
    inference/pipeline.md
+   inference/vl_pipeline.md
    inference/turbomind.md
    inference/turbomind_config.md
    inference/pytorch.md
@@ -49,7 +50,7 @@
    :maxdepth: 1
    :caption: 服务
 
-   serving/restful_api.md
+   serving/api_server.md
    serving/gradio.md
    serving/proxy_server.md
 

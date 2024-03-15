@@ -771,7 +771,8 @@ class Yi(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'yi' in model_path.lower():
+        path = model_path.lower()
+        if 'yi' in path and 'vl' not in path:
             return 'yi'
 
 
@@ -866,6 +867,38 @@ class Deepseek(BaseChatTemplate):
         path = model_path.lower()
         if 'deepseek' in path and 'chat' in path:
             return 'deepseek'
+
+
+@MODELS.register_module(name=['yi-vl'])
+class YiVL(BaseChatTemplate):
+
+    def __init__(
+            self,
+            meta_instruction="""This is a chat between an inquisitive human and an AI assistant. Assume the role of the AI assistant. Read all the images carefully, and respond to the human's questions with informative, helpful, detailed and polite answers. 这是一个好奇的人类和一个人工智能助手之间的对话。假设你扮演这个AI助手的角色。仔细阅读所有的图像，并对人类的问题做出信息丰富、有帮助、详细的和礼貌的回答。\n\n""",  # noqa: E501
+            user='### Human: ',
+            eoh='\n',
+            assistant='### Assistant: ',
+            eoa='\n',
+            stop_words=['###'],
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'yi-vl' in path:
+            return 'yi-vl'
 
 
 def best_match_model(query: str) -> Optional[str]:
