@@ -6,6 +6,7 @@ from lmdeploy.model import MODELS, best_match_model
 @pytest.mark.parametrize(
     'model_path_and_name',
     [('internlm/internlm-chat-7b', ['internlm']),
+     ('internlm/internlm2-1_8b', ['base']),
      ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
      ('Qwen/Qwen-7B-Chat', ['qwen']),
      ('codellama/CodeLlama-7b-hf', ['codellama']),
@@ -19,6 +20,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
+    if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
+        return  # internlm/internlm2-1_8b-suffix will got None
     deduced_name = best_match_model(model_path_and_name[0] + suffix)
     if deduced_name is not None:
         assert deduced_name in model_path_and_name[
