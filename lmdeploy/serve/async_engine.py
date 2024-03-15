@@ -534,8 +534,15 @@ class AsyncEngine:
                 128, self.session_len - self.id2step[str(session_id)] -
                 len(input_ids))
         finish_reason = None
+        logger.info(f'session_id={session_id}, '
+                    f'history_tokens={self.id2step[str(session_id)]}, '
+                    f'input_tokens={len(input_ids)}, '
+                    f'max_new_tokens={gen_config.max_new_tokens}, '
+                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                    f'step={step}, prep={do_preprocess}')
         if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
+            logger.warning(f'run out of tokens. session_id={session_id}')
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)

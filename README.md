@@ -26,8 +26,9 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
-- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/restful_api.md).
+- \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/api_server.md).
 - \[2024/01\] Support for multi-model, multi-machine, multi-card inference services. For usage instructions, please refer to [here](./docs/en/serving/proxy_server.md)
 - \[2024/01\] Support [PyTorch inference engine](./docs/en/inference/pytorch.md), developed entirely in Python, helping to lower the barriers for developers and enable  rapid experimentation with new features and technologies.
 
@@ -152,11 +153,11 @@ For detailed user guides and advanced guides, please refer to our [tutorials](ht
   - [Inference pipeline](./docs/en/inference/pipeline.md)
   - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
   - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
-  - [Serving](docs/en/serving/restful_api.md)
+  - [Serving](docs/en/serving/api_server.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide
-  - Add chat template
-  - Add a new model
+  - [Customize chat templates](docs/en/advance/chat_template.md)
+  - [Add a new model](docs/en/advance/pytorch_new_model.md)
   - gemm tuning
   - [Long context inference](docs/en/advance/long_context.md)
   - [Multi-model inference service](docs/en/serving/proxy_server.md)
