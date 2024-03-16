@@ -86,6 +86,7 @@ class Engine:
                           top_k=self.top_k,
                           top_p=self.top_p,
                           temperature=self.temperature,
+                          capability='completion',
                           log_level=self.log_level)
         stats = []
         for prompt, input_seqlen, output_seqlen in iter(
