@@ -115,14 +115,67 @@ def _new_msg_id():
     return seq_id
 
 
+SeqMap = Dict[int, 'SchedulerSequence']
+
+
+class SequenceManager:
+    """sequence manager."""
+
+    def __init__(self) -> None:
+        self._seq_map: SeqMap = dict()
+        self._status_seq_map: Dict[MessageStatus, SeqMap] = dict()
+        for status in MessageStatus:
+            self._status_seq_map[status] = dict()
+
+    def get_sequences(self, states: MessageStatus):
+        """get sequences."""
+        return self._status_seq_map[states]
+
+    def num_sequences(self, status: MessageStatus):
+        """num sequences."""
+        return len(self.get_sequences(status))
+
+    def add_sequence(self, seq: 'SchedulerSequence'):
+        """add sequence."""
+        seq_id = seq.seq_id
+        status = seq.status
+        status_map = self._status_seq_map[status]
+        self._seq_map[seq_id] = seq
+        status_map[seq_id] = seq
+
+    def remove_sequence(self, seq: 'SchedulerSequence'):
+        """remove sequence."""
+        seq_id = seq.seq_id
+        status = seq.status
+        status_map = self._status_seq_map[status]
+        self._seq_map.pop(seq_id)
+        status_map.pop(seq_id)
+
+    def update_sequence_status(self, seq: 'SchedulerSequence',
+                               new_status: MessageStatus):
+        """update status."""
+        old_status = seq.status
+        if new_status == old_status:
+            return
+        seq_id = seq.seq_id
+        old_status_map = self._status_seq_map[old_status]
+        new_status_map = self._status_seq_map[new_status]
+        old_status_map.pop(seq_id)
+        new_status_map[seq_id] = seq
+
+
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, block_size: int) -> None:
+    def __init__(self,
+                 session_id: int,
+                 block_size: int,
+                 seq_manager: SequenceManager = None) -> None:
         self.session_id = session_id
         self.block_size = block_size
         self.status: MessageStatus = MessageStatus.RUNNING
-        self.sequences: Dict[int, SchedulerSequence] = dict()
+        self.sequences: SeqMap = dict()
+        self.seq_manager = seq_manager
 
     def add_sequence(self,
                      token_ids: Tensor,
@@ -142,13 +195,14 @@ class SchedulerSession:
         seq = SchedulerSequence(seq_id=_new_msg_id(),
                                 session=self,
                                 history_cache=HistoryTokenIds(token_ids),
-                                status=MessageStatus.WAITING,
                                 num_new_tokens=0,
                                 sampling_param=sampling_param,
                                 adapter_name=adapter_name,
                                 arrive_time=time.time(),
                                 return_logits=return_logits)
         self.sequences[seq.seq_id] = seq
+        if self.seq_manager is not None:
+            self.seq_manager.add_sequence(seq)
         return seq
 
     def fork_sequence(
@@ -165,7 +219,6 @@ class SchedulerSession:
                                     history_cache=seq.history_cache.clone(),
                                     num_new_tokens=0,
                                     sampling_param=sampling_param,
-                                    status=seq.status,
                                     logical_blocks=seq.logical_blocks.clone(),
                                     adapter_name=seq.adapter_name,
                                     arrive_time=time.time(),
@@ -174,9 +227,17 @@ class SchedulerSession:
                                     random_offsets=seq.random_offsets + 1)
         new_msg._num_history_ids = seq._num_history_ids
         new_msg._num_token_ids = seq._num_token_ids
+        new_msg.status = seq.status
 
         self.sequences[new_msg.seq_id] = new_msg
         return new_msg
+
+    def remove_sequence(self, seq: 'SchedulerSequence'):
+        """remove sequence."""
+        assert seq.seq_id in self.sequences
+        self.sequences.pop(seq.seq_id)
+        if self.seq_manager is not None:
+            self.seq_manager.remove_sequence(seq)
 
 
 def _div_up(x, n):
@@ -254,7 +315,6 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
-    status: MessageStatus = MessageStatus.WAITING
     logical_blocks: LogicalTokenBlocks = field(
         default_factory=LogicalTokenBlocks)
     sender_id: int = -1
@@ -264,6 +324,7 @@ class SchedulerSequence:
     meta: Any = None
     return_logits: bool = False
     random_offsets: int = 0
+    _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
 
     def __post_init__(self):
         """post init."""
@@ -315,6 +376,20 @@ class SchedulerSequence:
     def num_all_ids(self):
         """num all tokens."""
         return self.history_len + self._num_token_ids
+
+    @property
+    def seq_manager(self) -> SequenceManager:
+        """sequence manager."""
+        return self.session.seq_manager
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value: MessageStatus):
+        self.seq_manager.update_sequence_status(self, value)
+        self._status = value
 
     def num_all_tokens(self):
         """num all tokens."""

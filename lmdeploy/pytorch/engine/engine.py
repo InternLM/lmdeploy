@@ -239,7 +239,6 @@ class Engine:
                 Response(type=resp_type,
                          sender_id=req.sender_id,
                          req_id=req.req_id))
-        self.scheduler.update()
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
@@ -253,7 +252,6 @@ class Engine:
                 Response(type=resp_type,
                          sender_id=req.sender_id,
                          req_id=req.req_id))
-        self.scheduler.update()
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
@@ -311,7 +309,6 @@ class Engine:
 
             msg.sender_id = req.sender_id
             msg.req_id = req.req_id
-        self.scheduler.update()
 
     @property
     def model_config(self):
@@ -550,7 +547,6 @@ class Engine:
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         self.update_running(running, next_token_ids, stopped)
-        self.scheduler.update()
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
