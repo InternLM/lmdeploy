@@ -14,6 +14,10 @@ class VLAsyncEngine(AsyncEngine):
 
     def __init__(self, model_path: str, **kwargs) -> None:
         super().__init__(model_path, **kwargs)
+        if self.model_name == 'base':
+            raise RuntimeError(
+                'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501
+            )
         self.vl_encoder = ImageEncoder(model_path)
         self.vl_prompt_template = get_vl_prompt_template(
             model_path, self.chat_template, self.model_name)
