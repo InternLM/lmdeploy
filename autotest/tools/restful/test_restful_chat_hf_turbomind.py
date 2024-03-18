@@ -35,8 +35,6 @@ def prepare_environment(request, config, worker_id):
     else:
         port = DEFAULT_PORT + worker_num
 
-    cmd = ['lmdeploy serve api_server ' + model_path + '/' + model]
-
     cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
                                  '/' + model + ' --server-port ' + str(port),
                                  config,
