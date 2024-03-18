@@ -628,32 +628,22 @@ class AsyncEngine:
 
         sequence_start = session._step == 0
 
-        def _work():
-            """run innfer in thread to enable parallel."""
-
-            async def _inner():
-                resp = Response('', -1, -1, session._id)
-                async for output in self.generate(
-                        prompt,
-                        session_id=session._id,
-                        gen_config=gen_config,
-                        stream_response=False,
-                        sequence_start=sequence_start,
-                        sequence_end=False,
-                        step=session._step,
-                        do_preprocess=do_preprocess,
-                        **kwargs):
-                    resp = session._merge_response(resp, output)
-                return resp
-
-            from lmdeploy.pytorch.engine.request import _run_until_complete
-            resp = _run_until_complete(_inner())
+        async def _work():
+            resp = Response('', -1, -1, session._id)
+            async for output in self.generate(prompt,
+                                              session_id=session._id,
+                                              gen_config=gen_config,
+                                              stream_response=False,
+                                              sequence_start=sequence_start,
+                                              sequence_end=False,
+                                              step=session._step,
+                                              do_preprocess=do_preprocess,
+                                              **kwargs):
+                resp = session._merge_response(resp, output)
             return resp
 
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor() as executor:
-            future = executor.submit(_work)
-            resp = future.result()
+        from lmdeploy.pytorch.engine.request import _run_until_complete
+        resp = _run_until_complete(_work())
 
         session._response = resp
         session._step += resp.generate_token_len + resp.input_token_len
