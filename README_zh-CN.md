@@ -151,12 +151,14 @@ print(response)
 为了帮助用户更进一步了解 LMDeploy，我们准备了用户指南和进阶指南，请阅读我们的[文档](https://lmdeploy.readthedocs.io/zh-cn/latest/)：
 
 - 用户指南
-  - [推理pipeline](./docs/zh_cn/inference/pipeline.md)
-  - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
-  - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
-  - [推理服务](./docs/zh_cn/serving/api_server.md)
+  - [LLM 推理 pipeline](./docs/zh_cn/inference/pipeline.md)
+  - [VLM 推理 pipeline](./docs/zh_cn/inference/vl_pipeline.md)
+  - [LLM 推理服务](./docs/zh_cn/serving/api_server.md)
+  - [VLM 推理服务](./docs/zh_cn/serving/api_server_vl.md)
   - [模型量化](./docs/zh_cn/quantization)
 - 进阶指南
+  - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
+  - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
   - [自定义对话模板](./docs/zh_cn/advance/chat_template.md)
   - [支持新模型](./docs/zh_cn/advance/pytorch_new_model.md)
   - gemm tuning

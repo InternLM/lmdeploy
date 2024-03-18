@@ -150,12 +150,14 @@ Please overview [getting_started](./docs/en/get_started.md) section for the basi
 For detailed user guides and advanced guides, please refer to our [tutorials](https://lmdeploy.readthedocs.io/en/latest/):
 
 - User Guide
-  - [Inference pipeline](./docs/en/inference/pipeline.md)
-  - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
-  - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
-  - [Serving](docs/en/serving/api_server.md)
+  - [LLM Inference pipeline](./docs/en/inference/pipeline.md)
+  - [VLM Inference pipeline](./docs/en/inference/vl_pipeline.md)
+  - [LLM Serving](docs/en/serving/api_server.md)
+  - [VLM Serving](docs/en/serving/api_server_vl.md)
   - [Quantization](docs/en/quantization)
 - Advance Guide
+  - [Inference Engine - TurboMind](docs/en/inference/turbomind.md)
+  - [Inference Engine - PyTorch](docs/en/inference/pytorch.md)
   - [Customize chat templates](docs/en/advance/chat_template.md)
   - [Add a new model](docs/en/advance/pytorch_new_model.md)
   - gemm tuning
