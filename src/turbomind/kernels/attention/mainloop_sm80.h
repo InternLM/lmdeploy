@@ -31,6 +31,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     using GmemIterK_ = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK, 0>;
     using GmemIterV_ = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV, 1>;
 
+    /// TODO: hide this behind a SFINAE gate so that `*KVp` stuff won't be needed for non-quantized impls
     using CombinedIterK =
         CombinedIterator<GmemIterK_, Sm80GmemIterator<T, typename Impl::ThreadMapKVp, typename Impl::SmemLayoutKVp, 2>>;
     using CombinedIterV =

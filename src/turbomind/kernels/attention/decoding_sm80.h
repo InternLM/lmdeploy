@@ -6,78 +6,6 @@
 
 namespace turbomind::attention {
 
-namespace sm80_decoding {
-
-template<class T, class Layout, int WARP_S, int K, int M>
-struct SmemIterK: BaseSmemIterator<T, Layout> {
-    using Base = BaseSmemIterator<T, Layout>;
-    using Base::Base;
-    using Base::smem_;
-    __device__ void Load(Array<T, 8> (&frag_K)[M], int k, int offset)
-    {
-        const int warp_id  = threadIdx.x / WARP_SIZE;
-        const int lane_id  = threadIdx.x % WARP_SIZE;
-        const int offset_s = lane_id % 16 + warp_id * WARP_S;
-        const int offset_c = lane_id / 16 * 8;
-        auto      uint_ptr = 0;  //  cast_smem_ptr_to_uint(smem_);
-        PRAGMA_UNROLL
-        for (int m = 0; m < M; ++m) {
-            const int s = m * 16 + offset_s;  // Q
-            const int c = k * 16 + offset_c;  // D
-            static_assert(sizeof(frag_K[m]) == sizeof(Array<uint32_t, 4>));
-            ldsm_x4((Array<uint32_t, 4>&)frag_K[m], uint_ptr + sizeof(T) * (offset + Layout::apply(s, c)));
-        }
-    }
-};
-
-#if 0
-template<class T, class Layout, int WARP_S, int K, int M>
-struct SmemIterV: BaseSmemIterator<T, Layout> {
-    using Base = BaseSmemIterator<T, Layout>;
-    using Base::Base;
-    using Base::smem_;
-    __device__ void Load(Array<T, 8> (&frag_V)[M], int k, int offset)
-    {
-        const int warp_id  = threadIdx.x / WARP_SIZE;
-        const int lane_id  = threadIdx.x % WARP_SIZE;
-        const int offset_s = lane_id / 16 * 8 + lane_id % 8 + warp_id * WARP_S;
-        const int offset_c = lane_id % 16 / 8 * 8;
-        auto      uint_ptr = 0;  // cast_smem_ptr_to_uint(smem_);
-        PRAGMA_UNROLL
-        for (int m = 0; m < M; ++m) {
-            const int s = k * 16 + offset_s;  // S
-            const int c = m * 16 + offset_c;  // D
-            static_assert(sizeof(frag_V[m]) == sizeof(Array<uint32_t, 4>));
-            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[m], uint_ptr + sizeof(T) * (offset + Layout::apply(s, c)));
-        }
-    }
-};
-#endif
-
-template<class T, class Layout, int WARP_S, int K, int M>
-struct SmemIterV: BaseSmemIterator<T, Layout> {
-    using Base = BaseSmemIterator<T, Layout>;
-    using Base::Base;
-    using Base::smem_;
-    __device__ void Load(Array<T, 8> (&frag_V)[K], int m, int offset)
-    {
-        const int warp_id  = threadIdx.x / WARP_SIZE;
-        const int lane_id  = threadIdx.x % WARP_SIZE;
-        const int offset_s = lane_id / 16 * 8 + lane_id % 8 + warp_id * WARP_S;
-        const int offset_c = lane_id % 16 / 8 * 8;
-        auto      uint_ptr = 0;  // cast_smem_ptr_to_uint(smem_);
-        PRAGMA_UNROLL
-        for (int k = 0; k < K; ++k) {
-            const int s = k * 16 + offset_s;  // S
-            const int c = m * 16 + offset_c;  // D
-            static_assert(sizeof(frag_V[k]) == sizeof(Array<uint32_t, 4>));
-            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[k], uint_ptr + sizeof(T) * (offset + Layout::apply(s, c)));
-        }
-    }
-};
-
-}  // namespace sm80_decoding
-
 template<class T_,
          class Tkv_,
          int CTA_H_,
@@ -94,11 +22,12 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
 
     using Arch = Sm80_16816;
 
+    static constexpr int kQuantKV = !std::is_same_v<T, Tkv>;
+
     static constexpr int CTA_H = CTA_H_;
     static constexpr int CTA_Q = CTA_Q_;
     static constexpr int CTA_S = CTA_S_;
 
-    static_assert(CTA_H == 8);
     static_assert(CTA_Q == 1);
 
     static constexpr int WARP_H = WARP_H_;
@@ -145,23 +74,20 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using SmemLayoutQ = SmemLayoutV2<CTA_H, HeadDim, CTA_H, HeadDim, Swizzle<3, 3, 4>>;
+    static constexpr int CTA_H1 = (CTA_H + OP_N - 1) / OP_N * OP_N;
+
+    using SmemLayoutQ = SmemLayoutV2<CTA_H1, HeadDim, CTA_H1, HeadDim, Swizzle<3, 3, 4>>;
     using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
     using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>;
 
-    using SmemIterQ = T*;
-    using SmemIterP = T*;
-    using SmemIterK = sm80_decoding::SmemIterK<Tkv, SmemLayoutK, WARP_S, K_K, K_M>;
-    using SmemIterV = sm80_decoding::SmemIterV<Tkv, SmemLayoutV, WARP_S, V_K, V_M>;
+    using SmemLayoutKVp = SmemLayoutV2<CTA_S, 2, CTA_S, 2, Identity>;
+
+    using PointerKV = get_pointer_type<Tkv>;
 
     union SharedStorage {
         __align__(16) T Q[SmemLayoutQ::kSize];
 
-        __align__(16) Tkv KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];
-        struct {
-            __align__(16) Tkv K[Stages == 2 ? SmemLayoutK::kSize : 1];
-            __align__(16) Tkv V[Stages == 2 ? SmemLayoutV::kSize : 1];
-        };
+        __align__(16) Array<Tkv, Stages * SmemLayoutK::kSize> KV;
 
         struct {
             __align__(16) SmemM M;
@@ -169,20 +95,38 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
             __align__(16) SmemO O;
         };
 
-        __align__(16) float O1[CTA_H][kHeadDim];
+        __align__(16) float O1[CTA_H1][kHeadDim];
 
         T P[1];
     };
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
-    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H1, 8, kWarpCount>;
+    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 128 / bitsof<Tkv>, kWarpCount>;
+    // `WARP_SIZE / WARP_S` is chosen to achieve minimum kIterS w/o introducing partial S iter
+    using ThreadMapKVp = RakedThreadMap<2, CTA_S, 2, kWarpCount, WARP_SIZE / WARP_S>;
 
     static constexpr int kBatchK = ThreadMapKV::kIterS;
     static constexpr int kBatchV = ThreadMapKV::kIterS;
 
     static constexpr bool kDeferReduceL = true;
 
-    __device__ static void Sync() {}
+    __device__ static void Sync()
+    {
+        if constexpr (kQuantKV) {  // Thread layout of KV & KVp is different within warp boundary
+            __syncwarp();
+        }
+    }
+
+    template<class GmemIterK, class GmemIterV>
+    __device__ static void SetSmemKV(GmemIterK& gmem_K, GmemIterV& gmem_V, SharedStorage& storage, bool offset_kv)
+    {
+        static_assert(!kQuantKV, "not implemented");
+
+        int pred = offset_kv;
+
+        gmem_K.SetSmem(storage.KV.data());
+        gmem_V.SetSmem(storage.KV.data() + pred * SmemLayoutK::kSize);
+    }
 
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)
@@ -237,29 +181,71 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
         }
     }
 
-    template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&     smem_Q,
-                                     SmemK&     smem_K,
-                                     FragQ&     frag_Q,
-                                     FragK&     frag_K,
-                                     FragS&     frag_S,
-                                     int        offset,
-                                     Prefetch&& prefetch,
-                                     Preload&&  preload)
+    struct StateQK {
+        PointerKV smem_K;
+        FragQ     frag_Q;
+        FragK     frag_K;
+
+        __device__ StateQK(SharedStorage& storage, FragQ frag_Q_)
+        {
+            smem_K = storage.KV.data();
+            static_assert(!kUseSmemQ, "not implemented");
+            PRAGMA_UNROLL
+            for (int n = 0; n < K_N; ++n) {
+                PRAGMA_UNROLL
+                for (int k = 0; k < K_K; ++k) {
+                    frag_Q[n][k] = frag_Q_[n][k];
+                }
+            }
+        }
+
+        __device__ void Load(int k, int pipe_iter)
+        {
+            const int warp_id  = threadIdx.x / WARP_SIZE;
+            const int lane_id  = threadIdx.x % WARP_SIZE;
+            const int offset_s = lane_id % 16 + warp_id * WARP_S;
+            const int offset_c = lane_id / 16 * 8;
+            auto      uint_ptr = 0;  //  cast_smem_ptr_to_uint(smem_);
+            PRAGMA_UNROLL
+            for (int m = 0; m < K_M; ++m) {
+                const int s = m * 16 + offset_s;  // Q
+                const int c = k * 16 + offset_c;  // D
+                static_assert(sizeof(frag_K[k][m]) == sizeof(Array<uint32_t, 4>));
+                ldsm_x4((Array<uint32_t, 4>&)frag_K[k][m],
+                        uint_ptr + sizeof(T) * (pipe_iter * SmemLayoutK::kSize + SmemLayoutK::apply(s, c)));
+            }
+        }
+
+        __device__ void Transform(int n)
+        {
+            // pass
+        }
+    };
+
+    template<class Prefetch, class Preload>
+    __device__ static void
+    ComputeQK(StateQK state_QK, FragS& frag_S, int offset, Prefetch&& prefetch, Preload&& preload)
     {
+        if constexpr (K_K == 1) {
+            ((Prefetch&&)prefetch)(0);
+        }
+
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
-                smem_K.Load(frag_K[k + 1], k + 1, offset);
+                state_QK.Load(k + 1, offset);
             }
             else {
                 ((Preload&&)preload)();
             }
+
+            state_QK.Transform(k);
+
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < K_N; ++n) {
-                    mma_m16n8k16_row_col(frag_S[m][n], frag_K[k][m], frag_Q[n][k], frag_S[m][n]);
+                    mma_m16n8k16_row_col(frag_S[m][n], state_QK.frag_K[k][m], state_QK.frag_Q[n][k], frag_S[m][n]);
                 }
             }
             if (k < K_K - 1) {
@@ -271,29 +257,59 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
         }
     }
 
-    template<class SmemP, class SmemV, class Prefetch, class Preload>
-    __device__ static void ComputePV(SmemP&,
-                                     SmemV&     smem_V,
-                                     FragP&     frag_P,
-                                     FragV&     frag_V,
-                                     FragO&     frag_O,
-                                     int        offset,
-                                     Prefetch&& prefetch,
-                                     Preload&&  preload)
+    struct StatePV {
+        PointerKV smem_V;
+        FragP     frag_P;
+        FragV     frag_V;
+
+        __device__ StatePV(SharedStorage& storage)
+        {
+            smem_V = storage.KV.data();
+        }
+
+        __device__ void Load(int m, int pipe_iter)
+        {
+            const int warp_id  = threadIdx.x / WARP_SIZE;
+            const int lane_id  = threadIdx.x % WARP_SIZE;
+            const int offset_s = lane_id / 16 * 8 + lane_id % 8 + warp_id * WARP_S;
+            const int offset_c = lane_id % 16 / 8 * 8;
+            auto      uint_ptr = 0;  // cast_smem_ptr_to_uint(smem_);
+            PRAGMA_UNROLL
+            for (int k = 0; k < V_K; ++k) {
+                const int s = k * 16 + offset_s;  // S
+                const int c = m * 16 + offset_c;  // D
+                static_assert(sizeof(frag_V[m][k]) == sizeof(Array<uint32_t, 4>));
+                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[m][k],
+                              uint_ptr + sizeof(T) * (pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(s, c)));
+            }
+        }
+
+        __device__ void Transform(int n)
+        {
+            // pass
+        }
+    };
+
+    template<class Prefetch, class Preload>
+    __device__ static void
+    ComputePV(StatePV state_PV, FragO& frag_O, int offset, Prefetch&& prefetch, Preload&& preload)
     {
         PRAGMA_UNROLL
         for (int m = 0; m < V_M; ++m) {
             if (m < V_M - 1) {
-                smem_V.Load(frag_V[m + 1], m + 1, offset);
+                state_PV.Load(m + 1, offset);
             }
             else {
                 ((Preload&&)preload)();
             }
+
+            state_PV.Transform(m);
+
             PRAGMA_UNROLL
             for (int k = 0; k < V_K; ++k) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < V_N; ++n) {
-                    mma_m16n8k16_row_col(frag_O[m][n], frag_V[m][k], frag_P[k][n], frag_O[m][n]);
+                    mma_m16n8k16_row_col(frag_O[m][n], state_PV.frag_V[m][k], state_PV.frag_P[k][n], frag_O[m][n]);
                 }
             }
             if (m < V_M - 1) {
@@ -560,7 +576,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
 
         __syncthreads();
 
-        using Map = RakedThreadMap<kHeadDim, CTA_H, 4, kWarpCount>;
+        using Map = RakedThreadMap<kHeadDim, CTA_H1, 4, kWarpCount>;
         Array<float, 4> tmp_O[Map::kIterS][Map::kIterC];
         const int2      offset = Map::get_offset(warp_id, lane_id);
         PRAGMA_UNROLL
