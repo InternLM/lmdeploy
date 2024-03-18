@@ -101,7 +101,7 @@ def check_vl_llm(config: dict) -> bool:
 
 def get_task(model_path: str):
     """get pipeline type and pipeline class from model config."""
-    if os.path.join(model_path, 'triton_models', 'weights'):
+    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
     config = get_hf_config_content(model_path)
