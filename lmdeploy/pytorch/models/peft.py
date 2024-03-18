@@ -198,8 +198,8 @@ class LoRALinear(torch.nn.Module):
             if len(lora_input.ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
-                    q_start_loc=lora_input.q_start_loc,
-                    q_seqlens=lora_input.q_seqlens,
+                    b_start_loc=lora_input.q_start_loc,
+                    b_seq_lens=lora_input.q_seqlens,
                     adapter_ids=lora_input.adapter_ids,
                     ranks=lora_input.ranks,
                     world_size=world_size,
@@ -230,8 +230,8 @@ class LoRALinear(torch.nn.Module):
             if len(lora_input.ranks) > 1:
                 gathered_xa = rearange_all_gather(
                     gathered_xa,
-                    q_start_loc=lora_input.q_start_loc,
-                    q_seqlens=lora_input.q_seqlens,
+                    b_start_loc=lora_input.q_start_loc,
+                    b_seq_lens=lora_input.q_seqlens,
                     adapter_ids=lora_input.adapter_ids,
                     ranks=lora_input.ranks,
                     world_size=world_size,
