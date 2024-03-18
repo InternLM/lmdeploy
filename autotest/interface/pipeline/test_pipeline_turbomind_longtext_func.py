@@ -69,6 +69,7 @@ class TestPipelineLongtextFunc:
         backend_config = TurbomindEngineConfig(rope_scaling_factor=2.0,
                                                session_len=210000,
                                                tp=tp_config)
+
         pipe = pipeline(model_path, backend_config=backend_config)
         prompt = '今 天 心 ' * int(200000 / 6)
 
