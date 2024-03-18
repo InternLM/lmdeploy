@@ -103,6 +103,7 @@ class Session:
         resp.finish_reason = step.finish_reason
         return resp
 
+    @property
     def response(self) -> Response:
         """return response."""
         return self._response

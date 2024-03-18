@@ -159,7 +159,7 @@ pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
 gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.8)
 sess = pipe.chat(('describe this image', image), gen_config=gen_config)
-print(sess.response().text)
+print(sess.response.text)
 sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)
-print(sess.response().text)
+print(sess.response.text)
 ```
