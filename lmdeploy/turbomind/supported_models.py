@@ -36,7 +36,9 @@ _SUPPORTED_ARCHS = dict(
     # Qwen 7B-72B, Qwen-VL-7B
     QWenLMHeadModel=True,
     # Qwen1.5 7B-72B
-    Qwen2ForCausalLM=False)
+    Qwen2ForCausalLM=False,
+    # llava
+    LlavaLlamaForCausalLM=True)
 
 
 def is_supported(model_path: str):

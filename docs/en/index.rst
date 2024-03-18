@@ -40,16 +40,15 @@ Welcome to LMDeploy's tutorials!
 
    inference/pipeline.md
    inference/vl_pipeline.md
-   inference/turbomind.md
-   inference/turbomind_config.md
-   inference/pytorch.md
+
 
 .. _serving:
 .. toctree::
    :maxdepth: 1
    :caption: serving
 
-   serving/restful_api.md
+   serving/api_server.md
+   serving/api_server_vl.md
    serving/gradio.md
    serving/proxy_server.md
 
@@ -66,6 +65,8 @@ Welcome to LMDeploy's tutorials!
    :maxdepth: 1
    :caption: Advanced Guide
 
+   inference/turbomind.md
+   inference/pytorch.md
    advance/pytorch_new_model.md
    advance/long_context.md
    advance/chat_template.md
