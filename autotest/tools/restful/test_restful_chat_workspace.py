@@ -5,8 +5,8 @@ from time import sleep, time
 import allure
 import pytest
 from pytest import assume
-from utils.config_utils import (get_all_model_list,
-                                get_cuda_prefix_by_workerid, get_workerid)
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_torch_model_list, get_workerid)
 from utils.get_run_config import get_command_with_extra
 from utils.run_client_chat import command_line_test
 from utils.run_restful_chat import (get_model, health_check, interactive_test,
@@ -96,7 +96,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num
-    } for item in get_all_model_list(tp_num) if 'chat' in item.lower()]
+    } for item in get_torch_model_list(tp_num) if 'chat' in item.lower()]
 
 
 @pytest.mark.order(7)
