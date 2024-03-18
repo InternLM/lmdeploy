@@ -45,6 +45,7 @@ class SubCliServe:
         # chat template args
         ArgumentHelper.meta_instruction(parser)  # TODO remove
         ArgumentHelper.chat_template(parser)
+        ArgumentHelper.cap(parser)
 
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
