@@ -24,10 +24,13 @@ template<class T_,
          int HeadDim,
          int Stages>
 struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
+
+    using Arch = Sm70_Simt;
+
     using T   = T_;
     using Tkv = Tkv_;
 
-    using Arch = Sm70_Simt;
+    static constexpr int kQuantKV = !std::is_same_v<T, Tkv>;
 
     static constexpr int CTA_H = CTA_H_;
     static constexpr int CTA_Q = CTA_Q_;
@@ -69,19 +72,36 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     static_assert(WARP_S % OP_S == 0);
     static_assert(HeadDim % OP_D == 0);
 
-    using Tqk = std::conditional_t<bitsof<Tkv> == 16, float, T>;
+    using Tqk = std::conditional_t<sizeof(Tkv) == 2, float, T>;
     using Tpv = Tqk;
 
+    struct RakedD {
+        static constexpr int S_D_thr = VEC * K_K;
+        static constexpr int S_S_thr = 1;
+        static constexpr int S_D     = VEC;
+        static constexpr int S_S     = T_S;
+        static constexpr int LDS     = K_K;
+    };
+
+    struct LinearD {
+        static constexpr int S_D_thr = VEC;
+        static constexpr int S_S_thr = 1;
+        static constexpr int S_D     = VEC * T_D;
+        static constexpr int S_S     = T_S;
+        static constexpr int LDS     = 1;
+    };
+
+    using ThreadMap = std::conditional_t<sizeof(Tkv) == 2, LinearD, RakedD>;
+
     // Strides of thread index
-    static constexpr int S_D_thr = VEC * K_K;
-    static constexpr int S_S_thr = 1;
-
+    static constexpr int S_D_thr = ThreadMap::S_D_thr;
+    static constexpr int S_S_thr = ThreadMap::S_S_thr;
     // Strides of array index
-    static constexpr int S_D = VEC;
-    static constexpr int S_S = T_S;
-
-    static constexpr int LDS_K = bitsof<Tkv> == 4 ? 2 : 1;
-    static constexpr int LDS_V = LDS_K;
+    static constexpr int S_D = ThreadMap::S_D;
+    static constexpr int S_S = ThreadMap::S_S;
+    // LDS vec count
+    static constexpr int LDS_K = ThreadMap::LDS;
+    static constexpr int LDS_V = ThreadMap::LDS;
 
     static_assert(LDS_K <= K_K);
 
@@ -160,7 +180,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
 
     __device__ static void Sync()
     {
-        if constexpr (!std::is_same_v<T, Tkv>) {  // Thread layout of KV & KVp is different within warp boundary
+        if constexpr (kQuantKV) {  // Thread layout of KV & KVp is different within warp boundary
             __syncwarp();
         }
     }
@@ -169,13 +189,13 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     __device__ static void SetSmemKV(GmemIterK& gmem_K, GmemIterV& gmem_V, SharedStorage& storage, bool offset_kv)
     {
         int pred = offset_kv;
-        if constexpr (std::is_same_v<T, Tkv>) {
-            gmem_K.SetSmem(storage.KV.data());
-            gmem_V.SetSmem(storage.KV.data() + pred * SmemLayoutK::kSize);
-        }
-        else {
+        if constexpr (kQuantKV) {
             gmem_K.SetSmem(storage.KV.data(), storage.KVp);
             gmem_V.SetSmem(storage.KV.data() + pred * SmemLayoutK::kSize, storage.KVp + pred * SmemLayoutKVp::kSize);
+        }
+        else {
+            gmem_K.SetSmem(storage.KV.data());
+            gmem_V.SetSmem(storage.KV.data() + pred * SmemLayoutK::kSize);
         }
     }
 
@@ -262,7 +282,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             const int offset_s = lane_id / T_D * S_S_thr + warp_id * WARP_S;
             const int offset_c = lane_id % T_D * S_D_thr;
 
-            if (!std::is_same_v<T, Tkv> && n == 0) {
+            if (kQuantKV && n == 0) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < K_N; ++n) {
                     const int si = n * S_S + offset_s;
@@ -361,7 +381,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             const int offset_s = lane_id / T_D * S_S_thr + warp_id * WARP_S;
             const int offset_c = lane_id % T_D * S_D_thr;
 
-            if (!std::is_same_v<T, Tkv> && k == 0) {
+            if (kQuantKV && k == 0) {
                 PRAGMA_UNROLL
                 for (int k = 0; k < V_K; ++k) {
                     const int si = k * S_S + offset_s;
