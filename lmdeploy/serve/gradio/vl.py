@@ -28,6 +28,14 @@ else:
 
 @dataclass
 class Session:
+    """chat session.
+
+    Args:
+        _session_id (int): session_id for internal use.
+        _message (List[Tuple[Any, str]]): chat history for internal use.
+        _step (int): the offset of the k/v cache for internal use.
+    """
+
     _count = count()
     _session_id: int = None
     _message: List[Tuple[str, str]] = field(default_factory=list)
