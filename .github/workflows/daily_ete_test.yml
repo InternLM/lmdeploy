@@ -111,6 +111,13 @@ jobs:
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
+          dpkg -i /root/packages/allure_2.24.1-1_all.deb
+          rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v3
         with:
@@ -238,7 +245,7 @@ jobs:
 
 
   test_triton:
-    if: ${{github.event_name == 'schedule' || !cancelled() && inputs.triton_regression}} 
+    if: ${{github.event_name == 'schedule' || !cancelled() && inputs.triton_regression}}
     runs-on: [self-hosted, linux-a100-2]
     needs: test_tools
     timeout-minutes: 30
@@ -383,6 +390,13 @@ jobs:
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
+          dpkg -i /root/packages/allure_2.24.1-1_all.deb
+          rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v3
         with:
