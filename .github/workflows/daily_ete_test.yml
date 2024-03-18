@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Whether start a restful api regression'
         type: boolean
-        default: true
+        default: false
       triton_regression:
         required: true
         description: 'Whether start a triton server api regression'
