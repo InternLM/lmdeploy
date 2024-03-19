@@ -13,6 +13,7 @@
 #undef TORCH_CUDA
 
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/flash_attention/flash_attention.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/allocator.h"
