@@ -82,10 +82,18 @@ def autoget_backend_config(
     else:
         config = TurbomindEngineConfig()
     if backend_config is not None:
-        data = asdict(backend_config)
-        for k, v in data.items():
-            if v and hasattr(config, k):
-                setattr(config, k, v)
+        if type(backend_config) == type(config):
+            return backend_config
+        else:
+            data = asdict(backend_config)
+            for k, v in data.items():
+                if v and hasattr(config, k):
+                    setattr(config, k, v)
+            # map attributes with different names
+            if type(backend_config) is TurbomindEngineConfig:
+                config.block_size = backend_config.cache_block_seq_len
+            else:
+                config.cache_block_seq_len = backend_config.block_size
     return config
 
 
