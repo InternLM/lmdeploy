@@ -537,9 +537,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             for (int w = 0; w < kWarpCntS - 1; ++w) {
                 frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS]);
             }
-            // if (threadIdx.x == 0) {
-            //     printf("M %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_M[m][0]);
-            // }
+            if (threadIdx.x == 0) {
+                printf("M %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_M[m][0]);
+            }
         }
 
         ///////////////////////////////////////////////////////////////////////////
@@ -622,9 +622,9 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             for (int w = 0; w < kWarpCntS - 1; ++w) {
                 frag_L[m][0] += storage.L[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS];
             }
-            // if (threadIdx.x == 0) {
-            //     printf("L %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_L[m][0]);
-            // }
+            if (threadIdx.x == 0) {
+                printf("L %d %f\n", m * OP_H + blockIdx.x * CTA_H, frag_L[m][0]);
+            }
         }
     }
 

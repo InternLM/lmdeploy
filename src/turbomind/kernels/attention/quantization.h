@@ -2,6 +2,7 @@
 
 #include "src/turbomind/kernels/attention/array_ops.h"
 #include "src/turbomind/kernels/attention/data_type.h"
+#include "src/turbomind/kernels/attention/smem_layout.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 
 #include <cuda_bf16.h>
@@ -76,6 +77,25 @@ inline __device__ Array<half, 4> cvt_f16x4_u8(const Array<uint8_t, 4>& src)
     Array<uint32_t, 2> dst;
     dst[0] = __byte_perm((uint32_t&)src, f16_magic, 0x7170);
     dst[1] = __byte_perm((uint32_t&)src, f16_magic, 0x7372);
+    if constexpr (norm) {
+        for (int i = 0; i < 4; ++i) {
+            ((Array<half, 4>&)dst)[i] -= __ushort_as_half(0x6400U);
+        }
+    }
+    return (Array<half, 4>&)dst;
+}
+
+template<bool norm = true>
+inline __device__ Array<half, 4> cvt_f16x2x2_u8_trans(const Array<uint8_t, 4>& src)
+{
+    static constexpr uint32_t f16_magic = 0x64000000;
+    // 01234567 01234567
+    // SEEEEEMM MMMMMMMM
+    //      1MM XXXXXXXX
+    // (1 + x/2^10) * 2^(e-15) -> e-15=10 -> e=25=16+8+1 -> 01100100b -> 0x64
+    Array<uint32_t, 2> dst;
+    dst[0] = __byte_perm((uint32_t&)src, f16_magic, 0x7270);
+    dst[1] = __byte_perm((uint32_t&)src, f16_magic, 0x7371);
     if constexpr (norm) {
         for (int i = 0; i < 4; ++i) {
             ((Array<half, 4>&)dst)[i] -= __ushort_as_half(0x6400U);

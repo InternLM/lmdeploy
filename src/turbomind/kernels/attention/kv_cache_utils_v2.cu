@@ -343,7 +343,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
                     Ldg(param_K[s], k_param);
                     Ldg(param_V[s], v_param);
                     // if (offset.x == 0) {
-                    //     printf("dst %d %f %f\n", si, (float)param_K[s][0], (float)param_K[s][1]);
+                    //     printf("dst %d %f %f\n", si, (float)param_V[s][0], (float)param_V[s][1]);
                     // }
                 }
             });
