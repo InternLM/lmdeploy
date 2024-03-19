@@ -1,7 +1,18 @@
 # VLM 离线推理 pipeline
 
-LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](./pipeline.md) 类似。本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，通过若干示例，展示 VLM pipeline 的强大能力。
-首先，我们会展示 pipeline 最基础的用法，并在此基础上，通过引擎的配置和生成条件配置，逐步引出更多能力，比如模型并行、自定义上下文长度、随机采样等等。然后，针对多图、批量提示词等场景，给出对应的推理示例。
+LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](./pipeline.md) 类似。
+
+目前，VLM pipeline 支持以下模型：
+
+- [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
+- LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
+- [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
+
+我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型的支持。
+
+本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，展示 VLM pipeline 的用法。你将了解它的最基础用法，以及如何通过调整引擎参数和生成条件来逐步解锁更多高级特性，如张量并行，上下文窗口大小调整，随机采样，以及对话模板的定制。
+
+此外，我们还提供针对多图、批量提示词等场景的实际推理示例。
 
 ## "Hello, world" 示例
 
