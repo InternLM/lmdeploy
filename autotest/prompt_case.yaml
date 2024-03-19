@@ -59,7 +59,7 @@ chinese_poem_case:
             - "。"
         - len_g:
             5
-        - llama-2:
+        - llama2:
             - contain:
                 - poem
                 - poetry
@@ -133,7 +133,7 @@ traditional_chinese_case:
                 - 维多利亚港
                 - hong kong
                 - 香港
-        - llama-2:
+        - llama2:
             - contain:
                 - victoria
                 - 維多利亞港

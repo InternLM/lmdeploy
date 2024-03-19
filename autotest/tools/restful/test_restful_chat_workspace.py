@@ -5,8 +5,8 @@ from time import sleep, time
 import allure
 import pytest
 from pytest import assume
-from utils.config_utils import (get_all_model_list,
-                                get_cuda_prefix_by_workerid, get_workerid)
+from utils.config_utils import (get_cuda_prefix_by_workerid,
+                                get_turbomind_model_list, get_workerid)
 from utils.get_run_config import get_command_with_extra
 from utils.run_client_chat import command_line_test
 from utils.run_restful_chat import (get_model, health_check, interactive_test,
@@ -18,7 +18,7 @@ DEFAULT_PORT = 23333
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
-    model_path = config.get('model_path')
+    dst_path = config.get('dst_path')
     log_path = config.get('log_path')
 
     param = request.param
@@ -35,23 +35,13 @@ def prepare_environment(request, config, worker_id):
     else:
         port = DEFAULT_PORT + worker_num
 
-    cmd = ['lmdeploy serve api_server ' + model_path + '/' + model]
-
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 '/' + model + ' --server-port ' + str(port),
+    cmd = get_command_with_extra('lmdeploy serve api_server ' + dst_path +
+                                 '/workspace_' + model + ' --server-port ' +
+                                 str(port),
                                  config,
                                  model,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
-
-    if 'kvint8' in model:
-        cmd += ' --quant-policy 4'
-        if 'w4' in model or '4bits' in model:
-            cmd += ' --model-format awq'
-        else:
-            cmd += ' --model-format hf'
-    if 'w4' in model or '4bits' in model:
-        cmd += ' --model-format awq'
 
     start_log = os.path.join(log_path,
                              'start_restful_' + model.split('/')[1] + '.log')
@@ -97,7 +87,7 @@ def getModelList(tp_num):
         'model': item,
         'cuda_prefix': None,
         'tp_num': tp_num
-    } for item in get_all_model_list(tp_num) if 'chat' in item.lower()]
+    } for item in get_turbomind_model_list(tp_num) if 'chat' in item.lower()]
 
 
 @pytest.mark.order(7)
