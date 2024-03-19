@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Whether start a restful api regression'
         type: boolean
-        default: false
+        default: true
       triton_regression:
         required: true
         description: 'Whether start a triton server api regression'
@@ -58,18 +58,6 @@ jobs:
       PLAT_NAME: manylinux2014_x86_64
       DOCKER_TAG: cuda11.8
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
-          tool-cache: false
-          docker-images: false
-          # All of these default to true, but feel free to set to "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
@@ -131,7 +119,7 @@ jobs:
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
       - name: Install lmdeploy
         run: |
-          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets matplotlib
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl

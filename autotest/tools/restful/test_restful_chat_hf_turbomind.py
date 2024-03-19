@@ -48,7 +48,7 @@ def prepare_environment(request, config, worker_id):
             cmd += ' --model-format awq'
         else:
             cmd += ' --model-format hf'
-    if 'w4' in model or '4bits' in model:
+    elif 'w4' in model or '4bits' in model:
         cmd += ' --model-format awq'
 
     start_log = os.path.join(log_path,
