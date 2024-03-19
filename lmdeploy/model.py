@@ -869,6 +869,45 @@ class Deepseek(BaseChatTemplate):
             return 'deepseek'
 
 
+@MODELS.register_module(name='deepseek-coder')
+class DeepSeek(BaseChatTemplate):
+    """Chat template of deepseek model."""
+
+    def __init__(
+            self,
+            session_len=4096,
+            system='',
+            meta_instruction="""You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n""",  # noqa: E501
+            eosys='',
+            user='### Instruction:\n',
+            eoh='\n',
+            assistant='### Response:\n',
+            separator='\n',
+            stop_words=['<|EOT|>'],
+            **kwargs):
+        super().__init__(session_len=session_len,
+                         system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-coder' in path:
+            return 'deepseek-coder'
+
+
 @MODELS.register_module(name=['yi-vl'])
 class YiVL(BaseChatTemplate):
 
