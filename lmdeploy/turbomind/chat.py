@@ -75,7 +75,6 @@ def main(model_path: str,
         model_path,
         model_name=model_name,
         engine_config=engine_cfg,
-        tp=tp,
         capability=cap,
         chat_template_config=chat_template_cfg,
         **kwargs)
