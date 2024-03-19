@@ -179,6 +179,17 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
+## Citation
+
+```bibtex
+@misc{2023lmdeploy,
+    title={LMDeploy: A Toolkit for Compressing, Deploying, and Serving LLM},
+    author={LMDeploy Contributors},
+    howpublished = {\url{https://github.com/InternLM/lmdeploy}},
+    year={2023}
+}
+```
+
 ## License
 
 This project is released under the [Apache 2.0 license](LICENSE).

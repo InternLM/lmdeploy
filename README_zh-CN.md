@@ -180,6 +180,17 @@ print(response)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [DeepSpeed-MII](https://github.com/microsoft/DeepSpeed-MII)
 
-## License
+## 引用
+
+```bibtex
+@misc{2023lmdeploy,
+    title={LMDeploy: A Toolkit for Compressing, Deploying, and Serving LLM},
+    author={LMDeploy Contributors},
+    howpublished = {\url{https://github.com/InternLM/lmdeploy}},
+    year={2023}
+}
+```
+
+## 开源许可证
 
 该项目采用 [Apache 2.0 开源许可证](LICENSE)。
