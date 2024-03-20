@@ -1,8 +1,18 @@
 # VLM Offline Inference Pipeline
 
-LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the the Large Language Model (LLM) inference [pipeline](./pipeline.md).
-In this article, we will take the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as an example, exhibiting the powerful capabilities of the VLM pipeline through various examples.
-First, we will demonstrate the most basic utilization of the pipeline and progressively unveil additional functionalities by configuring the engine parameters and generation arguments, such as tensor parallelism, setting context window size, and random sampling, customizing chat template and so on. Next, we will provide inference examples for scenarios involving multiple images, batch prompts etc.
+LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the Large Language Model (LLM) inference [pipeline](./pipeline.md).
+
+Currently, it supports the following models.
+
+- [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
+- LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
+- [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
+
+We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
+
+This article showcases the VLM pipeline using the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as a case study.
+You'll learn about the simplest ways to leverage the pipeline and how to gradually unlock more advanced features by adjusting engine parameters and generation arguments, such as tensor parallelism, context window sizing, random sampling, and chat template customization.
+Moreover, we will provide practical inference examples tailored to scenarios with multiple images, batch prompts etc.
 
 ## A 'Hello, world' example
 
@@ -89,7 +99,7 @@ print(response)
 
 ### Set chat template
 
-While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, liuhaotian/llava-v1.5-7b employs the 'vicuna' chat template, but the name 'vicuna' cannot be ascertained from the model's path. We can specify it by setting 'vicuna' to `ChatTemplateConfig` as follows:
+While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the 'vicuna' chat template, but the name 'vicuna' cannot be ascertained from the model's path. We can specify it by setting 'vicuna' to `ChatTemplateConfig` as follows:
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
@@ -143,4 +153,23 @@ image_urls=[
 prompts = [('describe this image', load_image(img_url)) for img_url in image_urls]
 response = pipe(prompts)
 print(response)
+```
+
+## Multi-turn conversation
+
+There are two ways to do the multi-turn conversations with the pipeline. One is to construct messages according to the format of OpenAI and use above introduced method, the other is to use the `pipeline.chat` interface.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
+from lmdeploy.vl import load_image
+
+pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+                backend_config=TurbomindEngineConfig(session_len=8192))
+
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
+gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.8)
+sess = pipe.chat(('describe this image', image), gen_config=gen_config)
+print(sess.response.text)
+sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)
+print(sess.response.text)
 ```

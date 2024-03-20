@@ -353,31 +353,22 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 
         // compute rope scaling factor
         if (r->start_flag) {
-            seq.rope_theta      = model_->attn_params_.rotary_embedding_base;
-            auto scaling_factor = 1.f;
-            if (r->inputs[rank_].isExist("rope_scaling_factor")) {  // runtime scaling factor
-                scaling_factor = r->inputs[rank_].getVal<float>("rope_scaling_factor");
-            }
-            else if (model_->attn_params_.rope_scaling_factor >= 1.f) {  // infer by `seq_len_limit`
-                scaling_factor   = model_->attn_params_.rope_scaling_factor;
-                auto max_seq_len = state.seq_len_limit[idx];
-                auto max_pos_emb = model_->attn_params_.max_position_embeddings;
-                if (max_seq_len > max_pos_emb) {
-                    scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
-                    // scaling_factor = std::max(exp2f(ceilf(log2f((float)max_seq_len / max_pos_emb) + 1.f))
-                    // - 1.f, 1.f);
+            seq.rope_theta = model_->attn_params_.rotary_embedding_base;
+            if (model_->attn_params_.use_dynamic_ntk) {
+                auto scaling_factor = model_->attn_params_.rope_scaling_factor;
+                if (scaling_factor >= 1.f) {  // infer by `seq_len_limit`
+                    auto max_seq_len = state.seq_len_limit[idx];
+                    auto max_pos_emb = model_->attn_params_.max_position_embeddings;
+                    if (max_seq_len > max_pos_emb) {
+                        scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
+                        float rope_dim = model_->attn_params_.rotary_embedding_dim;
+                        seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
+                        TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
+                                    (long)seq.id,
+                                    scaling_factor,
+                                    seq.rope_theta);
+                    }
                 }
-                else {
-                    scaling_factor = 1.f;
-                }
-            }
-            if (scaling_factor != 1.f) {
-                float rope_dim = model_->attn_params_.rotary_embedding_dim;
-                seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
-                TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                            (long)seq.id,
-                            scaling_factor,
-                            seq.rope_theta);
             }
         }
         state.h_rope_theta[idx] = seq.rope_theta;
@@ -565,8 +556,7 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
         // Prepare intermediate buffers
         h_cu_block_counts_[0] = 0;
 
-        auto k_ptrs = h_k_block_ptrs_;
-        auto v_ptrs = h_v_block_ptrs_;
+        auto block_ptrs = h_block_ptrs_;
 
         const int batch_size = state_->active_size;
 
@@ -579,19 +569,20 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
             FT_CHECK_WITH_INFO(h_cu_block_counts_[i + 1] <= sequence_manager_->max_block_count(),
                                std::to_string(h_cu_block_counts_[i + 1]));
 
-            k_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), k_ptrs, [&](int block_id) {
+            block_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), block_ptrs, [&](int block_id) {
                 return reinterpret_cast<uintptr_t>(sequence_manager_->GetKeyPtr(block_id));
             });
-            v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](int block_id) {
-                return reinterpret_cast<uintptr_t>(sequence_manager_->GetValPtr(block_id));
-            });
+            // v_ptrs = std::transform(seq.blocks.cbegin(), seq.blocks.cend(), v_ptrs, [&](int block_id) {
+            //     return reinterpret_cast<uintptr_t>(sequence_manager_->GetValPtr(block_id));
+            // });
         }
 
         static_assert(sizeof(uintptr_t) == sizeof(void*));
 
         Copy(h_cu_block_counts_, batch_size + 1, cu_block_counts_);
-        Copy(h_k_block_ptrs_, h_cu_block_counts_[batch_size], k_block_ptrs_);
-        Copy(h_v_block_ptrs_, h_cu_block_counts_[batch_size], v_block_ptrs_);
+        Copy(h_block_ptrs_, h_cu_block_counts_[batch_size], block_ptrs_);
+        // Copy(h_k_block_ptrs_, h_cu_block_counts_[batch_size], k_block_ptrs_);
+        // Copy(h_v_block_ptrs_, h_cu_block_counts_[batch_size], v_block_ptrs_);
     }
 
     const int batch_size = state_->active_size;
@@ -622,21 +613,11 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     Copy(state_->h_finished, batch_size, finished_buf_);
     Copy(state_->h_rope_theta, batch_size, rope_theta_);
 
-    // used for dispatching split-k decoding kernels
-    const int sum_seq_len =
-        std::accumulate(state_->h_context_length, state_->h_context_length + batch_size, -batch_size);
-    const int max_seq_len = *std::max_element(state_->h_context_length, state_->h_context_length + batch_size) - 1;
-
-    // TM_LOG_INFO(
-    //     "[init] batch_size = %d, max_ctx_len = %d, partial = %d", (int)batch_size, (int)max_context_len, partial);
-
     bool skip_init_sampling = std::equal(g.unique_ids.begin(),  //
                                          g.unique_ids.end() - g.partial,
                                          unique_ids.begin(),
                                          unique_ids.end() - partial);
 
-    g.sum_seq_len            = sum_seq_len;
-    g.max_seq_len            = max_seq_len;
     g.partial                = partial;
     g.partial_context_legnth = partial_len;
     g.unique_ids             = std::move(unique_ids);
@@ -730,14 +711,6 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     context_decoder_ids_buf_ =
         (int*)allocator_->reMalloc(context_decoder_ids_buf_, sizeof(int) * max_context_token_num_, false);
 
-    tmp_k_cache_buf_ = (T*)allocator_->reMalloc(
-        tmp_k_cache_buf_, sizeof(T) * max_context_token_num_ * local_kv_head_num * head_dim, false);
-    tmp_v_cache_buf_ = (T*)allocator_->reMalloc(
-        tmp_v_cache_buf_, sizeof(T) * max_context_token_num_ * local_kv_head_num * head_dim, false);
-
-    tmp_k_ptrs_ = (void**)allocator_->reMalloc(tmp_k_ptrs_, sizeof(void*) * batch_size, false);
-    tmp_v_ptrs_ = (void**)allocator_->reMalloc(tmp_v_ptrs_, sizeof(void*) * batch_size, false);
-
     decoder_input_buf_  = (T*)allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units, false);
     decoder_output_buf_ = (T*)allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units, false);
 
@@ -749,8 +722,7 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
     sequence_lengths_ = (int*)allocator_->reMalloc(sequence_lengths_, sizeof(int) * batchxbeam, false);
 
     cu_block_counts_ = (int*)allocator_->reMalloc(cu_block_counts_, sizeof(int) * (batch_size + 1));
-    k_block_ptrs_    = (uintptr_t*)allocator_->reMalloc(k_block_ptrs_, sizeof(uintptr_t) * max_block_count);
-    v_block_ptrs_    = (uintptr_t*)allocator_->reMalloc(v_block_ptrs_, sizeof(uintptr_t) * max_block_count);
+    block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_block_count);
 
     logits_buf_       = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
     local_logits_buf_ = (float*)allocator_->reMalloc(local_logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
@@ -768,12 +740,14 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len)
 template<typename T>
 void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
 {
-    d_stop_words_ = (int*)allocator_->reMalloc(d_stop_words_, sizeof(int) * max_batch_size * kMaxStopBadWordsLen, true);
-    d_bad_words_  = (int*)allocator_->reMalloc(d_bad_words_, sizeof(int) * max_batch_size * kMaxStopBadWordsLen, true);
+    d_stop_words_ =
+        (int*)allocator_->reMalloc(d_stop_words_, sizeof(int) * max_batch_size * 2 * kMaxStopBadWordsLen, true);
+    d_bad_words_ =
+        (int*)allocator_->reMalloc(d_bad_words_, sizeof(int) * max_batch_size * 2 * kMaxStopBadWordsLen, true);
     h_stop_words_ =
-        (int*)allocator_->reMalloc(h_stop_words_, sizeof(int) * max_batch_size * kMaxStopBadWordsLen, true, true);
+        (int*)allocator_->reMalloc(h_stop_words_, sizeof(int) * max_batch_size * 2 * kMaxStopBadWordsLen, true, true);
     h_bad_words_ =
-        (int*)allocator_->reMalloc(h_bad_words_, sizeof(int) * max_batch_size * kMaxStopBadWordsLen, true, true);
+        (int*)allocator_->reMalloc(h_bad_words_, sizeof(int) * max_batch_size * 2 * kMaxStopBadWordsLen, true, true);
 
     h_min_length_    = (int*)allocator_->reMalloc(h_min_length_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_k_ = (int*)allocator_->reMalloc(h_runtime_top_k_, sizeof(int) * max_batch_size, true, true);
@@ -820,15 +794,10 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size)
         h_input_length_buf_ =
             (int*)allocator_->reMalloc(h_input_length_buf_, sizeof(int) * max_batch_size, false, true);
 
-        h_tmp_k_ptrs_ = (void**)allocator_->reMalloc(h_tmp_k_ptrs_, sizeof(void*) * max_batch_size, false, true);
-        h_tmp_v_ptrs_ = (void**)allocator_->reMalloc(h_tmp_v_ptrs_, sizeof(void*) * max_batch_size, false, true);
-
         h_cu_block_counts_ =
             (int*)allocator_->reMalloc(h_cu_block_counts_, sizeof(int) * (max_batch_size + 1), false, true);
-        h_k_block_ptrs_ =
-            (uintptr_t*)allocator_->reMalloc(h_k_block_ptrs_, sizeof(uintptr_t) * max_block_count, false, true);
-        h_v_block_ptrs_ =
-            (uintptr_t*)allocator_->reMalloc(h_v_block_ptrs_, sizeof(uintptr_t) * max_block_count, false, true);
+        h_block_ptrs_ =
+            (uintptr_t*)allocator_->reMalloc(h_block_ptrs_, sizeof(uintptr_t) * max_block_count, false, true);
 
         for (auto& s : states_) {
             s.h_prompt_length =
@@ -858,11 +827,6 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&context_decoder_output_buf_);
         allocator_->free((void**)&context_decoder_ids_buf_);
 
-        allocator_->free((void**)&tmp_k_cache_buf_);
-        allocator_->free((void**)&tmp_v_cache_buf_);
-        allocator_->free((void**)&tmp_k_ptrs_);
-        allocator_->free((void**)&tmp_v_ptrs_);
-
         allocator_->free((void**)&decoder_input_buf_);
         allocator_->free((void**)&decoder_output_buf_);
 
@@ -874,8 +838,7 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&sequence_lengths_);
 
         allocator_->free((void**)&cu_block_counts_);
-        allocator_->free((void**)&k_block_ptrs_);
-        allocator_->free((void**)&v_block_ptrs_);
+        allocator_->free((void**)&block_ptrs_);
 
         allocator_->free((void**)&logits_buf_);
         allocator_->free((void**)&local_logits_buf_);
@@ -918,11 +881,8 @@ void LlamaBatch<T>::FreeBuffer()
             allocator_->free((void**)&s.output_ids);
             allocator_->free((void**)&s.curand_state);
         }
-        allocator_->free((void**)&h_tmp_k_ptrs_, true);
-        allocator_->free((void**)&h_tmp_v_ptrs_, true);
         allocator_->free((void**)&h_cu_block_counts_, true);
-        allocator_->free((void**)&h_k_block_ptrs_, true);
-        allocator_->free((void**)&h_v_block_ptrs_, true);
+        allocator_->free((void**)&h_block_ptrs_, true);
         allocator_->free((void**)&h_input_ids_buf_, true);
         allocator_->free((void**)&h_input_length_buf_, true);
         allocator_->free((void**)&h_seq_limit_len_, true);
@@ -1050,17 +1010,48 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
             FT_CHECK(shape[0] == 1);
             shape[0]                = batch_size;
             const int size_in_bytes = ref.sizeBytes();
-            memset(h_ptr, 0, size_in_bytes * batch_size);
+
+            int max_list_length = 0;
+            if (name == "bad_words_list" || name == "stop_words_list") {
+                for (int i = 0; i < batch_size; ++i) {
+                    if (state_->requests[i]->inputs[rank_].isExist(name)) {
+                        Tensor& src = state_->requests[i]->inputs[rank_].at(name);
+                        FT_CHECK(src.shape.size() == 3 && src.shape[1] == 2 && src.shape[2] <= kMaxStopBadWordsLen);
+                        max_list_length = std::max(max_list_length, (int)src.shape[2]);
+                    }
+                }
+                std::fill_n((int*)h_ptr, batch_size * 2 * max_list_length, -1);
+                shape[2] = max_list_length;
+            }
+            else {
+                memset(h_ptr, 0, size_in_bytes * batch_size);
+            }
             for (int i = 0; i < batch_size; ++i) {
                 FT_CHECK(state_->requests[i] != nullptr);
                 if (state_->requests[i]->inputs[rank_].isExist(name)) {
                     Tensor& src = state_->requests[i]->inputs[rank_].at(name);
-                    FT_CHECK(ref.shape == src.shape);
-                    std::copy_n(src.getPtr<std::byte>(), size_in_bytes, h_ptr + size_in_bytes * i);
+                    if (name == "bad_words_list" || name == "stop_words_list") {
+                        int list_length = src.shape[2];
+                        std::copy_n(src.getPtr<std::byte>(),
+                                    sizeof(int) * list_length,
+                                    h_ptr + i * sizeof(int) * 2 * max_list_length);
+                        std::copy_n(src.getPtr<std::byte>() + sizeof(int) * list_length,
+                                    sizeof(int) * list_length,
+                                    h_ptr + i * sizeof(int) * 2 * max_list_length + sizeof(int) * max_list_length);
+                    }
+                    else {
+                        FT_CHECK(ref.shape == src.shape);
+                        std::copy_n(src.getPtr<std::byte>(), size_in_bytes, h_ptr + size_in_bytes * i);
+                    }
                 }
             }
             if (d_ptr) {
-                Copy(h_ptr, batch_size * size_in_bytes, d_ptr);
+                if (name == "bad_words_list" || name == "stop_words_list") {
+                    Copy(h_ptr, batch_size * sizeof(int) * 2 * max_list_length, d_ptr);
+                }
+                else {
+                    Copy(h_ptr, batch_size * size_in_bytes, d_ptr);
+                }
             }
             inputs.insert({name, {d_ptr ? MEMORY_GPU : MEMORY_CPU, ref.type, shape, d_ptr ? d_ptr : h_ptr}});
             if (debug_ && rank_ == 0) {
@@ -1490,49 +1481,32 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
     // Find mini-batch offsets: input length > 1 ? prefill() : decode()
     // Constraints on mini-batches
     // - `context_decoder_input` and `context_decoder_output` can hold `max_context_token_num_` tokens w/o padding
-    // - prefill() use `tmp_k_cache_buf_` and `tmp_k_cache_buf_`, they can hold `max_context_token_num_` tokens
-    //     but each sequence is padded to the maximum context length in the batch
     std::vector<int> offsets{0};
-    std::vector<int> max_context_cnts;
     // initialize first mini-batch with decode tokens
-    int accum_size        = pf_offset;
-    int accum_token_count = pf_offset;
-    int max_context_count = 0;
+    int accum_q_count = pf_offset;
+    int accum_k_count = 0;  // only for prefill
     for (int i = pf_offset; i < active_size; ++i) {
         FT_CHECK(iter == 0);
-        int size          = accum_size + 1;
-        int input_count   = accum_token_count + h_input_length_buf_[i];
-        int context_count = std::max(max_context_count, state_->h_context_length[i]);
-        // correct pre-fill batch size for the first batch
-        int pf_size = offsets.size() == 1 ? size - pf_offset : size;
-        // we have `cu_seqlens` on q so no padding for input is needed
-        // prefill kernels are expecting uniform k/v cache length -> `max_context_count * size <=
-        // max_context_token_num_`
-        if (input_count <= max_context_token_num_ && context_count * pf_size <= max_context_token_num_) {
-            accum_size        = size;
-            accum_token_count = input_count;
-            max_context_count = context_count;
+        int q_count = accum_q_count + h_input_length_buf_[i];
+        int k_count = accum_k_count + state_->h_context_length[i];
+        if (q_count <= max_context_token_num_ && k_count <= max_context_token_num_) {
+            accum_q_count = q_count;
+            accum_k_count = k_count;
         }
         else {
             offsets.push_back(i);
-            max_context_cnts.push_back(max_context_count);
-            accum_size        = 1;
-            accum_token_count = h_input_length_buf_[i];
-            max_context_count = state_->h_context_length[i];
+            accum_q_count = h_input_length_buf_[i];
+            accum_k_count = state_->h_context_length[i];
         }
     }
     offsets.push_back(active_size);
-    max_context_cnts.push_back(max_context_count);
 
     // forward on mini-batches
     for (int p = 0; p < (int)offsets.size() - 1; ++p) {
-        int  first           = offsets[p];
-        int  last            = offsets[p + 1];
-        int  mini_batch_size = last - first;
-        T*   k_ptr           = tmp_k_cache_buf_;
-        T*   v_ptr           = tmp_v_cache_buf_;
-        int  max_input_len{};
-        auto input_ids = context_decoder_ids_buf_;
+        const int first           = offsets[p];
+        const int last            = offsets[p + 1];
+        const int mini_batch_size = last - first;
+        int*      input_ids       = context_decoder_ids_buf_;
         //
         std::vector<int> decode_indices{};
         std::vector<int> decode_lengths{};
@@ -1543,67 +1517,45 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
         for (int i = first; i < last; ++i) {
             input_ids = batched_copy.Add(input_d_ptrs[i], h_input_length_buf_[i], input_ids);
             dbg(i, h_input_length_buf_[i]);
-            // allocate tmp k/v buffer for pre-fill sequences
-            if (i < pf_offset) {
-                h_tmp_k_ptrs_[i] = h_tmp_v_ptrs_[i] = nullptr;
-            }
-            else {
-                h_tmp_k_ptrs_[i] = k_ptr;
-                h_tmp_v_ptrs_[i] = v_ptr;
-                k_ptr += model_->local_kv_head_num_ * max_context_cnts[p] * model_->size_per_head_;
-                v_ptr += model_->local_kv_head_num_ * max_context_cnts[p] * model_->size_per_head_;
-            }
             decode_indices.push_back(i);
             decode_lengths.push_back(h_input_length_buf_[i]);
             sequences.push_back(state_->sequences[i]);
-            max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
         }
         int token_count = input_ids - context_decoder_ids_buf_;
 
         batched_copy.Submit(stream_);
-
-        Copy(h_tmp_k_ptrs_ + first, mini_batch_size, tmp_k_ptrs_ + first);
-        Copy(h_tmp_v_ptrs_ + first, mini_batch_size, tmp_v_ptrs_ + first);
 
         const int dc_batch_size = p ? 0 : pf_offset;
         const int pf_batch_size = mini_batch_size - dc_batch_size;
 
         if (rank_ == 0) {
             if (pf_batch_size) {
+                const auto max_q = *std::max_element(h_input_length_buf_ + first, h_input_length_buf_ + last);
+                const auto max_k = *std::max_element(state_->h_context_length + first, state_->h_context_length + last);
                 TM_LOG_INFO("[Forward] [%d, %d), dc_bsz = %d, pf_bsz = %d, n_tok = %d, max_q = %d, max_k = %d",
                             first,
                             last,
                             dc_batch_size,
                             pf_batch_size,
                             token_count,
-                            max_input_len,
-                            max_context_cnts[p]);
+                            max_q,
+                            max_k);
             }
         }
 
         model_->forwardUnified(decoder_output_buf_ + first * model_->hidden_units_,
                                context_decoder_output_buf_,  // temp
                                context_decoder_input_buf_,   // temp
-                               (void**)k_block_ptrs_,
-                               (void**)v_block_ptrs_,
-                               context_decoder_ids_buf_,  // temp
+                               (void**)block_ptrs_,
                                cu_block_counts_ + first,
+                               context_decoder_ids_buf_,  // temp
+                               h_input_length_buf_ + first,
+                               state_->h_context_length + first,
                                rope_theta_ + first,
                                finished_buf_ + first,
-                               input_length_buf_ + first,
-                               context_length_buf_ + first,
-                               (T**)tmp_k_ptrs_ + first,
-                               (T**)tmp_v_ptrs_ + first,
                                token_count,
                                dc_batch_size,
-                               g.step,
-                               g.sum_seq_len,
-                               g.max_seq_len,
                                pf_batch_size,
-                               max_input_len,
-                               max_context_cnts[p],
-                               max_context_cnts[p],
-                               h_input_length_buf_ + first,
                                sequences.data());
 
         if (iter == 0) {
@@ -1667,8 +1619,6 @@ bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
     ////////////////////////////////////////////////
     /// ! increase the counters
     g.step += 1;
-    g.max_seq_len += 1;
-    g.sum_seq_len += state_->active_size;
 
     // PrintDecodeTokens(token_ids_buf_, g.step, active_size, stream_, "Forward");
 

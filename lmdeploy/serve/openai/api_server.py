@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 
+from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
@@ -1050,7 +1051,9 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
-    VariableInterface.async_engine = AsyncEngine(
+    pipeline_type, pipeline_class = get_task(model_path)
+
+    VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
         backend=backend,

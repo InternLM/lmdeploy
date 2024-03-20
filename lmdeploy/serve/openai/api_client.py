@@ -350,7 +350,7 @@ class APIClient:
                 temperature=temperature,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=ignore_eos):
-            if outputs['finish_reason'] == 'length':
+            if outputs['finish_reason'] == 'length' and outputs['tokens'] == 0:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
             yield outputs['text'], outputs['tokens'], outputs['finish_reason']

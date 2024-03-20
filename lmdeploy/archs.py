@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from typing import Literal, Optional, Union
 
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -81,10 +82,18 @@ def autoget_backend_config(
     else:
         config = TurbomindEngineConfig()
     if backend_config is not None:
-        data = asdict(backend_config)
-        for k, v in data.items():
-            if v and hasattr(config, k):
-                setattr(config, k, v)
+        if type(backend_config) == type(config):
+            return backend_config
+        else:
+            data = asdict(backend_config)
+            for k, v in data.items():
+                if v and hasattr(config, k):
+                    setattr(config, k, v)
+            # map attributes with different names
+            if type(backend_config) is TurbomindEngineConfig:
+                config.block_size = backend_config.cache_block_seq_len
+            else:
+                config.cache_block_seq_len = backend_config.block_size
     return config
 
 
@@ -100,6 +109,9 @@ def check_vl_llm(config: dict) -> bool:
 
 def get_task(model_path: str):
     """get pipeline type and pipeline class from model config."""
+    if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
+        # workspace model
+        return 'llm', AsyncEngine
     config = get_hf_config_content(model_path)
     if check_vl_llm(config):
         return 'vlm', VLAsyncEngine

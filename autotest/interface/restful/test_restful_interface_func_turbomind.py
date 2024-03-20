@@ -15,6 +15,7 @@ BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 @pytest.mark.order(8)
 @pytest.mark.turbomind
+@pytest.mark.chat
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatCompletions:
 
@@ -170,6 +171,7 @@ class TestRestfulInterfaceChatCompletions:
 
 @pytest.mark.order(8)
 @pytest.mark.turbomind
+@pytest.mark.chat
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceChatInteractive:
 

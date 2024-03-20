@@ -5,9 +5,10 @@ import os
 import random
 from argparse import ArgumentError
 from contextlib import asynccontextmanager
+from itertools import count
 from queue import Empty, Queue
 from threading import Thread
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from lmdeploy.messages import (EngineGenerationConfig, GenerationConfig,
                                PytorchEngineConfig, Response,
@@ -71,6 +72,55 @@ class GenOut:
     input_token_len: int
     generate_token_len: int
     finish_reason: Optional[Literal['stop', 'length']] = None
+
+
+class Session:
+    """Session for AsyncEngine.chat.
+
+    Args:
+        _id (int): session_id for internal use.
+        _step (int): the offset of the k/v cache for internal use.
+        _prompt (Any): input prompt for internal use.
+        _response (Reaponse): model output for prompt.
+        _engine (Any): engine for internal use.
+        history (List[Any, str]): chat history.
+    """
+    _ids = count(0)
+
+    def __init__(self):
+        self._id: int = next(self._ids)
+        self._step: int = 0
+        self._prompt: Any = None
+        self._response: Response = None
+        self._engine: Any = None
+        self.history: List[Tuple[Any, str]] = []
+
+    def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
+        """merge response."""
+        resp.text += step.text if isinstance(step, Response) else step.response
+        resp.input_token_len = step.input_token_len
+        resp.generate_token_len = step.generate_token_len
+        resp.finish_reason = step.finish_reason
+        return resp
+
+    @property
+    def response(self) -> Response:
+        """return response."""
+        return self._response
+
+    def close(self):
+        """release engine storage for this session."""
+        if self._engine:
+            inst = self._engine.create_instance()
+            inst.end(self._id)
+
+    def __repr__(self) -> str:
+        res = ''
+        for user, assistant in self.history:
+            if isinstance(user, list):
+                user = str(user)
+            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
+        return res
 
 
 class AsyncEngine:
@@ -507,8 +557,15 @@ class AsyncEngine:
                 128, self.session_len - self.id2step[str(session_id)] -
                 len(input_ids))
         finish_reason = None
+        logger.info(f'session_id={session_id}, '
+                    f'history_tokens={self.id2step[str(session_id)]}, '
+                    f'input_tokens={len(input_ids)}, '
+                    f'max_new_tokens={gen_config.max_new_tokens}, '
+                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                    f'step={step}, prep={do_preprocess}')
         if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
+            logger.warning(f'run out of tokens. session_id={session_id}')
             finish_reason = 'length'
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          finish_reason)
@@ -524,7 +581,7 @@ class AsyncEngine:
                         gen_config=gen_config,
                         adapter_name=adapter_name,
                         stream_output=stream_response,
-                        sequence_start=(sequence_start),
+                        sequence_start=sequence_start,
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
                     _, res, tokens = outputs
@@ -554,3 +611,54 @@ class AsyncEngine:
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
+
+    def chat(self,
+             prompt: str,
+             session=None,
+             gen_config: Optional[Union[GenerationConfig,
+                                        EngineGenerationConfig]] = None,
+             do_preprocess: bool = True,
+             **kwargs) -> Session:
+        """Chat.
+
+        Args:
+            prompt (str): prompt
+            session (Session): the chat session
+            gen_config (GenerationConfig | None): a instance of
+                GenerationConfig. Default to None.
+            do_preprocess (bool): whether pre-process the messages. Default to
+                True, which means chat_template will be applied.
+            **kwargs (dict): ad hoc parametrization of `gen_config
+        """
+        if session is None:
+            session = Session()
+            session._engine = self.engine
+
+        # sync & init
+        session._prompt = prompt
+        session._response = None
+
+        sequence_start = session._step == 0
+
+        async def _work():
+            resp = Response('', -1, -1, session._id)
+            async for output in self.generate(prompt,
+                                              session_id=session._id,
+                                              gen_config=gen_config,
+                                              stream_response=False,
+                                              sequence_start=sequence_start,
+                                              sequence_end=False,
+                                              step=session._step,
+                                              do_preprocess=do_preprocess,
+                                              **kwargs):
+                resp = session._merge_response(resp, output)
+            return resp
+
+        from lmdeploy.pytorch.engine.request import _run_until_complete
+        resp = _run_until_complete(_work())
+
+        session._response = resp
+        session._step += resp.generate_token_len + resp.input_token_len
+        session.history.append((session._prompt, resp.text))
+
+        return session

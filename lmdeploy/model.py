@@ -877,7 +877,7 @@ class YiVL(BaseChatTemplate):
             meta_instruction="""This is a chat between an inquisitive human and an AI assistant. Assume the role of the AI assistant. Read all the images carefully, and respond to the human's questions with informative, helpful, detailed and polite answers. 这是一个好奇的人类和一个人工智能助手之间的对话。假设你扮演这个AI助手的角色。仔细阅读所有的图像，并对人类的问题做出信息丰富、有帮助、详细的和礼貌的回答。\n\n""",  # noqa: E501
             user='### Human: ',
             eoh='\n',
-            assistant='### Assistant: ',
+            assistant='### Assistant:',
             eoa='\n',
             stop_words=['###'],
             **kwargs):
@@ -913,3 +913,11 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
+    try:
+        from transformers import AutoTokenizer
+        tokenizer_config = AutoTokenizer.from_pretrained(
+            query, trust_remote_code=True)
+        if tokenizer_config.chat_template is None:
+            return 'base'
+    except Exception as e:
+        assert type(e) == OSError

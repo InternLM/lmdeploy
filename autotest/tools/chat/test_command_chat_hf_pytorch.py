@@ -13,12 +13,19 @@ def getCaseList():
     return case_list
 
 
+def getModelList(tp_num):
+    return [
+        item for item in get_torch_model_list(tp_num)
+        if 'chat' in item.lower()
+    ]
+
+
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('usercase', getCaseList())
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=1))
+@pytest.mark.parametrize('model', getModelList(tp_num=1))
 def test_hf_pytorch_chat_tp1(config, model, cli_case_config, usercase,
                              worker_id):
     result, chat_log, msg = hf_command_line_test(
@@ -40,7 +47,7 @@ def test_hf_pytorch_chat_tp1(config, model, cli_case_config, usercase,
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('usercase', getCaseList())
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=2))
+@pytest.mark.parametrize('model', getModelList(tp_num=2))
 def test_hf_pytorch_chat_tp2(config, model, cli_case_config, usercase,
                              worker_id):
     result, chat_log, msg = hf_command_line_test(
