@@ -49,6 +49,11 @@ pytorch_model:
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-7b-it
     - deepseek-ai/deepseek-moe-16b-chat
+    - deepseek-ai/deepseek-coder-6.7b-instruct
+
+
+vl_model:
+    - Qwen/Qwen-VL-Chat
 
 
 quatization_case_config:

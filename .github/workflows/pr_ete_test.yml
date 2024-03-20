@@ -28,7 +28,7 @@ env:
 jobs:
   pr_functions_test:
     runs-on: [self-hosted, linux-a100-pr]
-    timeout-minutes: 120
+    timeout-minutes: 40
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -41,13 +41,6 @@ jobs:
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Setup systems
-        run: |
-          rm /etc/apt/sources.list.d/cuda*.list
-          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
-              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
-          dpkg -i /root/packages/allure_2.24.1-1_all.deb
-          rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install pytorch
@@ -93,7 +86,7 @@ jobs:
           export date_today="$(date +'%Y%m%d-%H%M%S')"
           export report_dir="$REPORT_DIR/$date_today"
           echo "Save report to $ALLURE_DIR"
-          allure generate -c -o $report_dir
+          mv allure-results $report_dir
       - name: Clear workfile
         if: always()
         run: |

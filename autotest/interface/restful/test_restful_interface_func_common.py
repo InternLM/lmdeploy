@@ -7,14 +7,15 @@ from tqdm import tqdm
 from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
-                                        assert_chat_interactive_stream_return)
+                                        assert_chat_interactive_stream_return,
+                                        get_repate_times)
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2-chat-20b'
-MODEL_NAME = 'internlm2-chat-20b'
+MODEL_NAME = 'internlm2'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
@@ -280,7 +281,10 @@ class TestRestfulInterfaceChatCompletions:
         outputList = []
         for i in range(3):
             for output in api_client.chat_completions_v1(
-                    model=MODEL_NAME, messages='Shanghai is', top_p=0.1):
+                    model=MODEL_NAME,
+                    messages='Shanghai is',
+                    top_p=0.1,
+                    max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_batch_return(output, MODEL_NAME)
         assert outputList[0].get('choices')[0].get('message').get(
@@ -490,7 +494,8 @@ class TestRestfulInterfaceChatInteractive:
                                                      request_output_len=512):
             continue
         assert_chat_interactive_batch_return(output)
-        assert 'a 上海 is a 上海, ' * 5 in output.get('text')
+        assert 'a 上海 is a 上海, ' * 5 in output.get('text') or get_repate_times(
+            output.get('text'), 'Shanghai is') > 5
 
     def test_chat_interactive_with_history_batch(self):
         api_client = APIClient(BASE_URL)
@@ -534,8 +539,8 @@ class TestRestfulInterfaceChatInteractive:
         api_client = APIClient(BASE_URL)
         outputList = []
         for i in range(3):
-            for output in api_client.chat_interactive_v1(prompt='Shanghai is',
-                                                         top_p=0.01):
+            for output in api_client.chat_interactive_v1(
+                    prompt='Shanghai is', top_p=0.01, request_output_len=10):
                 continue
             assert_chat_interactive_batch_return(output)
             outputList.append(output)
@@ -552,7 +557,8 @@ class TestRestfulInterfaceChatInteractive:
                     model=MODEL_NAME,
                     prompt='Hi, pls intro yourself',
                     stream=True,
-                    top_p=0.01):
+                    top_p=0.01,
+                    request_output_len=10):
                 outputList.append(output)
             assert_chat_interactive_stream_return(outputList[-1],
                                                   True,

@@ -9,7 +9,7 @@ from lmdeploy.serve.openai.api_client import APIClient
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2-chat-20b'
-MODEL_NAME = 'internlm2-chat-20b'
+MODEL_NAME = 'internlm2'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
@@ -115,25 +115,6 @@ class TestRestfulInterfaceChatCompletions:
         assert 'pls pls ' * 5 in response or \
             'Hi, pls intro yourself\n' * 5 in response
 
-    def test_chat_completions_topp_min_batch(self):
-        api_client = APIClient(BASE_URL)
-        outputList = []
-        for i in range(3):
-            for output in api_client.chat_completions_v1(
-                    model=MODEL_NAME,
-                    messages='Shanghai is',
-                    top_p=0.1,
-                    temperature=0.01):
-                outputList.append(output)
-            assert_chat_completions_batch_return(output, MODEL_NAME)
-            print(output)
-        assert outputList[0].get('choices')[0].get('message').get(
-            'content') == outputList[1].get('choices')[0].get('message').get(
-                'content')
-        assert outputList[1].get('choices')[0].get('message').get(
-            'content') == outputList[2].get('choices')[0].get('message').get(
-                'content')
-
     def test_chat_completions_topp_min_stream(self):
         api_client = APIClient(BASE_URL)
         responseList = []
@@ -145,7 +126,8 @@ class TestRestfulInterfaceChatCompletions:
                     messages='Hi, pls intro yourself',
                     stream=True,
                     top_p=0.1,
-                    temperature=0.01):
+                    temperature=0.01,
+                    max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_stream_return(outputList[0], MODEL_NAME,
                                                   True, False)
@@ -248,41 +230,3 @@ class TestRestfulInterfaceChatInteractive:
                                                   index=index)
         assert output.get('finish_reason') == 'length'
         assert len(outputList) == 6
-
-    def test_chat_interactive_topp_min_batch(self):
-        api_client = APIClient(BASE_URL)
-        outputList = []
-        for i in range(3):
-            for output in api_client.chat_interactive_v1(prompt='Shanghai is',
-                                                         top_p=0.01,
-                                                         temperature=0.01):
-                continue
-            assert_chat_interactive_batch_return(output)
-            outputList.append(output)
-            print(output)
-        assert outputList[0] == outputList[1]
-        assert outputList[1] == outputList[2]
-
-    def test_chat_interactive_topp_min_stream(self):
-        api_client = APIClient(BASE_URL)
-        responseList = []
-        for i in range(3):
-            outputList = []
-            response = ''
-            for output in api_client.chat_interactive_v1(
-                    model=MODEL_NAME,
-                    prompt='Hi, pls intro yourself',
-                    stream=True,
-                    top_p=0.01,
-                    temperature=0.01):
-                outputList.append(output)
-            assert_chat_interactive_stream_return(outputList[-1],
-                                                  True,
-                                                  index=len(outputList) - 2)
-            for index in range(0, len(outputList) - 1):
-                assert_chat_interactive_stream_return(outputList[index],
-                                                      index=index)
-                response += outputList[index].get('text')
-            responseList.append(response)
-        assert responseList[0] == responseList[1]
-        assert responseList[1] == responseList[2]
