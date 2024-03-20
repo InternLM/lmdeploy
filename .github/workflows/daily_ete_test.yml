@@ -55,7 +55,7 @@ env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
-
+  
 
 jobs:
   linux-build:
@@ -204,6 +204,8 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
         timeout-minutes: 25
+        env:
+          PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
       - name: Test lmdeploy - restful turbomind
@@ -217,6 +219,8 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind-vl') && contains(fromJSON(github.event.inputs.model), 'restful'))
         timeout-minutes: 30
+        env:
+          PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_turbomind_vl.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
       - name: Test lmdeploy - restful workspace
