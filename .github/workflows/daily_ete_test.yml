@@ -250,7 +250,7 @@ jobs:
         timeout-minutes: 30
         if: github.event_name == 'schedule' || (github.event.inputs.backend != '[]' && github.event.inputs.model != '[]')
         run: |
-          pytest autotest --lf --alluredir=allure-results
+          pytest autotest --lf --lfnf none --alluredir=allure-results
       - name: Generate reports
         if: always()
         run: |
@@ -495,7 +495,7 @@ jobs:
         run: |
           CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
+          sleep 180s
       - name: Test lmdeploy - restful api pytorch
         if: matrix.backend == 'pytorch'
         timeout-minutes: 40
