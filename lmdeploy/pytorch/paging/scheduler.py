@@ -10,8 +10,8 @@ from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import (MessageStatus, SchedulerSequence, SchedulerSession,
                         SequenceManager)
-from .block_manager import DefaultBlockManager as BlockManager
 from .block_manager import build_block_manager
+from .radix_tree_manager import RadixTreeManager
 
 logger = get_logger('lmdeploy')
 
@@ -52,10 +52,13 @@ class Scheduler:
 
         self.block_manager = build_block_manager(cache_config)
 
-        self.eviction_helper = self.build_eviction_helper(
-            self.scheduler_config.eviction_type, self.block_manager)
-
         self.seq_manager = SequenceManager()
+
+        self.rtree_manager = RadixTreeManager(self.cache_config,
+                                              self.add_session(-1))
+
+        self.eviction_helper = self.build_eviction_helper(
+            self.scheduler_config.eviction_type)
 
     @property
     def waiting(self):
@@ -75,14 +78,13 @@ class Scheduler:
         seq_map = self.seq_manager.get_sequences(MessageStatus.STOPPED)
         return list(seq_map.values())
 
-    def build_eviction_helper(ctx, eviction_type: str,
-                              block_manager: BlockManager):
+    def build_eviction_helper(self, eviction_type: str):
         if eviction_type == 'copy':
-            from .eviction_helper import CopyEvictionHelper
-            return CopyEvictionHelper(block_manager)
-        elif eviction_type == 'recompute':
+            logger.warning('Copy eviction has been deprecated.')
+            eviction_type = 'recompute'
+        if eviction_type == 'recompute':
             from .eviction_helper import RecomputeEvictionHelper
-            return RecomputeEvictionHelper(block_manager)
+            return RecomputeEvictionHelper(self)
         else:
             raise TypeError(f'Unknown eviction type: {eviction_type}')
 
@@ -151,6 +153,8 @@ class Scheduler:
         max_adapters = self.scheduler_config.max_active_adapters - len(
             required_adapters)
         token_count = 0
+        sorted_nodes = self.rtree_manager.sort_nodes(
+            max_visit_time=self.rtree_manager.step_time - 2)
 
         def _to_running(seq: SchedulerSequence):
             """to running."""
@@ -158,15 +162,15 @@ class Scheduler:
             running.append(seq)
             nonlocal token_count
             token_count += seq.num_token_ids
+            self.rtree_manager.update_sequence(seq)
 
-        def _evict_until_can_append(seq: SchedulerSequence, waiting):
+        def _evict_until_can_append(seq: SchedulerSequence):
             """evict until can append."""
-            while eviction_helper.try_swap_out_unused(self.hanging,
-                                                      waiting[1:],
-                                                      swap_out_map):
-                if block_manager.can_append_slot(seq):
-                    return True
-            return False
+            if block_manager.can_allocate(seq):
+                return True
+            if len(sorted_nodes) == 0:
+                return False
+            return eviction_helper.evict_for_seq(seq, sorted_nodes)
 
         def _reorder_waiting():
             """reorder waiting."""
@@ -201,7 +205,7 @@ class Scheduler:
 
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
-            seq = waiting[0]
+            seq = waiting.pop(0)
 
             if (len(running) > 0 and token_count + seq.num_token_ids >
                     self.cache_config.max_prefill_token_num):
@@ -212,17 +216,16 @@ class Scheduler:
                 if seq.adapter_name not in required_adapters:
                     break
 
-            if not block_manager.can_allocate(seq):
-                if not _evict_until_can_append(seq, waiting):
-                    break
+            if seq.seq_id not in self.rtree_manager.seq_node_map:
+                self.rtree_manager.add_sequence(
+                    seq, self.scheduler_config.shared_cache)
 
-            if eviction_helper.need_swap_in(seq):
-                if not eviction_helper.try_swap_in(seq, swap_in_map):
-                    break
+            if not _evict_until_can_append(seq):
+                break
+
             # allocate session memory
             block_manager.allocate(seq)
             _active_adapter(seq.adapter_name)
-            waiting.pop(0)
             _to_running(seq)
 
         deactive_adapters = self.actived_adapters.difference(required_adapters)
@@ -245,7 +248,8 @@ class Scheduler:
         swap_out_map: Dict[int, int] = dict()
         swap_in_map: Dict[int, int] = dict()
         copy_map: Dict[int, int] = dict()
-        hanging = self.hanging
+        sorted_nodes = self.rtree_manager.sort_nodes(
+            max_visit_time=self.rtree_manager.step_time - 1)
 
         def _try_append_slot(seq):
             """try append slot."""
@@ -258,11 +262,11 @@ class Scheduler:
 
         def _evict_until_can_append(seq: SchedulerSequence):
             """evict until can append."""
-            while eviction_helper.try_swap_out_unused(hanging, self.waiting,
-                                                      swap_out_map):
-                if block_manager.can_append_slot(seq, prealloc_size):
-                    return True
-            return False
+            if block_manager.can_allocate(seq):
+                return True
+            if len(sorted_nodes) == 0:
+                return False
+            return eviction_helper.evict_for_seq(seq, sorted_nodes)
 
         # 1. running
         for seq in running:
@@ -274,15 +278,16 @@ class Scheduler:
                                f'sequence[{seq.seq_id}] '
                                'reach max gpu size.')
                 self._set_message_status(seq, MessageStatus.ABORTED)
-                self.block_manager.free(seq)
+                node = self.rtree_manager.seq_node_map[seq.seq_id]
+                self.block_manager.free(seq, node.num_blocks)
+                self.rtree_manager.remove_sequence(seq)
 
-            if not _try_append_slot(seq):
-                # try free unused cache from waiting
-                if _evict_until_can_append(seq):
-                    _try_append_slot(seq)
-                else:
-                    # move to waiting
-                    self._set_message_status(seq, MessageStatus.WAITING)
+            if not _evict_until_can_append(seq):
+                self._set_message_status(seq, MessageStatus.WAITING)
+                continue
+
+            _try_append_slot(seq)
+            self.rtree_manager.update_sequence(seq)
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
@@ -295,6 +300,7 @@ class Scheduler:
 
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
+        self.rtree_manager.step_time += 1
         if is_prefill:
             output = self._schedule_prefill()
         else:
@@ -336,8 +342,10 @@ class Scheduler:
         Args:
             seq (SchedulerSequence): sequence to remove
         """
-        self.block_manager.free(seq)
+        node = self.rtree_manager.seq_node_map[seq.seq_id]
+        self.block_manager.free(seq, node.num_blocks)
         seq.session.remove_sequence(seq)
+        self.rtree_manager.remove_sequence(seq)
 
     def end_session(self, session_id: int):
         """End session.
@@ -348,6 +356,7 @@ class Scheduler:
         session = self.sessions[session_id]
         seqs = list(session.sequences.values())
         for seq in seqs:
+            seq.status = MessageStatus.ENDED
             self._remove_sequence(seq)
         self.sessions.pop(session_id)
 

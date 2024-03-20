@@ -75,10 +75,16 @@ class DefaultBlockManager(BaseBlockManager):
             blocks = self.allocator.allocate(num_required_blocks, 'cpu')
             adapter.logical_blocks.append(blocks)
 
-    def free(self, msg: SchedulerSequence):
+    def free(self, msg: SchedulerSequence, size: int = None):
         """Free all physical blocks allocated for the session."""
-        self.allocator.free(msg.logical_blocks.get_real_blocks())
-        msg.logical_blocks.reset()
+        if size is None:
+            self.allocator.free(msg.logical_blocks.get_real_blocks())
+            msg.logical_blocks.reset()
+        else:
+            blocks = msg.logical_blocks.get_real_blocks()[-size:]
+            self.allocator.free(blocks)
+            num_blocks = len(blocks)
+            msg.logical_blocks.resize(num_blocks)
 
     def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return true if the message can append new slot."""

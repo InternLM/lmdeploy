@@ -315,6 +315,12 @@ def main():
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 
+    # from lmdeploy.utils import get_logger
+    # logger = get_logger('lmdeploy')
+    # logger.setLevel(10)
+    # for handler in logger.handlers:
+    #     handler.setLevel(10)
+
     requests = sample_requests(args.dataset, args.num_prompts,
                                engine.tokenizer)
 

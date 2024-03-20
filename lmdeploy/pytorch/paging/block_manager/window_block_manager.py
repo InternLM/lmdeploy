@@ -149,23 +149,3 @@ class WindowBlockManager(DefaultBlockManager):
         # drop unused blocks
         if droped_blocks is not None:
             self.allocator.free(droped_blocks)
-
-    def allocate_adapter(self, adapter: SchedulerAdapter):
-        """Allocate cpu blocks for given adapter."""
-        num_required_blocks = self.num_required_blocks(adapter)
-        if num_required_blocks > 0:
-            blocks = self.allocator.allocate(num_required_blocks, 'cpu')
-            adapter.logical_blocks.append(blocks)
-
-    def free(self, msg: SchedulerSequence):
-        """Free all physical blocks allocated for the session."""
-        self.allocator.free(msg.logical_blocks.get_real_blocks())
-        msg.logical_blocks.reset()
-
-    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Return true if the message can append new slot."""
-        return self.can_allocate(msg, prealloc_size)
-
-    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
-        """Append new slot to message."""
-        return self.allocate(msg, prealloc_size)

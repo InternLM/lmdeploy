@@ -28,6 +28,7 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
+    shared_cache: bool = True
 
 
 @dataclass

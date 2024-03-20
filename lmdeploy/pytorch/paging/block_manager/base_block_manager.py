@@ -261,7 +261,7 @@ class BaseBlockManager:
         """Allocate cpu blocks for given adapter."""
         raise NotImplementedError('Not implemented.')
 
-    def free(self, msg: SchedulerSequence):
+    def free(self, msg: SchedulerSequence, size: int = None):
         """Free all physical blocks allocated for the session."""
         raise NotImplementedError('Not implemented.')
 

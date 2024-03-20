@@ -89,13 +89,12 @@ class TestScheduler:
 
         # stop seq
         seq1.status = MessageStatus.STOPPED
-        scheduler.update()
         assert len(scheduler.running) == 1
         assert seq1 in scheduler.hanging
 
         # end seq
         seq1.status = MessageStatus.ENDED
-        scheduler.update()
+        scheduler._remove_sequence(seq1)
         assert session_id1 in scheduler.sessions
         assert seq1 not in scheduler.running
         assert seq1 not in scheduler.hanging
@@ -103,14 +102,12 @@ class TestScheduler:
 
         # stop session
         scheduler.stop_session(session_id2)
-        scheduler.update()
         assert len(scheduler.running) == 0
         assert len(scheduler.waiting) == 0
         assert len(scheduler.hanging) == 2
 
         # end session
         scheduler.end_session(session_id2)
-        scheduler.update()
         assert seq2.status == MessageStatus.ENDED
         assert seq3.status == MessageStatus.ENDED
         assert session_id2 not in scheduler.sessions
@@ -143,7 +140,6 @@ class TestScheduler:
 
         # test: waiting alloc
         seq2.status = MessageStatus.STOPPED
-        scheduler.update()
         assert len(scheduler.running) == 1
         assert len(scheduler.waiting) == 1
         assert len(scheduler.hanging) == 1
@@ -162,8 +158,8 @@ class TestScheduler:
         # test: waiting append token
         seq2.status = MessageStatus.WAITING
         seq3.status = MessageStatus.ENDED
+        scheduler._remove_sequence(seq3)
         seq2.update_token_ids(torch.tensor([1] * block_size))
-        scheduler.update()
         assert len(scheduler.running) == 1
         assert len(scheduler.waiting) == 1
         assert len(scheduler.hanging) == 0
@@ -181,7 +177,6 @@ class TestScheduler:
         # test running append
         seq1.update_token_ids(torch.tensor([1] * block_size))
         seq2.update_token_ids(torch.tensor([1] * block_size))
-        scheduler.update()
         assert len(scheduler.running) == 2
         output = scheduler.schedule(is_prefill=False)
         # seq1: 1 waiting cpu

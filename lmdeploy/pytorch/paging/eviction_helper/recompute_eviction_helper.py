@@ -1,43 +1,44 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict
+from typing import List
 
+from ...adapter.adapter import ADAPTER_MANAGER
 from ...messages import SchedulerSequence
+from ..radix_tree_manager import TreeNode
 from .base_eviction_helper import BaseEvictionHelper
 
 
 class RecomputeEvictionHelper(BaseEvictionHelper):
     """recompute eviction."""
 
-    def __init__(self, block_manager):
-        super().__init__(block_manager)
+    def evict_for_seq(self, seq: SchedulerSequence,
+                      sorted_nodes: List[TreeNode]):
+        """evict until can alloc."""
+        num_required_blocks = self.block_manager.num_required_blocks(seq)
+        if seq.adapter_name is not None:
+            adapter = ADAPTER_MANAGER.get_adapter(seq.adapter_name)
+            num_required_blocks += self.block_manager.num_required_blocks(
+                adapter)
 
-    def need_swap_in(self, seq: SchedulerSequence):
-        """sequence need swap in."""
-        return False
+        ignore_nodes = self.rtree_manager.get_all_nodes(seq)
+        removed_nodes = []
 
-    def swap_in(self, seq: SchedulerSequence, swap_in_map: Dict[int, int]):
-        """sequence swap in."""
-        self.block_manager.allocate(seq)
+        success = False
+        for node in sorted_nodes:
+            num_blocks = node.num_blocks
+            self.block_manager.free(node.sequence, num_blocks)
+            self.rtree_manager.remove_node(node)
+            removed_nodes.append(node)
+            num_required_blocks -= num_blocks
+            if num_required_blocks <= 0:
+                success = True
+                break
 
-    def swap_out(self, seq: SchedulerSequence, swap_out_map: Dict[int, int]):
-        """sequence swap out."""
-        self.block_manager.free(seq)
-        seq.set_step(0)
-        seq.logical_blocks.reset()
+        if success:
+            removed_nodes += ignore_nodes
+            for node in removed_nodes:
+                try:
+                    sorted_nodes.remove(node)
+                except Exception:
+                    continue
 
-    def try_swap_out(self, seq: SchedulerSequence, swap_out_map: Dict[int,
-                                                                      int]):
-        """try swap out."""
-        if seq.history_len > 0:
-            self.swap_out(seq, swap_out_map)
-            return True
-        else:
-            return False
-
-    def try_swap_in(self, seq: SchedulerSequence, swap_in_map: Dict[int, int]):
-        """try swap in."""
-        if self.block_manager.can_allocate(seq):
-            self.swap_in(seq, swap_in_map)
-            return True
-        else:
-            return False
+        return success
