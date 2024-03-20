@@ -90,7 +90,6 @@ def getModelList(tp_num):
 
 
 @pytest.mark.order(7)
-@pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
@@ -130,8 +129,7 @@ def run_all_step(port: int = DEFAULT_PORT):
         }],
         temperature=0.8,
         top_p=0.8)
-    print(response)
-    assert 'tiger' in response, response
+    assert 'tiger' in str(response).lower(), response
 
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
@@ -150,5 +148,5 @@ def run_all_step(port: int = DEFAULT_PORT):
     }]
     for item in api_client.chat_completions_v1(model=model_name,
                                                messages=messages):
-        print(item)
-    assert 'tiger' in item, item
+        continue
+    assert 'tiger' in str(item).lower(), item
