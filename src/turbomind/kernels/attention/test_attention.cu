@@ -193,9 +193,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
-#define KV_INT8 1
+#define KV_INT8 0
 
-#define KV_INT4 0
+#define KV_INT4 1
 
 #define DECODING 1
 
@@ -211,12 +211,12 @@ int test_attention()
     // constexpr size_t kBatchSize = 64;
     constexpr size_t kHeadNum   = 64;
     constexpr size_t KvHeadNum  = kHeadNum / 8;
-    constexpr size_t kBatchSize = 128;
+    constexpr size_t kBatchSize = 256;
     constexpr size_t kInputLen  = 1;
     // constexpr size_t kSequenceLen = 63;
-    constexpr size_t kSequenceLen = 4095;
+    // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
-    // constexpr size_t kSequenceLen = 16383;
+    constexpr size_t kSequenceLen = 2047;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;

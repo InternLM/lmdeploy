@@ -25,7 +25,7 @@ template void invokeDecoding<sm80_f16_u8_g1_d128>(const typename sm80_f16_u8_g1_
 using sm80_f16_u8_g8_d128 = Decoding<arch::Sm80, half, uint8_t, 8, 128>;
 template void invokeDecoding<sm80_f16_u8_g8_d128>(const typename sm80_f16_u8_g8_d128::ParamType& params);
 
-using sm80_f16_u4_g1_d128 = Decoding<arch::Sm80, half, uint4_t, 1, 128>;
+using sm80_f16_u4_g1_d128 = Decoding<arch::Sm80, half, uint4_t, 8, 128>;
 template void invokeDecoding<sm80_f16_u4_g1_d128>(const typename sm80_f16_u4_g1_d128::ParamType& params);
 
 // using sm80_f16_s8_g2_d128 = Decoding<arch::Sm80, half, int8_t, 2, 128>;

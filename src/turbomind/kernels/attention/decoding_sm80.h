@@ -91,8 +91,8 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     static constexpr int CTA_H1 = (CTA_H + OP_N - 1) / OP_N * OP_N;
 
     using SmemLayoutQ = SmemLayoutV2<CTA_H1, HeadDim, CTA_H1, HeadDim, Swizzle<3, 3, 4>>;
-    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 4, 3>>;
-    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 4, 3>>;
+    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>;
+    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>;
 
     using SmemLayoutKVp = SmemLayoutV2<CTA_S, 2, CTA_S, 2, Identity>;
 
@@ -280,17 +280,17 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     frag_K[k][m] = data_K[k][m];
                 }
             }
-            else if (bitsof<Tkv> == 8) {
-                static_assert(K_M == 1 && X == 2);
+            else {
+                static_assert(K_M == 1);
                 if (k % X == 0) {
                     PRAGMA_UNROLL
                     for (int s = 0; s < 2; ++s) {
                         ConvertKvCache<Tkv, T> convert(param_K[0][s][0], param_K[0][s][1]);
                         PRAGMA_UNROLL
                         for (int d = 0; d < 2; ++d) {
-                            Array<T, 4> dx_d2 = convert((Array<Tkv, 4>&)data_K[k / X][0][d * 8 + s * 4]);
+                            auto dx_d2 = convert((Array<Tkv, X * 2>&)data_K[k / X][0][d * 4 * X + s * 2 * X]);
                             PRAGMA_UNROLL
-                            for (int x = 0; x < 2; ++x) {
+                            for (int x = 0; x < X; ++x) {
                                 (Array<T, 2>&)frag_K[k + x][0][d * 4 + s * 2] = (Array<T, 2>&)dx_d2[x * 2];
                             }
                         }
@@ -393,22 +393,39 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     frag_V[m][k] = data_V[m][k];
                 }
             }
-            else if (bitsof<Tkv> == 8) {
-                static_assert(V_K == 1 && X == 2);
+            else {
+                static_assert(V_K == 1);
                 if (m % X == 0) {
                     PRAGMA_UNROLL
                     for (int s = 0; s < 2; ++s) {
                         PRAGMA_UNROLL
                         for (int d = 0; d < 2; ++d) {
-                            Array<T, 4> dx_s2 = cvt_f16x2x2_u8_trans((Array<Tkv, 4>&)data_V[m / X][0][s * 8 + d * 4]);
-                            PRAGMA_UNROLL
-                            for (int x = 0; x < 2; ++x) {
+                            // (s2,dx) -> (dx,s2)
+                            if constexpr (bitsof<Tkv> == 8) {
+                                auto dx_s2 =
+                                    cvt_f16x2x2_u8_trans((Array<Tkv, 2 * X>&)data_V[m / X][0][s * 4 * X + d * 2 * X]);
                                 PRAGMA_UNROLL
-                                for (int s0 = 0; s0 < 2; ++s0) {
-                                    const auto& param = param_V[0][s * 2 + s0];
-                                    dx_s2[x * 2 + s0] = dx_s2[x * 2 + s0] * param[0] + param[1];
+                                for (int x = 0; x < X; ++x) {
+                                    PRAGMA_UNROLL
+                                    for (int s0 = 0; s0 < 2; ++s0) {
+                                        const auto& param = param_V[0][s * 2 + s0];
+                                        dx_s2[x * 2 + s0] = dx_s2[x * 2 + s0] * param[0] + param[1];
+                                    }
+                                    (Array<T, 2>&)frag_V[m + x][0][s * 4 + d * 2] = (Array<T, 2>&)dx_s2[x * 2];
                                 }
-                                (Array<T, 2>&)frag_V[m + x][0][s * 4 + d * 2] = (Array<T, 2>&)dx_s2[x * 2];
+                            }
+                            else if constexpr (bitsof<Tkv> == 4) {
+                                auto dx_s2 = ConvertKvCache<uint4_t, half>::cvt_f16x8_u4_biased(
+                                    (Array<Tkv, 2 * X>&)data_V[m / X][0][s * 4 * X + d * 2 * X]);
+                                PRAGMA_UNROLL
+                                for (int x = 0; x < X; ++x) {
+                                    PRAGMA_UNROLL
+                                    for (int s0 = 0; s0 < 2; ++s0) {
+                                        const auto& param = param_V[0][s * 2 + s0];
+                                        dx_s2[x * 2 + s0] = dx_s2[x * 2 + s0] * param[0] + param[1];
+                                    }
+                                    (Array<T, 2>&)frag_V[m + x][0][s * 4 + d * 2] = (Array<T, 2>&)dx_s2[x * 2];
+                                }
                             }
                         }
                     }
@@ -702,10 +719,13 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                         PRAGMA_UNROLL
                         for (int q = 0; q < 2; ++q) {
                             const int hi = n * OP_N + lane_id % 4 * 2 + q * 1;
-                            const int di = m * OP_M + lane_id / 4 * X + d * 8 * X + x;
+                            // const int di = m * OP_M + lane_id / 4 * X + d * 8 * X + x;
+                            const int di = m * OP_M + lane_id / 4 % 2 * 1 + d * 8 * X + x * 2 + lane_id / 8 * 8;
                             if (warp_id == 0) {
                                 storage.O1[hi][di] = frag_O[m + x][n][d * 2 + q];
-                                // printf("O %4d %4d %f\n", hi, di, frag_O[m][n][d * 2 + q]);
+                                // if (hi == 0) {
+                                //     printf("O %4d %4d %f\n", hi, di, frag_O[m][n][d * 2 + q]);
+                                // }
                             }
                         }
                     }

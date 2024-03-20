@@ -47,7 +47,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
             //     return invokeDecoding<typename DecodingConfig<arch::Sm80, T, int8_t, 2, kHeadDim>::Kernel>(params);
             // }
             // else {
-                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint8_t, 8, kHeadDim>::Kernel>(params);
+                return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint8_t, 1, kHeadDim>::Kernel>(params);
             // }
         }
         else {
@@ -64,7 +64,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
         }
     }
     else if (is_kv_int4) {
-        return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint4_t, 1, kHeadDim>::Kernel>(params);
+        return invokeDecoding<typename DecodingConfig<arch::Sm80, T, uint4_t, 8, kHeadDim>::Kernel>(params);
     }
     else {
         if (params.arch >= 80) {  // tensor core & async copy
