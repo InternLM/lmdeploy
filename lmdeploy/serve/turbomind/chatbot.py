@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import json
 import logging
 import queue
 import random
@@ -9,11 +8,9 @@ from enum import Enum
 from functools import partial
 from typing import List, Union
 
-import google.protobuf.json_format
 import mmengine
 import numpy as np
 import tritonclient.grpc as grpcclient
-from tritonclient.grpc.service_pb2 import ModelInferResponse
 
 from lmdeploy.model import MODELS
 from lmdeploy.serve.turbomind.utils import (Postprocessor, Preprocessor,
@@ -44,11 +41,7 @@ class StatusCode(Enum):
 
 def stream_callback(que, result, error):
     """callback function invoked by triton client."""
-    if error:
-        print(error)
-        que.put(dict(errcode=StatusCode.TRITON_SERVER_ERR, errmsg=f'{error}'))
-    else:
-        que.put(result.get_response(as_json=True))
+    que.put((result, error))
 
 
 class Chatbot:
@@ -627,28 +620,26 @@ class Chatbot:
         output_ids = np.zeros((1, 1, 0), dtype=np.uint32)
         text = ''
         while True:
-            result = res_queue.get()
-            if result is None:
+            result_pack = res_queue.get()
+            if result_pack is None:
                 status = StatusCode.TRITON_STREAM_END
                 res = session.response
                 session.status = StatusCode.TRITON_STREAM_END
                 break
-            if 'errcode' in result:
+            result, error = result_pack
+            if error is not None:
                 logger.error(f'got error from turbomind, code '
-                             f"{result['errcode']}, {result['errmsg']}, "
+                             f'{StatusCode.TRITON_SERVER_ERR}, {error}, '
                              f'token {session.sequence_length}')
                 session.sequence_length = preseq_length
                 session.response = ''
                 status = StatusCode.TRITON_SERVER_ERR
-                res = f"{result['errcode']}, {result['errmsg']}"
+                res = f'{status}, {error}'
                 n_token = 0
                 break
             if cancel:
                 continue
             try:
-                message = ModelInferResponse()
-                google.protobuf.json_format.Parse(json.dumps(result), message)
-                result = grpcclient.InferResult(message)
                 sequence_length = result.as_numpy('sequence_length')
                 output_ids = result.as_numpy('output_ids')
 
