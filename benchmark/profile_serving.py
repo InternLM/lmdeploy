@@ -83,10 +83,10 @@ class Engine:
 
         chatbot = Chatbot(self.server_addr,
                           ignore_eos=True,
-                          profile_serving=True,
                           top_k=self.top_k,
                           top_p=self.top_p,
                           temperature=self.temperature,
+                          capability='completion',
                           log_level=self.log_level)
         stats = []
         for prompt, input_seqlen, output_seqlen in iter(
@@ -153,7 +153,8 @@ class Engine:
             session_id, _stats = res_queue.get()
             # print(f'\n{"-" * 50}\n'
             #       f'session {session_id} stats: \n{_stats}\n{"-" * 50}\n')
-            stats.append(np.array(_stats))
+            if len(_stats) != 0:
+                stats.append(np.array(_stats))
 
         stats = np.concatenate(stats).reshape(-1, 5)
 

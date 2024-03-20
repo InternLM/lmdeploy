@@ -6,7 +6,7 @@ from utils.config_utils import get_cuda_prefix_by_workerid
 from utils.quantization_utils import quantization
 
 model_list = [
-    'meta-llama/Llama-2-7b-chat-inner-kvint8',
+    'meta-llama/Llama-2-7b-chat-hf-inner-kvint8',
     'internlm/internlm-chat-20b-inner-kvint8',
     'internlm/internlm2-chat-20b-inner-kvint8',
     'Qwen/Qwen-7B-Chat-inner-kvint8', 'Qwen/Qwen-14B-Chat-inner-kvint8',

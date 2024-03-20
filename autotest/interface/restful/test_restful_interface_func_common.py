@@ -11,8 +11,8 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
-BASE_HTTP_URL = 'http://10.140.0.187'
-DEFAULT_PORT = 23334
+BASE_HTTP_URL = 'http://localhost'
+DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2-chat-20b'
 MODEL_NAME = 'internlm2-chat-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
@@ -21,38 +21,10 @@ BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 @pytest.mark.order(8)
 @pytest.mark.turbomind
 @pytest.mark.pytorch
+@pytest.mark.chat
+@pytest.mark.completion
 @pytest.mark.flaky(reruns=2)
 class TestRestfulInterfaceBase:
-
-    def test_issue1232(self):
-
-        def process_one(question):
-            api_client = APIClient(BASE_URL)
-            model_name = api_client.available_models[0]
-
-            msg = [dict(role='user', content=question)]
-
-            data = api_client.chat_interactive_v1(msg,
-                                                  session_id=randint(1, 100),
-                                                  repetition_penalty=1.02,
-                                                  request_output_len=224)
-            for item in data:
-                pass
-
-            data = api_client.chat_completions_v1(model=model_name,
-                                                  messages=msg,
-                                                  repetition_penalty=1.02,
-                                                  stop=['<|im_end|>', '100'],
-                                                  max_tokens=10)
-
-            for item in data:
-                response = item
-
-            return response
-
-        with ThreadPoolExecutor(max_workers=256) as executor:
-            for response in tqdm(executor.map(process_one, ['你是谁'] * 500)):
-                continue
 
     def test_get_model(self):
         api_client = APIClient(BASE_URL)
@@ -85,6 +57,44 @@ class TestRestfulInterfaceBase:
         assert input_ids1[0] == 1 and input_ids3[0] == 1
         assert length5 == length2 * 100
         assert input_ids5 == input_ids2 * 100
+
+
+@pytest.mark.order(8)
+@pytest.mark.turbomind
+@pytest.mark.pytorch
+@pytest.mark.chat
+@pytest.mark.flaky(reruns=2)
+class TestRestfulInterfaceIssue:
+
+    def test_issue1232(self):
+
+        def process_one(question):
+            api_client = APIClient(BASE_URL)
+            model_name = api_client.available_models[0]
+
+            msg = [dict(role='user', content=question)]
+
+            data = api_client.chat_interactive_v1(msg,
+                                                  session_id=randint(1, 100),
+                                                  repetition_penalty=1.02,
+                                                  request_output_len=224)
+            for item in data:
+                pass
+
+            data = api_client.chat_completions_v1(model=model_name,
+                                                  messages=msg,
+                                                  repetition_penalty=1.02,
+                                                  stop=['<|im_end|>', '100'],
+                                                  max_tokens=10)
+
+            for item in data:
+                response = item
+
+            return response
+
+        with ThreadPoolExecutor(max_workers=256) as executor:
+            for response in tqdm(executor.map(process_one, ['你是谁'] * 500)):
+                continue
 
 
 @pytest.mark.order(8)

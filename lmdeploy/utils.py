@@ -1,12 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import functools
+import json
 import logging
+import os
 import sys
 import time
 from contextlib import contextmanager
 from logging import Logger, LogRecord
 from typing import List, Optional
+
+from huggingface_hub import hf_hub_download
 
 logger_initialized = {}
 
@@ -175,6 +179,20 @@ def _stop_words(stop_words: List[str], tokenizer: object):
     return stop_words
 
 
+def get_hf_config_content(pretrained_model_name_or_path: str,
+                          **kwargs) -> dict:
+    """Get config content of a hf model."""
+    if os.path.exists(pretrained_model_name_or_path):
+        config_path = os.path.join(pretrained_model_name_or_path,
+                                   'config.json')
+    else:
+        config_path = hf_hub_download(pretrained_model_name_or_path,
+                                      'config.json')
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
+
+
 def get_model(pretrained_model_name_or_path: str,
               download_dir: str = None,
               revision: str = None):
@@ -214,7 +232,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
         @functools.wraps(func)
         def __func_warpper(*args, **kwargs):
             """func warpper."""
-            if not logger.isEnabledFor(level):
+            if logger.level > level:
                 return func(*args, **kwargs)
             with __timer():
                 return func(*args, **kwargs)
@@ -224,7 +242,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
             """async warpper."""
 
             async def __tmp():
-                if not logger.isEnabledFor(level):
+                if logger.level > level:
                     return (await func(*args, **kwargs))
                 with __timer():
                     return (await func(*args, **kwargs))

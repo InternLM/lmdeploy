@@ -368,3 +368,18 @@ class ArgumentHelper:
             action='store_false',
             default=True,
             help='Trust remote code for loading hf models')
+
+    @staticmethod
+    def cache_block_seq_len(parser):
+        """Add argument cache_block_seq_len to parser."""
+
+        return parser.add_argument(
+            '--cache-block-seq-len',
+            type=int,
+            default=64,
+            help='The length of the token sequence in a k/v block. '
+            'For Turbomind Engine, if the GPU compute capability '
+            'is >= 8.0, it should be a multiple of 32, otherwise '
+            'it should be a multiple of 64. For Pytorch Engine, '
+            'if Lora Adapter is specified, this parameter will '
+            'be ignored')

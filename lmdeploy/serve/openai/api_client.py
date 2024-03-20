@@ -173,6 +173,7 @@ class APIClient:
                             repetition_penalty: float = 1.0,
                             ignore_eos: bool = False,
                             skip_special_tokens: Optional[bool] = True,
+                            adapter_name: Optional[str] = None,
                             **kwargs):
         """Interactive completions.
 
@@ -205,6 +206,8 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
+            adapter_name (str): For slora inference. Choose which lora to do
+                the inference.
 
         Yields:
             json objects consist of text, tokens, input_tokens,
@@ -347,7 +350,7 @@ class APIClient:
                 temperature=temperature,
                 repetition_penalty=repetition_penalty,
                 ignore_eos=ignore_eos):
-            if outputs['finish_reason'] == 'length':
+            if outputs['finish_reason'] == 'length' and outputs['tokens'] == 0:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
             yield outputs['text'], outputs['tokens'], outputs['finish_reason']

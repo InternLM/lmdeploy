@@ -13,7 +13,7 @@ tp_config:
 
 
 turbomind_model:
-    - meta-llama/Llama-2-7b-chat
+    - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm2-chat-1_8b
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
@@ -32,7 +32,7 @@ turbomind_model:
 
 
 pytorch_model:
-    - meta-llama/Llama-2-7b-chat
+    - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm-chat-7b
     - internlm/internlm-chat-20b
     - internlm/internlm2-chat-7b
@@ -53,7 +53,7 @@ pytorch_model:
 
 quatization_case_config:
     w4a16:
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - Qwen/Qwen-7B-Chat
         - Qwen/Qwen-14B-Chat
@@ -61,11 +61,11 @@ quatization_case_config:
         - baichuan-inc/Baichuan2-7B-Chat
         - internlm/internlm2-20b
     kvint8: # more models are supported kvint8 quantization, but the chat response are not good, already removed
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
     kvint8_w4a16:
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-20b
@@ -73,7 +73,7 @@ quatization_case_config:
         - Qwen/Qwen-14B-Chat
         - baichuan-inc/Baichuan2-7B-Chat
     w8a8:
-        - meta-llama/Llama-2-7b-chat
+        - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm-chat-20b
         - internlm/internlm2-chat-20b
         - internlm/internlm2-chat-7b

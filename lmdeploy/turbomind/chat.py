@@ -2,7 +2,7 @@
 import os
 import random
 
-from lmdeploy.messages import EngineGenerationConfig
+from lmdeploy.messages import EngineGenerationConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.tokenizer import DetokenizeState
 
@@ -65,10 +65,16 @@ def main(model_path: str,
             else:
                 new_kwargs[k] = v
         kwargs = new_kwargs
+
+    engine_cfg = TurbomindEngineConfig(model_name=model_name, tp=tp)
+    for k, v in kwargs.items():
+        if hasattr(engine_cfg, k):
+            setattr(engine_cfg, k, v)
+
     tm_model = tm.TurboMind.from_pretrained(
         model_path,
         model_name=model_name,
-        tp=tp,
+        engine_config=engine_cfg,
         capability=cap,
         chat_template_config=chat_template_cfg,
         **kwargs)
