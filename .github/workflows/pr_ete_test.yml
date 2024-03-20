@@ -41,6 +41,12 @@ jobs:
         - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
+          rm -rf /var/lib/apt/lists/*
       - name: Clone repository
         uses: actions/checkout@v2
       - name: Install pytorch
