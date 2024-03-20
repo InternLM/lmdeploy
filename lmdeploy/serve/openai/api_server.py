@@ -71,13 +71,12 @@ async def check_api_key(
 def get_model_list():
     """Available models.
 
-    Only provided one now.
+    If it is a slora serving. The model list would be [model_name,
+    adapter_name1, adapter_name2, ...]
     """
     model_names = [VariableInterface.async_engine.model_name]
     cfg = VariableInterface.async_engine.backend_config
-    if hasattr(cfg, 'adapters'):
-        if cfg.adapters:
-            model_names += cfg.adapters.keys()
+    model_names += getattr(cfg, 'adapters', [])
     return model_names
 
 
