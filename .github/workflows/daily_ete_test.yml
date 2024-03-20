@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Dependency packages, you can also set a specific version'
         type: string
-        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib'
+        default: 'packaging protobuf transformers_stream_generator transformers datasets matplotlib openai'
       tools_regression:
         required: true
         description: 'Whether start a tool regression'

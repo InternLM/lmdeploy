@@ -97,21 +97,18 @@ def getModelList(tp_num):
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
-def test_restful_chat_tp1(config, common_case_config, worker_id):
+def test_restful_chat_tp1(worker_id):
     if get_workerid(worker_id) is None:
-        run_all_step(config, common_case_config)
+        run_all_step()
     else:
-        run_all_step(config,
-                     common_case_config,
-                     worker_id=worker_id,
-                     port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 PIC = 'https://raw.githubusercontent.com/' + \
     'open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
 
 
-def run_all_step(config, port: int = DEFAULT_PORT):
+def run_all_step(port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
