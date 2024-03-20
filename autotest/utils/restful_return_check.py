@@ -68,6 +68,6 @@ def assert_chat_interactive_stream_return(output,
         assert output.get('finish_reason') is None
 
 
-def get_repate_times(input, sub_input):
+def get_repeat_times(input, sub_input):
     time = input.count(sub_input)
     return time

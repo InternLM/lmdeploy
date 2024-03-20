@@ -8,7 +8,7 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
                                         assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return,
                                         assert_chat_interactive_stream_return,
-                                        get_repate_times)
+                                        get_repeat_times)
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
@@ -494,7 +494,7 @@ class TestRestfulInterfaceChatInteractive:
                                                      request_output_len=512):
             continue
         assert_chat_interactive_batch_return(output)
-        assert 'a 上海 is a 上海, ' * 5 in output.get('text') or get_repate_times(
+        assert 'a 上海 is a 上海, ' * 5 in output.get('text') or get_repeat_times(
             output.get('text'), 'Shanghai is') > 5
 
     def test_chat_interactive_with_history_batch(self):
