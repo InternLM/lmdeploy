@@ -882,6 +882,7 @@ class DeepSeek(BaseChatTemplate):
             user='### Instruction:\n',
             eoh='\n',
             assistant='### Response:\n',
+            eoa='\n<|EOT|>',
             separator='\n',
             stop_words=['<|EOT|>'],
             **kwargs):
@@ -892,6 +893,7 @@ class DeepSeek(BaseChatTemplate):
                          user=user,
                          eoh=eoh,
                          assistant=assistant,
+                         eoa=eoa,
                          separator=separator,
                          stop_words=stop_words,
                          **kwargs)
