@@ -77,7 +77,7 @@ def get_model_list():
     """
     model_names = [VariableInterface.async_engine.model_name]
     cfg = VariableInterface.async_engine.backend_config
-    model_names += getattr(cfg, 'adapters', [])
+    model_names += getattr(cfg, 'adapters', None) or []
     return model_names
 
 
