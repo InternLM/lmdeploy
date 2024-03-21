@@ -80,4 +80,5 @@ add_executable(test_context_attention_layer test_context_attention_layer.cu)
 target_link_libraries(test_context_attention_layer PUBLIC
                       Llama CUDA::cublas CUDA::cublasLt CUDA::cudart
                       unfused_attention_kernels
+                      flash_attention
                       memory_utils tensor cublasMMWrapper cuda_utils logger)

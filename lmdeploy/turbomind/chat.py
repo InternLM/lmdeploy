@@ -2,12 +2,10 @@
 import os
 import random
 
-from lmdeploy.messages import EngineGenerationConfig
-from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.messages import EngineGenerationConfig, TurbomindEngineConfig
+from lmdeploy.model import MODELS, ChatTemplateConfig
+from lmdeploy.serve.async_engine import deduce_a_name
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.turbomind.utils import (ModelSource,
-                                      get_model_name_from_workspace_model,
-                                      get_model_source)
 from lmdeploy.utils import _stop_words
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
@@ -24,16 +22,6 @@ def input_prompt(model_name):
     return '\n'.join(iter(input, sentinel))
 
 
-def valid_str(string, coding='utf-8'):
-    """decode text according to its encoding type."""
-    invalid_chars = [b'\xef\xbf\xbd']
-    bstr = bytes(string, coding)
-    for invalid_char in invalid_chars:
-        bstr = bstr.replace(invalid_char, b'')
-    ret = bstr.decode(encoding=coding, errors='ignore')
-    return ret
-
-
 def main(model_path: str,
          model_name: str = None,
          session_id: int = 1,
@@ -43,9 +31,15 @@ def main(model_path: str,
          repetition_penalty: float = 1.0,
          cap: str = 'chat',
          tp: int = 1,
+         model_format: str = None,
+         quant_policy: int = 0,
+         cache_max_entry_count: float = 0.8,
+         cache_block_seq_len: int = 64,
+         rope_scaling_factor: float = 0.0,
+         session_len: int = None,
          stream_output: bool = True,
          request_output_len: int = 1024,
-         **kwargs):
+         chat_template: str = None):
     """An example to perform model inference through the command line
     interface.
 
@@ -57,44 +51,52 @@ def main(model_path: str,
         top_p (int): sampling top p.
         temperature (float): sampling temperature.
         repetition_penalty (float): parameter to penalize repetition
-        cap (str): the capability of a model. For example, codellama has
-            the ability among ['completion', 'infilling', 'chat', 'python']
+        cap (str): the capability of a model. For example, codellama has the ability among ['completion', 'infilling', 'chat', 'python']
         tp (int): GPU number used in tensor parallelism
+        model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq]
+        quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
+        cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
+        cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
+        rope_scaling_factor (float): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
+        session_len (int): the length input output tokens
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
-        **kwarg (dict): other arguments for initializing model's chat template
-    """
+        chat_template (str): user defined chat template
+    """ # noqa: E 501
     # chat template
-    if model_name is None:
-        model_source = get_model_source(model_path)
-        if model_source == ModelSource.WORKSPACE:
-            model_name = get_model_name_from_workspace_model(model_path)
-        else:
-            model_name = best_match_model(model_path)
-            assert model_name is not None, 'Can not find match model template'
-            print(f'match template: <{model_name}>')
-    chat_template_args = {}
-    new_kwargs = {}
-    for k, v in kwargs.items():
-        if hasattr(ChatTemplateConfig, k) and v is not None:
-            chat_template_args[k] = v
-        else:
-            new_kwargs[k] = v
-    if 'capability' not in chat_template_args:
-        chat_template_args['capability'] = cap
-    model = MODELS.get(model_name).from_config(**chat_template_args)
+    if chat_template is not None:
+        chat_template_config = ChatTemplateConfig.from_json(chat_template)
+        model = chat_template_config.chat_template
+    else:
+        model_name = deduce_a_name(model_path, model_name, None, None)
+        model = MODELS.get(model_name)(capability=cap)
 
     # engine
+    if session_len is None:
+        session_len = model.session_len
+
+    engine_cfg = TurbomindEngineConfig(
+        model_name=model_name,
+        model_format=model_format,
+        session_len=session_len,
+        cache_max_entry_count=cache_max_entry_count,
+        cache_block_seq_len=cache_block_seq_len,
+        quant_policy=quant_policy,
+        rope_scaling_factor=rope_scaling_factor,
+        tp=tp)
+    print('engine_cfg:\n', engine_cfg, sep='', flush=True)
+
     from lmdeploy import turbomind as tm
-    kwargs = new_kwargs
-    tm_model = tm.TurboMind.from_pretrained(model_path, tp=tp, **kwargs)
-    tokenizer = tm_model.tokenizer
+    tm_model = tm.TurboMind.from_pretrained(model_path,
+                                            engine_config=engine_cfg)
     generator = tm_model.create_instance()
 
     # generateion config
+    tokenizer = tm_model.tokenizer
     stop_words = _stop_words(model.stop_words, tokenizer)
     if stop_words is not None:
         stop_words = stop_words[0][0].tolist()
+
     gen_config = EngineGenerationConfig(max_new_tokens=request_output_len,
                                         top_k=top_k,
                                         top_p=top_p,
@@ -105,7 +107,6 @@ def main(model_path: str,
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
-
     while True:
         prompt = input_prompt(model_name)
         if prompt == 'exit':
@@ -117,9 +118,8 @@ def main(model_path: str,
             seed = random.getrandbits(64)
         else:
             prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt, nth_round == 1)
             print(f'{prompt} ', end='', flush=True)
-            state = DetokenizeState()
+            input_ids = tokenizer.encode(prompt, nth_round == 1)
             gen_config.random_seed = seed
 
             if model.capability == 'chat':
@@ -137,6 +137,7 @@ def main(model_path: str,
                       ' Please end the session.')
                 continue
 
+            state = DetokenizeState()
             for outputs in generator.stream_infer(
                     session_id=session_id,
                     input_ids=[input_ids],
@@ -149,8 +150,7 @@ def main(model_path: str,
                 # decode res
                 response, state = tokenizer.detokenize_incrementally(
                     res, state=state)
-                response = valid_str(response)
-                print(f'{response}', end='', flush=True)
+                print(response, end='', flush=True)
 
             # update step
             step += len(input_ids) + tokens

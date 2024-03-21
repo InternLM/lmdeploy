@@ -6,7 +6,7 @@ import os.path as osp
 import sys
 from configparser import ConfigParser
 from contextlib import contextmanager
-from queue import Queue
+from queue import LifoQueue, Queue
 from threading import Thread
 from typing import Iterable, List, Optional, Union
 
@@ -78,6 +78,11 @@ def _update_engine_config(config: TurbomindEngineConfig, **kwargs):
 
 
 def _update_tm_config(dst: TurbomindModelConfig, src: TurbomindEngineConfig):
+    # A workaround to support max token number of each iteration in prefill
+    if src.max_prefill_token_num is not None and src.session_len is not None:
+        dst.num_tokens_per_iter = src.max_prefill_token_num
+        dst.max_prefill_iters = (src.session_len + src.max_prefill_token_num -
+                                 1) // src.max_prefill_token_num
     dst_dict = copy.deepcopy(dst.__dict__)
     src_dict = copy.deepcopy(src.__dict__)
     src_dict['tensor_para_size'] = src_dict['tp']
@@ -492,6 +497,27 @@ class TurboMindInstance:
             t.start()
             self.threads[device_id] = t
 
+    def _async_forward_callback(self, result, ctx, que: LifoQueue):
+        que.put((False, result))
+
+    def _async_forward_thread(self, inputs, que: LifoQueue):
+        instance_comm = self.tm_model.model_comm.create_instance_comm(
+            self.gpu_count)
+
+        def _func(device_id, enque_output):
+            with cuda_ctx(device_id):
+                output = self.model_insts[device_id].forward(
+                    inputs, instance_comm)
+                if enque_output:
+                    que.put((True, output))
+
+        for device_id in range(self.gpu_count):
+            t = Thread(target=_func,
+                       args=(device_id, device_id == 0),
+                       daemon=True)
+            t.start()
+            self.threads[device_id] = t
+
     def _update_generation_config(self, config: EngineGenerationConfig,
                                   **kwargs: dict):
         if config is None:
@@ -521,6 +547,11 @@ class TurboMindInstance:
                                                   sequence_end=True):
             pass
 
+    async def async_end(self, session_id: int):
+        """End the given session."""
+        self.end(session_id)
+        await asyncio.sleep(0.002)
+
     def cancel(self, session_id: int):
         """Stop current streaming inference."""
         input_ids = [self.tm_model.tokenizer.eos_token_id]
@@ -532,6 +563,11 @@ class TurboMindInstance:
                                                    sequence_end=False,
                                                    stop=True):
             pass
+
+    async def async_cancel(self, session_id: int):
+        """End the given session."""
+        self.cancel(session_id)
+        await asyncio.sleep(0.002)
 
     def prepare_inputs(self,
                        session_id,
@@ -680,8 +716,13 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
+        # start forward thread
+        que = LifoQueue()
+        from functools import partial
+        _forward_callback = partial(self._async_forward_callback, que=que)
+        _forward_thread = partial(self._async_forward_thread, que=que)
         if stream_output and not stop:
-            self.model_insts[0].register_callback(self._forward_callback)
+            self.model_insts[0].register_callback(_forward_callback)
 
         gen_config = self._update_generation_config(gen_config, **kwargs)
         inputs, input_lengths = self.prepare_inputs(
@@ -696,23 +737,17 @@ class TurboMindInstance:
             gen_config=gen_config)
 
         tm_inputs = _np_dict_to_tm_dict(inputs)
-        # start forward thread
-        self.que = Queue()
-        self._forward_thread(tm_inputs)
+        _forward_thread(tm_inputs)
 
         seq_start = input_lengths + input_lengths.new_tensor(step)
 
+        prev_len = 0
         # generator
         while True:
-            # Thanks for https://github.com/frankxyy and his issue
-            # https://github.com/InternLM/lmdeploy/issues/832
-            while self.que.qsize() == 0:
-                await asyncio.sleep(0.002)  # sleep(0) makes server unstable
+            while que.qsize() == 0:  # let other requests in
+                await asyncio.sleep(0.002)
 
-            while self.que.qsize() > 1:
-                self.que.get()
-
-            finish, tm_outputs = self.que.get()
+            finish, tm_outputs = que.get()
 
             outputs = _tm_dict_to_torch_dict(tm_outputs)
 
@@ -737,13 +772,15 @@ class TurboMindInstance:
                     outputs = (status, output[:-1].tolist(), len_)
                 else:
                     outputs = (status, output.tolist(), len_)
+            if outputs[-1] < prev_len and not finish:
+                continue
+            else:
+                prev_len = outputs[-1]
             yield outputs
 
             if finish:
                 for t in self.threads:
                     t.join()
-                while self.que.qsize() > 0:
-                    self.que.get()
                 break
 
         if stream_output and not stop:

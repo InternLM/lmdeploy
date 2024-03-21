@@ -56,7 +56,7 @@ class TurbomindModelConfig:
     max_context_token_num: int = 1
     step_length: int = 1
     cache_max_entry_count: float = 0.8
-    cache_block_seq_len: int = 128
+    cache_block_seq_len: int = 64
     cache_chunk_size: int = -1
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
@@ -65,6 +65,7 @@ class TurbomindModelConfig:
     quant_policy: int = 0
     max_position_embeddings: int = 0
     rope_scaling_factor: float = 0.0
+    use_dynamic_ntk: int = 0
     use_logn_attn: int = 0
 
     @classmethod
@@ -88,6 +89,13 @@ class TurbomindModelConfig:
         env['tensor_para_size'] = env['tp']
         ret = TurbomindModelConfig.from_dict(env, allow_none=True)
         ret.rotary_embedding = ret.size_per_head
+        # workround to support `max_prefill_token_num` in turbomind engine
+        if config.max_prefill_token_num is not None and \
+                config.session_len is not None:
+            ret.num_tokens_per_iter = config.max_prefill_token_num
+            ret.max_prefill_iters = (config.session_len +
+                                     config.max_prefill_token_num -
+                                     1) // config.max_prefill_token_num
         return ret
 
     def toini(self):

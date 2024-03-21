@@ -7,10 +7,11 @@ from utils.rule_condition_assert import assert_result
 from lmdeploy.serve.openai.api_client import APIClient
 
 
-def open_chat_test(config, case_info, model, url):
+def open_chat_test(config, case_info, model, url, worker_id: str = 'default'):
     log_path = config.get('log_path')
 
-    restful_log = os.path.join(log_path, 'restful_' + model + '.log')
+    restful_log = os.path.join(log_path,
+                               'restful_' + model + '_' + worker_id + '.log')
 
     file = open(restful_log, 'w')
 
@@ -30,13 +31,7 @@ def open_chat_test(config, case_info, model, url):
 
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages=messages,
-                                                     temperature=0.01,
-                                                     request_output_len=1024):
-            if output.get('code') is not None and output.get('code') != 0:
-                file.writelines('output error:' + output.get('message') + '\n')
-                msg = output.get('message')
-                result = False
-                break
+                                                     temperature=0.01):
             output_message = output.get('choices')[0].get('message')
             messages.append(output_message)
 
@@ -55,10 +50,15 @@ def open_chat_test(config, case_info, model, url):
     return result, restful_log, msg
 
 
-def interactive_test(config, case_info, model, url):
+def interactive_test(config,
+                     case_info,
+                     model,
+                     url,
+                     worker_id: str = 'default'):
     log_path = config.get('log_path')
 
-    interactive_log = os.path.join(log_path, 'interactive_' + model + '.log')
+    interactive_log = os.path.join(
+        log_path, 'interactive_' + model + '_' + worker_id + '.log')
 
     file = open(interactive_log, 'w')
 
@@ -83,8 +83,7 @@ def interactive_test(config, case_info, model, url):
         for output in api_client.chat_interactive_v1(prompt=prompt,
                                                      interactive_mode=True,
                                                      session_id=random_chars,
-                                                     temperature=0.01,
-                                                     request_output_len=1024):
+                                                     temperature=0.01):
             output_content = output.get('text')
             file.writelines('output:' + output_content + '\n')
 
@@ -113,3 +112,12 @@ def health_check(url):
             return True
     except Exception:
         return False
+
+
+def get_model(url):
+    try:
+        api_client = APIClient(url)
+        model_name = api_client.available_models[0]
+        return model_name
+    except Exception:
+        return None

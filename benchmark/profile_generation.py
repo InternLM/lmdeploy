@@ -1,13 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import csv
-import logging
 import os
 import time
 from dataclasses import dataclass
 from queue import Queue
 from threading import Thread
-from typing import List
+from typing import List, Union
 
 import numpy as np
 from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
@@ -16,13 +15,17 @@ from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
                     nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
+from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
+from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+                               TurbomindEngineConfig)
 
-def infer(model, session_id: int, input_ids: List, output_seqlen: int,
-          top_k: int, top_p: float, temperature: float, test_round: int,
-          que: Queue):
+
+def infer(model, session_id: int, input_ids: List,
+          gen_config: EngineGenerationConfig, test_round: int, que: Queue):
     if session_id == 1:
         pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
+    output_seqlen = gen_config.max_new_tokens
     stats = []
     for _ in range(test_round):
         token_latency_stats = [0] * (output_seqlen + 1)
@@ -42,20 +45,19 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
         """   # noqa: E501
         for outputs in chatbot.stream_infer(session_id,
                                             input_ids,
-                                            request_output_len=output_seqlen,
+                                            gen_config=gen_config,
                                             sequence_start=True,
                                             sequence_end=True,
-                                            ignore_eos=True,
-                                            stream_output=True,
-                                            top_k=top_k,
-                                            top_p=top_p,
-                                            temperature=temperature):
+                                            stream_output=True):
             _, res, n_token = outputs
             now = time.perf_counter()
             if n_prev_token != n_token:
                 token_latency_stats[n_prev_token] = np.round(now - prev, 3)
                 n_prev_token = n_token
             prev = now
+        # for pytorch engine to restart a session
+        if hasattr(chatbot, 'end'):
+            chatbot.end(session_id)
         if session_id == 1:
             pbar.update(1)
 
@@ -66,12 +68,13 @@ def infer(model, session_id: int, input_ids: List, output_seqlen: int,
     que.put((session_id, stats))
 
 
-def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
-           warmup_round: int):
+def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
+           gen_config: EngineGenerationConfig):
     if not warmup_round:
         return
 
     print('start to warmup ...')
+    output_seqlen = gen_config.max_new_tokens
 
     def _infer(model, session_id):
         chatbot = model.create_instance()
@@ -82,15 +85,16 @@ def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
                                           sequence_start=True,
                                           sequence_end=True,
                                           ignore_eos=True,
-                                          top_k=1,
-                                          top_p=1.0,
-                                          temperature=1.0):
+                                          gen_config=gen_config):
                 continue
+            # for pytorch engine to restart a session
+            if hasattr(chatbot, 'end'):
+                chatbot.end(session_id)
 
     _start = time.perf_counter()
     procs = []
     for i in range(concurrency):
-        proc = Thread(target=_infer, args=(model, i + 1))
+        proc = Thread(target=_infer, args=(model, i + 1), daemon=True)
         procs.append(proc)
         proc.start()
 
@@ -102,26 +106,27 @@ def warmup(model, concurrency: int, input_ids: List[int], output_seqlen: int,
 
 
 def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
-                       output_seqlen: int, tp: int, top_k: int, top_p: float,
-                       temperature: float, test_round: int, warmup_round: int,
-                       **kwargs):
-
-    from lmdeploy.turbomind import TurboMind
+                       engine_config: Union[PytorchEngineConfig,
+                                            TurbomindEngineConfig],
+                       gen_config: EngineGenerationConfig, test_round: int,
+                       warmup_round: int):
+    output_seqlen = gen_config.max_new_tokens
     print(f'profiling ... concurrency: {concurrency}, '
           f'n_prompt_token: {input_seqlen}, '
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
-
-    # avoid turbomind checking chat template name by setting `model_name='llama'` # noqa
-    tm_model = TurboMind(model_path=model_path,
-                         tp=tp,
-                         model_name='llama',
-                         **kwargs)
+    if isinstance(engine_config, TurbomindEngineConfig):
+        from lmdeploy.turbomind import TurboMind
+        tm_model = TurboMind.from_pretrained(model_path,
+                                             engine_config=engine_config)
+    elif isinstance(engine_config, PytorchEngineConfig):
+        from lmdeploy.pytorch.engine import Engine
+        tm_model = Engine(model_path, engine_config)
 
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
     input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
-    warmup(tm_model, concurrency, input_ids, output_seqlen, warmup_round)
+    warmup(tm_model, concurrency, input_ids, warmup_round, gen_config)
 
     que = Queue()
     procs = []
@@ -129,8 +134,8 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
 
     for i in range(concurrency):
         proc = Thread(target=infer,
-                      args=(tm_model, i + 1, input_ids, output_seqlen, top_k,
-                            top_p, temperature, test_round, que))
+                      args=(tm_model, i + 1, input_ids, gen_config, test_round,
+                            que))
         procs.append(proc)
         proc.start()
 
@@ -247,7 +252,7 @@ class MemoryMonitor:
     def start(cls):
         cls._running = True
         from multiprocessing import Process
-        cls.proc = Process(target=cls.mem_monitor)
+        cls.proc = Process(target=cls.mem_monitor, daemon=True)
         cls.proc.start()
 
     @classmethod
@@ -273,64 +278,97 @@ class ProfileResult:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Regression Test')
+    parser = argparse.ArgumentParser(
+        description='Profile the token generation performance with'
+        ' pytorch or turbomind engine',
+        formatter_class=DefaultsAndTypesHelpFormatter)
     parser.add_argument('model_path',
                         type=str,
                         help='the path of the model in localhost or '
                         'the repo_id of the model in huggingface.co')
-    parser.add_argument('--concurrency',
+    parser.add_argument('-c',
+                        '--concurrency',
                         nargs='+',
                         type=int,
                         help='how many requests launched concurrently',
                         default=[1, 16, 32, 64])
     parser.add_argument(
+        '-pt',
         '--prompt-tokens',
         nargs='+',
         type=int,
-        help='how many requests launched concurrently. One-to-one'
+        help='how many requests launched concurrently. One-to-one '
         'correspondence with completion-tokens',
         default=[1, 128, 128, 2048, 2048])
-    parser.add_argument('--completion-tokens',
+    parser.add_argument('-ct',
+                        '--completion-tokens',
                         nargs='+',
                         type=int,
                         help='how many tokens to be generated. One-to-one'
                         'correspondence with prompt-tokens',
                         default=[128, 128, 2048, 128, 2048])
-    parser.add_argument('--tp', type=int, help='Tensor parallel', default=1)
-    parser.add_argument('--top_k',
-                        type=int,
-                        help='The number of highest probability vocabulary '
-                        'tokens to keep for top-k-filtering',
-                        default=1)
-    parser.add_argument('--top_p',
-                        type=float,
-                        help='the set of most probable tokens with '
-                        'probabilities that add up to top_p or higher '
-                        'are kept for generation',
-                        default=1.0)
-    parser.add_argument('--temperature',
-                        type=float,
-                        help='The value used to modulate the next token '
-                        'probabilities',
-                        default=1.0)
     parser.add_argument('--csv',
                         type=str,
                         help='Where to save the result.',
                         default='profile_generation.csv')
-    parser.add_argument('--log-level',
-                        help='set log level',
-                        default='ERROR',
-                        choices=list(logging._nameToLevel.keys()))
-    parser.add_argument('--test-round',
+    parser.add_argument('-tr',
+                        '--test-round',
                         type=int,
                         help='number of test rounds',
-                        default=6)
-    parser.add_argument('--warmup-round',
+                        default=3)
+    parser.add_argument('-w',
+                        '--warmup-round',
                         type=int,
-                        help='number of warmuop rounds',
+                        help='number of warmup rounds',
                         default=1)
+    # other args
+    ArgumentHelper.top_p(parser)
+    ArgumentHelper.temperature(parser)
+    ArgumentHelper.top_k(parser)
+    ArgumentHelper.log_level(parser)
+    ArgumentHelper.backend(parser)
+    # pytorch engine args
+    pt_group = parser.add_argument_group('PyTorch engine arguments')
+    tp_act = ArgumentHelper.tp(pt_group)
+    cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
+    cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
+    session_len_act = ArgumentHelper.session_len(pt_group, default=2048)
+
+    # turbomind engine args
+    tb_group = parser.add_argument_group('TurboMind engine argument')
+    tb_group._group_actions.append(tp_act)
+    tb_group._group_actions.append(session_len_act)
+    tb_group._group_actions.append(cache_count_act)
+    tb_group._group_actions.append(cache_block_seq_len_act)
+    ArgumentHelper.model_format(tb_group, default='hf')
     args = parser.parse_args()
     return args
+
+
+def __proc_cb(*args, ret_pipe, target):
+    try:
+        ret = target(*args)
+        ret_pipe[1].send(ret)
+    except Exception as e:
+        ret_pipe[1].send(e)
+
+
+def _process_map(target, iterable):
+    from multiprocessing import Pipe, get_context
+
+    pipe = Pipe(False)
+    spawn_context = get_context('spawn')
+    proc = spawn_context.Process(target=__proc_cb,
+                                 args=iterable,
+                                 kwargs=dict(ret_pipe=pipe, target=target))
+    proc.start()
+    proc.join()
+
+    ret = pipe[0].recv()
+    if isinstance(ret, Exception):
+        raise ret
+
+    return ret
 
 
 def main():
@@ -341,25 +379,48 @@ def main():
 
     os.environ['TM_LOG_LEVEL'] = args.log_level
     results: List[ProfileResult] = []
+
     for batch in args.concurrency:
         for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
                                                     args.completion_tokens):
             MemoryMonitor.start()
             from functools import partial
-            from multiprocessing import Pool
-            profile_target = partial(profile_throughput,
-                                     concurrency=batch,
-                                     input_seqlen=prompt_tokens,
-                                     output_seqlen=completion_tokens,
-                                     tp=args.tp,
-                                     top_k=args.top_k,
-                                     top_p=args.top_p,
-                                     temperature=args.temperature,
-                                     test_round=args.test_round,
-                                     warmup_round=args.warmup_round)
-            output = Pool(1).map(profile_target, (args.model_path, ))
+
+            # make sure session_len >= prompt_tokens + completion_tokens
+            session_len = max(args.session_len,
+                              prompt_tokens + completion_tokens)
+            if args.backend == 'turbomind':
+                engine_config = TurbomindEngineConfig(
+                    cache_max_entry_count=args.cache_max_entry_count,
+                    cache_block_seq_len=args.cache_block_seq_len,
+                    model_format=args.model_format,
+                    session_len=session_len,
+                    tp=args.tp)
+            elif args.backend == 'pytorch':
+                engine_config = PytorchEngineConfig(
+                    cache_max_entry_count=args.cache_max_entry_count,
+                    block_size=args.cache_block_seq_len,
+                    session_len=session_len,
+                    tp=args.tp,
+                    thread_safe=True)
+            gen_config = EngineGenerationConfig(
+                top_k=args.top_k,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                max_new_tokens=completion_tokens,
+                ignore_eos=True)
+            profile_target = partial(
+                profile_throughput,
+                concurrency=batch,
+                input_seqlen=prompt_tokens,
+                engine_config=engine_config,
+                gen_config=gen_config,
+                test_round=args.test_round,
+                warmup_round=args.warmup_round,
+            )
+            output = _process_map(profile_target, (args.model_path, ))
             model_name, first_token_latency, percentiles, \
-                throughput_per_proc, tp = output[0]
+                throughput_per_proc, tp = output
             time.sleep(5)  # wait a while for releasing GPU mem
             memory = MemoryMonitor.terminate()
             device_count = MemoryMonitor.device_count.value

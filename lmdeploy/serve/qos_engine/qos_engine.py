@@ -65,9 +65,9 @@ class QosEngine:
         """check while qos engine is enabled."""
         return self.qos_config.is_qos_enabled
 
-    def stop_session(self, session_id: int):
+    async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        self.engine.stop_session(session_id)
+        await self.engine.stop_session(session_id)
 
     async def generate(self, request):
         """entry of qos engine generate for three api."""
@@ -126,6 +126,7 @@ class QosEngine:
                 if request.max_tokens else 512,
                 stop=request.stop,
                 top_p=request.top_p,
+                top_k=request.top_k,
                 temperature=request.temperature,
                 repetition_penalty=request.repetition_penalty,
                 ignore_eos=request.ignore_eos)

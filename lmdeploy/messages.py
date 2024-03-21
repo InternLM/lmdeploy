@@ -87,6 +87,7 @@ class EngineGenerationConfig(GenerationConfig):
         return EngineGenerationConfig(
             n=gen_config.n,
             max_new_tokens=gen_config.max_new_tokens,
+            min_new_tokens=gen_config.min_new_tokens,
             top_p=gen_config.top_p,
             top_k=gen_config.top_k,
             temperature=gen_config.temperature,
@@ -111,11 +112,13 @@ class TurbomindEngineConfig:
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
             For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it defaults to 0.5, depicting the percentage of TOTAL GPU memory to be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8, signifying the percentage of FREE GPU memory to be reserved for the k/v cache
-        quant_policy (int): , default to 0. When k/v is quantized into 8 bit, set it to 4
+        cache_block_seq_len (int): the length of the token sequence in a k/v block, default to 64
+        quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
         rope_scaling_factor (int): scaling factor used for dynamic ntk, default to 0. TurboMind follows the implementation of transformer LlamaAttention
         use_logn_attn (bool): whether or not to use log attn: default to False
         download_dir (str): Directory to download and load the weights, default to the default cache directory of huggingface.
         revision (str): The specific model version to use. It can be a branch name, a tag name, or a commit id. If unspecified, will use the default version.
+        max_prefill_token_num(int): the number of tokens each iteration during prefill, default to 8192
     """  # noqa: E501
 
     model_name: Optional[str] = None
@@ -124,11 +127,13 @@ class TurbomindEngineConfig:
     session_len: Optional[int] = None
     max_batch_size: int = 128
     cache_max_entry_count: float = 0.8
+    cache_block_seq_len: int = 64
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
     download_dir: Optional[str] = None
     revision: Optional[str] = None
+    max_prefill_token_num: int = 8192
 
 
 @dataclass
@@ -140,6 +145,10 @@ class PytorchEngineConfig:
         tp (int): Tensor Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. Default 128.
+        cache_max_entry_count (float): the percentage of gpu memory occupied
+            by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
+            it defaults to 0.8, signifying the percentage of FREE GPU memory
+            to be reserved for the k/v cache
         eviction_type (str): What action to perform when kv cache
             is full, ['recompute', 'copy'], Default 'recompute'.
         prefill_interval (int): Interval to perform prefill,
@@ -151,6 +160,7 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters (dict): The path configs to lora adapters.
         max_prefill_token_num (int): tokens per iteration.
+        thread_safe (bool): thread safe engine instance.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
         revision (str): The specific model version to use.
@@ -161,13 +171,15 @@ class PytorchEngineConfig:
     tp: int = 1
     session_len: int = None
     max_batch_size: int = 128
+    cache_max_entry_count: float = 0.8
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     block_size: int = 64
     num_cpu_blocks: int = 0
     num_gpu_blocks: int = 0
     adapters: Dict[str, str] = None
-    max_prefill_token_num: int = 16384
+    max_prefill_token_num: int = 4096
+    thread_safe: bool = False
     download_dir: str = None
     revision: str = None
 

@@ -2,18 +2,91 @@ name: daily_ete_test
 
 on:
   workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is InternLM'
+        type: string
+        default: 'InternLM/lmdeploy'
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      backend:
+        required: true
+        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
+      model:
+        required: true
+        description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
+        type: string
+        default: "['quantization','convert','pipeline','restful','chat','interface-pipeline']"
+      tools_regression:
+        required: true
+        description: 'Whether start a tool regression'
+        type: boolean
+        default: true
+      restful_regression:
+        required: true
+        description: 'Whether start a restful api regression'
+        type: boolean
+        default: true
+      triton_regression:
+        required: true
+        description: 'Whether start a triton server api regression'
+        type: boolean
+        default: true
   schedule:
-    - cron:  '00 23 * * *'
+    - cron:  '00 21 * * *'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
+  OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
 
 
 jobs:
-  test_functions:
+  linux-build:
+    strategy:
+      matrix:
+        pyver: [py38, py310]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: ${{ matrix.pyver }}
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda11.8
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          echo ${GITHUB_RUN_ID}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
+
+
+  test_tools:
+    needs: linux-build
+    if: ${{github.event_name == 'schedule' || inputs.tools_regression}}
     runs-on: [self-hosted, linux-a100]
-    timeout-minutes: 240
+    timeout-minutes: 300
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -23,6 +96,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -33,71 +107,114 @@ jobs:
           dpkg -i /root/packages/allure_2.24.1-1_all.deb
           rm -rf /var/lib/apt/lists/*
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
           python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
-      - name: Build lmdeploy
-        run: |
-          python3 -m pip install cmake
-          python3 -m pip install -r requirements/build.txt
-          mkdir build
-          cd build
-          cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
-              -DCMAKE_INSTALL_PREFIX=/opt/tritonserver \
-              -DBUILD_PY_FFI=ON \
-              -DBUILD_MULTI_GPU=ON \
-              -DCMAKE_CUDA_FLAGS="-lineinfo" \
-              -DUSE_NVTX=ON \
-              -DSM=80 \
-              -DCMAKE_CUDA_ARCHITECTURES=80 \
-              -DBUILD_TEST=OFF
-          make -j$(nproc) && make install
       - name: Install lmdeploy
         run: |
           python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt -r requirements/test.txt
-          python3 -m pip install .
+          python3 -m pip install my-artifact-${{ github.run_id }}-py38/lmdeploy-*.whl
+          python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Test lmdeploy - quantization
+          rm -rf allure-results
+      - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
         run: |
-          pytest autotest -m '(quantization or quantization_w8a8) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 8 --alluredir=allure-results --clean-alluredir
+          pytest autotest/tools/quantization/test_quantization_w4a16.py -m 'not pr_test' -n 8 --alluredir=allure-results --clean-alluredir
+      - name: Test lmdeploy - quantization kv int8
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization w8a8
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - quantization kv int8 and w4a16
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'quantization'))
+        run: |
+          pytest autotest/tools/quantization/test_quantization_kvint8_w4a16.py -n 8 --alluredir=allure-results
       - name: Test lmdeploy - convert
         continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'convert'))
         run: |
-          pytest autotest -m 'convert and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 6 --alluredir=allure-results
-      - name: Test lmdeploy - pipeline
+          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=allure-results
+      - name: Test lmdeploy - chat workspace
         continue-on-error: true
-        timeout-minutes: 60
-        run: pytest autotest -m '(pipeline_chat) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' --alluredir=allure-results
-      - name: Test lmdeploy - restful
-        continue-on-error: true
-        run: pytest autotest -m restful_api --alluredir=allure-results
-      - name: Test lmdeploy - chat
-        continue-on-error: true
-        timeout-minutes: 60
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        timeout-minutes: 20
         run: |
-          pytest autotest -m '(command_chat or command_chat_hf or command_chat_pytorch) and not Baichuan2_7B_Chat and not Baichuan2_13B_Chat' -n 4 --alluredir=allure-results
-      - name: Downgrade transformers
-        run: python3 -m pip install transformers==4.33.0
-      - name: Test lmdeploy - run Baichuan
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf turbomind
         continue-on-error: true
-        timeout-minutes: 50
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        timeout-minutes: 20
         run: |
-          pytest autotest -m '(Baichuan2_7B_Chat or Baichuan2_13B_Chat) and not pipeline_chat_pytorch' --alluredir=allure-results
-      - name: Test lmdeploy - rerun fail cases
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - chat hf torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'chat'))
+        timeout-minutes: 20
         run: |
-          pytest autotest --alluredir=allure-results --lf
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/chat/test_command_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - pipeline turbomind
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        timeout-minutes: 25
+        run: |
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful turbomind
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        timeout-minutes: 30
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_turbomind.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - interface pipeline turbomind case
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'turbomind') && contains(fromJSON(github.event.inputs.model), 'interface-pipeline'))
+        timeout-minutes: 75
+        run: |
+          pytest autotest/interface/pipeline -m 'not pr_test' --alluredir=allure-results
+      - name: Test lmdeploy - pipeline torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'pipeline'))
+        timeout-minutes: 25
+        run: |
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/pipeline/test_pipeline_chat_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - restful torch
+        continue-on-error: true
+        if: github.event_name == 'schedule' || (contains(fromJSON(github.event.inputs.backend), 'pytorch') && contains(fromJSON(github.event.inputs.model), 'restful'))
+        timeout-minutes: 40
+        run: |
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=allure-results
+          pytest autotest/tools/restful/test_restful_chat_hf_pytorch.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=allure-results
+      - name: Test lmdeploy - rerun all fail cases
+        timeout-minutes: 30
+        if: github.event_name == 'schedule' || (github.event.inputs.backend != '' && github.event.inputs.model != '')
+        run: |
+          pytest autotest --lf --alluredir=allure-results
       - name: Generate reports
         if: always()
         run: |
@@ -114,8 +231,11 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
+
   test_triton:
-    runs-on: [self-hosted, linux-a100]
+    if: ${{github.event_name == 'schedule' || !cancelled() && inputs.triton_regression}}
+    runs-on: [self-hosted, linux-a100-2]
+    needs: test_tools
     timeout-minutes: 30
     env:
       HF_MODEL: /nvme/qa_test_models/internlm-chat-20b
@@ -124,7 +244,10 @@ jobs:
       GRPC_PORT: 33337
     steps:
       - name: Clone repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Create test container
         run: |
           export CONTAINER_ID=$(docker create \
@@ -234,13 +357,111 @@ jobs:
           docker stop $CONTAINER_ID
 
 
+
+  test_restful:
+    if: ${{github.event_name == 'schedule' || !cancelled() && inputs.restful_regression}}
+    runs-on: [self-hosted, linux-a100]
+    needs: test_tools
+    strategy:
+      matrix:
+        backend: ${{fromJSON(github.event.inputs.backend)}}
+    timeout-minutes: 300
+    env:
+      REPORT_DIR: /nvme/qa_test_models/test-reports
+    container:
+      image: nvcr.io/nvidia/tritonserver:22.12-py3
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk/qa_test_models:/mnt/bigdisk/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Setup systems
+        run: |
+          rm /etc/apt/sources.list.d/cuda*.list
+          apt-get update && apt-get install -y --no-install-recommends rapidjson-dev \
+              libgoogle-glog-dev libgl1 openjdk-8-jre-headless
+          dpkg -i /root/packages/allure_2.24.1-1_all.deb
+          rm -rf /var/lib/apt/lists/*
+      - name: Clone repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+      - name: Install pytorch
+        run: |
+          python3 -m pip cache dir
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip install packaging protobuf transformers_stream_generator transformers datasets
+          # manually install flash attn
+          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.6/flash_attn-2.3.6+cu118torch2.0cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.3.6+cu118torch2.1cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
+          python3 -m pip install my-artifact-${{ github.run_id }}-py38/lmdeploy-*.whl
+          python3 -m pip install -r requirements/test.txt
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
+          rm -rf allure-results
+      - name: Start restful api turbomind
+        if: ${{ matrix.backend }} == 'turbomind'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Test lmdeploy restful api turbomind
+        if: ${{ matrix.backend }} == 'turbomind'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -m turbomind -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_turbomind.py -m turbomind -n 20 --alluredir=allure-results
+          kill -9 "$restful_pid"
+      - name: Start restful api pytorch
+        if: ${{ matrix.backend }} == 'pytorch'
+        run: |
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /mnt/bigdisk/qa_test_models/internlm/internlm2-chat-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 120s
+      - name: Test lmdeploy - restful api pytorch
+        if: ${{ matrix.backend }} == 'pytorch'
+        timeout-minutes: 40
+        run: |
+          pytest autotest/interface/restful/test_restful_interface_func_common.py -m turbomind -n 20 --alluredir=allure-results
+          pytest autotest/interface/restful/test_restful_interface_func_pytorch.py -m turbomind -n 20 --alluredir=allure-results
+          kill -9 "$restful_pid"
+      - name: Generate reports
+        if: always()
+        run: |
+          export date_today="$(date +'%Y%m%d-%H%M%S')"
+          export report_dir="$REPORT_DIR/$date_today"
+          echo "Save report to $ALLURE_DIR"
+          allure generate -c -o $report_dir
+      - name: Clear workfile
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
+
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
-    needs: [test_functions, test_triton]
+    needs: [test_tools, test_triton, test_restful]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:
       - name: fail notify
         if: contains(needs.*.result, 'failure')
         run: |
-          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- daily test failed","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test failed！！！","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"},{"tag":"at","user_id":"'${{ secrets.FEISHU_USER_ID }}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}
+      - name: success notify
+        if: needs.test_tools.result=='success' && needs.test_triton.result=='success' && needs.test_restful.result=='success'
+        run: |
+          curl -X POST -H "Content-Type: application/json" -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"Lmdeploy- Daily test success","content":[[{"tag":"text","text":"branch: ${{github.ref_name}}, run action: ${{github.workflow}} failed. "},{"tag":"a","text":"Please click here for details ","href":"https://github.com/'${{ github.repository }}'/actions/runs/'${GITHUB_RUN_ID}'"}]]}}}}'  ${{ secrets.FEISHU_WEBHOOK_URL }}

@@ -50,7 +50,7 @@ def make_step_context(
     world_size: int = 1,
     device: str = 'cuda',
     block_size: int = 64,
-    num_heads: int = 32,
+    num_key_value_heads: int = 32,
     head_size: int = 128,
     kv_cache_dtype: torch.dtype = torch.float16,
     json_config: Any = None,
@@ -78,7 +78,7 @@ def make_step_context(
         num_blocks_per_seq = (total_length + block_size - 1) // block_size
         num_blocks = sum(num_blocks_per_seq)
         num_caches = 1 if past_key_values is None else len(past_key_values)
-        cache_shape = [num_blocks, block_size, num_heads, head_size]
+        cache_shape = [num_blocks, block_size, num_key_value_heads, head_size]
 
         block_offsets_1d = torch.arange(0, num_blocks)
         block_end_loc = num_blocks_per_seq.cumsum(0)

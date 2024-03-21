@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict
 
 import torch
 
@@ -28,7 +28,6 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    max_prefill_token_num: int = 16384
 
 
 @dataclass
@@ -38,6 +37,9 @@ class CacheConfig:
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    window_size: int = -1
+    cache_max_entry_count: float = 0.8
+    max_prefill_token_num: int = 4096
 
 
 @dataclass
@@ -50,14 +52,18 @@ class ModelConfig:
     num_key_value_heads: int
     bos_token_id: int
     eos_token_id: int
+    head_dim: int
+    sliding_window: int = -1
     dtype: torch.dtype = torch.float16
     multi_query_attention: bool = False
+    vocab_size: int = 40000
     json_config: dict = field(default_factory=dict)
     hf_config: Any = None
+    init_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     def get_head_size(self):
         """get head size."""
-        return self.hidden_size // self.num_attention_heads
+        return self.head_dim
 
     @classmethod
     def from_pretrained(cls,
@@ -87,6 +93,7 @@ class ModelConfig:
             else:
                 # rw-1b, MHA
                 kv_head = num_attention_heads
+            head_dim = hf_config.hidden_size // num_attention_heads
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
@@ -94,56 +101,81 @@ class ModelConfig:
                 num_key_value_heads=kv_head,
                 bos_token_id=hf_config.bos_token_id,
                 eos_token_id=hf_config.eos_token_id,
+                head_dim=head_dim,
                 multi_query_attention=hf_config.multi_query,
+                vocab_size=hf_config.vocab_size,
             )
 
         def __build_chatglm():
             """build chatglm."""
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
+            bos_token_id = hf_config.bos_token_id
+            if bos_token_id is None:
+                bos_token_id = hf_config.pad_token_id
+            init_kwargs = dict(empty_init=False)
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=hf_config.multi_query_group_num,
-                bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id)
+                bos_token_id=bos_token_id,
+                eos_token_id=hf_config.eos_token_id,
+                head_dim=head_dim,
+                vocab_size=hf_config.padded_vocab_size,
+                init_kwargs=init_kwargs)
 
-        def __build_internlm2():
-            """build internlm2."""
+        def __build_gemma():
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=hf_config.num_key_value_heads,
                 bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id)
+                eos_token_id=hf_config.eos_token_id,
+                head_dim=hf_config.head_dim,
+                vocab_size=hf_config.vocab_size)
 
         def __build_default():
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
             num_attention_heads = hf_config.num_attention_heads
             num_key_value_heads = getattr(hf_config, 'num_key_value_heads',
                                           num_attention_heads)
+            use_sliding_window = getattr(hf_config, 'use_sliding_window', True)
+            sliding_window = -1
+            if use_sliding_window:
+                sliding_window = getattr(hf_config, 'sliding_window',
+                                         sliding_window) or -1
             return ModelConfig(
                 hidden_size=hf_config.hidden_size,
                 num_layers=hf_config.num_hidden_layers,
                 num_attention_heads=hf_config.num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
                 bos_token_id=hf_config.bos_token_id,
-                eos_token_id=hf_config.eos_token_id)
-
-        arch = getattr(hf_config, 'architectures', ['Unknown'])[0]
-        auto_map = getattr(hf_config, 'auto_map', dict())
-        causallm_name = auto_map.get('AutoModelForCausalLM', 'Unknown')
+                eos_token_id=hf_config.eos_token_id,
+                sliding_window=sliding_window,
+                head_dim=head_dim,
+                vocab_size=hf_config.vocab_size)
 
         if 'falcon' in model_path:
             model_config = __build_falcon()
         elif 'chatglm' in model_path:
             model_config = __build_chatglm()
-        elif (arch == 'InternLM2ForCausalLM'
-              or causallm_name == 'modeling_internlm2.InternLM2ForCausalLM'):
-            model_config = __build_internlm2()
+        elif hf_config.model_type == 'gemma':
+            model_config = __build_gemma()
         else:
             model_config = __build_default()
 
+        if hf_config.model_type == 'qwen' and hf_config.torch_dtype is None:
+            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+            ) else 'float16'
+            if hf_config.bf16:
+                torch_dtype = 'bfloat16'
+            elif hf_config.fp16:
+                torch_dtype = 'float16'
+            setattr(hf_config, 'torch_dtype', torch_dtype)
+
         model_config.dtype = _get_torch_dtype(hf_config)
+
         model_config.hf_config = hf_config
         model_config.json_config = hf_config.to_dict()
         return model_config

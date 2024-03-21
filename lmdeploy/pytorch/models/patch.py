@@ -83,8 +83,9 @@ def _find_rewrite_module_qualname(model):
         rewrite_qualname = _find_submodulename()
 
     origin_qualname = f'{module_name}.{class_name}'
-    logger.debug(
-        f'Find rewrite of module {origin_qualname}: {rewrite_qualname}.')
+    if rewrite_qualname is not None:
+        logger.debug('Find rewrite of module\n'
+                     f'{origin_qualname} <=> {rewrite_qualname}')
     return rewrite_qualname
 
 
@@ -212,6 +213,8 @@ def _dist_model(model: torch.nn.Module,
                 lambda mod, inputs, outputs: output_fn(outputs, device_mesh))
 
     for name, child in model.named_children():
+        if rank == 0:
+            logger.debug(f'Distribute module: <{name}>')
         new_child = _dist_model(child, rank, device_mesh)
         if new_child != child:
             model.register_module(name, child)

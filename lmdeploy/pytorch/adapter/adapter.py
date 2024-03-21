@@ -263,7 +263,7 @@ class SchedulerAdapter:
             adapter_name=adapter_name,
             config=config,
             target_modules=list(config.target_modules),
-            logical_blocks=LogicalTokenBlocks(1),
+            logical_blocks=LogicalTokenBlocks(),
             adapter_manager=manager)
         new_adapter._active = False
         return new_adapter
@@ -291,18 +291,6 @@ class SchedulerAdapter:
         """active adapter."""
         self.adapter_manager._on_active(self, flag)
         self._active = flag
-
-    def num_blocks(self):
-        """get num blocks."""
-        # ranks * (lora_a + lora_b) * num_targets
-        return self.rank * len(self.target_modules)
-
-    def num_required_blocks(self):
-        """get num required blocks."""
-        if self.is_actived():
-            return 0
-        else:
-            return self.num_blocks()
 
     def build_weight_map(self, block_table: Tensor):
         return AdapterWeightMap.new(self.name,

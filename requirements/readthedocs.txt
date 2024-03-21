@@ -1,4 +1,7 @@
+accelerate
 mmengine-lite
+pillow
+pydantic
 torch
 transformers
 urllib3<2.0.0

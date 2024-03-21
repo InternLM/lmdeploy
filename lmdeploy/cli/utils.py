@@ -78,13 +78,11 @@ class ArgumentHelper:
             'model names')
 
     @staticmethod
-    def model_format(parser):
-        """Add argument model_format to parser."""
-
+    def model_format(parser, default: str = None):
         return parser.add_argument(
             '--model-format',
             type=str,
-            default=None,
+            default=default,
             choices=['hf', 'llama', 'awq'],
             help='The format of input model. `hf` meaning `hf_llama`, `llama` '
             'meaning `meta_llama`, `awq` meaning the quantized model by awq')
@@ -109,12 +107,10 @@ class ArgumentHelper:
                                    help='The identical id of a session')
 
     @staticmethod
-    def session_len(parser):
-        """Add argument session_len to parser."""
-
+    def session_len(parser, default: int = None):
         return parser.add_argument('--session-len',
                                    type=int,
-                                   default=None,
+                                   default=default,
                                    help='The max session length of a sequence')
 
     @staticmethod
@@ -189,12 +185,11 @@ class ArgumentHelper:
             'with the highest probability')
 
     @staticmethod
-    def temperature(parser):
-        """Add argument temperature to parser."""
-
-        return parser.add_argument('--temperature',
+    def temperature(parser, default: float = 0.8):
+        return parser.add_argument('-temp',
+                                   '--temperature',
                                    type=float,
-                                   default=0.8,
+                                   default=default,
                                    help='Sampling temperature')
 
     @staticmethod
@@ -215,8 +210,8 @@ class ArgumentHelper:
             type=str,
             default='chat',
             choices=['completion', 'infilling', 'chat', 'python'],
-            help='The capability of a model. For example, codellama has the '
-            'ability among ["completion", "infilling", "chat", "python"]')
+            help='The capability of a model. '
+            'Deprecated. Please use --chat-template instead')
 
     @staticmethod
     def log_level(parser):
@@ -321,10 +316,25 @@ class ArgumentHelper:
     def meta_instruction(parser):
         """Add argument meta_instruction to parser."""
 
-        return parser.add_argument('--meta-instruction',
-                                   type=str,
-                                   default=None,
-                                   help='System prompt for ChatTemplateConfig')
+        return parser.add_argument(
+            '--meta-instruction',
+            type=str,
+            default=None,
+            help='System prompt for ChatTemplateConfig. Deprecated. '
+            'Please use --chat-template instead')
+
+    @staticmethod
+    def chat_template(parser):
+        """Add chat template config to parser."""
+
+        return parser.add_argument(
+            '--chat-template',
+            type=str,
+            default=None,
+            help=\
+            'A JSON file or string that specifies the chat template configuration. '  # noqa
+            'Please refer to https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html for the specification'  # noqa
+        )
 
     @staticmethod
     def cache_max_entry_count(parser):
@@ -359,3 +369,18 @@ class ArgumentHelper:
             type=str,
             default='./work_dir',
             help='The working directory to save results')
+
+    @staticmethod
+    def cache_block_seq_len(parser):
+        """Add argument cache_block_seq_len to parser."""
+
+        return parser.add_argument(
+            '--cache-block-seq-len',
+            type=int,
+            default=64,
+            help='The length of the token sequence in a k/v block. '
+            'For Turbomind Engine, if the GPU compute capability '
+            'is >= 8.0, it should be a multiple of 32, otherwise '
+            'it should be a multiple of 64. For Pytorch Engine, '
+            'if Lora Adapter is specified, this parameter will '
+            'be ignored')

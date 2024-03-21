@@ -4,12 +4,13 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List, Set, Union
 
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, logging_timer
 
 from ..adapter.adapter import ADAPTER_MANAGER, SchedulerAdapter
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession
-from .block_manager import BlockManager
+from .block_manager import DefaultBlockManager as BlockManager
+from .block_manager import build_block_manager
 
 logger = get_logger('lmdeploy')
 
@@ -51,10 +52,7 @@ class Scheduler:
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
         self.actived_adapters: Set[str] = set()
 
-        self.block_manager = BlockManager(
-            cache_config.num_gpu_blocks,
-            cache_config.num_cpu_blocks,
-        )
+        self.block_manager = build_block_manager(cache_config)
 
         self.eviction_helper = self.build_eviction_helper(
             self.scheduler_config.eviction_type, self.block_manager)
@@ -118,6 +116,7 @@ class Scheduler:
             adapter) - self.block_manager.num_gpu_blocks
         return adapter.build_weight_map(block_table)
 
+    @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
         """Schedule for prefilling."""
 
@@ -208,6 +207,7 @@ class Scheduler:
         self.running += running
         return running, swap_in_map, swap_out_map, copy_map
 
+    @logging_timer('ScheduleDecoding', logger)
     def _schedule_decoding(self):
         """schedule decoding."""
         assert len(self.running) != 0
@@ -226,7 +226,7 @@ class Scheduler:
 
         def _try_append_slot(seq):
             """try append slot."""
-            if seq.num_required_blocks() == 0:
+            if self.block_manager.num_required_blocks(seq) == 0:
                 _to_running(seq)
                 return True
             if block_manager.can_append_slot(seq):

@@ -12,6 +12,7 @@ Welcome to LMDeploy's tutorials!
 .. toctree::
    :maxdepth: 1
    :caption: Build
+
    build.md
 
 .. _benchmark:
@@ -38,16 +39,17 @@ Welcome to LMDeploy's tutorials!
    :caption: Inference
 
    inference/pipeline.md
-   inference/turbomind.md
-   inference/turbomind_config.md
-   inference/pytorch.md
+   inference/vl_pipeline.md
+
 
 .. _serving:
 .. toctree::
    :maxdepth: 1
    :caption: serving
 
-   serving/restful_api.md
+   serving/api_server.md
+   serving/api_server_vl.md
+   serving/gradio.md
    serving/proxy_server.md
 
 .. _quantization:
@@ -63,9 +65,19 @@ Welcome to LMDeploy's tutorials!
    :maxdepth: 1
    :caption: Advanced Guide
 
+   inference/turbomind.md
+   inference/pytorch.md
    advance/pytorch_new_model.md
    advance/long_context.md
+   advance/chat_template.md
+   advance/debug_turbomind.md
    serving/qos.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: API Reference
+
+   api/pipeline.rst
 
 Indices and tables
 ==================

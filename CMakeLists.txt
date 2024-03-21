@@ -290,6 +290,29 @@ print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   endif()
 endif()
 
+# turn off warnings on windows
+if (MSVC)
+  foreach(
+    flag_var
+    CMAKE_CXX_FLAGS
+    CMAKE_CXX_FLAGS_DEBUG
+    CMAKE_CXX_FLAGS_RELEASE
+    CMAKE_CXX_FLAGS_MINSIZEREL
+    CMAKE_CXX_FLAGS_RELWITHDEBINFO
+    CMAKE_C_FLAGS
+    CMAKE_C_FLAGS_DEBUG
+    CMAKE_C_FLAGS_RELEASE
+    CMAKE_C_FLAGS_MINSIZEREL
+    CMAKE_C_FLAGS_RELWITHDEBINFO
+    CMAKE_CUDA_FLAGS
+    CMAKE_CUDA_FLAGS_DEBUG
+    CMAKE_CUDA_FLAGS_RELEASE
+    CMAKE_CUDA_FLAGS_MINSIZEREL
+    CMAKE_CUDA_FLAGS_RELWITHDEBINFO)
+    string(REGEX REPLACE "-Wall" " /W0 " ${flag_var} "${${flag_var}}")
+  endforeach()
+endif()
+
 if (BUILD_MULTI_GPU)
   list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
 endif()
@@ -336,8 +359,8 @@ endif()
 add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
-  $<TARGET_OBJECTS:llama_fmha>
-  $<TARGET_OBJECTS:flash_attention2>
+  # $<TARGET_OBJECTS:llama_fmha>
+  # $<TARGET_OBJECTS:flash_attention2>
   $<TARGET_OBJECTS:Llama>
   $<TARGET_OBJECTS:LlamaTritonBackend>
   $<TARGET_OBJECTS:gemm_s4_f16>
@@ -352,8 +375,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:cuda_utils>
   $<TARGET_OBJECTS:custom_ar_comm>
   $<TARGET_OBJECTS:custom_ar_kernels>
-  $<TARGET_OBJECTS:decoder_multihead_attention>
-  $<TARGET_OBJECTS:decoder_masked_multihead_attention>
+  $<TARGET_OBJECTS:attention>
   $<TARGET_OBJECTS:decoding_kernels>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:logprob_kernels>
