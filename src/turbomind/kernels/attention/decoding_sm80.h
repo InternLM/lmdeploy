@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "thread_map.h"
+#include <type_traits>
 
 namespace turbomind::attention {
 
@@ -90,9 +91,22 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
 
     static constexpr int CTA_H1 = (CTA_H + OP_N - 1) / OP_N * OP_N;
 
+    static constexpr auto _SmemLayoutKV(std::integral_constant<int, 16>)
+    {
+        return SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>{};
+    }
+    static constexpr auto _SmemLayoutKV(std::integral_constant<int, 8>)
+    {
+        return SmemLayoutV2<CTA_S, HeadDim, 32, 64, Swizzle<3, 4, 3>>{};
+    }
+    static constexpr auto _SmemLayoutKV(std::integral_constant<int, 4>)
+    {
+        return SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>{};
+    }
+
     using SmemLayoutQ = SmemLayoutV2<CTA_H1, HeadDim, CTA_H1, HeadDim, Swizzle<3, 3, 4>>;
-    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>;
-    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<2, 5, 3>>;
+    using SmemLayoutK = decltype(_SmemLayoutKV(bitsof<Tkv>));
+    using SmemLayoutV = decltype(_SmemLayoutKV(bitsof<Tkv>));
 
     using SmemLayoutKVp = SmemLayoutV2<CTA_S, 2, CTA_S, 2, Identity>;
 
@@ -719,8 +733,9 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                         PRAGMA_UNROLL
                         for (int q = 0; q < 2; ++q) {
                             const int hi = n * OP_N + lane_id % 4 * 2 + q * 1;
-                            // const int di = m * OP_M + lane_id / 4 * X + d * 8 * X + x;
-                            const int di = m * OP_M + lane_id / 4 % 2 * 1 + d * 8 * X + x * 2 + lane_id / 8 * 8;
+                            const int di = bitsof<Tkv> != 4 ?
+                                               (m * OP_M + lane_id / 4 * X + d * 8 * X + x) :
+                                               (m * OP_M + lane_id / 4 % 2 + d * 8 * X + x * 2 + lane_id / 8 * 8);
                             if (warp_id == 0) {
                                 storage.O1[hi][di] = frag_O[m + x][n][d * 2 + q];
                                 // if (hi == 0) {

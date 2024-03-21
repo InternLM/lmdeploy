@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/attention/smem_layout.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 
+#include <cmath>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
@@ -157,11 +158,14 @@ inline __device__ T round(float x)
     if constexpr (std::is_same_v<T, uint8_t>) {
         asm("cvt.rni.sat.u8.f32 %0, %1;\n" : "=r"(y) : "f"(x));
     }
-    if constexpr (std::is_same_v<T, uint16_t>) {
+    else if constexpr (std::is_same_v<T, uint16_t>) {
         asm("cvt.rni.sat.u16.f32 %0, %1;\n" : "=r"(y) : "f"(x));
     }
-    if constexpr (std::is_same_v<T, uint32_t>) {
+    else if constexpr (std::is_same_v<T, uint32_t>) {
         asm("cvt.rni.sat.u32.f32 %0, %1;\n" : "=r"(y) : "f"(x));
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>, "not implemented");
     }
     return y;
 }
@@ -173,11 +177,14 @@ inline __device__ T round(half x)
     if constexpr (std::is_same_v<T, uint8_t>) {
         asm("cvt.rni.sat.u8.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
     }
-    if constexpr (std::is_same_v<T, uint16_t>) {
+    else if constexpr (std::is_same_v<T, uint16_t>) {
         asm("cvt.rni.sat.u16.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
     }
-    if constexpr (std::is_same_v<T, uint32_t>) {
+    else if constexpr (std::is_same_v<T, uint32_t>) {
         asm("cvt.rni.sat.u32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>, "not implemented");
     }
     return y;
 }
@@ -234,6 +241,8 @@ __device__ void warp_stats(Array<P, 2> (&param)[S], const Array<T, N> (&x)[S][C]
         const float scale     = ((float)stats[1] - (float)stats[0]) * inv_q_max;
         param[s][0]           = (P)scale;
         param[s][1]           = (P)stats[0];
+
+        param[s][1] = (P)(rintf((float)stats[0] / scale) * scale);
     }
 }
 
@@ -506,5 +515,86 @@ inline __device__ void StoreQuantParam<uint4_t, half>(half* dst, Array<half, 2> 
     src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
     Store(dst, src);
 }
+
+#if 0
+template<int K_K, int K_M, class Map, class T, class Tk, int ITER_S, int ITER_C>
+__device__ void QuantizeK(const Array<T, 8> (&data)[ITER_S][ITER_C],
+                          const Array<T, 2> (&param)[ITER_S],
+                          Array<T, 8>       (&frag_K)[K_K][K_M],
+                          Array<Tk, 8>      (&qdata)[ITER_S][ITER_C])
+{
+    __shared__ T data_buf[Map::kDimS * Map::kDimC];
+    __shared__ T param_buf[Map::kDimS];
+
+    SmemAccessor<T, SmemLayoutV2<Map::kDimS, Map::kDimC, Map::kDimS, Map::kDimC, Identity>> smem_K{data_buf};
+    SmemAccessor<T, SmemLayoutV2<Map::kDimS, 2, Map::kDimS, 2, Identity>>                   smem_Q{param_buf};
+
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    const int2 offset = Map::get_offset(warp_id, lane_id);
+
+    PRAGMA_UNROLL
+    for (int s = 0; s < ITER_S; ++s) {
+        Store(&smem_param(s * Map::kIterS + offset.y, 0), param[s]);
+        PRAGMA_UNROLL
+        for (int c = 0; c < ITER_C; ++c) {
+            Store(&smem_data(s * Map::kDeltaS + offset.y, c * Map::kDeltaC + offset.x), data[s][c]);
+        }
+    }
+
+    __syncthreads();
+
+    static_assert(Map::kWarpCount == 4);
+
+    // Load FP fragments
+    const int offset_s = lane_id % 16 * 1 + warp_id * 16;
+    const int offset_c = lane_id / 16 * 8;
+    PRAGMA_UNROLL
+    for (int k = 0; k < K_K; ++k) {
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {
+            const int s = m * 16 + offset_s;
+            const int c = k * 16 + offset_c;
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[k][m], cast_smem_ptr_to_uint(&smem_K(s, c)));
+        }
+    }
+
+    // Quantize the fragments
+    Array<Tk, 8> data_K[K_K][K_M];
+    PRAGMA_UNROLL
+    for (int k = 0; k < K_K; ++k) {
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {
+            quantize(data_K[k][m], frag_K[k][m], param);
+        }
+    }
+
+    // Rearrange for LDS.128
+
+    // num fragments per LDS.128 processes
+    constexpr int kFragsPerLds = 16 / sizeof(Array<Tk, 8>);
+
+    constexpr int kWarpAccess = WARP_SIZE * kFragsPerLds * 8;
+
+    constexpr int kDeltaC = kWarpAccess % Map::kDimC;
+    constexpr int kDeltaS = kWarpAccess / Map::kDimC;
+
+    static_assert((kDeltaC == 0) ^ (kDeltaS == 0));
+
+    SmemAccessor<Tk, SmemLayoutV2<Map::kDimS, Map::kDimC, Map::kDimS, Map::kDimC, Identity>> smem_O{data_buf};
+
+    const int warp_offset_s = Map::get_offset(warp_id, 0).y;
+    PRAGMA_UNROLL
+    for (int i = 0, s =0, c = 0; i < K_K * K_M; i += kFragsPerLds, s += kDeltaS, c += kDeltaC) {
+        const int  m = i % K_M;
+        const int  k = i / K_M;
+        const int cc = c % Map::kDimC;
+        const int ss = c / Map::kDimC + s;
+
+        // smem_O(&warp_offset_s + n /, )
+    }
+}
+#endif
 
 }  // namespace turbomind
