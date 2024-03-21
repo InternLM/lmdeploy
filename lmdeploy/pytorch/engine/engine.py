@@ -160,11 +160,10 @@ class Engine:
                  trust_remote_code: bool = True) -> None:
         check_env()
         check_model(model_path, trust_remote_code)
-        if engine_config.adapters is not None:
-            check_adapters(list(engine_config.adapters.values()))
-
         if engine_config is None:
             engine_config = PytorchEngineConfig()
+        if engine_config.adapters is not None:
+            check_adapters(list(engine_config.adapters.values()))
 
         self.engine_config = engine_config
         model_name = engine_config.model_name

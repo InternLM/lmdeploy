@@ -961,7 +961,14 @@ def _start_tp_process(rank: int,
     """
     try:
         os.environ['MASTER_ADDR'] = '127.0.0.1'
-        os.environ['MASTER_PORT'] = str(port)
+        if 'MASTER_PORT' not in os.environ:
+            os.environ['MASTER_PORT'] = str(port)
+        if rank == 0:
+            master_addr = os.environ['MASTER_ADDR']
+            master_port = os.environ['MASTER_PORT']
+            logger.info('Initializing `nccl` process group: '
+                        f'{master_addr}:{master_port}, '
+                        f'world_size: {world_size}')
         dist.init_process_group('nccl', rank=rank, world_size=world_size)
 
         with torch.cuda.device(rank), torch.no_grad():
