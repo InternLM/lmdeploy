@@ -273,6 +273,7 @@ class GenerateRequest(BaseModel):
     ignore_eos: bool = False
     skip_special_tokens: Optional[bool] = True
     cancel: Optional[bool] = False  # cancel a responding request
+    adapter_name: Optional[str] = Field(default=None, examples=[None])
 
 
 class GenerateRequestQos(BaseModel):

@@ -17,6 +17,8 @@ from lmdeploy.model import MODELS, best_match_model
      ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
      ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
      ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
+     ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
+     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek', 'deepseek-chat']),
      ('tiiuae/falcon-7b', ['falcon']), ('workspace', [None])])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
@@ -206,3 +208,23 @@ def test_codellama_others():
     with pytest.raises(AssertionError):
         model = MODELS.get('codellama')(capability='java')
     assert model is None
+
+
+def test_deepseek_coder():
+    model = MODELS.get('deepseek-coder')()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        'deepseek-ai/deepseek-coder-1.3b-instruct', trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = '<｜begin▁of▁sentence｜>' + model.messages2prompt(messages)
+    assert res.startswith(ref)
