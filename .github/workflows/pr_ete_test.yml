@@ -28,7 +28,7 @@ env:
 jobs:
   pr_functions_test:
     runs-on: [self-hosted, linux-a100-pr]
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
@@ -84,14 +84,13 @@ jobs:
           python3 -m pip list
           lmdeploy check_env
       - name: Test lmdeploy
-        timeout-minutes: 120
         run: CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m pr_test -v -s --alluredir=allure-results --clean-alluredir
       - name: Generate reports
         if: always()
         run: |
           export date_today="$(date +'%Y%m%d-%H%M%S')"
           export report_dir="$REPORT_DIR/$date_today"
-          echo "Save report to $ALLURE_DIR"
+          echo "Save report to $report_dir"
           mv allure-results $report_dir
       - name: Clear workfile
         if: always()
