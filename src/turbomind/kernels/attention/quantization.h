@@ -407,12 +407,6 @@ struct ConvertKvCache<uint4_t, half> {
     }
 
     template<int N>
-    __device__ static auto convert_trans(const Array<uint4_t, N>& vi)
-    {
-        return convert(vi);
-    }
-
-    template<int N>
     __device__ auto operator()(const Array<uint4_t, N>& vi) const
     {
         auto vo = convert(vi);
@@ -521,27 +515,12 @@ struct ConvertKvCache<uint8_t, T> {
     }
 
     template<int N>
-    __device__ static auto convert_trans(const Array<uint8_t, N>& vi)
-    {
-        // only fp16 support
-        Array<T, N> vo;
-        PRAGMA_UNROLL
-        for (int n = 0; n < N; n += 4) {
-            (Array<T, 4>&)vo[n] = cvt_f16x2x2_u8_trans((Array<uint8_t, 4>&)vi[n]);
-        }
-        return vo;
-    }
-
-    template<int N>
     __device__ auto operator()(const Array<uint8_t, N>& vi) const
     {
         auto vo = convert(vi);
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < 4; ++c) {
-                vo[c] = vo[c] * scale_ + zero_;
-            }
+            vo[i] = vo[i] * scale_ + zero_;
         }
         return vo;
     }

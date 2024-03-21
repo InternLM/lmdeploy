@@ -75,10 +75,10 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                                                     //   1 2x    16x 16   8x  8  2  1
     using ParamK = Array<T, 2>[K_M][2];             // {s8,_4} [     Sm] (   s2      )
                                                     //   1  0        16       8
-    using DataV = Array<Tkv, 8 * X>[V_M / X][V_K];  // {d8,s4} [Dm/x,Sk] (s2,d2,s2,dx)
-                                                    //   x  2    16x 16    8 8x  1  1
-    using ParamV = Array<T, 2>[V_K][4];             // {_8,s4} [     Sk] (s2    s2   )
-                                                    //   0  2        16    8     1
+    using DataV = Array<Tkv, 8 * X>[V_M / X][V_K];  // {s8,d4} [Dm/x,Sk] (s2,d2,dx,d2)
+                                                    //   1 2x    16x 16    8 8x  2  1
+    using ParamV = Array<T, 2>[V_K][2];             // {s8,_4} [     Sk] (s2         )
+                                                    //   1  0        16    8
 
     using FragL = FragM;
 
@@ -316,8 +316,10 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     PRAGMA_UNROLL
                     for (int d = 0; d < 2; ++d) {
                         auto& d2 = (Array<T, 2>&)frag_K[k][0][d * 4 + s * 2];
-                        using namespace ops;
-                        d2 = d2 * param_K[0][s][0] + param_K[0][s][1];
+                        {
+                            using namespace ops;
+                            d2 = d2 * param_K[0][s][0] + param_K[0][s][1];
+                        }
                     }
                 }
             }
@@ -382,9 +384,8 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 const int k = 0;
                 PRAGMA_UNROLL
                 for (int s = 0; s < 2; ++s) {
-                    const int si = k * 16 + lane_id % 4 * 2 + s * 8 + warp_id * WARP_S;
-                    Lds((Array<T, 4>&)param_V[k][s * 2],
-                        &smem_V_param[pipe_iter * SmemLayoutKVp::kSize + SmemLayoutKVp::apply(si, 0)]);
+                    const int si = k * 16 + lane_id / 4 * 1 + s * 8 + warp_id * WARP_S;
+                    Lds(param_V[k][s], &smem_V_param[pipe_iter * SmemLayoutKVp::kSize + SmemLayoutKVp::apply(si, 0)]);
                 }
             }
 
@@ -393,12 +394,19 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 const int offset_c = lane_id % 16 / 8 * 8 * X;
                 PRAGMA_UNROLL
                 for (int k = 0; k < V_K; ++k) {
-                    const int s = k * 16 + offset_s;  // S
-                    const int c = m * 16 + offset_c;  // D
+                    const int s = k * 16 + offset_s;
+                    const int c = m * 16 + offset_c;
                     static_assert(sizeof(data_V[m / X][k]) == 16);
-                    ldsm_x4_trans(
-                        (Array<uint32_t, 4>&)data_V[m / X][k],
-                        cast_smem_ptr_to_uint(&smem_V[pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(s, c)]));
+                    if constexpr (!kQuantKV) {
+                        ldsm_x4_trans(
+                            (Array<uint32_t, 4>&)data_V[m / X][k],
+                            cast_smem_ptr_to_uint(&smem_V[pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(s, c)]));
+                    }
+                    else {
+                        ldsm_x4(
+                            (Array<uint32_t, 4>&)data_V[m / X][k],
+                            cast_smem_ptr_to_uint(&smem_V[pipe_iter * SmemLayoutV::kSize + SmemLayoutV::apply(s, c)]));
+                    }
                 }
             }
         }
@@ -418,12 +426,11 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     for (int s = 0; s < 2; ++s) {
                         PRAGMA_UNROLL
                         for (int d = 0; d < 2; ++d) {
-                            // (s2,dx) -> (dx,s2)
-                            auto dx_s2 = ConvertKvCache<Tkv, T>::convert_trans(
+                            auto dx_d2 = ConvertKvCache<Tkv, T>::convert(
                                 (Array<Tkv, 2 * X>&)data_V[m / X][0][s * 4 * X + d * 2 * X]);
                             PRAGMA_UNROLL
                             for (int x = 0; x < X; ++x) {
-                                (Array<T, 2>&)frag_V[m + x][0][s * 4 + d * 2] = (Array<T, 2>&)dx_s2[x * 2];
+                                (Array<T, 2>&)frag_V[m + x][0][s * 4 + d * 2] = (Array<T, 2>&)dx_d2[x * 2];
                             }
                         }
                     }
@@ -432,12 +439,12 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                 for (int s = 0; s < 2; ++s) {
                     PRAGMA_UNROLL
                     for (int d = 0; d < 2; ++d) {
-                        auto& s2 = (Array<T, 2>&)frag_V[m][0][s * 4 + d * 2];
-                        PRAGMA_UNROLL
-                        for (int s0 = 0; s0 < 2; ++s0) {
-                            const auto& param = param_V[0][s * 2 + s0];
-                            s2[s0]            = s2[s0] * param[0] + param[1];
+                        auto& d2 = (Array<T, 2>&)frag_V[m][0][s * 4 + d * 2];
+                        {
+                            using namespace ops;
+                            d2 = d2 * param_V[0][s][0] + param_V[0][s][1];
                         }
+                        (uint32_t&)d2 = transpose_m8n8_b16((uint32_t&)d2);
                     }
                 }
             }
@@ -729,9 +736,11 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                         PRAGMA_UNROLL
                         for (int q = 0; q < 2; ++q) {
                             const int hi = n * OP_N + lane_id % 4 * 2 + q * 1;
-                            const int di = bitsof<Tkv> != 4 ?
-                                               (m * OP_M + lane_id / 4 * X + d * 8 * X + x) :
-                                               (m * OP_M + lane_id / 4 % 2 + d * 8 * X + x * 2 + lane_id / 8 * 8);
+                            // [43][2][10]
+                            //   2  1
+                            //   4  1
+                            //   8  1
+                            const int di = m * OP_M + lane_id / 4 % 2 + d * 8 * X + x * 2 + lane_id / 8 * X * 2;
                             if (warp_id == 0) {
                                 storage.O1[hi][di] = frag_O[m + x][n][d * 2 + q];
                                 // if (hi == 0) {
