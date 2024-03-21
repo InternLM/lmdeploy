@@ -51,14 +51,13 @@ def prepare_environment(request, config, worker_id):
     with open(start_log, 'w') as f:
         f.writelines('reproduce command restful: ' + cmd + '\n')
 
-        # convert
-        convertRes = subprocess.Popen([cmd],
-                                      stdout=f,
-                                      stderr=f,
-                                      shell=True,
-                                      text=True,
-                                      encoding='utf-8')
-        pid = convertRes.pid
+        stratRes = subprocess.Popen([cmd],
+                                    stdout=f,
+                                    stderr=f,
+                                    shell=True,
+                                    text=True,
+                                    encoding='utf-8')
+        pid = stratRes.pid
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
     http_url = BASE_HTTP_URL + ':' + str(port)
@@ -77,7 +76,7 @@ def prepare_environment(request, config, worker_id):
                                 'kill_' + model.split('/')[1] + '.log')
 
         with open(kill_log, 'w') as f:
-            convertRes.kill()
+            stratRes.kill()
 
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 
