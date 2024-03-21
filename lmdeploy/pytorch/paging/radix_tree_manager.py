@@ -99,7 +99,7 @@ class TreeNode:
 
     def update_visit_time(self, time: int, window_size: int = -1):
         """update visit time."""
-        self.last_visit_time = time
+        self.visit_time = max(time, self.visit_time)
         if self.parent is not None:
             if window_size < 0:
                 self.parent.update_visit_time(time)
@@ -118,7 +118,7 @@ token_ids={self.token_ids},
 blocks={self.blocks},
 parent={parent},
 children=[{children_str}],
-last_visit_time={self.last_visit_time})"""
+visit_time={self.visit_time})"""
 
     def __repr__(self):
         return str(self)
@@ -209,7 +209,10 @@ class RadixTreeManager:
             if match_size == 0:
                 return 0
             diff = tokens0[:match_size] == tokens1[:match_size]
-            return np.argmin(diff)
+            ret = np.argmin(diff)
+            if ret == 0 and diff[0]:
+                ret = match_size
+            return ret
 
         def __match_children(node: TreeNode, token_ids: np.ndarray,
                              num_matched: int):
@@ -260,6 +263,8 @@ class RadixTreeManager:
             parent = self.split_node(matched_node, num_blocks)
             node = __parent_exists(parent)
             return node
+
+        share_cache = seq.num_blocks == 0 and share_cache
 
         if share_cache:
             matched_node, matched_len = self.match_sequence(seq)
@@ -355,7 +360,7 @@ class RadixTreeManager:
 
         def __sort_key(n: TreeNode):
             """get sort key."""
-            key = n.last_visit_time
+            key = n.visit_time
             if len(n.children) == 0:
                 # children first
                 key -= 0.5
@@ -365,8 +370,7 @@ class RadixTreeManager:
         if ignore_empty:
             nodes = filter(lambda n: n.num_blocks > 0, nodes)
         if max_visit_time is not None:
-            nodes = filter(lambda n: n.last_visit_time <= max_visit_time,
-                           nodes)
+            nodes = filter(lambda n: n.visit_time <= max_visit_time, nodes)
 
         nodes = list(nodes)
         nodes = sorted(nodes, key=__sort_key)
@@ -383,6 +387,8 @@ class RadixTreeManager:
             ret.append(node)
             node = node.parent
 
-        reversed(ret)
-
         return ret
+
+    def get_seq_node(self, seq: SchedulerSequence):
+        """get seq node."""
+        return self.seq_node_map.get(seq.seq_id, None)

@@ -217,8 +217,8 @@ class Scheduler:
                     break
 
             if seq.seq_id not in self.rtree_manager.seq_node_map:
-                self.rtree_manager.add_sequence(
-                    seq, self.scheduler_config.shared_cache)
+                self.rtree_manager.add_sequence(seq,
+                                                self.cache_config.shared_cache)
 
             if not _evict_until_can_append(seq):
                 break

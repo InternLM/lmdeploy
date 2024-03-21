@@ -28,7 +28,6 @@ class SchedulerConfig:
     eviction_type: str = 'recompute'
     prefill_interval: int = 16
     max_active_adapters: int = 64
-    shared_cache: bool = True
 
 
 @dataclass
@@ -41,6 +40,16 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
+    shared_cache: bool = False
+
+    def __post_init__(self):
+        """post init."""
+        from lmdeploy.utils import get_logger
+        logger = get_logger('lmdeploy')
+        if self.window_size > 1 and self.shared_cache:
+            logger.warning(
+                'Shared cache is not available for window attention.')
+            self.shared_cache = False
 
 
 @dataclass
