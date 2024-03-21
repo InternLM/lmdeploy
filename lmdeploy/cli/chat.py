@@ -92,16 +92,6 @@ class SubCliChat(object):
         """Chat with TurboMind inference engine through terminal."""
         from lmdeploy.turbomind.chat import main
         kwargs = convert_args(args)
-        # from lmdeploy.model import ChatTemplateConfig
-        # chat_template_config = ChatTemplateConfig(
-        #     model_name=args.model_name,
-        #     meta_instruction=args.meta_instruction,
-        #     capability=args.cap)
-        # if args.chat_template:
-        #     chat_template_config = ChatTemplateConfig.from_json(
-        #         args.chat_template)
-        # kwargs.update(dict(chat_template_cfg=chat_template_config))
-        # kwargs.pop('chat_template', None)
         main(**kwargs)
 
     @staticmethod
