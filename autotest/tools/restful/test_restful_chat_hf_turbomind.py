@@ -171,10 +171,11 @@ def run_all_step(config,
 
         with allure.step(case + ' step1 - command chat regression'):
             chat_result, chat_log, msg = command_line_test(
-                config, case, case_info, model + worker_id, 'api_client', http_url)
+                config, case, case_info, model + worker_id, 'api_client',
+                http_url)
             if chat_log is not None:
                 allure.attach.file(chat_log,
-                               attachment_type=allure.attachment_type.TEXT)
+                                   attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert chat_result, msg
 
