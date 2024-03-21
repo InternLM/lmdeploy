@@ -40,7 +40,8 @@ def prepare_environment(request, config, worker_id):
                                  ' --server-port ' + str(port),
                                  config,
                                  model,
-                                 need_tp=True)
+                                 need_tp=True,
+                                 cuda_prefix=cuda_prefix)
 
     print('reproduce command restful: ' + cmd)
 
