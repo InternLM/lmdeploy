@@ -547,7 +547,7 @@ template<typename Ti, typename To, typename = void>
 struct ConvertKvCache {
     __device__ __host__ ConvertKvCache(float, float) {}
     template<int N>
-    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<To, N>
+    __device__ static auto convert(const Array<Ti, N>& vi)
     {
         Array<To, N> vo;
         PRAGMA_UNROLL
@@ -556,6 +556,11 @@ struct ConvertKvCache {
         }
         return vo;
     }
+    template<int N>
+    inline __device__ auto operator()(const Array<Ti, N>& vi) const -> Array<To, N>
+    {
+        return convert(vi);
+    }
 };
 
 // generic case for converting to same type, bypass
@@ -563,9 +568,14 @@ template<typename T>
 struct ConvertKvCache<T, T> {
     __device__ __host__ ConvertKvCache(float, float) {}
     template<int N>
-    inline __device__ auto operator()(const Array<T, N>& v) const -> Array<T, N>
+    __device__ static auto convert(const Array<T, N>& v)
     {
         return v;
+    }
+    template<int N>
+    inline __device__ auto operator()(const Array<T, N>& v) const -> Array<T, N>
+    {
+        return convert(v);
     }
 };
 

@@ -367,10 +367,10 @@ struct ConvertKvCache<uint4_t, half> {
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_0), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[3]) : "r"(top_i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
-        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[0]) : "r"(h[0]), "r"(MAGIC_NUM_0));
-        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[1]) : "r"(h[1]), "r"(MAGIC_NUM_1));
-        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[2]) : "r"(h[2]), "r"(MAGIC_NUM_0));
-        // asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[3]) : "r"(h[3]), "r"(MAGIC_NUM_1));
+        asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[0]) : "r"(h[0]), "r"(MAGIC_NUM_0));
+        asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[1]) : "r"(h[1]), "r"(MAGIC_NUM_1));
+        asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[2]) : "r"(h[2]), "r"(MAGIC_NUM_0));
+        asm("sub.f16x2 %0, %1, %2;\n" : "=r"(h[3]) : "r"(h[3]), "r"(MAGIC_NUM_1));
         return result;
     }
 
@@ -395,26 +395,49 @@ struct ConvertKvCache<uint4_t, half> {
     }
 
     template<int N>
-    __device__ auto operator()(const Array<uint4_t, N>& vi) const
+    __device__ static auto convert(const Array<uint4_t, N>& vi)
     {
         Array<half, N> vo;
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 8) {
             auto& v = (Array<half, 8>&)vo[i];
             v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
-            // v[0]    = v[0] * scale_ + zero_[0];
-            // v[1]    = v[1] * scale_ + zero_[0];
-            // v[2]    = v[2] * scale_ + zero_[1];
-            // v[3]    = v[3] * scale_ + zero_[1];
-            // v[4]    = v[4] * scale_ + zero_[0];
-            // v[5]    = v[5] * scale_ + zero_[0];
-            // v[6]    = v[6] * scale_ + zero_[1];
-            // v[7]    = v[7] * scale_ + zero_[1];
-            {
-                using namespace ops;
-                v = v * scale_ + zero_;
-            }
         }
+        return vo;
+    }
+
+    template<int N>
+    __device__ static auto convert_trans(const Array<uint4_t, N>& vi)
+    {
+        return convert(vi);
+    }
+
+    template<int N>
+    __device__ auto operator()(const Array<uint4_t, N>& vi) const
+    {
+        auto vo = convert(vi);
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            vo[i] = vo[i] * scale_ + zero_;
+        }
+        // Array<half, N> vo;
+        // PRAGMA_UNROLL
+        // for (int i = 0; i < N; i += 8) {
+        //     auto& v = (Array<half, 8>&)vo[i];
+        //     v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
+        //     // v[0]    = v[0] * scale_ + zero_[0];
+        //     // v[1]    = v[1] * scale_ + zero_[0];
+        //     // v[2]    = v[2] * scale_ + zero_[1];
+        //     // v[3]    = v[3] * scale_ + zero_[1];
+        //     // v[4]    = v[4] * scale_ + zero_[0];
+        //     // v[5]    = v[5] * scale_ + zero_[0];
+        //     // v[6]    = v[6] * scale_ + zero_[1];
+        //     // v[7]    = v[7] * scale_ + zero_[1];
+        //     {
+        //         using namespace ops;
+        //         v = v * scale_ + zero_;
+        //     }
+        // }
         return vo;
     }
 };
@@ -477,7 +500,7 @@ struct ConvertKvCache<uint8_t, T> {
     __device__ ConvertKvCache(T scale, T zero): scale_{scale}, zero_{zero} {}
 
     template<int N>
-    __device__ auto operator()(const Array<uint8_t, N>& vi) const
+    __device__ static auto convert(const Array<uint8_t, N>& vi)
     {
         Array<T, N> vo;
         PRAGMA_UNROLL
@@ -493,10 +516,31 @@ struct ConvertKvCache<uint8_t, T> {
             }
             else if constexpr (std::is_same_v<T, nv_bfloat16>) {
             }
+        }
+        return vo;
+    }
 
+    template<int N>
+    __device__ static auto convert_trans(const Array<uint8_t, N>& vi)
+    {
+        // only fp16 support
+        Array<T, N> vo;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 4) {
+            (Array<T, 4>&)vo[n] = cvt_f16x2x2_u8_trans((Array<uint8_t, 4>&)vi[n]);
+        }
+        return vo;
+    }
+
+    template<int N>
+    __device__ auto operator()(const Array<uint8_t, N>& vi) const
+    {
+        auto vo = convert(vi);
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
             PRAGMA_UNROLL
             for (int c = 0; c < 4; ++c) {
-                uo[c] = uo[c] * scale_ + zero_;
+                vo[c] = vo[c] * scale_ + zero_;
             }
         }
         return vo;
