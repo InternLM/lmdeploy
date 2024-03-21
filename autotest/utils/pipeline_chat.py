@@ -130,7 +130,12 @@ def run_pipeline_vl_chat_test(config, model_case):
     model_path = config.get('model_path')
     hf_path = model_path + '/' + model_case
 
-    backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
+    if 'llava-v1.5-7b' in model_case:
+        backend_config = TurbomindEngineConfig(tp=tp,
+                                               session_len=8192,
+                                               model_name='vicuna')
+    else:
+        backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(

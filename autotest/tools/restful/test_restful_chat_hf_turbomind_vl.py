@@ -42,6 +42,9 @@ def prepare_environment(request, config, worker_id):
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
+    if 'llava-v1.5-7b' in model:
+        cmd += ' --model-name vicuna'
+
     start_log = os.path.join(log_path,
                              'start_restful_' + model.split('/')[1] + '.log')
 
@@ -89,13 +92,27 @@ def getModelList(tp_num):
 
 
 @pytest.mark.order(7)
-@pytest.mark.restful_api
+@pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment',
                          getModelList(tp_num=1),
                          indirect=True)
 def test_restful_chat_tp1(worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step()
+    else:
+        run_all_step(port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=2),
+                         indirect=True)
+def test_restful_chat_tp2(worker_id):
     if get_workerid(worker_id) is None:
         run_all_step()
     else:
