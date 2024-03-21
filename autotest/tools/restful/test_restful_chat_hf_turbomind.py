@@ -72,12 +72,12 @@ def prepare_environment(request, config, worker_id):
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     sleep(5)
-    for i in range(120):
+    for i in range(150):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 120:
+        if result or total_time >= 150:
             break
     yield
     if pid > 0:

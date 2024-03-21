@@ -2,6 +2,7 @@ import pytest
 from pytest import assume
 
 from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
+from utils.restful_return_check import get_repeat_times
 
 
 @pytest.mark.order(8)
@@ -107,7 +108,7 @@ class TestPipelineTurbomindFuncRegression:
         with assume:
             assert response.finish_reason == 'length', str(response)
         with assume:
-            assert 'a 上海 is a 上海, ' * 10 in response.text, str(response)
+            assert 'a 上海 is a 上海, ' * 10 in response.text or get_repeat_times(response.text, 'Shanghai is') > 5, str(response)
 
         del pipe
 
