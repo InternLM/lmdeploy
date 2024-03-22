@@ -35,7 +35,7 @@ class TestAutoBackend:
             ('codellama/CodeLlama-7b-Instruct-hf', True, True),
             ('mistralai/Mistral-7B-Instruct-v0.1', True, False),
             ('mistralai/Mixtral-8x7B-Instruct-v0.1', True, False),
-            ('Qwen/Qwen-7B-Chat', False, True),
+            ('Qwen/Qwen-7B-Chat', True, True),
             ('Qwen/Qwen-VL-Chat', False, True),
             ('Qwen/Qwen1.5-4B-Chat', True, False),
         ]

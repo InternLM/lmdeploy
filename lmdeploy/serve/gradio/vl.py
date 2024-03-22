@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 import time
 from dataclasses import dataclass, field
 from itertools import count
@@ -57,14 +56,6 @@ class Session:
     @property
     def step(self):
         return self._step
-
-
-def preprocess(engine, prompt, sequence_start: bool):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    inputs = loop.run_until_complete(
-        engine._get_prompt_input(prompt, True, sequence_start=sequence_start))
-    return inputs
 
 
 def run_local(model_path: str,
@@ -126,9 +117,7 @@ def run_local(model_path: str,
         prompt = engine.vl_prompt_template.prompt_to_messages(prompt)
         t0 = time.perf_counter()
         inputs = _run_until_complete(
-            engine._get_prompt_input(prompt,
-                                     True,
-                                     sequence_start=sequence_start))
+            engine._get_prompt_input(prompt, True, sequence_start, ''))
         t1 = time.perf_counter()
         logger.info('preprocess cost %.3fs' % (t1 - t0))
 

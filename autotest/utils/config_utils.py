@@ -22,8 +22,8 @@ def get_turbomind_model_list(tp_num: int = None):
         return [
             item for item in case_list if get_tp_num(config, item) == tp_num
         ]
-
-    return case_list
+    else:
+        return case_list
 
 
 def get_torch_model_list(tp_num: int = None):
@@ -40,8 +40,8 @@ def get_torch_model_list(tp_num: int = None):
         return [
             item for item in case_list if get_tp_num(config, item) == tp_num
         ]
-
-    return case_list
+    else:
+        return case_list
 
 
 def get_all_model_list(tp_num: int = None):
@@ -65,8 +65,23 @@ def get_all_model_list(tp_num: int = None):
         return [
             item for item in case_list if get_tp_num(config, item) == tp_num
         ]
+    else:
+        return case_list
 
-    return case_list
+
+def get_vl_model_list(tp_num: int = None):
+    config_path = os.path.join('autotest/config.yaml')
+    with open(config_path) as f:
+        config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+
+    case_list = config.get('vl_model')
+
+    if tp_num is not None:
+        return [
+            item for item in case_list if get_tp_num(config, item) == tp_num
+        ]
+    else:
+        return case_list
 
 
 def get_cuda_prefix_by_workerid(worker_id, tp_num: int = 1):
