@@ -1,12 +1,26 @@
 # LMDeploy Triton Python Backend
 
-This is an efficient [Triton Python Backend](https://github.com/triton-inference-server/python_backend/tree/main) for LMDeploy.
+We provide the [Triton Python Backend](https://github.com/triton-inference-server/python_backend/tree/main) for LMDeploy. Here is the guide to deploy server, test client and profile server performance.
 
-## Deployment Procedure
+## Server Deployment
 
-### 1. Specify the folder layout
+### Step 1: Prepare the Model Repository
 
-The folder layout of Triton Inference Server model repository should be as follows. More details can be found in the [user guide](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_repository.html).
+The Triton Inference Server requires a specific folder structure for serving models. We provided the necessary `model.py` and `config.pbtxt` files. Follow these steps to set up your model repository:
+
+1. Create a directory named `model_repository/` in a suitable location.
+
+2. Inside the `model_repository/` directory, create a subdirectory for your model. For this example, we will name it `lmdeploy_model/`, which should be consistent with the name in `config.pbtxt`.
+
+3. Within the `lmdeploy_model/` directory, create another subdirectory named `1/`, which represents version 1 of your model. Triton supports model versioning, and each version should have its own directory.
+
+4. Place the `model.py` file inside the `1/` directory. This file contains the logic for your model's inference.
+
+5. The model weights should be placed in a folder named `weights/` inside the `1/` directory. You can either move the downloaded model weights to this folder or use a symbolic link to reference them.
+
+6. Place the `config.pbtxt` file directly inside the `lmdeploy_model/` directory. This configuration file is essential for Triton to understand how to serve your model. For advanced usage, you can modify the `config.pbtxt` to load your customized configurations.
+
+The final folder structure should look like this:
 
 ```
 model_repository
@@ -17,43 +31,43 @@ model_repository
     └── config.pbtxt
 ```
 
-- The `model.py` and `config.pbtxt` are provided here.
-- The `weights` folder contains the weights of models. You should download the model weights at first. And then move it to the `weights` folder. You also can use soft link to avoid moving, for example:
+You can find more details of the model repository in the [Triton Inference Server User Guide](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_repository.html).
 
-```
-ln -s /model_download_path/llama2_13b_chat /model_repository_path/lmdeploy_model/1/weights
-```
+### Step 2: Run the Triton Server
 
-### 2. Run the Triton server
+Use the following command to start the Triton Inference Server with the specified model repository:
 
 ```
 tritonserver \
     --model-repository=/path/to/your/model_repository \
-    --backend-directory /opt/tritonserver/backends \
-    --allow-http=0 \
     --allow-grpc=1 \
-    --grpc-port=33337 \
-    --allow-metrics=1 \
-    --log-info=1 \
-    --log-dir /path/to/put/your/logs
+    --grpc-port=33337
 ```
 
-In the above command, you should specify the path of your `model_repository` prepared in step 1.
+- Replace `/path/to/your/model_repository` with the actual path to the model repository you prepared in step 1.
+- The `--allow-grpc=1` option enables gRPC support, which is used by our client to communicate with the server.
+- The `--grpc-port` option sets the port for the Triton gRPC server. You can change this to any port that suits your environment. Here we use `33337` as an example for following client test and performance profiling.
 
 ## Client Test
 
-Once the deployment done, we can use the provided `client.py` to test the deployed Triton server.
+After successfully deploying the server, you can test it using the provided `client.py` script:
 
 ```
 python3 client.py
 ```
 
-You should make sure the server address and port are configured correctly in the client file.
+- Before running the client script, make sure that the server's address and port in the `client.py` file match the ones you configured for the Triton server.
 
-## Profile
+## Performance Profiling
 
-`profile_triton_python_backend.py` under benchmark folder is provided to profile this Triton Python backend.
+The `profile_triton_python_backend.py` script in the `benchmark/` folder is provided to help you profile the performance of this Triton Python backend.
 
 ```
-python3 benchmark/profile_triton_python_backend.py 0.0.0.0:33337 /model_path/llama2_13b_chat/ /dataset_path/ShareGPT_V3_unfiltered_cleaned_split.json --num_prompts 1000 --concurrency=128
+python3 benchmark/profile_triton_python_backend.py 0.0.0.0:33337 /path/to/model /path/to/ShareGPT_V3_unfiltered_cleaned_split.json --num_prompts 1000 --concurrency=128
 ```
+
+- Replace `0.0.0.0:33337` with the address and port of your Triton server.
+- Replace `/path/to/model` with the path to your model weights.
+- Replace `/path/to/ShareGPT_V3_unfiltered_cleaned_split.json` with the path to your dataset file.
+- The `--num_prompts=1000` option specifies the number of prompts you want to use for profiling.
+- The `--concurrency=128` option specifies the number of concurrent requests to send to the Triton server for profiling.
