@@ -556,10 +556,10 @@ class AsyncEngine:
                 128, self.session_len - self.id2step[str(session_id)] -
                 len(input_ids))
         finish_reason = None
-        logger.info(f'prompt: {prompt!r}, '
-                    f'gen_config: {gen_config}, '
-                    f'prompt_token_ids: {input_ids}, '
-                    f'adapter_name: {adapter_name}.')
+        logger.info(f'prompt={prompt!r}, '
+                    f'gen_config={gen_config}, '
+                    f'prompt_token_id={input_ids}, '
+                    f'adapter_name={adapter_name}.')
         logger.info(f'session_id={session_id}, '
                     f'history_tokens={self.id2step[str(session_id)]}, '
                     f'input_tokens={len(input_ids)}, '
