@@ -220,7 +220,6 @@ class AsyncEngine:
             model_path: str,
             backend_config: Optional[Union[TurbomindEngineConfig,
                                            PytorchEngineConfig]] = None,
-            chat_template_config: Optional[ChatTemplateConfig] = None,
             tp: int = 1,
             **kwargs):
         """Innter build method for turbomind backend."""
