@@ -5,6 +5,7 @@ import time
 from threading import Thread
 from typing import List, Union
 
+import torch
 from PIL.Image import Image
 
 from lmdeploy.utils import get_logger
@@ -68,6 +69,7 @@ class ImageEncoder:
         self.max_batch_size = max_batch_size
         self.loop = asyncio.new_event_loop()
         self.work_thread = self._start_work_thread()
+        torch.cuda.empty_cache()
 
     def _start_work_thread(self):
         """internal thread."""
