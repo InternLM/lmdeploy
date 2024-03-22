@@ -119,6 +119,20 @@ class YiVLChatTemplateWrapper(VLChatTemplateWrapper):
     pass
 
 
+class DeepSeekVLChatTemplateWrapper(VLChatTemplateWrapper):
+    """DeepSeek vl chat template."""
+
+    def append_image_token(self, prompt, num_images: int):
+        """append image tokens to user prompt."""
+        if num_images == 1:
+            return f'{IMAGE_TOKEN}{prompt}'
+        res = ''
+        for i in range(num_images):
+            res += f'{IMAGE_TOKEN} is Figure {str(i)}.\n'
+        res = res + prompt
+        return res
+
+
 class QwenVLChatTemplateWrapper(VLChatTemplateWrapper):
     """Qwen vl chat template."""
 
