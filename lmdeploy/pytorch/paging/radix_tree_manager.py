@@ -329,8 +329,12 @@ class RadixTreeManager:
 
         def __update_leaf(node: TreeNode):
             """update leaf seq."""
-            if node.sequence.seq_id not in self.seq_node_map:
+            seq = node.sequence
+            if seq.seq_id not in self.seq_node_map:
                 __remove_from_manager(node)
+            else:
+                if seq.status == MessageStatus.RUNNING:
+                    seq.status = MessageStatus.WAITING
 
         def __update_empty_child(node: TreeNode, remove_len: int):
             """update child sequence."""
@@ -340,6 +344,9 @@ class RadixTreeManager:
             seq.logical_blocks.resize(new_num_blocks)
             seq.set_step(new_num_tokens)
             node.parent = node.parent.parent
+            if seq.seq_id in self.seq_node_map:
+                if seq.status == MessageStatus.RUNNING:
+                    seq.status = MessageStatus.WAITING
 
         if len(node.children) == 0:
             __update_leaf(node)

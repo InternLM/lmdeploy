@@ -19,10 +19,6 @@ SeqList = List[SchedulerSequence]
 AdapterList = List[SchedulerAdapter]
 
 
-def _find_seq_with_session_id(group: SeqList, session_id: int):
-    return [seq for seq in group if seq.session_id == session_id]
-
-
 @dataclass
 class SchedulerOutput:
     """Output of schedule."""

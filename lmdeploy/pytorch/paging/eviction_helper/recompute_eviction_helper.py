@@ -18,7 +18,9 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             adapter = ADAPTER_MANAGER.get_adapter(seq.adapter_name)
             num_required_blocks += self.block_manager.num_required_blocks(
                 adapter)
-
+        num_required_blocks = max(
+            0,
+            num_required_blocks - self.block_manager.get_num_free_gpu_blocks())
         ignore_nodes = self.rtree_manager.get_all_nodes(seq)
         removed_nodes = []
 
