@@ -83,7 +83,7 @@ class DefaultBlockManager(BaseBlockManager):
         else:
             blocks = msg.logical_blocks.get_real_blocks()[-size:]
             self.allocator.free(blocks)
-            num_blocks = len(blocks)
+            num_blocks = len(msg.logical_blocks) - len(blocks)
             msg.logical_blocks.resize(num_blocks)
 
     def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
