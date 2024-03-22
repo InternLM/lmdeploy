@@ -158,7 +158,9 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        check_env()
+
+        self.device_ids = engine_config.device_ids
+        check_env(self.device_ids[0])
         check_model(model_path, trust_remote_code)
         if engine_config is None:
             engine_config = PytorchEngineConfig()
@@ -196,7 +198,8 @@ class Engine:
             cache_config=cache_config,
             trust_remote_code=trust_remote_code,
             adapters=adapters,
-            tp=tp)
+            tp=tp,
+            device_ids=self.device_ids)
 
         cache_config = self.model_agent.cache_config
         self.scheduler = Scheduler(scheduler_config, cache_config)
@@ -208,7 +211,7 @@ class Engine:
 
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
-        self.stream = torch.cuda.Stream()
+        self.stream = torch.cuda.Stream(self.device_ids[0])
 
         self.req_manager = self._bind_request_manager()
 
@@ -971,7 +974,8 @@ class Engine:
                 is_prefill = not prefill_counter or not has_running
                 if is_prefill:
                     prefill_counter = prefill_interval
-                with torch.inference_mode():
+                with torch.inference_mode(), torch.cuda.device(
+                        self.device_ids[0]):
                     step_tokens: Dict[int,
                                       InferOutput] = await self.async_step(
                                           is_prefill=is_prefill)

@@ -22,7 +22,7 @@ def _handle_exception(e: Exception,
     exit(1)
 
 
-def check_env_torch():
+def check_env_torch(device_id: int = 0):
     """check PyTorch environment."""
     logger = get_logger('lmdeploy')
 
@@ -30,15 +30,16 @@ def check_env_torch():
         logger.debug('Checking <PyTorch> environment.')
         import torch
 
-        a = torch.tensor([1, 2], device='cuda')
-        b = a.new_tensor([3, 4], device='cuda')
-        c = a + b
+        with torch.cuda.device(device_id):
+            a = torch.tensor([1, 2], device='cuda')
+            b = a.new_tensor([3, 4], device='cuda')
+            c = a + b
         torch.testing.assert_close(c, a.new_tensor([4, 6]))
     except Exception as e:
         _handle_exception(e, 'PyTorch', logger)
 
 
-def check_env_triton():
+def check_env_triton(device_id: int = 0):
     """check OpenAI Triton environment."""
     logger = get_logger('lmdeploy')
 
@@ -47,20 +48,21 @@ def check_env_triton():
         import torch
 
         from .triton_custom_add import custom_add
-        a = torch.tensor([1, 2], device='cuda')
-        b = a.new_tensor([3, 4], device='cuda')
-        c = custom_add(a, b)
+        with torch.cuda.device(device_id):
+            a = torch.tensor([1, 2], device='cuda')
+            b = a.new_tensor([3, 4], device='cuda')
+            c = custom_add(a, b)
         torch.testing.assert_close(c, a + b)
     except Exception as e:
         _handle_exception(e, 'Triton', logger)
 
 
-def check_env():
+def check_env(device_id: int = 0):
     """check all environment."""
     logger = get_logger('lmdeploy')
     logger.info('Checking environment for PyTorch Engine.')
-    check_env_torch()
-    check_env_triton()
+    check_env_torch(device_id)
+    check_env_triton(device_id)
 
 
 def check_transformers_version(model_path: str,
