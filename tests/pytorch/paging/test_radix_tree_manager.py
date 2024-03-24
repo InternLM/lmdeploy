@@ -269,6 +269,7 @@ class TestRadixTreeManager:
         rtree_manager.remove_node(node)
         assert len(rtree_manager.nodes) == 4
         assert seq1.num_blocks == 2
+        assert seq1.num_history_ids == 2 * block_size
 
         # test remove parent
         parent = rtree_manager.seq_node_map[seq.seq_id].parent
@@ -276,6 +277,8 @@ class TestRadixTreeManager:
         assert len(rtree_manager.nodes) == 3
         assert seq.num_blocks == 0
         assert seq1.num_blocks == 0
+        assert seq.num_history_ids == 0
+        assert seq1.num_history_ids == 0
 
     def test_sort_node(self, rtree_manager, session, block_size):
         token_ids = np.array([1] * block_size)

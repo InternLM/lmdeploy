@@ -333,6 +333,8 @@ class RadixTreeManager:
             if seq.seq_id not in self.seq_node_map:
                 __remove_from_manager(node)
             else:
+                new_num_tokens = seq.num_blocks * self.block_size
+                seq.set_step(new_num_tokens)
                 if seq.status == MessageStatus.RUNNING:
                     seq.status = MessageStatus.WAITING
 

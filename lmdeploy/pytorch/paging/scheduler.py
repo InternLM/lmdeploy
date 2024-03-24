@@ -258,11 +258,12 @@ class Scheduler:
 
         def _evict_until_can_append(seq: SchedulerSequence):
             """evict until can append."""
-            if block_manager.can_allocate(seq):
+            if block_manager.can_allocate(seq, prealloc_size):
                 return True
             if len(sorted_nodes) == 0:
                 return False
-            return eviction_helper.evict_for_seq(seq, sorted_nodes)
+            return eviction_helper.evict_for_seq(seq, sorted_nodes,
+                                                 prealloc_size)
 
         # 1. running
         for seq in running:
@@ -278,11 +279,15 @@ class Scheduler:
                 self.block_manager.free(seq, node.num_blocks)
                 self.rtree_manager.remove_sequence(seq)
 
+            if seq.status != MessageStatus.RUNNING:
+                continue
+
             if not _evict_until_can_append(seq):
                 self._set_message_status(seq, MessageStatus.WAITING)
                 continue
 
-            _try_append_slot(seq)
+            success = _try_append_slot(seq)
+            assert success
             self.rtree_manager.update_sequence(seq)
 
         return self.running, swap_in_map, swap_out_map, copy_map

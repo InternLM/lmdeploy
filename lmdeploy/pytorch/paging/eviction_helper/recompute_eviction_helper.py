@@ -10,10 +10,13 @@ from .base_eviction_helper import BaseEvictionHelper
 class RecomputeEvictionHelper(BaseEvictionHelper):
     """recompute eviction."""
 
-    def evict_for_seq(self, seq: SchedulerSequence,
-                      sorted_nodes: List[TreeNode]):
+    def evict_for_seq(self,
+                      seq: SchedulerSequence,
+                      sorted_nodes: List[TreeNode],
+                      prealloc_size: int = 0):
         """evict until can alloc."""
-        num_required_blocks = self.block_manager.num_required_blocks(seq)
+        num_required_blocks = self.block_manager.num_required_blocks(
+            seq, prealloc_size)
         if seq.adapter_name is not None:
             adapter = ADAPTER_MANAGER.get_adapter(seq.adapter_name)
             num_required_blocks += self.block_manager.num_required_blocks(
@@ -26,6 +29,8 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
 
         success = False
         for node in sorted_nodes:
+            if node in ignore_nodes:
+                continue
             num_blocks = node.num_blocks
             self.block_manager.free(node.sequence, num_blocks)
             self.rtree_manager.remove_node(node)

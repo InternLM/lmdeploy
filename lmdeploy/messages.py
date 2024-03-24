@@ -179,7 +179,7 @@ class PytorchEngineConfig:
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
-    shared_cache: bool = False
+    shared_cache: bool = True
     download_dir: str = None
     revision: str = None
 
