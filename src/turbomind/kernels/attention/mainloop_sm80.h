@@ -198,12 +198,10 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         __pipeline_wait_prior(0);
     }
 
-#if 0
-    template<class GmemIterK, class GmemIterV, class CacheIter, class StoreS>
+#if 1
+    template<class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         FragQ&         frag_Q,
-                        GmemIterK&     gmem_K,
-                        GmemIterV&     gmem_V,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
                         FragM&         frag_M,
@@ -216,23 +214,24 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         SharedStorage& storage,
                         const StoreS&  store_S)
     {
-        gmem_K.SetSmem(storage.KV);
-        gmem_V.SetSmem(storage.KV);
+        GmemIterK gmem_K{};
+        GmemIterV gmem_V{};
 
+        Impl::SetSmemKV(gmem_K, gmem_V, storage, false);
 
         PRAGMA_UNROLL
         for (int i = 0; i < Stages; ++i) {
-            gmem_K.ClearSmem(i * kSmemStepSize);
+            gmem_K.ClearSmem(i);
         }
 
         gmem_K.Prefetch(true_c, cache_iter, max_step - tile_iter * CTA_S, 0);
         __pipeline_commit();
 
-        FragK frag_K;
-        FragV frag_V;
+        typename Impl::StateQK state_QK{storage, frag_Q};
+        typename Impl::StatePV state_PV{storage};
 
         Wait();
-        smem_K.Load(frag_K[0], 0, 0);
+        state_QK.Load(0, 0);
 
         constexpr auto _ = [](int){};
 
@@ -243,15 +242,15 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             auto prefetch_V = [&](int k) {
                 if (k == 0) {
-                    gmem_V.Prefetch(is_residue, cache_iter, max_step - offset_K, kSmemStepSize);
+                    gmem_V.Prefetch(is_residue, cache_iter, max_step - offset_K, 1);
                     __pipeline_commit();
                 }
             };
             prefetch_V(0);
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, 0, _, [&] {
+            Impl::ComputeQK(state_QK, frag_S, 0, _, [&] {
                 Wait();
-                smem_V.Load(frag_V[0], 0, kSmemStepSize);
+                state_PV.Load(0, 1);
             });
 
             cache_iter.Advance();
@@ -270,13 +269,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            __align__(16) FragP frag_P;
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage.P);
 
-            Impl::ConvertStoP(frag_S, frag_P, storage.P);
-
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, kSmemStepSize, _, [&] {
+            Impl::ComputePV(state_PV, frag_O, 1, _, [&] {
                 Wait();
-                smem_K.Load(frag_K[0], 0, 0);
+                state_QK.Load(0, 0);
             });
         };
 
@@ -294,21 +291,17 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         __pipeline_wait_prior(0);
     }
 
-#elif 0
+#elif 1
     // Load      : K0,K1 | V0,K2,V1,K3 ...
     // Compute   :    K0 | K1,V0,K2,V1 ...
     // Conclusion:
     // - more register consumption (209 -> 250)
     // - more interleaved HMMA and FMA
     // - slight performance gain
-    template<class GmemIterK, class GmemIterV, class BlockIter, class StoreS>
+    template<class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         FragQ&         frag_Q,
-                        GmemIterK&     gmem_K,
-                        GmemIterV&     gmem_V,
-                        TransformK&    transform_K,
-                        TransformV&    transform_V,
-                        BlockIter&     block_iter_,
+                        CacheIter&     cache_iter_,
                         FragO&         frag_O,
                         FragM&         frag_M,
                         FragL&         frag_L,
@@ -320,44 +313,39 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         SharedStorage& storage,
                         const StoreS&  store_S)
     {
-        gmem_K.SetSmem(storage.KV);
-        gmem_V.SetSmem(storage.KV);
+        GmemIterK gmem_K{};
+        GmemIterV gmem_V{};
 
-        SmemIterK smem_K{storage.KV};
-        SmemIterV smem_V{storage.KV};
-        SmemIterQ smem_Q{storage.Q};
-        SmemIterP smem_P{storage.P};
+        Impl::SetSmemKV(gmem_K, gmem_V, storage, false);
 
         gmem_K.ClearSmem(0);
-        gmem_K.ClearSmem(kSmemStepSize);
+        gmem_K.ClearSmem(1);
 
-        block_iter_.SetTile(tile_iter);
+        auto cache_iter_K = cache_iter_;
+        auto cache_iter_V = cache_iter_;
 
-        auto block_iter_K = block_iter_;
-        auto block_iter_V = block_iter_;
-
-        gmem_K.Prefetch(true_c, block_iter_K, max_step - tile_iter * CTA_S, 0);
+        gmem_K.Prefetch(true_c, cache_iter_K, max_step - tile_iter * CTA_S, 0);
         __pipeline_commit();
-        block_iter_K.Advance();
+        cache_iter_K.Advance();
 
-        FragK frag_K;
-        FragV frag_V;
+        typename Impl::StateQK state_QK{storage, frag_Q};
+        typename Impl::StatePV state_PV{storage};
 
         Wait();
-        smem_K.Load(frag_K[0], 0, 0);
+        state_QK.Load(0, 0);
 
         FragS frag_S{};
         auto  _ = [&](int k) {
             if (k == 0) {
-                gmem_K.Prefetch(false_c, block_iter_K, CTA_S, kSmemStepSize);
+                gmem_K.Prefetch(false_c, cache_iter_K, CTA_S, 1);
                 __pipeline_commit();
             }
         };
-        Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, _, [&] {
+        Impl::ComputeQK(state_QK, frag_S, 0, _, [&] {
             Wait();
-            smem_K.Load(frag_K[0], 0, kSmemStepSize);
+            state_QK.Load(0, 1);
         });
-        block_iter_K.Advance();
+        cache_iter_K.Advance();
 
         auto loop = [&](auto is_residue, auto is_mask, auto is_last) {
             const int offset_K = tile_iter * CTA_S;
@@ -367,40 +355,39 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             }
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            __align__(16) FragP frag_P;
-            Impl::ConvertStoP(frag_S, frag_P, storage.P);
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage.P);
 
             auto prefetch_V = [&](int k) {
                 if (k == 0) {
-                    gmem_V.Prefetch(is_residue, block_iter_V, max_step - offset_K, 0);
+                    gmem_V.Prefetch(is_residue, cache_iter_V, max_step - offset_K, 0);
                     __pipeline_commit();
                 }
             };
             if constexpr (!is_last) {
                 clear(frag_S);
-                Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, kSmemStepSize, prefetch_V, [&] {
+                Impl::ComputeQK(state_QK, frag_S, 1, prefetch_V, [&] {
                     Wait();
-                    smem_V.Load(frag_V[0], 0, 0);
+                    state_PV.Load(0, 0);
                 });
-                block_iter_V.Advance();
+                cache_iter_V.Advance();
             }
             else {
                 prefetch_V(0);
                 Wait();
-                smem_V.Load(frag_V[0], 0, 0);
+                state_PV.Load(0, 0);
             }
 
             auto prefetch_K = [&](int k) {
                 if (k == 0) {
-                    gmem_K.Prefetch(false_c, block_iter_K, CTA_S, kSmemStepSize);
+                    gmem_K.Prefetch(false_c, cache_iter_K, CTA_S, 1);
                     __pipeline_commit();
                 }
             };
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, 0, prefetch_K, [&] {
+            Impl::ComputePV(state_PV, frag_O, 0, prefetch_K, [&] {
                 Wait();
-                smem_K.Load(frag_K[0], 0, kSmemStepSize);
+                state_QK.Load(0, 1);
             });
-            block_iter_K.Advance();
+            cache_iter_K.Advance();
         };
 
         PRAGMA_UNROLL

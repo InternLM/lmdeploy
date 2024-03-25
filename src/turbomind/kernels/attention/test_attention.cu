@@ -197,7 +197,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
 #define KV_INT4 0
 
-#define DECODING 1
+#define DECODING 0
 
 template<class T>
 int test_attention()
@@ -245,11 +245,11 @@ int test_attention()
     // constexpr int    kMaxSplitK   = 1;
 
     // prefill
-    constexpr size_t kHeadNum     = 1;
+    constexpr size_t kHeadNum     = 16;
     constexpr size_t KvHeadNum    = kHeadNum;
-    constexpr size_t kBatchSize   = 1;
-    constexpr size_t kInputLen    = 1;
-    constexpr size_t kSequenceLen = 127;
+    constexpr size_t kBatchSize   = 2;
+    constexpr size_t kInputLen    = 8192;
+    constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
     constexpr int kBlockSz = 128;
