@@ -56,6 +56,7 @@ pytorch_model:
 
 vl_model:
     - Qwen/Qwen-VL-Chat
+    - liuhaotian/llava-v1.5-7b
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - 01-ai/Yi-VL-6B
