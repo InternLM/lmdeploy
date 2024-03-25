@@ -897,7 +897,7 @@ class DeepseekVL(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'deepseek' in path and 'vl' in path and 'chat' in path:
+        if 'deepseek-vl' in path and 'chat' in path:
             return 'deepseek-vl'
 
 

@@ -30,9 +30,10 @@ class DeepSeekVisionModel(VisonModel):
         check_deepseek_vl_install()
         from deepseek_vl.models import VLChatProcessor
         from transformers import AutoModelForCausalLM
-        model = AutoModelForCausalLM.from_pretrained(self.model_path,
-                                                     trust_remote_code=True)
-        del model.language_model
+        with torch.device('cpu'):
+            model = AutoModelForCausalLM.from_pretrained(
+                self.model_path, trust_remote_code=True)
+            del model.language_model
         self.vision_model = model.vision_model
         self.aligner = model.aligner
         self.vision_model.eval().half().to(self.device)
