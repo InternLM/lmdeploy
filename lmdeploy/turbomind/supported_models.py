@@ -42,6 +42,8 @@ _SUPPORTED_ARCHS = dict(
 
 
 def maybe_deepseek_vl(model_path: str):
+    """Maybe a deepseek vl model which means AutoConfig.from_pretrained
+    failed."""
     from transformers import PretrainedConfig
     cfg = PretrainedConfig.get_config_dict(model_path)[0]
     if 'deepseek-vl' in model_path and cfg['model_type'] == 'multi_modality':
