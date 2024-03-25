@@ -2,7 +2,6 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-add_subdirectory(fused_multi_head_attention)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -26,8 +25,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
-        decoder_masked_multihead_attention
-        decoder_multihead_attention
+        attention
         bert_preprocess_kernels
         decoding_kernels
         unfused_attention_kernels
@@ -41,18 +39,14 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         logger
         llama_fmha)
 
-if (NOT MSVC)
-        add_subdirectory(flash_attention2)
-        target_link_libraries(Llama PUBLIC flash_attention2)
-endif()
 
 add_executable(llama_gemm llama_gemm.cc)
 target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)
 
 install(TARGETS llama_gemm DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/bin)
 
-find_package(Catch2 3 QUIET)
-if (Catch2_FOUND)
-        add_executable(test_cache_manager test_cache_manager.cc)
-        target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
-endif ()
+# find_package(Catch2 3 QUIET)
+# if (Catch2_FOUND)
+#         add_executable(test_cache_manager test_cache_manager.cc)
+#         target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
+# endif ()

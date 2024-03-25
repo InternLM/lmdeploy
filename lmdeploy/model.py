@@ -771,7 +771,8 @@ class Yi(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'yi' in model_path.lower():
+        path = model_path.lower()
+        if 'yi' in path and 'vl' not in path:
             return 'yi'
 
 
@@ -868,6 +869,79 @@ class Deepseek(BaseChatTemplate):
             return 'deepseek'
 
 
+@MODELS.register_module(name='deepseek-coder')
+class DeepSeek(BaseChatTemplate):
+    """Chat template of deepseek model."""
+
+    def __init__(
+            self,
+            session_len=4096,
+            system='',
+            meta_instruction="""You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n""",  # noqa: E501
+            eosys='',
+            user='### Instruction:\n',
+            eoh='\n',
+            assistant='### Response:\n',
+            eoa='\n<|EOT|>',
+            separator='\n',
+            stop_words=['<|EOT|>'],
+            **kwargs):
+        super().__init__(session_len=session_len,
+                         system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-coder' in path:
+            return 'deepseek-coder'
+
+
+@MODELS.register_module(name=['yi-vl'])
+class YiVL(BaseChatTemplate):
+
+    def __init__(
+            self,
+            meta_instruction="""This is a chat between an inquisitive human and an AI assistant. Assume the role of the AI assistant. Read all the images carefully, and respond to the human's questions with informative, helpful, detailed and polite answers. 这是一个好奇的人类和一个人工智能助手之间的对话。假设你扮演这个AI助手的角色。仔细阅读所有的图像，并对人类的问题做出信息丰富、有帮助、详细的和礼貌的回答。\n\n""",  # noqa: E501
+            user='### Human: ',
+            eoh='\n',
+            assistant='### Assistant:',
+            eoa='\n',
+            stop_words=['###'],
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'yi-vl' in path:
+            return 'yi-vl'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
@@ -880,3 +954,11 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
+    try:
+        from transformers import AutoTokenizer
+        tokenizer_config = AutoTokenizer.from_pretrained(
+            query, trust_remote_code=True)
+        if tokenizer_config.chat_template is None:
+            return 'base'
+    except Exception as e:
+        assert type(e) == OSError

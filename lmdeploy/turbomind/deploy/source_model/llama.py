@@ -190,7 +190,14 @@ class LlamaModel(BaseInputModel):
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
             max_position_embeddings = int(
                 model_arg.get('max_position_embeddings', 0))
-            repo_scaling = bool(model_arg.get('rope_scaling', False))
+            rope_scaling = model_arg.get('rope_scaling', None)
+            scaling_factor = 0.0
+            use_dynamic_ntk = 0
+            if isinstance(rope_scaling, dict):
+                scaling_type = model_arg['rope_scaling'].get('type', '')
+                scaling_factor = model_arg['rope_scaling'].get('factor', '')
+                if scaling_type == 'dynamic':
+                    use_dynamic_ntk = 1
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
@@ -198,4 +205,5 @@ class LlamaModel(BaseInputModel):
                     kv_head_num=kv_head_num,
                     rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
-                    use_dynamic_ntk=int(repo_scaling))
+                    use_dynamic_ntk=use_dynamic_ntk,
+                    rope_scaling_factor=scaling_factor)

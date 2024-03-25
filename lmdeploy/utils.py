@@ -1,12 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import functools
+import json
 import logging
+import os
 import sys
 import time
 from contextlib import contextmanager
 from logging import Logger, LogRecord
 from typing import List, Optional
+
+from huggingface_hub import hf_hub_download
 
 logger_initialized = {}
 
@@ -124,7 +128,7 @@ def get_logger(
     formatter = ColorFormatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
-        handler.setLevel(log_level)
+        handler.setLevel(logging.DEBUG)
         handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
@@ -173,6 +177,20 @@ def _stop_words(stop_words: List[str], tokenizer: object):
     stop_word_offsets = range(1, len(stop_indexes) + 1)
     stop_words = np.array([[stop_indexes, stop_word_offsets]]).astype(np.int32)
     return stop_words
+
+
+def get_hf_config_content(pretrained_model_name_or_path: str,
+                          **kwargs) -> dict:
+    """Get config content of a hf model."""
+    if os.path.exists(pretrained_model_name_or_path):
+        config_path = os.path.join(pretrained_model_name_or_path,
+                                   'config.json')
+    else:
+        config_path = hf_hub_download(pretrained_model_name_or_path,
+                                      'config.json')
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
 
 
 def get_model(pretrained_model_name_or_path: str,

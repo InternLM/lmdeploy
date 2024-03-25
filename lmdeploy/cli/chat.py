@@ -31,6 +31,7 @@ class SubCliChat(object):
         ArgumentHelper.session_len(engine_group)
         ArgumentHelper.adapters(engine_group)
         ArgumentHelper.cache_max_entry_count(engine_group)
+        ArgumentHelper.cache_block_seq_len(engine_group)
 
         # other args
         parser.add_argument('--trust-remote-code',
@@ -62,6 +63,7 @@ class SubCliChat(object):
         ArgumentHelper.quant_policy(engine_group)
         ArgumentHelper.model_name(engine_group)
         ArgumentHelper.cache_max_entry_count(engine_group)
+        ArgumentHelper.cache_block_seq_len(engine_group)
         ArgumentHelper.rope_scaling_factor(engine_group)
         ArgumentHelper.session_len(engine_group)
         # other arguments
@@ -80,6 +82,7 @@ class SubCliChat(object):
             tp=args.tp,
             session_len=args.session_len,
             cache_max_entry_count=args.cache_max_entry_count,
+            block_size=args.cache_block_seq_len,
             adapters=adapters)
         run_chat(args.model_path,
                  engine_config,

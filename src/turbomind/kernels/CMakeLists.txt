@@ -38,14 +38,6 @@ add_library(bert_preprocess_kernels STATIC bert_preprocess_kernels.cu)
 set_property(TARGET bert_preprocess_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET bert_preprocess_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
-set(decoder_masked_multihead_attention_files
-    decoder_masked_multihead_attention.cu
-)
-file(GLOB decoder_masked_multihead_attention_files ${decoder_masked_multihead_attention_files} ./decoder_masked_multihead_attention/*.cu)
-add_library(decoder_masked_multihead_attention STATIC ${decoder_masked_multihead_attention_files})
-set_property(TARGET decoder_masked_multihead_attention PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET decoder_masked_multihead_attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-
 add_library(decoding_kernels STATIC decoding_kernels.cu)
 set_property(TARGET decoding_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET decoding_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -71,4 +63,5 @@ set_property(TARGET custom_ar_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_subdirectory(gemm_s_f16)
-add_subdirectory(decoder_multihead_attention)
+add_subdirectory(flash_attention)
+add_subdirectory(attention)

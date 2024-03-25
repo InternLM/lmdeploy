@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/kernels/decoder_multihead_attention/array_ops.h"
+#include "src/turbomind/kernels/attention/array_ops.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
@@ -45,8 +45,8 @@ __global__ void softmax_kernel(T*          attn_score,
     // attn_mask, [batch_size, q_length, k_length]
     // linear_bias_slopes, [num_heads]
 
-    const int bi = blockIdx.y;  // Batch index.
-    const int hi = blockIdx.z;  // Head index.
+    const long bi = blockIdx.y;  // Batch index.
+    const int  hi = blockIdx.z;  // Head index.
 
     __shared__ float s_mean, s_max;
 
@@ -56,7 +56,7 @@ __global__ void softmax_kernel(T*          attn_score,
     for (int qi = blockIdx.x; qi < q_length; qi += gridDim.x) {
 
         float data[ITEMS_PER_THREAD];
-        int   qk_offset;
+        long  qk_offset;
         float local_max = -1e20f;
 
         // Loop along with K dimension.
@@ -74,7 +74,7 @@ __global__ void softmax_kernel(T*          attn_score,
                 qk_bias += static_cast<float>(linear_bias_slope * (ki - qi));
             }
 
-            int   mask_offset = (bi * q_length + qi) * k_length + ki;
+            long  mask_offset = (bi * q_length + qi) * k_length + ki;
             float mask_val    = static_cast<float>(ldg(&attn_mask[mask_offset]));
             qk_bias += (1.0f - mask_val) * -10000.0f;
 
@@ -130,8 +130,8 @@ __global__ void softmax_kernel_h2(T*        attn_score,
     const T2* qk_buf_h2     = reinterpret_cast<const T2*>(qk_buf);
     const T2* attn_mask_h2  = reinterpret_cast<const T2*>(attn_mask);
 
-    const int bi = blockIdx.y;  // Batch index
-    const int hi = blockIdx.z;  // Head index.
+    const long bi = blockIdx.y;  // Batch index
+    const int  hi = blockIdx.z;  // Head index.
 
     __shared__ float s_mean, s_max;
 
@@ -148,15 +148,15 @@ __global__ void softmax_kernel_h2(T*        attn_score,
     // Loop over q dimension.
     for (int qi = blockIdx.x; qi < q_length; qi += gridDim.x) {
         T2    data[ITEMS_PER_THREAD];
-        int   qk_offset;
+        long  qk_offset;
         float local_max = -1e20f;
 
         // Loop over k dimension.
         for (int i = 0; blockDim.x * i + threadIdx.x < (k_length / 2) && i < ITEMS_PER_THREAD; i++) {
             // The half of the index of k dimension. We will use the elements at {2 * ki, 2 * ki + 1}.
-            int ki          = blockDim.x * i + threadIdx.x;
-            qk_offset       = ((bi * head_num + hi) * q_length + qi) * (k_length / 2) + ki;
-            int mask_offset = (bi * q_length + qi) * (k_length / 2) + ki;
+            int ki           = blockDim.x * i + threadIdx.x;
+            qk_offset        = ((bi * head_num + hi) * q_length + qi) * (k_length / 2) + ki;
+            long mask_offset = (bi * q_length + qi) * (k_length / 2) + ki;
 
             // The value of QK^T matrix at (qi, ki).
             T2 qk = qk_buf_h2[qk_offset];
@@ -231,8 +231,8 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
     const T2* qk_buf_h2     = reinterpret_cast<const T2*>(qk_buf);
     const T2* attn_mask_h2  = reinterpret_cast<const T2*>(attn_mask);
 
-    const int bi = blockIdx.y;  // Batch index
-    const int hi = blockIdx.z;  // Head index.
+    const long bi = blockIdx.y;  // Batch index
+    const int  hi = blockIdx.z;  // Head index.
 
     // Constant values that will be used repeately in the q/k loop.
     const T2 ONE       = cuda_cast<T2>(1.0f);
@@ -250,7 +250,7 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
     for (int qi = blockIdx.x; qi < q_length; qi += gridDim.x * Q_ITEMS_PER_THREAD) {
         T2 data[Q_ITEMS_PER_THREAD][K_ITEMS_PER_THREAD];
 
-        int qk_offset[Q_ITEMS_PER_THREAD];
+        long qk_offset[Q_ITEMS_PER_THREAD];
 
         float local_max[Q_ITEMS_PER_THREAD];
 #pragma unroll
@@ -264,7 +264,7 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
             // The half of the index of k dimension. We will use the elements at {2 * ki, 2 * ki + 1}.
             int ki = blockDim.x * i + threadIdx.x;
 
-            int mask_offset[Q_ITEMS_PER_THREAD];
+            long mask_offset[Q_ITEMS_PER_THREAD];
 #pragma unroll
             for (int j = 0; j < Q_ITEMS; j++) {
                 qk_offset[j]   = ((bi * head_num + hi) * q_length + qi + j * gridDim.x) * (k_length / 2) + ki;
@@ -437,7 +437,10 @@ void invokeMaskedSoftmax(MaskedSoftmaxParam<T, T_IN>& param, cudaStream_t stream
     bool is_half2 = sizeof(T) == 2 && sizeof(T_IN) == 2 && param.k_length % 2 == 0;
     dim3 block((param.k_length / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
-    if (block.x > 2048 && block.x <= 4096) {
+    if (block.x > 4096 && block.x <= 8192) {
+        LAUNCH_MAKSED_SOFTMAX(8);
+    }
+    else if (block.x > 2048 && block.x <= 4096) {
         LAUNCH_MAKSED_SOFTMAX(4)
     }
     else if (block.x > 1024) {
@@ -447,7 +450,7 @@ void invokeMaskedSoftmax(MaskedSoftmaxParam<T, T_IN>& param, cudaStream_t stream
         LAUNCH_MAKSED_SOFTMAX(1)
     }
     else {
-        FT_CHECK(param.k_length <= 4096);
+        FT_CHECK(param.k_length <= 8192);
     }
 }
 
@@ -673,8 +676,10 @@ __global__ void transpose_remove_padding(const T*     src,
     // do remove_sequence_length_padding
     const int bid = blockIdx.x;  // batch * seq_len or valid_word_num
 
-    const int src_batch_id = (bid + mask_offset[bid]) / seq_len;
-    const int src_seq_id   = (bid + mask_offset[bid]) % seq_len;
+    const int token_offset = mask_offset ? mask_offset[bid] : 0;
+
+    const int src_batch_id = (bid + token_offset) / seq_len;
+    const int src_seq_id   = (bid + token_offset) % seq_len;
 
     const int dst_seq_id = bid;
 
@@ -943,11 +948,14 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
         rotary_embedding_base = rope_theta[batch_idx];
     }
 
-    RotaryEmbedding<vec_size> rotary_emb(rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0});
-    rotary_emb.apply((Array<T, vec_size>&)q);
+    if (rotary_embedding_dim) {
+        RotaryEmbedding<vec_size> rotary_emb(
+            rotary_embedding_base, rotary_embedding_dim, timestep, {tidx * vec_size, 0});
+        rotary_emb.apply((Array<T, vec_size>&)q);
 
-    if (head_idx < kv_head_num) {
-        rotary_emb.apply((Array<T, vec_size>&)k);
+        if (head_idx < kv_head_num) {
+            rotary_emb.apply((Array<T, vec_size>&)k);
+        }
     }
 
     if (use_logn_attn) {
@@ -1023,7 +1031,7 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     bool         use_logn_attn,
                                     cudaStream_t stream)
 {
-    FT_CHECK(rotary_embedding_dim);
+    // FT_CHECK(rotary_embedding_dim);
     // To implement rotary embeddings, each thread processes two QKV elems:
     dim3   block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
     dim3   grid(token_num, head_num);

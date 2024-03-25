@@ -145,6 +145,18 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaRMSNorm',
 })
 
+# qwen
+MODULE_MAP.update({
+    'modeling_qwen.QWenAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenAttention',
+    'modeling_qwen.QWenModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenModel',
+    'modeling_qwen.QWenMLP':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenMLP',
+    'modeling_qwen.RMSNorm':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedRMSNorm',
+})
+
 # qwen1.5
 MODULE_MAP.update({
     'transformers.models.qwen2.modeling_qwen2.Qwen2Attention':
