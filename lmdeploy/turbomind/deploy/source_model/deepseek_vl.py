@@ -1,33 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-import os
 import os.path as osp
-from glob import glob
 
-import torch
-from safetensors.torch import load_file
-
-from lmdeploy.tokenizer import Tokenizer
-
-from .base import INPUT_MODELS, BaseInputModel, BaseReader
+from .base import INPUT_MODELS
+from .llama import LlamaModel, LlamaReader
 
 
-class LlamaReader(BaseReader):
-    """LlamaReader."""
+class DeepSeekVLReader(LlamaReader):
+    """DeepSeekVL model reader."""
 
-    attn_layer_patten = r'model.layers.([0-9]+).'
-    tok_embeddings_key = 'model.embed_tokens.weight'
-    norm_weight_key = 'model.norm.weight'
-    output_weight_key = 'lm_head.weight'
+    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
+    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
+    norm_weight_key = 'language_model.model.norm.weight'
+    output_weight_key = 'language_model.lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
                  model_cfg: dict):
-        super().__init__()
-        self.params = unused_params
-        self.params.update(new_params)
-        self.last_bin = last_bin
-        self.model_cfg = model_cfg
-        self.init_layer_id()
+        super().__init__(new_params, unused_params, last_bin, model_cfg)
 
     def init_layer_id(self):
         """Get start/end transformer layer id."""
@@ -64,7 +53,7 @@ class LlamaReader(BaseReader):
         result = []
         for key in ['q', 'k', 'v', 'o']:
             tensor = self.params.get(
-                f'model.layers.{i}.self_attn.{key}_proj.{kind}')
+                f'language_model.model.layers.{i}.self_attn.{key}_proj.{kind}')
             if not allow_none:
                 assert tensor is not None
             result.append(tensor)
@@ -88,13 +77,15 @@ class LlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[f'model.layers.{i}.input_layernorm.weight']
+        return self.params[
+            f'language_model.model.layers.{i}.input_layernorm.weight']
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'model.layers.{i}.mlp.{key}_proj.{kind}']
+            tensor = self.params[
+                f'language_model.model.layers.{i}.mlp.{key}_proj.{kind}']
             result.append(tensor)
         return (*result, )
 
@@ -112,68 +103,18 @@ class LlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[f'model.layers.{i}.post_attention_layernorm.weight']
+        return self.params[
+            f'language_model.model.layers.{i}.post_attention_layernorm.weight']
 
 
-@INPUT_MODELS.register_module(name='hf')
-class LlamaModel(BaseInputModel):
-    """Llama model in hf format."""
+@INPUT_MODELS.register_module(name='deepseekvl')
+class DeepSeekVLModel(LlamaModel):
+    """DeepSeekVL model in hf format."""
 
-    Reader = LlamaReader
+    Reader = DeepSeekVLReader
 
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
-        super().__init__(model_path, tokenizer_path)
-        ckpt_path = kwargs.get('ckpt_path')
-        if ckpt_path is None:
-            ckpt_path = model_path
-        self.ckpt_path = ckpt_path
-        self.ckpt_files = self.get_ckpt()
-
-    def get_ckpt(self):
-        """Get weight files."""
-        patterns = ['*.safetensors', 'pytorch_model*.bin']
-        files = []
-        for pattern in patterns:
-            files = glob(os.path.join(self.ckpt_path, pattern))
-            files = [os.path.basename(file) for file in files]
-            if len(files) > 0:
-                break
-        files = sorted(files)
-        return files
-
-    @property
-    def nmgrs(self):
-        """Get number of checkpoint."""
-        return len(self.ckpt_files)
-
-    def get_mgrs(self):
-        """Conctruct all Reader."""
-        assert self.nmgrs > 0, \
-            f'could not find checkpoints in {self.ckpt_path}'
-        unused_params = {}
-        try:
-            for i, ckpt in enumerate(self.ckpt_files):
-                is_last_bin = i == len(self.ckpt_files) - 1
-                if ckpt.endswith('.bin'):
-                    new_params = torch.load(osp.join(self.ckpt_path, ckpt),
-                                            map_location='cpu')
-                else:
-                    new_params = load_file(osp.join(self.ckpt_path, ckpt))
-                ret = self.Reader(new_params, unused_params,
-                                  i == self.nmgrs - 1, self.model_info())
-                yield ret
-                ret.clean_up(is_last_bin)
-        except GeneratorExit:
-            ret.clean_up(True)
-
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        assert osp.isdir(self.model_path), self.model_path
-        tk_model = Tokenizer(self.model_path)
-        n_words = tk_model.vocab_size
-        bos_id = tk_model.bos_token_id
-        eos_id = tk_model.eos_token_id
-        return n_words, bos_id, eos_id
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path, **kwargs)
 
     def model_info(self):
         """Read model info."""

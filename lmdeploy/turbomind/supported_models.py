@@ -41,6 +41,14 @@ _SUPPORTED_ARCHS = dict(
     LlavaLlamaForCausalLM=True)
 
 
+def maybe_deepseek_vl(model_path: str):
+    from transformers import PretrainedConfig
+    cfg = PretrainedConfig.get_config_dict(model_path)[0]
+    if 'deepseek-vl' in model_path and cfg['model_type'] == 'multi_modality':
+        return True
+    return False
+
+
 def is_supported(model_path: str):
     """Check whether supported by turbomind engine.
 
@@ -68,7 +76,12 @@ def is_supported(model_path: str):
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        try:
+            cfg = AutoConfig.from_pretrained(model_path,
+                                             trust_remote_code=True)
+        except Exception as e:  # noqa
+            if maybe_deepseek_vl(model_path):
+                return True
 
         if hasattr(cfg, 'architectures'):
             arch = cfg.architectures[0]

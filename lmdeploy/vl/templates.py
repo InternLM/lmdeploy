@@ -157,4 +157,6 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch == 'LlavaLlamaForCausalLM':
         return LlavaVLChatTemplateWrapper(chat_template)
+    elif arch == 'MultiModalityCausalLM':  # deepseek-vl
+        return DeepSeekVLChatTemplateWrapper(chat_template)
     raise ValueError(f'unsupported vl_prompt_template with arch {arch}')

@@ -37,7 +37,8 @@ class VLAsyncEngine(AsyncEngine):
         return _prompts
 
     async def _get_prompt_input(self, prompt: Dict, do_preprocess: bool,
-                                sequence_start: bool):
+                                sequence_start: bool, adapter_name: str, *args,
+                                **kwargs):
         """get input_ids, embeddings and offsets."""
         if do_preprocess:
             decorated = self.vl_prompt_template.messages2prompt(
