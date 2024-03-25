@@ -28,7 +28,7 @@ env:
 jobs:
   pr_functions_test:
     runs-on: [self-hosted, linux-a100-pr]
-    timeout-minutes: 75
+    timeout-minutes: 120
     env:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
