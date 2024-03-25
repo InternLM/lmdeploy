@@ -80,7 +80,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     union SharedStorage {
         __align__(16) T KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];
         __align__(16) T Q[SmemLayoutQ::kSize];
-        __align__(16) T P[1];
     };
 
     static constexpr bool kUseSmemQ = false;

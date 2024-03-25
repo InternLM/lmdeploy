@@ -127,8 +127,6 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
         };
 
         __align__(16) float O1[CTA_H1][kHeadDim];
-
-        T P[1];
     };
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H1, 8, kWarpCount>;
@@ -566,7 +564,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
         }
     }
 
-    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T*)
+    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, SharedStorage&)
     {
         static_assert(K_M == V_K);
 

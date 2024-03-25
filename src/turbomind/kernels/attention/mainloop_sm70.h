@@ -98,7 +98,7 @@ struct Mainloop<arch::Sm70, Impl_> {
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage.P);
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
 
             Impl::Sync();
             state_PV.Load(0, 0);

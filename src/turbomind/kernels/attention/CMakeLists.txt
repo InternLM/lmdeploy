@@ -3,7 +3,6 @@
 add_library(attention STATIC
             attention.cu
             decoding.cu
-            # kv_cache_utils.cu
             kv_cache_utils_v2.cu
             utils.cc
             attention_128_f16_sm80.cu

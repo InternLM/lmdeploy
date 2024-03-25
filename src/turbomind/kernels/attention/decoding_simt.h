@@ -164,7 +164,6 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
             __align__(16) SmemL L;
             __align__(16) SmemO O;
         };
-        T P[1];
     };
 
     static constexpr bool kUseSmemQ = false;
@@ -491,7 +490,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
         }
     }
 
-    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T* smem_P)
+    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, SharedStorage&)
     {
         FragSp& frag_Sp = (FragSp&)frag_P;
         PRAGMA_UNROLL

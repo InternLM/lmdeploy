@@ -74,9 +74,6 @@ struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
             __align__(16) Tkv K[SmemLayoutK::kSize];
             __align__(16) Tkv V[SmemLayoutV::kSize];
         };
-        struct {
-            T P[1];
-        };
     };
 
     static constexpr bool kUseSmemQ = false;

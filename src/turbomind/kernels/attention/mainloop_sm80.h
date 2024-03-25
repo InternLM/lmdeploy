@@ -172,7 +172,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage.P);
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
 
             auto prefetch_1 = [&, pipe_iter](int k) {
                 Prefetch<kBatch1, Stages % 2 != 0>(gmem_1, cache_iter, k, pipe_iter.w);
@@ -269,7 +269,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage.P);
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
 
             Impl::ComputePV(state_PV, frag_O, 1, _, [&] {
                 Wait();
@@ -355,7 +355,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             }
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
-            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage.P);
+            Impl::ConvertStoP(frag_S, state_PV.frag_P, storage);
 
             auto prefetch_V = [&](int k) {
                 if (k == 0) {
