@@ -40,7 +40,8 @@ def prepare_environment(request, config, worker_id):
                                  ' --server-port ' + str(port),
                                  config,
                                  model,
-                                 need_tp=True)
+                                 need_tp=True,
+                                 cuda_prefix=cuda_prefix)
 
     print('reproduce command restful: ' + cmd)
 
@@ -50,25 +51,24 @@ def prepare_environment(request, config, worker_id):
     with open(start_log, 'w') as f:
         f.writelines('reproduce command restful: ' + cmd + '\n')
 
-        # convert
-        convertRes = subprocess.Popen([cmd],
-                                      stdout=f,
-                                      stderr=f,
-                                      shell=True,
-                                      text=True,
-                                      encoding='utf-8')
-        pid = convertRes.pid
+        startRes = subprocess.Popen([cmd],
+                                    stdout=f,
+                                    stderr=f,
+                                    shell=True,
+                                    text=True,
+                                    encoding='utf-8')
+        pid = startRes.pid
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     sleep(5)
-    for i in range(120):
+    for i in range(180):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 120:
+        if result or total_time >= 180:
             break
     yield
     if pid > 0:
@@ -77,7 +77,7 @@ def prepare_environment(request, config, worker_id):
                                 'kill_' + model.split('/')[1] + '.log')
 
         with open(kill_log, 'w') as f:
-            convertRes.kill()
+            startRes.kill()
 
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 

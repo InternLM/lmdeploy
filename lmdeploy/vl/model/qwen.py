@@ -29,12 +29,11 @@ class QwenVisionModel(VisonModel):
             for key in ['wte', 'h', 'ln_f']:
                 setattr(model.transformer, key, None)
 
-        with torch.device(self.device):
-            model.to_empty(device=self.device)
-            load_model_from_weight_files(model, self.model_path)
+        model.to_empty(device='cpu')
+        load_model_from_weight_files(model, self.model_path)
 
         self.model = model.transformer.visual
-        self.model.eval().half()
+        self.model.to(self.device).eval().half()
 
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:
