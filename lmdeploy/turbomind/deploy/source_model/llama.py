@@ -180,16 +180,13 @@ class LlamaModel(BaseInputModel):
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             model_arg = json.load(f)
-            if 'language_config' in model_arg and model_arg[
-                    'language_config'].get('model_type', None) == 'llama':
-                model_arg = model_arg['language_config']  # depseek-vl
             num_layer = model_arg['num_hidden_layers']
-            norm_eps = model_arg.get('rms_norm_eps', 1e-06)
-            attn_head_num = model_arg.get('num_attention_heads', 32)
+            norm_eps = model_arg['rms_norm_eps']
+            attn_head_num = model_arg['num_attention_heads']
             if 'num_key_value_heads' in model_arg:
                 kv_head_num = model_arg['num_key_value_heads']
             else:
-                kv_head_num = model_arg.get('num_attention_heads', 32)
+                kv_head_num = model_arg['num_attention_heads']
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
             max_position_embeddings = int(
                 model_arg.get('max_position_embeddings', 0))
