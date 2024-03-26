@@ -42,13 +42,13 @@ Then, you can communicate with codellama in consolo by following instructions in
 ### Completion
 
 ```shell
-lmdeploy chat turbomind ./workspace --cap completion
+lmdeploy chat ./workspace --cap completion
 ```
 
 ### Infilling
 
 ```shell
-lmdeploy chat turbomind ./workspace --cap infilling
+lmdeploy chat ./workspace --cap infilling
 ```
 
 The input code is supposed to have a special placeholder `<FILL>`. For example,
@@ -64,7 +64,7 @@ And the generated code piece by `turbomind.chat` is the one to be filled in `<FI
 ### Chat
 
 ```
-lmdeploy chat turbomind ./workspace --cap chat --meta-instruct "Provide answers in Python"
+lmdeploy chat ./workspace --cap chat --meta-instruct "Provide answers in Python"
 ```
 
 `--meta-instruct` instruction can be changed to other coding languages as long as codellama supports it
@@ -72,7 +72,7 @@ lmdeploy chat turbomind ./workspace --cap chat --meta-instruct "Provide answers 
 ### Python specialist
 
 ```
-lmdeploy chat turbomind ./workspace --cap python
+lmdeploy chat ./workspace --cap python
 ```
 
 Python fine-tuned model is highly recommended when 'python specialist' capability is required.

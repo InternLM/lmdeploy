@@ -42,13 +42,13 @@ lmdeploy convert codellama /path/of/codellama/model
 ### 代码续写
 
 ```shell
-lmdeploy chat turbomind ./workspace --cap completion
+lmdeploy chat ./workspace --cap completion
 ```
 
 ### 代码填空
 
 ```shell
-lmdeploy chat turbomind ./workspace --cap infilling
+lmdeploy chat ./workspace --cap infilling
 ```
 
 输入的代码块中要包含 `<FILL>`，比如：
@@ -64,7 +64,7 @@ def remove_non_ascii(s: str) -> str:
 ### 对话
 
 ```
-lmdeploy chat turbomind ./workspace --cap chat --meta-instruct "Provide answers in Python"
+lmdeploy chat ./workspace --cap chat --meta-instruction "Provide answers in Python"
 ```
 
 可以把 `--meta-instruct` 的指令换成 codellama 支持的其他变成语言。
@@ -72,7 +72,7 @@ lmdeploy chat turbomind ./workspace --cap chat --meta-instruct "Provide answers 
 ### Python 专项
 
 ```
-lmdeploy chat turbomind ./workspace --cap python
+lmdeploy chat ./workspace --cap python
 ```
 
 建议这里部署 Python 微调模型

@@ -34,7 +34,7 @@ lmdeploy lite calibrate \
 测试聊天效果。注意需要添加参数`--quant-policy 4`以开启KV Cache int8模式。
 
 ```bash
-lmdeploy chat turbomind $HF_MODEL --model-format hf --quant-policy 4
+lmdeploy chat $HF_MODEL --model-format hf --quant-policy 4
 ```
 
 ## 显存测试
@@ -80,5 +80,5 @@ lmdeploy chat turbomind $HF_MODEL --model-format hf --quant-policy 4
 需要注意的是，`kCacheKVInt8` 和 `WeightInt4` 两种方案可以同时开启。请参阅 [w4a16](./w4a16.md) 开启 `WeightInt4` ，然后测试聊天效果：
 
 ```shell
-lmdeploy chat turbomind ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
+lmdeploy chat ./internlm-chat-7b-4bit --model-format awq --quant-policy 4
 ```
