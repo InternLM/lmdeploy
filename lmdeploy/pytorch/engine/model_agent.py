@@ -260,7 +260,7 @@ class StepContext:
 
         max_kv_seq_length = max_q_seq_length + max(inputs.history_lengths)
 
-        window_size = cache_config.window_size
+        window_size = getattr(cache_config, 'window_size', 0)
         if window_size > 0:
             block_size = cache_config.block_size
             expected_num_blocks = _div_up(kv_seq_length, block_size)
