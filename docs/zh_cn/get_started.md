@@ -50,7 +50,7 @@ LMDeploy CLI 提供了如下便捷的工具，方便用户快速体验模型对�
 ### 控制台交互式对话
 
 ```shell
-lmdeploy chat turbomind internlm/internlm-chat-7b
+lmdeploy chat internlm/internlm-chat-7b
 ```
 
 ### WebUI 交互式对话

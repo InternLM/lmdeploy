@@ -59,25 +59,24 @@ def prepare_environment(request, config, worker_id):
     with open(start_log, 'w') as f:
         f.writelines('reproduce command restful: ' + cmd + '\n')
 
-        # convert
-        convertRes = subprocess.Popen([cmd],
-                                      stdout=f,
-                                      stderr=f,
-                                      shell=True,
-                                      text=True,
-                                      encoding='utf-8')
-        pid = convertRes.pid
+        startRes = subprocess.Popen([cmd],
+                                    stdout=f,
+                                    stderr=f,
+                                    shell=True,
+                                    text=True,
+                                    encoding='utf-8')
+        pid = startRes.pid
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     sleep(5)
-    for i in range(120):
+    for i in range(150):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 120:
+        if result or total_time >= 150:
             break
     yield
     if pid > 0:
@@ -85,7 +84,7 @@ def prepare_environment(request, config, worker_id):
                                 'kill_' + model.split('/')[1] + '.log')
 
         with open(kill_log, 'w') as f:
-            convertRes.kill()
+            startRes.kill()
 
     allure.attach.file(kill_log, attachment_type=allure.attachment_type.TEXT)
 
@@ -172,15 +171,17 @@ def run_all_step(config,
 
         with allure.step(case + ' step1 - command chat regression'):
             chat_result, chat_log, msg = command_line_test(
-                config, case, case_info, model, 'api_client', http_url)
-            allure.attach.file(chat_log,
-                               attachment_type=allure.attachment_type.TEXT)
+                config, case, case_info, model + worker_id, 'api_client',
+                http_url)
+            if chat_log is not None:
+                allure.attach.file(chat_log,
+                                   attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert chat_result, msg
 
         with allure.step(case + ' step2 - restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(
-                config, case_info, model, http_url)
+                config, case_info, model, http_url, worker_id)
             allure.attach.file(restful_log,
                                attachment_type=allure.attachment_type.TEXT)
         with assume:
@@ -188,7 +189,7 @@ def run_all_step(config,
 
         with allure.step(case + ' step3 - restful_test - interactive chat'):
             active_result, interactive_log, msg = interactive_test(
-                config, case_info, model, http_url)
+                config, case_info, model, http_url, worker_id)
             allure.attach.file(interactive_log,
                                attachment_type=allure.attachment_type.TEXT)
 

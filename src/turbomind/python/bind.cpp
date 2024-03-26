@@ -306,7 +306,7 @@ PYBIND11_MODULE(_turbomind, m)
             "__dlpack__",
             [](triton::Tensor* self, long stream) {
                 auto tensor_ptr = TritonTensorToDLManagedTensor(*self);
-                return new py::capsule(tensor_ptr.release(), kDlTensorCapsuleName, [](PyObject* obj) {
+                return py::capsule(tensor_ptr.release(), kDlTensorCapsuleName, [](PyObject* obj) {
                     DLManagedTensor* dlmt =
                         static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
                     if (dlmt) {

@@ -128,7 +128,7 @@ def get_logger(
     formatter = ColorFormatter(log_formatter)
     for handler in handlers:
         handler.setFormatter(formatter)
-        handler.setLevel(log_level)
+        handler.setLevel(logging.DEBUG)
         handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
