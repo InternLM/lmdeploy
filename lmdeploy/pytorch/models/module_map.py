@@ -149,8 +149,10 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'modeling_qwen.QWenAttention':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenAttention',
-    # 'modeling_qwen.QWenModel':
-    # f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenModel',
+    'modeling_qwen.FlashSelfAttention':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenAttention',
+    'modeling_qwen.QWenModel':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenModel',
     'modeling_qwen.QWenMLP':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen.PatchedQWenMLP',
     'modeling_qwen.RMSNorm':

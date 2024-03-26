@@ -21,10 +21,13 @@ def rotate_half(x: torch.Tensor):
 
 def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor):
     """apply rotary."""
-    dtype = t.dtype
-    t_ = t.float()
-    t_ = (t_ * freqs.cos()) + (rotate_half(t_) * freqs.sin())
-    return t_.to(dtype)
+    rot_dim = freqs[0].shape[-1]
+    cos, sin = freqs
+    t_, t_pass_ = t[..., :rot_dim], t[..., rot_dim:]
+    t_ = t_.float()
+    t_pass_ = t_pass_.float()
+    t_ = (t_ * cos) + (rotate_half(t_) * sin)
+    return torch.cat((t_, t_pass_), dim=-1).type_as(t)
 
 
 class PatchedQWenAttention(nn.Module):
@@ -83,43 +86,23 @@ class PatchedQWenAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-
-            if len(rotary_pos_emb_list) == 1:
-                rotary_pos_emb = rotary_pos_emb_list[0]
-                rotary_pos_emb = [
-                    i[:, position_ids_1d, :, :] for i in rotary_pos_emb
-                ]
-                rotary_pos_emb = (rotary_pos_emb, ) * 2
-                q_pos_emb, k_pos_emb = rotary_pos_emb
-                # Slice the pos emb for current inference
-                query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
-                key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
-            else:
-                query_list = []
-                key_list = []
-                for i, rotary_pos_emb in enumerate(rotary_pos_emb_list):
-                    rotary_pos_emb = [
-                        i[:, position_ids_1d, :, :] for i in rotary_pos_emb
-                    ]
-                    rotary_pos_emb = (rotary_pos_emb, ) * 2
-                    q_pos_emb, k_pos_emb = rotary_pos_emb
-                    # Slice the pos emb for current inference
-                    query_list += [
-                        apply_rotary_pos_emb(query_states[i:i + 1, :, :],
-                                             q_pos_emb)
-                    ]
-                    key_list += [
-                        apply_rotary_pos_emb(key_states[i:i + 1, :, :],
-                                             k_pos_emb)
-                    ]
-                query_states = torch.cat(query_list, dim=0)
-                key_states = torch.cat(key_list, dim=0)
+            assert len(rotary_pos_emb_list) == 1, 'do not support dynamic ntk'
+            rotary_pos_emb = rotary_pos_emb_list[0]
+            rotary_pos_emb = [
+                i[:, position_ids_1d, :, :] for i in rotary_pos_emb
+            ]
+            rotary_pos_emb = (rotary_pos_emb, ) * 2
+            q_pos_emb, k_pos_emb = rotary_pos_emb
+            # Slice the pos emb for current inference
+            query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
+            key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
 
             return query_states, key_states, value_states
 
         context = self.context.context
         block_offsets = context.block_offsets
         position_ids_1d = context.position_ids_1d
+        max_kv_seq_length = context.max_kv_seq_length
         max_q_seq_length = context.max_q_seq_length
         kv_seq_length = context.kv_seq_length
         q_start_loc = context.q_start_loc
@@ -129,8 +112,7 @@ class PatchedQWenAttention(nn.Module):
         if rotary_pos_emb_list is not None:
             query_states, key_states, value_states = __rotary_emb_fn(
                 query_states, key_states, value_states)
-
-        if key_states.size(1) > self.seq_length and self.use_logn_attn:
+        if max_kv_seq_length > self.seq_length and self.use_logn_attn:
             if self.logn_tensor.device != query_states.device or \
                     self.logn_tensor.dtype != query_states.dtype:
                 self.logn_tensor = self.logn_tensor.to(
@@ -227,21 +209,27 @@ class PatchedQWenModel(nn.Module):
         # Attention mask is not necessary in continuous batching
         hidden_states = inputs_embeds
 
-        # decoder layers
-        for idx, decoder_layer in enumerate(self.h):
-            past_key_value = (past_key_values[idx]
-                              if past_key_values is not None else None)
-            layer_outputs = decoder_layer(
+        context = self.context.context
+        max_kv_seq_length = context.max_kv_seq_length
+        # do not support use_dynamic_ntk
+        ntk_alpha_list = [1.0]
+        self.rotary_emb._ntk_alpha_cached_list = ntk_alpha_list
+        rotary_pos_emb_list = [
+            self.rotary_emb(max_kv_seq_length, ntk_alpha=ntk_alpha)
+            for ntk_alpha in ntk_alpha_list
+        ]
+        for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
+            outputs = block(
                 hidden_states,
-                layer_past=past_key_value,
+                layer_past=layer_past,
+                rotary_pos_emb_list=rotary_pos_emb_list,
             )
-            hidden_states = layer_outputs[0]
+            hidden_states = outputs[0]
 
         hidden_states = self.ln_f(hidden_states)
-
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=past_key_value,
+            past_key_values=past_key_values,
             hidden_states=None,
             attentions=None,
         )
