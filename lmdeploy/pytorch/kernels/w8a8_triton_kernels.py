@@ -33,42 +33,19 @@ def per_channel_quant(x, n_bits, dtype):
 @triton.autotune(
     configs=[
         triton.Config({
-            'BLOCK_M': 16,
-            'BLOCK_N': 128,
-            'BLOCK_K': 256,
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_M': 32,
             'BLOCK_N': 64,
             'BLOCK_K': 128,
         },
                       num_stages=4,
                       num_warps=4),
         triton.Config({
-            'BLOCK_M': 64,
-            'BLOCK_N': 64,
-            'BLOCK_K': 128,
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_M': 64,
-            'BLOCK_N': 128,
-            'BLOCK_K': 128,
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_M': 128,
             'BLOCK_N': 128,
             'BLOCK_K': 128,
         },
                       num_stages=4,
                       num_warps=4)
     ],
-    key=['M', 'N', 'K'],
+    key=['N', 'K'],
 )
 @triton.jit
 def _linear(
@@ -138,42 +115,19 @@ def _linear(
 @triton.autotune(
     configs=[
         triton.Config({
-            'BLOCK_M': 16,
-            'BLOCK_N': 128,
-            'BLOCK_K': 256,
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_M': 32,
             'BLOCK_N': 64,
             'BLOCK_K': 128,
         },
                       num_stages=4,
                       num_warps=4),
         triton.Config({
-            'BLOCK_M': 64,
-            'BLOCK_N': 64,
-            'BLOCK_K': 128,
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_M': 64,
-            'BLOCK_N': 128,
-            'BLOCK_K': 128,
-        },
-                      num_stages=4,
-                      num_warps=4),
-        triton.Config({
-            'BLOCK_M': 128,
             'BLOCK_N': 128,
             'BLOCK_K': 128,
         },
                       num_stages=4,
                       num_warps=4)
     ],
-    key=['M', 'N', 'K'],
+    key=['N', 'K'],
 )
 @triton.jit
 def _linear_add(
@@ -260,9 +214,8 @@ def matmul_kernel_dynamic_quant(a,
     """
     assert a.shape[-1] == b.shape[-1]
     assert b.ndim == 2 and b.is_contiguous()
-    b = b.t()  # (K, N)
     M = a.numel() // a.shape[-1]
-    K, N = b.shape
+    N, K = b.shape
     c_shape = a.shape[:-1] + (N, )
     if residual is not None:
         assert residual.shape == c_shape
@@ -273,6 +226,10 @@ def matmul_kernel_dynamic_quant(a,
         return (triton.cdiv(M, META['BLOCK_M']) *
                 triton.cdiv(N, META['BLOCK_N']), )
 
+    BLOCK_M = 128
+    if M < BLOCK_M:
+        BLOCK_M = triton.next_power_of_2(M)
+        BLOCK_M = max(BLOCK_M, 16)
     if residual is not None:
         _linear_add[grid](a,
                           b,
@@ -283,10 +240,11 @@ def matmul_kernel_dynamic_quant(a,
                           K,
                           a.stride(-2),
                           a.stride(-1),
-                          b.stride(0),
                           b.stride(1),
+                          b.stride(0),
                           c.stride(-2),
                           c.stride(-1),
+                          BLOCK_M=BLOCK_M,
                           GROUP_SIZE_M=8,
                           rms_scale_ptr=rms_scale,
                           linear_scale_ptr=linear_scale)
@@ -299,10 +257,11 @@ def matmul_kernel_dynamic_quant(a,
                       K,
                       a.stride(-2),
                       a.stride(-1),
-                      b.stride(0),
                       b.stride(1),
+                      b.stride(0),
                       c.stride(-2),
                       c.stride(-1),
+                      BLOCK_M=BLOCK_M,
                       GROUP_SIZE_M=8,
                       rms_scale_ptr=rms_scale,
                       linear_scale_ptr=linear_scale)
@@ -340,7 +299,7 @@ def _per_token_quant_int8(
     # Quant
     _absmax = tl.maximum(tl.max(tl.abs(y)), eps)
     y_s = _absmax / 127
-    y_q = tl.maximum(tl.minimum(tl.math.round(y / y_s), 127), -128).to(tl.int8)
+    y_q = tl.math.round(y / y_s).to(tl.int8)
 
     tl.store(y_q_ptr + cols, y_q, mask=mask)
     tl.store(y_s_ptr, y_s)
@@ -389,18 +348,15 @@ def _rms_norm_fwd_fused_dynamic_symmetric(
     row = tl.program_id(0)
     Y += row * stride
     X += row * stride
-    _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-
-    cols = tl.arange(0, BLOCK_SIZE)
-    x = tl.load(X + cols, mask=cols < N, other=0.).to(tl.float32)
-    _var += x * x
-    var = tl.sum(_var, axis=0) / N
-    rstd = 1 / tl.sqrt(var + eps)
 
     cols = tl.arange(0, BLOCK_SIZE)
     mask = cols < N
-    w = tl.load(W + cols, mask=mask)
     x = tl.load(X + cols, mask=mask, other=0.).to(tl.float32)
+    _var = x * x
+    var = tl.sum(_var, axis=0) / N
+    rstd = tl.math.rsqrt(var + eps)
+
+    w = tl.load(W + cols, mask=mask)
     x_hat = x * rstd
     y = x_hat * w
 
