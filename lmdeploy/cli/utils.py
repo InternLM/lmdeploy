@@ -361,7 +361,7 @@ class ArgumentHelper:
             help='The working directory to save results')
 
     @staticmethod
-    def trut_remote_code(parser):
+    def trust_remote_code(parser):
         """Add argument trust_remote_code to parser."""
         return parser.add_argument(
             '--trust-remote-code',

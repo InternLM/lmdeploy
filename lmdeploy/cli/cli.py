@@ -99,7 +99,7 @@ class CLI(object):
             ', "baichuan-inc/baichuan2-7b-chat" and so on')
         # common args
         ArgumentHelper.backend(parser)
-        ArgumentHelper.trut_remote_code(parser)
+        ArgumentHelper.trust_remote_code(parser)
         # # chat template args
         ArgumentHelper.meta_instruction(parser)
         ArgumentHelper.cap(parser)
