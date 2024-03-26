@@ -58,6 +58,7 @@ class PatchedQWenAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        rotary_pos_emb_list: Optional[List[List[torch.Tensor]]] = None,
         world_size: int = 1,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
                Optional[Tuple[torch.Tensor]]]:
@@ -82,28 +83,37 @@ class PatchedQWenAttention(nn.Module):
 
         def __rotary_emb_fn(query_states, key_states, value_states):
             """rotary embedding func."""
-            kv_seq_len = max_kv_seq_length
-            if (self.use_dynamic_ntk
-                    and kv_seq_len == hidden_states.size()[1]):
-                import math
-                context_value = math.log(kv_seq_len / self.seq_length, 2) + 1
-                ntk_alpha = 2**math.ceil(context_value) - 1
-                ntk_alpha = max(ntk_alpha, 1)
-                self._ntk_cached = ntk_alpha
-            else:
-                ntk_alpha = self._ntk_cached
-            rotary_pos_emb = self.rotary_emb(
-                kv_seq_len, ntk_alpha=ntk_alpha).to(hidden_states.device)
-            if isinstance(rotary_pos_emb, tuple):
-                rotary_pos_emb = rotary_pos_emb
-            else:
-                rotary_pos_emb = (rotary_pos_emb, ) * 2
-            q_pos_emb, k_pos_emb = rotary_pos_emb
 
-            q_pos_emb = q_pos_emb[:, position_ids_1d, :, :]
-            k_pos_emb = k_pos_emb[:, position_ids_1d, :, :]
-            query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
-            key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
+            if len(rotary_pos_emb_list) == 1:
+                rotary_pos_emb = rotary_pos_emb_list[0]
+                rotary_pos_emb = [
+                    i[:, position_ids_1d, :, :] for i in rotary_pos_emb
+                ]
+                rotary_pos_emb = (rotary_pos_emb, ) * 2
+                q_pos_emb, k_pos_emb = rotary_pos_emb
+                # Slice the pos emb for current inference
+                query_states = apply_rotary_pos_emb(query_states, q_pos_emb)
+                key_states = apply_rotary_pos_emb(key_states, k_pos_emb)
+            else:
+                query_list = []
+                key_list = []
+                for i, rotary_pos_emb in enumerate(rotary_pos_emb_list):
+                    rotary_pos_emb = [
+                        i[:, position_ids_1d, :, :] for i in rotary_pos_emb
+                    ]
+                    rotary_pos_emb = (rotary_pos_emb, ) * 2
+                    q_pos_emb, k_pos_emb = rotary_pos_emb
+                    # Slice the pos emb for current inference
+                    query_list += [
+                        apply_rotary_pos_emb(query_states[i:i + 1, :, :],
+                                             q_pos_emb)
+                    ]
+                    key_list += [
+                        apply_rotary_pos_emb(key_states[i:i + 1, :, :],
+                                             k_pos_emb)
+                    ]
+                query_states = torch.cat(query_list, dim=0)
+                key_states = torch.cat(key_list, dim=0)
 
             return query_states, key_states, value_states
 
@@ -112,15 +122,15 @@ class PatchedQWenAttention(nn.Module):
         position_ids_1d = context.position_ids_1d
         max_q_seq_length = context.max_q_seq_length
         kv_seq_length = context.kv_seq_length
-        max_kv_seq_length = context.max_kv_seq_length
         q_start_loc = context.q_start_loc
         q_seq_length = context.q_seq_length
 
         query_states, key_states, value_states = __qkv_proj(hidden_states)
-        query_states, key_states, value_states = __rotary_emb_fn(
-            query_states, key_states, value_states)
+        if rotary_pos_emb_list is not None:
+            query_states, key_states, value_states = __rotary_emb_fn(
+                query_states, key_states, value_states)
 
-        if self.use_logn_attn:
+        if key_states.size(1) > self.seq_length and self.use_logn_attn:
             if self.logn_tensor.device != query_states.device or \
                     self.logn_tensor.dtype != query_states.dtype:
                 self.logn_tensor = self.logn_tensor.to(
@@ -162,7 +172,8 @@ class PatchedQWenAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states: Optional[Tuple[torch.FloatTensor]],
+        rotary_pos_emb_list: Optional[List[List[torch.Tensor]]] = None,
         layer_past: Optional[Tuple[torch.Tensor]] = None,
         **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor],
@@ -174,6 +185,7 @@ class PatchedQWenAttention(nn.Module):
         return self._contiguous_batching_forward_impl(
             hidden_states,
             past_key_value=layer_past,
+            rotary_pos_emb_list=rotary_pos_emb_list,
             world_size=world_size,
         )
 
