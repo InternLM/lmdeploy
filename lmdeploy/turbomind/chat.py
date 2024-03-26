@@ -31,6 +31,7 @@ def main(model_path: str,
          repetition_penalty: float = 1.0,
          cap: str = 'chat',
          tp: int = 1,
+         max_batch_size: int = 128,
          model_format: str = None,
          quant_policy: int = 0,
          cache_max_entry_count: float = 0.8,
@@ -39,7 +40,8 @@ def main(model_path: str,
          session_len: int = None,
          stream_output: bool = True,
          request_output_len: int = 1024,
-         chat_template: str = None):
+         chat_template: str = None,
+         **kwargs):
     """An example to perform model inference through the command line
     interface.
 
@@ -53,6 +55,7 @@ def main(model_path: str,
         repetition_penalty (float): parameter to penalize repetition
         cap (str): the capability of a model. For example, codellama has the ability among ['completion', 'infilling', 'chat', 'python']
         tp (int): GPU number used in tensor parallelism
+        max_batch_size (int): max batch size
         model_format (str): the layout of the deployed model. It can be one of the following values [hf, llama, awq]
         quant_policy (int): default to 0. When k/v is quantized into 8 bit, set it to 4
         cache_max_entry_count (float): the percentage of gpu memory occupied by the k/v cache.
@@ -62,7 +65,10 @@ def main(model_path: str,
         stream_output (bool): indicator for streaming output or not
         request_output_len (int): output token nums
         chat_template (str): user defined chat template
+        kwargs (dict): unused args
     """ # noqa: E 501
+    print('unused kwargs', kwargs, sep='')
+
     # chat template
     if chat_template is not None:
         chat_template_config = ChatTemplateConfig.from_json(chat_template)
@@ -76,6 +82,7 @@ def main(model_path: str,
         session_len = model.session_len
 
     engine_cfg = TurbomindEngineConfig(
+        max_batch_size=max_batch_size,
         model_name=model_name,
         model_format=model_format,
         session_len=session_len,
