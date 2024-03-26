@@ -166,7 +166,8 @@ class ModelInputs:
                 local_adapter_ids = local_adapter_ids[:, start:end]
 
             block_offsets = self.block_offsets[:, :block_end]
-            num_blocks = self.num_blocks.new_tensor([block_offsets.size(1)])
+            out_num_blocks = self.num_blocks.new_tensor(
+                [block_offsets.size(1)])
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -176,7 +177,7 @@ class ModelInputs:
                 q_start_loc=input_ids.new_zeros(1),
                 history_lengths=[history_len + start],
                 is_decoding=self.is_decoding,
-                num_blocks=num_blocks,
+                num_blocks=out_num_blocks,
                 local_adapter_ids=local_adapter_ids,
                 global_adapter_ids=self.global_adapter_ids,
                 adapter_offsets=self.adapter_offsets,
