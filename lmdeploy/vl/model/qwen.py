@@ -3,7 +3,6 @@
 from typing import List
 
 import torch
-from accelerate import init_empty_weights
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -20,6 +19,7 @@ class QwenVisionModel(VisonModel):
         self.build_model()
 
     def build_model(self):
+        from accelerate import init_empty_weights
         with init_empty_weights():
             config = AutoConfig.from_pretrained(self.model_path,
                                                 trust_remote_code=True)
