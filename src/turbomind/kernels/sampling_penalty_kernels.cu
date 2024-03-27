@@ -412,6 +412,10 @@ __global__ void batchApplyRepetitionPenalty(T*           logits,
         }
     }
 
+    if (blockDim.x > 32) {
+        __syncthreads();
+    }
+
     // Phase 2. Replace a logit value by the penalized one.
     for (int index = threadIdx.x; index < step; index += blockDim.x) {
         // Skip the padding tokens in input sequences.
