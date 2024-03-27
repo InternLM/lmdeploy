@@ -52,6 +52,10 @@ DLDevice getDLDevice(triton::Tensor& tensor)
     return device;
 }
 
+static void deleter(DLManagedTensor* arg) {
+  delete static_cast<triton::Tensor*>(arg->manager_ctx);
+}
+
 std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& tensor)
 {
     DLDevice device = getDLDevice(tensor);
@@ -122,7 +126,10 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
                        (int64_t*)(nullptr),
                        0};
 
-    return std::unique_ptr<DLManagedTensor>(new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor*) {}});
+
+    auto dl_managed_tensor = std::unique_ptr<DLManagedTensor>(new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor*) {}});
+    dl_managed_tensor->deleter = &deleter;
+    return dl_managed_tensor;
 }
 
 triton::MemoryType getMemoryType(DLDevice device)
