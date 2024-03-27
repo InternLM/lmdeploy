@@ -121,9 +121,7 @@ DLManagedTensor* TritonTensorToDLManagedTensor(triton::Tensor& tensor)
                        reinterpret_cast<int64_t*>(const_cast<size_t*>(tensor.shape.data())),
                        (int64_t*)(nullptr),
                        0};
-    return new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor* dlmt) {
-        delete dlmt;
-    }};
+    return new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor* dlmt) { delete dlmt; }};
 }
 
 triton::MemoryType getMemoryType(DLDevice device)
