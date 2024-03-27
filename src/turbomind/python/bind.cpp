@@ -52,7 +52,7 @@ DLDevice getDLDevice(triton::Tensor& tensor)
     return device;
 }
 
-std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& tensor)
+DLManagedTensor* TritonTensorToDLManagedTensor(triton::Tensor& tensor)
 {
     DLDevice device = getDLDevice(tensor);
 
@@ -121,8 +121,9 @@ std::unique_ptr<DLManagedTensor> TritonTensorToDLManagedTensor(triton::Tensor& t
                        reinterpret_cast<int64_t*>(const_cast<size_t*>(tensor.shape.data())),
                        (int64_t*)(nullptr),
                        0};
-
-    return std::unique_ptr<DLManagedTensor>(new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor*) {}});
+    return new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor* dlmt) {
+        delete dlmt;
+    }};
 }
 
 triton::MemoryType getMemoryType(DLDevice device)
@@ -305,8 +306,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "__dlpack__",
             [](triton::Tensor* self, long stream) {
-                auto tensor_ptr = TritonTensorToDLManagedTensor(*self);
-                return py::capsule(tensor_ptr.release(), kDlTensorCapsuleName, [](PyObject* obj) {
+                DLManagedTensor* dlmt = TritonTensorToDLManagedTensor(*self);
+                return py::capsule(dlmt, kDlTensorCapsuleName, [](PyObject* obj) {
                     DLManagedTensor* dlmt =
                         static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
                     if (dlmt) {
