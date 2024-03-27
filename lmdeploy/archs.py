@@ -14,7 +14,7 @@ SUPPORTED_TASKS = {'llm': AsyncEngine, 'vlm': VLAsyncEngine}
 logger = get_logger('lmdeploy')
 
 
-def autoget_backend(model_path: str) -> Union[Literal['turbomind', 'pytorch']]:
+def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     """Get backend type in auto backend mode.
 
     Args:
