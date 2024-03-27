@@ -16,7 +16,10 @@ The Triton Inference Server requires a specific folder structure for serving mod
 
 4. Place the `model.py` file inside the `1/` directory. This file contains the logic for your model's inference.
 
-5. The model weights should be placed in a folder named `weights/` inside the `1/` directory. You can either move the downloaded model weights to this folder or use a symbolic link to reference them.
+5. The model weights should be placed in a folder named `weights/` inside the `1/` directory.
+
+   - If you use Huggingface model, you can copy the whole downloaded model folder to `1/` and rename it to `weights`.
+   - If you use [converted Turbomind workspace](https://github.com/InternLM/lmdeploy/blob/main/docs/en/inference/load_hf.md#3-a-model-converted-by-lmdeploy-convert), you can copy the generated `workspace` folder to `1/` and rename it to `weights`.
 
 6. Place the `config.pbtxt` file directly inside the `lmdeploy_model/` directory. This configuration file is essential for Triton to understand how to serve your model. For advanced usage, you can modify the `config.pbtxt` to load your customized configurations.
 
