@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+from triton.runtime.jit import get_cuda_stream
 
 
 def per_channel_quant(x, n_bits, dtype):
@@ -212,6 +213,14 @@ def matmul_kernel_dynamic_quant(a,
     `linear_scale`, and optionally adds a `residual` tensor and a `bias`. The
     output is returned in the specified `output_dtype`.
     """
+
+    def __kernel_meta():
+        device = a.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     assert a.shape[-1] == b.shape[-1]
     assert b.ndim == 2 and b.is_contiguous()
     M = a.numel() // a.shape[-1]
@@ -220,16 +229,17 @@ def matmul_kernel_dynamic_quant(a,
     if residual is not None:
         assert residual.shape == c_shape
         assert residual.is_contiguous()
-    c = torch.empty(c_shape, device=a.device, dtype=output_dtype)
-
-    def grid(META):
-        return (triton.cdiv(M, META['BLOCK_M']) *
-                triton.cdiv(N, META['BLOCK_N']), )
+    c = a.new_empty(c_shape, dtype=output_dtype)
 
     BLOCK_M = 128
     if M < BLOCK_M:
         BLOCK_M = triton.next_power_of_2(M)
         BLOCK_M = max(BLOCK_M, 16)
+
+    def grid(META):
+        return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, META['BLOCK_N']), )
+
+    kernel_meta = __kernel_meta()
     if residual is not None:
         _linear_add[grid](a,
                           b,
@@ -247,7 +257,8 @@ def matmul_kernel_dynamic_quant(a,
                           BLOCK_M=BLOCK_M,
                           GROUP_SIZE_M=8,
                           rms_scale_ptr=rms_scale,
-                          linear_scale_ptr=linear_scale)
+                          linear_scale_ptr=linear_scale,
+                          **kernel_meta)
     else:
         _linear[grid](a,
                       b,
@@ -264,7 +275,8 @@ def matmul_kernel_dynamic_quant(a,
                       BLOCK_M=BLOCK_M,
                       GROUP_SIZE_M=8,
                       rms_scale_ptr=rms_scale,
-                      linear_scale_ptr=linear_scale)
+                      linear_scale_ptr=linear_scale,
+                      **kernel_meta)
     if bias is not None:
         c += bias
 
@@ -311,6 +323,14 @@ def per_token_quant_int8(x, eps):
     It converts the tensor values into signed 8-bit integers and returns the
     quantized tensor along with the scaling factor used for quantization.
     """
+
+    def __kernel_meta():
+        device = x.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
     x_q = torch.empty_like(x, device=x.device, dtype=torch.int8)
     M = x.numel() // x.shape[-1]
     N = x.shape[-1]
@@ -321,6 +341,7 @@ def per_token_quant_int8(x, eps):
     # heuristics for number of warps
     num_warps = min(max(BLOCK // 256, 1), 8)
     # enqueue kernel
+    kernel_meta = __kernel_meta()
     _per_token_quant_int8[(M, )](x,
                                  x_q,
                                  x_s,
@@ -328,7 +349,9 @@ def per_token_quant_int8(x, eps):
                                  N,
                                  eps,
                                  BLOCK=BLOCK,
-                                 num_warps=num_warps)
+                                 num_warps=num_warps,
+                                 **kernel_meta)
+
     return x_q, x_s
 
 
@@ -376,7 +399,15 @@ def rms_norm_dynamic_quant(x, w, eps):
     with the same shape as `x`, and calculates RMS normalization on the
     reshaped `x` using a Triton kernel `_rms_norm_fwd_fused_dynamic_symmetric`.
     """
-    x_arg = x.reshape(-1, x.shape[-1])
+
+    def __kernel_meta():
+        device = x.device
+        device_idx = device.index
+        device_type = device.type
+        stream = get_cuda_stream(device_idx)
+        return dict(device=device, device_type=device_type, stream=stream)
+
+    x_arg = x.flatten(0, -2)
     y = torch.empty_like(x, dtype=torch.int8)
     M, K = x_arg.shape
     MAX_FUSED_SIZE = 65536 // x.element_size()
@@ -385,20 +416,18 @@ def rms_norm_dynamic_quant(x, w, eps):
         raise RuntimeError(
             "This rms norm doesn't support feature dim >= 64KB.")
     num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
-    scale = torch.empty(x.shape[:-1] + (1, ),
-                        dtype=torch.float32,
-                        device=x.device)
-    _rms_norm_fwd_fused_dynamic_symmetric[(M, )](
-        x_arg,
-        y,
-        w,
-        scale,
-        x_arg.stride(0),
-        K,
-        eps,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_warps=num_warps,
-    )
+    scale = x.new_empty(x.shape[:-1] + (1, ), dtype=torch.float32)
+    kernel_meta = __kernel_meta()
+    _rms_norm_fwd_fused_dynamic_symmetric[(M, )](x_arg,
+                                                 y,
+                                                 w,
+                                                 scale,
+                                                 x_arg.stride(0),
+                                                 K,
+                                                 eps,
+                                                 BLOCK_SIZE=BLOCK_SIZE,
+                                                 num_warps=num_warps,
+                                                 **kernel_meta)
     return y, scale
 
 
