@@ -52,7 +52,7 @@ jobs:
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
-          python3 -m pip install torch
+          python3 -m pip install torch==2.1.0 torchvision==0.16.0
       - name: Build lmdeploy
         run: |
           python3 -m pip install cmake
