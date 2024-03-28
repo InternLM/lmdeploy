@@ -52,8 +52,9 @@ class WindowBlockManager(DefaultBlockManager):
         self.window_size = window_size
 
     @classmethod
-    def num_required_blocks(cls, obj: Union[SchedulerSequence,
-                                            SchedulerAdapter]):
+    def num_required_blocks(cls,
+                            obj: Union[SchedulerSequence, SchedulerAdapter],
+                            prealloc_size: int = 0):
         """get num required blocks."""
 
         def __num_req_seq(seq: SchedulerSequence):
@@ -63,7 +64,7 @@ class WindowBlockManager(DefaultBlockManager):
             lb_remain_tokens = 0
             if len(seq.logical_blocks) > 0:
                 lb_remain_tokens = block_size - lb_tokens
-            num_input_tokens = len(seq.token_ids)
+            num_input_tokens = seq.num_token_ids + prealloc_size
             num_req_tokens = max(0, num_input_tokens - lb_remain_tokens)
             return _div_up(num_req_tokens, block_size)
 
@@ -87,17 +88,17 @@ class WindowBlockManager(DefaultBlockManager):
             return 0
         return _last_block_size(seq.history_len, seq.block_size)
 
-    def can_allocate(self, msg: SchedulerSequence):
+    def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""
         num_drop_blocks = _num_blocks_to_drop(msg, self.window_size)
-        num_required_blocks = self.num_required_blocks(msg)
+        num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         num_free_phy = self.get_num_free_gpu_blocks()
         if msg.adapter_name is not None:
             adapter = ADAPTER_MANAGER.get_adapter(msg.adapter_name)
             num_required_blocks += self.num_required_blocks(adapter)
         return num_required_blocks <= num_free_phy + num_drop_blocks
 
-    def allocate_msg(self, msg: SchedulerSequence):
+    def allocate_msg(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Allocate physical blocks for given message according to logical
         blocks."""
         logical_blocks = msg.logical_blocks
@@ -133,7 +134,7 @@ class WindowBlockManager(DefaultBlockManager):
             return num_required_blocks, droped_blocks
 
         num_drop_blocks = _num_blocks_to_drop(msg, self.window_size)
-        num_required_blocks = self.num_required_blocks(msg)
+        num_required_blocks = self.num_required_blocks(msg, prealloc_size)
 
         droped_blocks = __get_droped_blocks(num_drop_blocks)
 
@@ -161,10 +162,10 @@ class WindowBlockManager(DefaultBlockManager):
         self.allocator.free(msg.logical_blocks.get_real_blocks())
         msg.logical_blocks.reset()
 
-    def can_append_slot(self, msg: SchedulerSequence):
+    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return true if the message can append new slot."""
-        return self.can_allocate(msg)
+        return self.can_allocate(msg, prealloc_size)
 
-    def append_slot(self, msg: SchedulerSequence):
+    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Append new slot to message."""
-        return self.allocate(msg)
+        return self.allocate(msg, prealloc_size)

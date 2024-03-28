@@ -12,6 +12,20 @@ def _get_torch_dtype(config: Any, default: str = 'float16'):
         config: Config of the hf model.
         default (str): default device type.
     """
+
+    def __hack_qwen():
+        """hack qwen."""
+        torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
+        ) else 'float16'
+        if config.bf16:
+            torch_dtype = 'bfloat16'
+        elif config.fp16:
+            torch_dtype = 'float16'
+        setattr(config, 'torch_dtype', torch_dtype)
+
+    if config.model_type == 'qwen' and config.torch_dtype is None:
+        __hack_qwen()
+
     torch_dtype = getattr(config, 'torch_dtype', default)
     # torch_dtype in config could be none
     torch_dtype = torch_dtype or default
@@ -156,23 +170,14 @@ class ModelConfig:
                 head_dim=head_dim,
                 vocab_size=hf_config.vocab_size)
 
-        if 'falcon' in model_path:
+        if hf_config.model_type == 'falcon':
             model_config = __build_falcon()
-        elif 'chatglm' in model_path:
+        elif hf_config.model_type == 'chatglm':
             model_config = __build_chatglm()
         elif hf_config.model_type == 'gemma':
             model_config = __build_gemma()
         else:
             model_config = __build_default()
-
-        if hf_config.model_type == 'qwen' and hf_config.torch_dtype is None:
-            torch_dtype = 'bfloat16' if torch.cuda.is_bf16_supported(
-            ) else 'float16'
-            if hf_config.bf16:
-                torch_dtype = 'bfloat16'
-            elif hf_config.fp16:
-                torch_dtype = 'float16'
-            setattr(hf_config, 'torch_dtype', torch_dtype)
 
         model_config.dtype = _get_torch_dtype(hf_config)
 

@@ -237,8 +237,9 @@ class BaseBlockManager:
         self.block_tables: Dict[int, BlockTable] = {}
 
     @classmethod
-    def num_required_blocks(cls, obj: Union[SchedulerSequence,
-                                            SchedulerAdapter]):
+    def num_required_blocks(cls,
+                            obj: Union[SchedulerSequence, SchedulerAdapter],
+                            prealloc_size: int = 0):
         """get num required blocks."""
         raise NotImplementedError('Not implemented.')
 
@@ -247,11 +248,11 @@ class BaseBlockManager:
         """get last block size."""
         raise NotImplementedError('Not implemented.')
 
-    def can_allocate(self, msg: SchedulerSequence):
+    def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""
         raise NotImplementedError('Not implemented.')
 
-    def allocate_msg(self, msg: SchedulerSequence):
+    def allocate_msg(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Allocate physical blocks for given message according to logical
         blocks."""
         raise NotImplementedError('Not implemented.')
@@ -264,11 +265,11 @@ class BaseBlockManager:
         """Free all physical blocks allocated for the session."""
         raise NotImplementedError('Not implemented.')
 
-    def can_append_slot(self, msg: SchedulerSequence):
+    def can_append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return true if the message can append new slot."""
         raise NotImplementedError('Not implemented.')
 
-    def append_slot(self, msg: SchedulerSequence):
+    def append_slot(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Append new slot to message."""
         raise NotImplementedError('Not implemented.')
 
@@ -298,10 +299,12 @@ class BaseBlockManager:
         return self.allocator.get_physical_blocks(
             logical_blocks.get_real_blocks())
 
-    def allocate(self, data: Union[SchedulerSequence, SchedulerAdapter]):
+    def allocate(self,
+                 data: Union[SchedulerSequence, SchedulerAdapter],
+                 prealloc_size: int = 0):
         """allocate stuff."""
         if isinstance(data, SchedulerSequence):
-            return self.allocate_msg(data)
+            return self.allocate_msg(data, prealloc_size)
         elif isinstance(data, SchedulerAdapter):
             return self.allocate_adapter(data)
         else:
