@@ -67,6 +67,8 @@ class TurbomindModelConfig:
     rope_scaling_factor: float = 0.0
     use_dynamic_ntk: int = 0
     use_logn_attn: int = 0
+    medusa_num_heads: int = 0
+    medusa_num_layers: int = 0
 
     @classmethod
     def from_dict(cls, env, allow_none=False):

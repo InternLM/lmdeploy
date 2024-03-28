@@ -21,6 +21,7 @@
 #pragma once
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/models/medusa_plugin/medusa_weight.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
@@ -38,7 +39,9 @@ struct LlamaWeight {
                 WeightType weight_type,
                 int        group_size,
                 size_t     tensor_para_size,
-                size_t     tensor_para_rank);
+                size_t     tensor_para_rank,
+                int        medusa_num_heads  = 0,
+                int        medusa_num_layers = 0);
 
     ~LlamaWeight();
 
@@ -53,6 +56,11 @@ struct LlamaWeight {
     const T*                                 pre_decoder_embedding_table{};
     const T*                                 output_norm_weight{};
     const T*                                 post_decoder_embedding_kernel{};
+
+    std::unique_ptr<MedusaWeight<T>> medusa_weight;
+    bool                             medusa_enable_ = false;
+
+    const MedusaWeight<T>& get_medusa_weight() const;
 
 private:
     void mallocWeights();
