@@ -414,12 +414,14 @@ class Engine:
                                  stop_words: torch.Tensor,
                                  num_appendable_ids: torch.Tensor):
         """batched stopping criteria."""
-        stopped = num_appendable_ids <= 0
-        if stop_words is not None:
-            sw_stopped = (token_ids[:, None] == stop_words).any(1)
-            stopped = stopped | sw_stopped
-
-        return stopped, num_appendable_ids - 1
+        with torch.inference_mode(), torch.cuda.stream(self.stream):
+            stopped = num_appendable_ids <= 0
+            if stop_words is not None:
+                sw_stopped = (token_ids[:, None] == stop_words).any(1)
+                stopped = stopped | sw_stopped
+            num_appendable_ids = num_appendable_ids - 1
+        self.stream.synchronize()
+        return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor,
