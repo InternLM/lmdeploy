@@ -422,12 +422,12 @@ jobs:
         if: always()
         run: |
           docker exec --workdir /__w/lmdeploy $CONTAINER_ID rm -rf /root/workspace/workdir/${TB_MODEL}
+          docker exec --workdir /__w/lmdeploy $CONTAINER_ID chmod -R 777 lmdeploy
           docker stop $CONTAINER_ID
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
           mkdir $workdir
-          chmod -R 777 $workdir
 
 
   test_restful:
@@ -462,6 +462,8 @@ jobs:
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py38
       - name: Install pytorch
         run: |
           python3 -m pip cache dir
@@ -475,7 +477,7 @@ jobs:
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
-          python3 -m pip install my-artifact-${{ github.run_id }}-py38/lmdeploy-*.whl
+          python3 -m pip install lmdeploy-*.whl
           python3 -m pip install -r requirements/test.txt
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
