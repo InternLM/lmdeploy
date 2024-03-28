@@ -865,8 +865,40 @@ class Deepseek(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'deepseek' in path and 'chat' in path:
+        if 'deepseek' in path and 'chat' in path and 'vl' not in path:
             return 'deepseek'
+
+
+@MODELS.register_module(name=['deepseek-vl'])
+class DeepseekVL(BaseChatTemplate):
+
+    def __init__(
+            self,
+            meta_instruction="""You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.""",  # noqa: E501
+            eosys='\n\n',
+            user='User: ',
+            eoh='\n\n',
+            assistant='Assistant: ',
+            eoa='<｜end▁of▁sentence｜>',
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-vl' in path and 'chat' in path:
+            return 'deepseek-vl'
 
 
 @MODELS.register_module(name='deepseek-coder')

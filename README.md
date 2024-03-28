@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/03\] Support DeepSeek-VL offline inference pipeline and serving.
 - \[2024/03\] Support VLM offline inference pipeline and serving.
 - \[2024/02\] Support Qwen 1.5, Gemma, Mistral, Mixtral, Deepseek-MOE and so on.
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) seamless integration with [LMDeploy Serving Service](./docs/en/serving/api_server.md).
@@ -102,6 +103,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 |         YI         |  6B - 34B  |
 |      Mistral       |     7B     |
 |    DeepSeek-MoE    |    16B     |
+|    DeepSeek-VL     |     7B     |
 |      Mixtral       |    8x7B    |
 |       Gemma        |   2B-7B    |
 
