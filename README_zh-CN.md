@@ -120,7 +120,7 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 pip install lmdeploy
 ```
 
-LMDeploy的预编译包默认是基于 CUDA 11.8 编译的。如果需要在 CUDA 12+ 下安装 LMDeploy，请执行以下命令：
+LMDeploy的预编译包默认是基于 CUDA 12.1 编译的。如果需要在 CUDA 11+ 下安装 LMDeploy，请执行以下命令：
 
 ```shell
 export LMDEPLOY_VERSION=0.2.0
