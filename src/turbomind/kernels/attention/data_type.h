@@ -48,6 +48,11 @@ struct SubBytePtr {
         return a + n;
     }
 
+    __device__ explicit operator T*() const
+    {
+        return (T*)ptr_;
+    }
+
     char* ptr_;
 };
 

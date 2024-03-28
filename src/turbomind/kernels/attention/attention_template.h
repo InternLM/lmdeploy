@@ -58,12 +58,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
     cta_map.set_split_cnt(split_cnt);
     grid = cta_map.get_grid_shape();
 
-    // must be `LinearIteratorFactory`
-    using Tkv = typename Kernel::Tkv;
-    typename Kernel::CacheIteratorFactory cache_iter_factory{(const Tkv*)params.linear_iter_params.kv_cache,
-                                                             params.cu_k_len,
-                                                             params.linear_iter_params.stride_h,
-                                                             params.linear_iter_params.key_to_val};
+    auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
     kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, cta_map);
 

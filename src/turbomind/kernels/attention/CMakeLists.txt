@@ -8,10 +8,10 @@ add_library(attention STATIC
             attention_128_f16_sm80.cu
             attention_128_f16_sm75.cu
             attention_128_f16_sm70.cu
-            # attention_128_bf16_sm80.cu
+            attention_128_bf16_sm80.cu
             # decoding_128_f16_sm70.cu
             decoding_128_f16_sm80.cu
-            # decoding_128_bf16_sm80.cu
+            decoding_128_bf16_sm80.cu
             )
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

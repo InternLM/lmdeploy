@@ -5,7 +5,8 @@
 
 namespace turbomind {
 
-using Kernel = typename attention::AttentionConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 128>::Kernel;
+using Kernel = typename attention::
+    AttentionConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 128, attention::CacheType::kLinear>::Kernel;
 template void invokeAttention<Kernel>(const typename Kernel::ParamType& params);
 
 }  // namespace turbomind

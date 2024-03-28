@@ -80,4 +80,17 @@ struct AttentionParams {
     T*     pr;
 };
 
+template<class CacheIterFactory, class SFINAE = void>
+struct CreateCacheIterFactory {
+    template<class Param>
+    static CacheIterFactory apply(const Param& param)
+    {
+        using Tkv = typename CacheIterFactory::Tkv;
+        return {(const Tkv*)param.linear_iter_params.kv_cache,
+                param.cu_k_len,
+                param.linear_iter_params.stride_h,
+                param.linear_iter_params.key_to_val};
+    }
+};
+
 }  // namespace turbomind

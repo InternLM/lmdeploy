@@ -20,9 +20,6 @@ struct DecodingConfig {
     static_assert(sizeof(T) == 0, "config not found");
 };
 
-template<class T, class Tkv, int CTA_S, int HeadDim>
-using GetBlockIterFactory = BlockIteratorFactory<T, Tkv, block::Layout<block::Config<T, Tkv, HeadDim>>, CTA_S>;
-
 template<class Arch, class T, class Tkv, int Qh, int HeadDim>
 using Decoding = typename DecodingConfig<Arch, T, Tkv, Qh, HeadDim>::Kernel;
 

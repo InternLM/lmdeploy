@@ -198,7 +198,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         __pipeline_wait_prior(0);
     }
 
-#if 1
+#if 0
     template<class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
                         FragQ&         frag_Q,
@@ -294,8 +294,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 #elif 1
     // Load      : K0,K1 | V0,K2,V1,K3 ...
     // Compute   :    K0 | K1,V0,K2,V1 ...
-    // Conclusion:
-    // - more register consumption (209 -> 250)
+    // - more register consumption
     // - more interleaved HMMA and FMA
     // - slight performance gain
     template<class CacheIter, class StoreS>

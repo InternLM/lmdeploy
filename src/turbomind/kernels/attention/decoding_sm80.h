@@ -238,9 +238,9 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
         PointerKV smem_K;
         T*        smem_K_param;
         FragQ     frag_Q;
-        FragK     frag_K;
-        DataK     data_K;
         ParamK    param_K;
+        DataK     data_K;
+        FragK     frag_K;
 
         __device__ StateQK(SharedStorage& storage, FragQ frag_Q_)
         {
@@ -264,6 +264,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
             if (kQuantKV && k == 0) {
                 static_assert(K_M == 1);
                 const int m = 0;
+                PRAGMA_UNROLL
                 for (int s = 0; s < 2; ++s) {
                     const int si = m * 16 + lane_id / 4 * 1 + s * 8 + warp_id * WARP_S;
                     Lds(param_K[m][s], &smem_K_param[pipe_iter * SmemLayoutKVp::kSize + SmemLayoutKVp::apply(si, 0)]);
@@ -304,7 +305,7 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                                 Converter::convert((Array<Tkv, X * 2>&)data_K[k / X][0][d * 4 * X + s * 2 * X]);
                             PRAGMA_UNROLL
                             for (int x = 0; x < X; ++x) {
-                                (Array<T, 2>&)frag_K[k + x][0][d * 4 + s * 2] = (Array<T, 2>&)dx_d2[x * 2];
+                                (Array<short, 2>&)frag_K[k + x][0][d * 4 + s * 2] = (Array<short, 2>&)dx_d2[x * 2];
                             }
                         }
                     }
@@ -314,9 +315,9 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     PRAGMA_UNROLL
                     for (int d = 0; d < 2; ++d) {
                         auto& d2 = (Array<T, 2>&)frag_K[k][0][d * 4 + s * 2];
-                        {
-                            using namespace ops;
-                            d2 = d2 * param_K[0][s][0] + param_K[0][s][1];
+                        PRAGMA_UNROLL
+                        for (int i = 0; i < 2; ++i) {
+                            d2[i] = __hfma(d2[i], param_K[0][s][0], param_K[0][s][1]);
                         }
                     }
                 }
@@ -362,10 +363,10 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
     struct StatePV {
         PointerKV smem_V;
         T*        smem_V_param;
+        ParamV    param_V;
+        DataV     data_V;
         FragP     frag_P;
         FragV     frag_V;
-        DataV     data_V;
-        ParamV    param_V;
 
         __device__ StatePV(SharedStorage& storage)
         {
@@ -438,9 +439,9 @@ struct Impl<Sm80_81616, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_
                     PRAGMA_UNROLL
                     for (int d = 0; d < 2; ++d) {
                         auto& d2 = (Array<T, 2>&)frag_V[m][0][s * 4 + d * 2];
-                        {
-                            using namespace ops;
-                            d2 = d2 * param_V[0][s][0] + param_V[0][s][1];
+                        PRAGMA_UNROLL
+                        for (int i = 0; i < 2; ++i) {
+                            d2[i] = __hfma(d2[i], param_V[0][s][0], param_V[0][s][1]);
                         }
                         (uint32_t&)d2 = transpose_m8n8_b16((uint32_t&)d2);
                     }

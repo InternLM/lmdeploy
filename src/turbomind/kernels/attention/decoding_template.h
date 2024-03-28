@@ -62,16 +62,7 @@ void invokeDecoding(const typename Kernel::ParamType& params)
 
     // Print(typename Kernel::Impl::ThreadMapKVp{});
 
-    using CacheIterFactory = typename Kernel::CacheIteratorFactory;
-    using BlockLayout      = typename CacheIterFactory::BlockLayout;
-    using BlockConfig      = typename BlockLayout::Config;
-
-    CacheIterFactory cache_iter_factory{
-        BlockLayout{BlockConfig{params.num_kv_heads, params.block_iter_params.block_len}},
-        params.block_iter_params.block_ptrs,
-        params.block_iter_params.cu_block_nums,
-        params.block_iter_params.layer_id,
-    };
+    auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
     kernel_func<<<grid, block, kSmemSize, params.stream>>>(params, cache_iter_factory, CtaMap{});
 

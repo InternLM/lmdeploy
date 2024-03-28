@@ -105,6 +105,7 @@ void dispatchDecoding(const AttentionParams<nv_bfloat16>& params)
     constexpr int kHeadDim = 128;
 
     const bool is_kv_int8     = params.quant_policy & QuantPolicy::kCacheKVInt8;
+    const bool is_kv_int4     = params.quant_policy & QuantPolicy::kCacheKVInt4;
     const int  query_group_sz = params.num_heads / params.num_kv_heads;
 
     using namespace attention;
@@ -112,40 +113,43 @@ void dispatchDecoding(const AttentionParams<nv_bfloat16>& params)
     // TODO: we need better Qh dispatching, when #waves < 1, smaller Qh may outperform larger Qh due to better
     // concurrency
 
-    // if (is_kv_int8) {
-    //     if (params.arch >= 80) {
-    //         if (0) {}
-    //         else if (query_group_sz % 2 == 0) {
-    //             return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, int8_t, 2, kHeadDim>::Kernel>(
-    //                 params);
-    //         }
-    //         else {
-    //             return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, int8_t, 1, kHeadDim>::Kernel>(
-    //                 params);
-    //         }
-    //     }
-    // }
-    // else {
-    //     if (params.arch >= 80) {
-    //         if (0) {}
-    //         else if (query_group_sz % 8 == 0) {
-    //             return invokeDecoding<
-    //                 typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>::Kernel>(params);
-    //         }
-    //         else if (query_group_sz % 4 == 0) {
-    //             return invokeDecoding<
-    //                 typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 4, kHeadDim>::Kernel>(params);
-    //         }
-    //         else if (query_group_sz % 2 == 0) {
-    //             return invokeDecoding<
-    //                 typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, kHeadDim>::Kernel>(params);
-    //         }
-    //         else {
-    //             return invokeDecoding<
-    //                 typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, kHeadDim>::Kernel>(params);
-    //         }
-    //     }
-    // }
+    if (is_kv_int8) {
+        if (params.arch >= 80) {
+            if (0) {}
+            // else if (query_group_sz % 2 == 0) {
+            //     return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, int8_t, 2, kHeadDim>::Kernel>(
+            //         params);
+            // }
+            else {
+                return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, uint8_t, 8, kHeadDim>::Kernel>(
+                    params);
+            }
+        }
+    }
+    else if (is_kv_int4) {
+        return invokeDecoding<typename DecodingConfig<arch::Sm80, nv_bfloat16, uint4_t, 8, kHeadDim>::Kernel>(params);
+    }
+    else {
+        if (params.arch >= 80) {
+            if (0) {}
+            // else if (query_group_sz % 8 == 0) {
+            //     return invokeDecoding<
+            //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>::Kernel>(params);
+            // }
+            // else if (query_group_sz % 4 == 0) {
+            //     return invokeDecoding<
+            //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 4, kHeadDim>::Kernel>(params);
+            // }
+            // else if (query_group_sz % 2 == 0) {
+            //     return invokeDecoding<
+            //         typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 2, kHeadDim>::Kernel>(params);
+            // }
+            else {
+                return invokeDecoding<
+                    typename DecodingConfig<arch::Sm80, nv_bfloat16, nv_bfloat16, 8, kHeadDim>::Kernel>(params);
+            }
+        }
+    }
 
     FT_CHECK(0);
 }

@@ -16,7 +16,7 @@ void dispatchAttention(const AttentionParams<T>& params)
     if (params.size_per_head == 128) {
         if (0) {}
         else if (params.arch >= 80) {
-            using Config = AttentionConfig<arch::Sm80, T, T, 1, 128>;
+            using Config = AttentionConfig<arch::Sm80, T, T, 1, 128, CacheType::kLinear>;
             invokeAttention<typename Config::Kernel>(params);
         }
         // else if (params.arch == 75) {

@@ -195,9 +195,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
 #define KV_INT8 0
 
-#define KV_INT4 0
+#define KV_INT4 1
 
-#define DECODING 0
+#define DECODING 1
 
 template<class T>
 int test_attention()
@@ -548,7 +548,7 @@ int test_attention()
 
 int main(int argc, char* argv[])
 {
-    test_attention<half>();
+    // test_attention<half>();
 
-    // test_attention<nv_bfloat16>();
+    test_attention<nv_bfloat16>();
 }

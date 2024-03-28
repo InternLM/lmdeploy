@@ -1,4 +1,5 @@
 
+#include "attention_params.h"
 #include "block.h"
 
 #pragma once
@@ -61,7 +62,7 @@ struct BlockIterator {
 template<class T, class Tkv, class BlockLayout_, int CTA_S>
 struct BlockIteratorFactory {
     using BlockLayout = BlockLayout_;
-    
+
     BlockLayout_ block_layout_;
     char**       block_ptrs_;
     const int*   cu_block_nums_;
@@ -76,5 +77,25 @@ struct BlockIteratorFactory {
         return BlockIterator<block::Head<T, Tkv, BlockLayout>, CTA_S>{head, block_ptrs};
     }
 };
+
+template<class CacheIterFactory>
+struct CreateCacheIterFactory<CacheIterFactory, std::void_t<typename CacheIterFactory::BlockLayout>> {
+    template<class Param>
+    static CacheIterFactory apply(const Param& param)
+    {
+        using BlockLayout = typename CacheIterFactory::BlockLayout;
+        using BlockConfig = typename BlockLayout::Config;
+
+        return {
+            BlockLayout{BlockConfig{param.num_kv_heads, param.block_iter_params.block_len}},
+            param.block_iter_params.block_ptrs,
+            param.block_iter_params.cu_block_nums,
+            param.block_iter_params.layer_id,
+        };
+    }
+};
+
+template<class T, class Tkv, int CTA_S, int HeadDim>
+using GetBlockIterFactory = BlockIteratorFactory<T, Tkv, block::Layout<block::Config<T, Tkv, HeadDim>>, CTA_S>;
 
 }  // namespace turbomind

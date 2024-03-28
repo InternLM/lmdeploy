@@ -109,7 +109,7 @@ inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_u8(const Array<uint8_t, 4>& s
 {
     // 01234567 01234567 01234567 01234567
     // SEEEEEEE EMMMMMMM MMMMMMMM MMMMMMMM
-    //      1MM          XXXXXXXX
+    //          1MM...   XXXXXXXX
     // (1 + x/2^15) * 2^(e-127) -> e-127=15 -> e=142 -> 01000111 -> 0x47
     static constexpr uint32_t f32_magic = 0x47000000;  // 32768
 
@@ -133,7 +133,7 @@ inline __device__ Array<float, 4> cvt_f32x4_u8(const Array<uint8_t, 4>& src)
 {
     // 01234567 01234567 01234567 01234567
     // SEEEEEEE EMMMMMMM MMMMMMMM MMMMMMMM
-    //      1MM          XXXXXXXX
+    //          1MM...   XXXXXXXX
     // (1 + x/2^15) * 2^(e-127) -> e-127=15 -> e=142 -> 01000111 -> 0x47
     static constexpr uint32_t f32_magic = 0x47000000;  // 32768
 
@@ -149,6 +149,41 @@ inline __device__ Array<float, 4> cvt_f32x4_u8(const Array<uint8_t, 4>& src)
         vec[i] -= 32768.f;
     }
     return vec;
+}
+
+template<bool norm = true>
+inline __device__ Array<nv_bfloat16, 8> cvt_bf16x8_u4(const Array<uint4_t, 8>& src)
+{
+    // 01234567 01234567
+    // SEEEEEEE EMMMMMMM
+    //          1...XXXX
+    // (1 + x/2^7) * 2^(e-127) -> e-127=7 -> e=134 -> 0100 0011 -> 0x43
+    static constexpr uint32_t TEMPLATE = 0x43004300;  // nv_bfloat162(128, 128)
+    static constexpr uint32_t MASK     = 0x000f000f;
+    static constexpr uint32_t immLut   = (0xf0 & 0xcc) | 0xaa;
+
+    Array<uint32_t, 4> h;
+
+    static_assert(sizeof(Array<nv_bfloat16, 8>) == sizeof(Array<uint32_t, 4>));
+
+    uint32_t const& i4s    = reinterpret_cast<uint32_t const&>(src);
+    const uint32_t  i4s_4  = i4s >> 4;
+    const uint32_t  i4s_8  = i4s >> 8;
+    const uint32_t  i4s_12 = i4s >> 12;
+
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s_4), "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(i4s_8), "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[3]) : "r"(i4s_12), "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+
+    if constexpr (norm) {
+        auto result = reinterpret_cast<nv_bfloat16*>(h.data());
+        PRAGMA_UNROLL
+        for (int i = 0; i < 8; ++i) {
+            result[i] -= nv_bfloat16(128.f);
+        }
+    }
+    return (Array<nv_bfloat16, 8>&)h;
 }
 
 template<class T>
@@ -333,23 +368,14 @@ struct ConvertKvCache<T, uint4_t> {
 
 template<>
 struct ConvertKvCache<uint4_t, half> {
-    // half scale_;
-    // half zero_;
-
-    // __device__ ConvertKvCache(half scale, half zero): scale_{scale}, zero_{zero} {}
 
     half scale_;
-    // Array<half, 2> zero_;
     half zero_;
 
     __device__ ConvertKvCache(half scale, half zero)
     {
         scale_ = scale;
-        // zero_[0] = zero - scale * __ushort_as_half(0x6400);
-        // zero_[1] = zero - scale * __ushort_as_half(0x5400);
-
-        // zero_ = zero - scale * __ushort_as_half(0x5400);
-        zero_ = zero;
+        zero_  = zero;
     }
 
     static __device__ Array<half, 8> cvt_f16x8_u4(const Array<uint4_t, 8>& vi)
@@ -414,25 +440,44 @@ struct ConvertKvCache<uint4_t, half> {
         for (int i = 0; i < N; ++i) {
             vo[i] = vo[i] * scale_ + zero_;
         }
-        // Array<half, N> vo;
-        // PRAGMA_UNROLL
-        // for (int i = 0; i < N; i += 8) {
-        //     auto& v = (Array<half, 8>&)vo[i];
-        //     v       = cvt_f16x8_u4_biased((Array<uint4_t, 8>&)vi[i]);
-        //     // v[0]    = v[0] * scale_ + zero_[0];
-        //     // v[1]    = v[1] * scale_ + zero_[0];
-        //     // v[2]    = v[2] * scale_ + zero_[1];
-        //     // v[3]    = v[3] * scale_ + zero_[1];
-        //     // v[4]    = v[4] * scale_ + zero_[0];
-        //     // v[5]    = v[5] * scale_ + zero_[0];
-        //     // v[6]    = v[6] * scale_ + zero_[1];
-        //     // v[7]    = v[7] * scale_ + zero_[1];
-        //     {
-        //         using namespace ops;
-        //         v = v * scale_ + zero_;
-        //     }
-        // }
         return vo;
+    }
+};
+
+template<>
+struct ConvertKvCache<uint4_t, nv_bfloat16> {
+
+    nv_bfloat16 scale_;
+    nv_bfloat16 zero_;
+
+    __device__ ConvertKvCache(nv_bfloat16 scale, nv_bfloat16 zero)
+    {
+        scale_ = scale;
+        zero_  = zero;
+    }
+
+    template<int N>
+    __device__ static Array<nv_bfloat16, N> convert(const Array<uint4_t, N>& vi)
+    {
+        Array<nv_bfloat16, N> vo{};
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 8) {
+            auto& v = (Array<short, 8>&)vo[i];
+            auto  u = cvt_bf16x8_u4((Array<uint4_t, 8>&)vi[i]);
+            v       = (Array<short, 8>&)u;
+        }
+        return vo;
+    }
+
+    template<int N>
+    __device__ Array<nv_bfloat16, N> operator()(const Array<uint4_t, N>& vi) const
+    {
+        auto vo = convert(vi);
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            vo[i] = vo[i] * scale_ + zero_;
+        }
+        return (Array<nv_bfloat16, N>&)vo;
     }
 };
 
@@ -509,6 +554,7 @@ struct ConvertKvCache<uint8_t, T> {
                 uo = cvt_f32x4_u8(ui);
             }
             else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                uo = cvt_bf16x4_u8(ui);
             }
         }
         return vo;
@@ -538,86 +584,5 @@ inline __device__ void StoreQuantParam<uint4_t, half>(half* dst, Array<half, 2> 
     src[1] = src[1] - src[0] * __ushort_as_half(0x5400);
     Store(dst, src);
 }
-
-#if 0
-template<int K_K, int K_M, class Map, class T, class Tk, int ITER_S, int ITER_C>
-__device__ void QuantizeK(const Array<T, 8> (&data)[ITER_S][ITER_C],
-                          const Array<T, 2> (&param)[ITER_S],
-                          Array<T, 8>       (&frag_K)[K_K][K_M],
-                          Array<Tk, 8>      (&qdata)[ITER_S][ITER_C])
-{
-    __shared__ T data_buf[Map::kDimS * Map::kDimC];
-    __shared__ T param_buf[Map::kDimS];
-
-    SmemAccessor<T, SmemLayoutV2<Map::kDimS, Map::kDimC, Map::kDimS, Map::kDimC, Identity>> smem_K{data_buf};
-    SmemAccessor<T, SmemLayoutV2<Map::kDimS, 2, Map::kDimS, 2, Identity>>                   smem_Q{param_buf};
-
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
-
-    const int2 offset = Map::get_offset(warp_id, lane_id);
-
-    PRAGMA_UNROLL
-    for (int s = 0; s < ITER_S; ++s) {
-        Store(&smem_param(s * Map::kIterS + offset.y, 0), param[s]);
-        PRAGMA_UNROLL
-        for (int c = 0; c < ITER_C; ++c) {
-            Store(&smem_data(s * Map::kDeltaS + offset.y, c * Map::kDeltaC + offset.x), data[s][c]);
-        }
-    }
-
-    __syncthreads();
-
-    static_assert(Map::kWarpCount == 4);
-
-    // Load FP fragments
-    const int offset_s = lane_id % 16 * 1 + warp_id * 16;
-    const int offset_c = lane_id / 16 * 8;
-    PRAGMA_UNROLL
-    for (int k = 0; k < K_K; ++k) {
-        PRAGMA_UNROLL
-        for (int m = 0; m < K_M; ++m) {
-            const int s = m * 16 + offset_s;
-            const int c = k * 16 + offset_c;
-            ldsm_x4((Array<uint32_t, 4>&)frag_K[k][m], cast_smem_ptr_to_uint(&smem_K(s, c)));
-        }
-    }
-
-    // Quantize the fragments
-    Array<Tk, 8> data_K[K_K][K_M];
-    PRAGMA_UNROLL
-    for (int k = 0; k < K_K; ++k) {
-        PRAGMA_UNROLL
-        for (int m = 0; m < K_M; ++m) {
-            quantize(data_K[k][m], frag_K[k][m], param);
-        }
-    }
-
-    // Rearrange for LDS.128
-
-    // num fragments per LDS.128 processes
-    constexpr int kFragsPerLds = 16 / sizeof(Array<Tk, 8>);
-
-    constexpr int kWarpAccess = WARP_SIZE * kFragsPerLds * 8;
-
-    constexpr int kDeltaC = kWarpAccess % Map::kDimC;
-    constexpr int kDeltaS = kWarpAccess / Map::kDimC;
-
-    static_assert((kDeltaC == 0) ^ (kDeltaS == 0));
-
-    SmemAccessor<Tk, SmemLayoutV2<Map::kDimS, Map::kDimC, Map::kDimS, Map::kDimC, Identity>> smem_O{data_buf};
-
-    const int warp_offset_s = Map::get_offset(warp_id, 0).y;
-    PRAGMA_UNROLL
-    for (int i = 0, s =0, c = 0; i < K_K * K_M; i += kFragsPerLds, s += kDeltaS, c += kDeltaC) {
-        const int  m = i % K_M;
-        const int  k = i / K_M;
-        const int cc = c % Map::kDimC;
-        const int ss = c / Map::kDimC + s;
-
-        // smem_O(&warp_offset_s + n /, )
-    }
-}
-#endif
 
 }  // namespace turbomind

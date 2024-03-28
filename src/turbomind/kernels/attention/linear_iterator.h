@@ -43,9 +43,11 @@ struct LinearIterator {
     }
 };
 
-template<class T, int CTA_S, int HeadDim>
+template<class Tkv_, int CTA_S, int HeadDim>
 struct LinearIteratorFactory {
-    const T*   kv_cache_;
+    using Tkv = Tkv_;
+
+    const Tkv* kv_cache_;
     const int* cu_ctx_len_;
     int        stride_h_;
     int        key_to_val_;
@@ -54,9 +56,9 @@ struct LinearIteratorFactory {
     {
         int seq_ti = cu_ctx_len_[batch_idx] - cu_ctx_len_[0];
 
-        const T* kv_cache = kv_cache_ + head_idx * stride_h_ + seq_ti * HeadDim;
+        const Tkv* kv_cache = kv_cache_ + head_idx * stride_h_ + seq_ti * HeadDim;
 
-        return LinearIterator<T, CTA_S, HeadDim>{kv_cache, key_to_val_};
+        return LinearIterator<Tkv, CTA_S, HeadDim>{kv_cache, key_to_val_};
     }
 };
 
