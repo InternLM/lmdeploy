@@ -210,7 +210,6 @@ class AsyncEngine:
         self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2generator = {}
-        self.loop = asyncio.get_event_loop()
         self.running_session_ids = set()
         self.gens_set = set()
         for i in range(self.instance_num):
@@ -409,7 +408,7 @@ class AsyncEngine:
                     for i in range(len(batch_prompts))
                 ])
 
-            self.loop.run_until_complete(gather())
+            asyncio.new_event_loop().run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
@@ -476,8 +475,8 @@ class AsyncEngine:
                 ])
                 outputs.put(None)
 
-            proc = Thread(
-                target=lambda: self.loop.run_until_complete(gather()))
+            proc = Thread(target=lambda: asyncio.new_event_loop().
+                          run_until_complete(gather()))
             proc.start()
 
             while True:
